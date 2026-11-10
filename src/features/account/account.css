@@ -142,8 +142,8 @@
 .public-links { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); }
 .public-links__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .public-links__head h2 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 550; }
-.public-links__url { display: flex; align-items: center; gap: 5px; width: fit-content; max-width: 100%; color: var(--ink); font-size: 13px; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px; overflow-wrap: anywhere; }
-.public-links__url svg { flex: none; }
+.public-links__url { display: block; width: fit-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; color: var(--ink); font-size: 13px; line-height: 20px; white-space: nowrap; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px; }
+.public-links__url svg { display: inline-block; margin-left: 5px; vertical-align: -1px; }
 .public-links .account-empty { margin: 16px 0; text-align: left; font-size: 13px; }
 .share:has(.public-links) { display: flex; max-height: calc(100dvh - 90px); flex-direction: column; }
 .share:has(.public-links) > .share__body { overflow-y: auto; min-height: 0; }

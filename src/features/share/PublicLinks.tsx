@@ -53,21 +53,24 @@ export function PublicLinks({ pageId }: { pageId: string }) {
     <p className="account-muted">获得链接的人可以阅读此页及其子页。</p>
     <ListStatus loading={loading} error={error} retry={retry} empty={!items.length} emptyText="暂无公开链接" />
     <ul className="account-list" aria-label="此页的公开链接">
-      {items.map((item) => <li className="account-row account-row--wrap" key={item.id}>
-        <span className="account-row__text">
-          <a className="public-links__url" href={item.url} target="_blank" rel="noopener noreferrer">{item.url}<ExternalLink size={12} aria-hidden="true" /></a>
-          <small>创建于 {formatDate(item.createdAt)}</small>
-        </span>
-        <div className="account-row__actions">
-          {confirming === item.id ? <>
-            <button type="button" className="btn" disabled={Boolean(pending)} onClick={() => setConfirming("")}>取消</button>
-            <button type="button" className="btn btn--danger" aria-label={`确认撤销公开链接 ${item.url}`} disabled={Boolean(pending)} onClick={() => void revoke(item)}>{pending === item.id ? "撤销中…" : "确认撤销"}</button>
-          </> : <>
-            <button type="button" className="btn" disabled={Boolean(pending)} aria-label={`复制公开链接 ${item.url}`} onClick={() => void copy(item.url)}><Copy size={14} />复制</button>
-            <button type="button" className="btn btn--danger" disabled={Boolean(pending)} aria-label={`撤销公开链接 ${item.url}`} onClick={() => setConfirming(item.id)}>撤销</button>
-          </>}
-        </div>
-      </li>)}
+      {items.map((item) => {
+        const absolute = new URL(item.url, window.location.origin).href;
+        return <li className="account-row" key={item.id}>
+          <span className="account-row__text">
+            <a className="public-links__url" href={absolute} target="_blank" rel="noopener noreferrer" title={absolute}>{absolute}<ExternalLink size={12} aria-hidden="true" /></a>
+            <small>创建于 {formatDate(item.createdAt)}</small>
+          </span>
+          <div className="account-row__actions">
+            {confirming === item.id ? <>
+              <button type="button" className="btn" disabled={Boolean(pending)} onClick={() => setConfirming("")}>取消</button>
+              <button type="button" className="btn btn--danger" aria-label={`确认撤销公开链接 ${item.url}`} disabled={Boolean(pending)} onClick={() => void revoke(item)}>{pending === item.id ? "撤销中…" : "确认撤销"}</button>
+            </> : <>
+              <button type="button" className="btn" disabled={Boolean(pending)} aria-label={`复制公开链接 ${item.url}`} onClick={() => void copy(item.url)}><Copy size={14} />复制</button>
+              <button type="button" className="btn btn--danger" disabled={Boolean(pending)} aria-label={`撤销公开链接 ${item.url}`} onClick={() => setConfirming(item.id)}>撤销</button>
+            </>}
+          </div>
+        </li>;
+      })}
     </ul>
     {copyFallback ? <label className="account-field">链接<input value={copyFallback} readOnly autoFocus onFocus={(event) => event.target.select()} /></label> : null}
     {notice ? <p className="account-muted" role="status">{notice}</p> : null}
