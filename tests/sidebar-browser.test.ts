@@ -1,5 +1,5 @@
-import { test, expect, type Locator, type Page } from "@playwright/test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { test, expect, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { startServer } from "../server/index.ts";
@@ -67,42 +67,104 @@ function newMenu(page: Page) {
   return page.locator('.menu[role="menu"][aria-label="新建"]');
 }
 
+function createButton(page: Page) {
+  return page.locator(".sidebar__topbar").getByRole("button", { name: "新建", exact: true });
+}
+
+const views = [
+  { name: "Files", label: "全部页面" },
+  { name: "Favorites", label: "收藏夹" },
+  { name: "Shared", label: "共享空间" },
+  { name: "Graph", label: "关系图谱" },
+] as const;
+
 async function expectToolbarLayout(toolbar: Locator) {
-  const create = toolbar.getByRole("button", { name: "新建", exact: true });
-  const sort = toolbar.getByRole("button", { name: "Change sort order", exact: true });
-  const collapse = toolbar.getByRole("button", { name: "Collapse all", exact: true });
-  await expect(create).toBeVisible();
-  await expect(sort).toBeVisible();
-  await expect(collapse).toBeVisible();
-  await expect(toolbar.getByRole("button")).toHaveCount(3);
-  const [bar, left, middle, right, padding, views] = await Promise.all([
-    toolbar.boundingBox(), create.boundingBox(), sort.boundingBox(), collapse.boundingBox(),
-    toolbar.evaluate((element) => {
-      const style = getComputedStyle(element);
-      return { left: Number.parseFloat(style.paddingLeft), right: Number.parseFloat(style.paddingRight) };
-    }),
-    toolbar.evaluate((element) => {
-      const views = element.closest(".sidebar")!.querySelector(".sidebar__views")!;
-      const button = element.querySelector(".sidebar__new")!;
-      const box = views.getBoundingClientRect();
-      return { x: box.x, width: box.width, height: box.height, background: getComputedStyle(views).backgroundColor, buttonBackground: getComputedStyle(button).backgroundColor };
-    }),
-  ]);
+  await expect(toolbar).toBeVisible();
+  await expect(toolbar).toContainText("笔记");
+  await expect(toolbar.getByRole("button", { name: "Change sort order", exact: true })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "Collapse all", exact: true })).toBeVisible();
+  await expect(toolbar.getByRole("button")).toHaveCount(2);
+  const boxes = await toolbar.getByRole("button").evaluateAll((buttons) => buttons.map((button) => {
+    const rect = button.getBoundingClientRect();
+    return { x: rect.x, right: rect.right, y: rect.y, height: rect.height };
+  }));
+  const bar = await toolbar.boundingBox();
   expect(bar).not.toBeNull();
-  expect(left).not.toBeNull();
-  expect(middle).not.toBeNull();
-  expect(right).not.toBeNull();
-  expect(Math.abs(left!.x - bar!.x - padding.left)).toBeLessThanOrEqual(1);
-  expect(Math.abs(left!.x - views.x)).toBeLessThanOrEqual(1);
-  expect(Math.abs(left!.width - views.width)).toBeLessThanOrEqual(1);
-  expect(Math.abs(left!.height - views.height)).toBeLessThanOrEqual(1);
-  expect(views.buttonBackground).toBe(views.background);
-  expect(middle!.x - left!.x - left!.width).toBeGreaterThanOrEqual(0);
-  expect(middle!.x + middle!.width).toBeLessThanOrEqual(right!.x);
-  expect(right!.x - middle!.x - middle!.width).toBeLessThanOrEqual(8);
-  expect(Math.abs(bar!.x + bar!.width - padding.right - right!.x - right!.width)).toBeLessThanOrEqual(2);
-  expect(Math.abs(left!.y + left!.height / 2 - right!.y - right!.height / 2)).toBeLessThanOrEqual(1);
+  expect(boxes[0].x).toBeGreaterThanOrEqual(bar!.x);
+  expect(boxes[0].right).toBeLessThanOrEqual(boxes[1].x);
+  expect(boxes[1].right).toBeLessThanOrEqual(bar!.x + bar!.width);
+  expect(Math.abs(boxes[0].y - boxes[1].y)).toBeLessThanOrEqual(1);
   expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+}
+
+async function expectNavigationLayout(page: Page) {
+  const sidebar = page.locator(".sidebar");
+  await sidebar.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
+  const topbar = sidebar.locator(".sidebar__topbar");
+  const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
+  await expect(tabs).toHaveAttribute("aria-orientation", "vertical");
+  await expect(tabs.getByRole("tab")).toHaveCount(4);
+  await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+  await expect(createButton(page)).toBeVisible();
+  await expect(createButton(page)).toHaveText("");
+  await expect(createButton(page).locator("svg")).toHaveCount(1);
+  const searchStyle = await topbar.getByRole("button", { name: "Search", exact: true }).evaluate((button) => {
+    const style = getComputedStyle(button);
+    return { text: button.textContent, border: style.borderTopWidth, shadow: style.boxShadow };
+  });
+  expect(searchStyle.text?.trim()).toBeTruthy();
+  expect(searchStyle.border).toBe("0px");
+  expect(searchStyle.shadow).toBe("none");
+  const top = await topbar.boundingBox();
+  expect(top).not.toBeNull();
+  let previousBottom = top!.y + top!.height;
+  let previousX: number | undefined;
+  for (const view of views) {
+    const tab = tabs.getByRole("tab", { name: view.name, exact: true });
+    await expect(tab).toContainText(view.label);
+    const box = await tab.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
+    expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
+    if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
+    previousX = box!.x;
+    previousBottom = box!.y + box!.height;
+  }
+  const bar = await filesToolbar(page).boundingBox();
+  expect(bar).not.toBeNull();
+  expect(bar!.y).toBeGreaterThanOrEqual(previousBottom - 1);
+  // The resize handle extends 3px beyond the sidebar by design. Check the
+  // content regions and control bounds, rather than that intentional handle.
+  const sidebarBox = await sidebar.boundingBox();
+  expect(sidebarBox).not.toBeNull();
+  for (const region of [sidebar.locator(".sidebar__head"), topbar, tabs]) {
+    expect(await region.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    const bounds = await region.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(sidebarBox!.x);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+  }
+  await expectToolbarLayout(filesToolbar(page));
+}
+
+async function attachLayout(page: Page, testInfo: TestInfo, name: string) {
+  await page.evaluate(() => document.fonts.ready);
+  await page.mouse.move(700, 500);
+  const sidebarPath = testInfo.outputPath(`${name}-sidebar-2x.png`);
+  await page.locator(".sidebar").screenshot({ path: sidebarPath, animations: "disabled", scale: "device" });
+  await testInfo.attach(`${name}: complete sidebar (2x)`, { path: sidebarPath, contentType: "image/png" });
+  const pagePath = testInfo.outputPath(`${name}-page-2x.png`);
+  await page.screenshot({ path: pagePath, fullPage: true, animations: "disabled", scale: "device" });
+  await testInfo.attach(`${name}: full page (2x)`, { path: pagePath, contentType: "image/png" });
+}
+
+async function createDocument(page: Page, title: string) {
+  await createButton(page).click();
+  await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).click();
+  const heading = page.getByLabel("Page title", { exact: true });
+  await expect(heading).toBeEmpty();
+  await heading.fill(title);
+  await expect.poll(async () => (await savedPages(page)).filter((row) => row.title === title)).toHaveLength(1);
+  await expect(page.getByRole("status", { name: "All changes saved", exact: true })).toHaveCount(1);
 }
 
 test("files toolbar opens one dark creation menu and dismisses without creating", async ({ page }, testInfo) => {
@@ -110,41 +172,19 @@ test("files toolbar opens one dark creation menu and dismisses without creating"
   await register(page, "sidebar_menu");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   const baseline = await savedPages(page);
-  const toolbar = filesToolbar(page);
-  const create = toolbar.getByRole("button", { name: "新建", exact: true });
+  const create = createButton(page);
   const menu = newMenu(page);
-  await expectToolbarLayout(toolbar);
-  await expect(create).toHaveText("新建");
-  await expect(create.locator("svg")).toHaveCount(1);
+  await expectNavigationLayout(page);
   await expect(create).toHaveAttribute("aria-haspopup", "menu");
   await expect(create).toHaveAttribute("aria-expanded", "false");
-  await page.evaluate(() => document.fonts.ready);
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("DOM.enable");
-  await cdp.send("CSS.enable");
-  const { root } = await cdp.send("DOM.getDocument");
-  const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".sidebar__new span" });
-  const platformFonts = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
-  const typography = await create.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, lineHeight: style.lineHeight };
-  });
-  const fontsPath = testInfo.outputPath("sidebar-toolbar-fonts.json");
-  await writeFile(fontsPath, JSON.stringify({ ...platformFonts, typography }, null, 2));
-  await testInfo.attach("Toolbar actual fonts", { path: fontsPath, contentType: "application/json" });
-  await cdp.detach();
-  const restingShot = testInfo.outputPath("sidebar-toolbar-dark-resting.png");
-  await toolbar.screenshot({ path: restingShot, animations: "disabled" });
-  await testInfo.attach("Dark resting toolbar button (2x)", { path: restingShot, contentType: "image/png" });
+  await attachLayout(page, testInfo, "dark-resting");
 
   await create.click();
   await expect(create).toHaveAttribute("aria-expanded", "true");
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库"]);
   expect(await savedPages(page)).toEqual(baseline);
-  const darkShot = testInfo.outputPath("sidebar-toolbar-menu-dark.png");
-  await page.screenshot({ path: darkShot, animations: "disabled", clip: { x: 0, y: 0, width: 240, height: 200 } });
-  await testInfo.attach("Dark toolbar and creation menu (2x)", { path: darkShot, contentType: "image/png" });
+  await attachLayout(page, testInfo, "dark-creation-menu");
 
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
@@ -170,7 +210,7 @@ test("files toolbar opens one dark creation menu and dismisses without creating"
   await create.click();
   await expect(menu).toBeVisible();
   await expect(menu.locator("..")).toHaveClass(/\bis-shown\b/);
-  await page.getByRole("main").click({ position: { x: 50, y: 100 } });
+  await page.getByRole("main").click({ position: { x: 300, y: 300 } });
   await expect(menu).toBeHidden();
   await expect(create).toHaveAttribute("aria-expanded", "false");
   expect(await savedPages(page)).toEqual(baseline);
@@ -190,7 +230,7 @@ test("both creation choices save the correct page kind and title across reload",
   ] as const;
 
   for (const choice of choices) {
-    await filesToolbar(page).getByRole("button", { name: "新建", exact: true }).click();
+    await createButton(page).click();
     if (choice.kind === "database") {
       await newMenu(page).press("ArrowDown");
       await newMenu(page).press("Enter");
@@ -224,12 +264,11 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await page.mouse.move(120, 300, { steps: 6 });
   await page.mouse.up();
   await expect.poll(async () => Math.round((await sidebar.boundingBox())!.width)).toBe(168);
-  await expectToolbarLayout(filesToolbar(page));
-  await filesToolbar(page).getByRole("button", { name: "新建", exact: true }).click();
+  await expectNavigationLayout(page);
+  await attachLayout(page, testInfo, "light-168px-resting");
+  await createButton(page).click();
   await expect(newMenu(page)).toBeVisible();
-  const lightShot = testInfo.outputPath("sidebar-menu-light-168px.png");
-  await page.screenshot({ path: lightShot, animations: "disabled" });
-  await testInfo.attach("Light creation menu at 168px (2x)", { path: lightShot, contentType: "image/png" });
+  await attachLayout(page, testInfo, "light-168px-menu");
   await page.keyboard.press("Escape");
   await expect(newMenu(page)).toBeHidden();
 
@@ -240,7 +279,7 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await expect(allPages).toHaveAttribute("aria-expanded", "true");
   await expect(sidebar).toBeVisible();
   await expectToolbarLayout(filesToolbar(page));
-  await filesToolbar(page).getByRole("button", { name: "新建", exact: true }).click();
+  await createButton(page).click();
   const menu = newMenu(page);
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库"]);
@@ -259,9 +298,188 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   expect(await savedPages(page)).toEqual([]);
 });
 
+test("vertical navigation keeps live counts, keyboard selection, and search", async ({ page }, testInfo) => {
+  await register(page, "sidebar_navigation");
+  await createDocument(page, "Alpha reference");
+  await createDocument(page, "Beta reference");
+  const tabs = page.getByRole("tablist", { name: "Page list", exact: true });
+  const files = tabs.getByRole("tab", { name: "Files", exact: true });
+  const favorites = tabs.getByRole("tab", { name: "Favorites", exact: true });
+  const shared = tabs.getByRole("tab", { name: "Shared", exact: true });
+  await expect(files).toHaveText(/全部页面\s*2$/);
+  await expect(favorites).toHaveText(/收藏夹\s*0$/);
+  await expect(shared).toHaveText(/共享空间\s*0$/);
+  await page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Alpha reference", exact: true }).hover();
+  await page.getByRole("button", { name: "Actions for Alpha reference", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Add to favorites", exact: true }).click();
+  await expect(favorites).toHaveText(/收藏夹\s*1$/);
+  await expectNavigationLayout(page);
+  const rowHeights = await page.locator(".sidebar .tree-row").evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
+  expect(rowHeights).toHaveLength(2);
+  for (const height of rowHeights) expect(Math.abs(height - 31)).toBeLessThanOrEqual(1);
+
+  await files.focus();
+  await files.press("ArrowDown");
+  await expect(favorites).toBeFocused();
+  await expect(favorites).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tree", { name: "Favorites", exact: true }).locator(".tree-row__label")).toHaveText(["Alpha reference"]);
+  await favorites.press("End");
+  const graph = tabs.getByRole("tab", { name: "Graph", exact: true });
+  await expect(graph).toBeFocused();
+  await expect(graph).toHaveAttribute("aria-selected", "true");
+  await graph.press("ArrowUp");
+  await expect(shared).toBeFocused();
+  await expect(shared).toHaveAttribute("aria-selected", "true");
+  await shared.press("Home");
+  await expect(files).toBeFocused();
+  await expect(files).toHaveAttribute("aria-selected", "true");
+  await expect(tabs.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
+
+  await page.locator(".sidebar__topbar").getByRole("button", { name: "Search", exact: true }).click();
+  const search = page.getByRole("dialog", { name: "Search pages", exact: true });
+  const input = search.getByRole("textbox", { name: "Search pages", exact: true });
+  await expect(input).toBeFocused();
+  await input.fill("Alpha reference");
+  await expect(search.getByRole("option")).toHaveText(["Alpha reference"]);
+  await input.press("Enter");
+  await expect(search).toBeHidden();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Alpha reference");
+  await expect(page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Alpha reference", exact: true })).toHaveAttribute("aria-current", "page");
+  await attachLayout(page, testInfo, "light-populated");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await attachLayout(page, testInfo, "dark-populated");
+  await page.reload();
+  await expect(files).toHaveText(/全部页面\s*2$/);
+  await expect(favorites).toHaveText(/收藏夹\s*1$/);
+});
+
+test("topbar creation works from every view and from the desktop rail", async ({ page }) => {
+  await register(page, "sidebar_views");
+  for (const [index, view] of views.entries()) {
+    const tab = page.getByRole("tab", { name: view.name, exact: true });
+    await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(createButton(page)).toBeVisible();
+    const baseline = await savedPages(page);
+    await createButton(page).click();
+    await expect(newMenu(page)).toBeVisible();
+    await newMenu(page).press("Escape");
+    await expect(newMenu(page)).toBeHidden();
+    await expect(createButton(page)).toBeFocused();
+    expect(await savedPages(page)).toEqual(baseline);
+    await createDocument(page, `View ${index + 1} document`);
+    await expect(page.getByRole("tab", { name: "Files", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: `View ${index + 1} document`, exact: true })).toHaveAttribute("aria-current", "page");
+    expect(await savedPages(page)).toHaveLength(baseline.length + 1);
+  }
+  await page.getByRole("button", { name: "Collapse to rail", exact: true }).click();
+  const rail = page.getByRole("navigation", { name: "Notes navigation", exact: true });
+  await expect(rail).toBeVisible();
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toHaveCount(0);
+  const baseline = await savedPages(page);
+  const create = rail.getByRole("button", { name: "新建", exact: true });
+  await create.press("Enter");
+  await expect(newMenu(page)).toBeFocused();
+  await newMenu(page).press("Escape");
+  await expect(create).toBeFocused();
+  expect(await savedPages(page)).toEqual(baseline);
+  await create.click();
+  await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).click();
+  await page.getByLabel("Page title", { exact: true }).fill("Rail document");
+  await expect.poll(async () => (await savedPages(page)).filter((row) => row.title === "Rail document")).toHaveLength(1);
+  await page.reload();
+  await expect(rail).toBeVisible();
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Rail document");
+  await rail.getByRole("button", { name: "All pages", exact: true }).click();
+  await expect(createButton(page)).toBeVisible();
+});
+
+async function effectiveOpacity(locator: Locator) {
+  return locator.evaluate((element) => {
+    let opacity = 1;
+    for (let current: Element | null = element; current; current = current.parentElement) {
+      opacity *= Number(getComputedStyle(current).opacity);
+    }
+    return opacity;
+  });
+}
+
+test("tree tools reveal on hover, focus, and open menu; sorting and collapse change the tree", async ({ page }) => {
+  await register(page, "sidebar_tree_tools");
+  await createDocument(page, "Zulu parent");
+  await createDocument(page, "Alpha sibling");
+  await page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Zulu parent", exact: true }).hover();
+  await page.getByRole("button", { name: "New page inside Zulu parent", exact: true }).click();
+  await expect(page.getByLabel("Page title", { exact: true })).toBeEmpty();
+  await page.getByLabel("Page title", { exact: true }).fill("Nested child");
+  await expect.poll(async () => (await savedPages(page)).filter((row) => row.title === "Nested child")).toHaveLength(1);
+  const tree = page.getByRole("tree", { name: "Files", exact: true });
+  await expect(tree.getByRole("button", { name: "Nested child", exact: true })).toBeVisible();
+  const toolbar = filesToolbar(page);
+  const sort = toolbar.getByRole("button", { name: "Change sort order", exact: true });
+  await page.getByRole("main").click({ position: { x: 50, y: 100 } });
+  await page.mouse.move(900, 500);
+  await expect.poll(() => effectiveOpacity(sort)).toBeLessThan(0.6);
+  expect(await effectiveOpacity(sort)).toBeGreaterThan(0);
+  await toolbar.hover();
+  await expect.poll(() => effectiveOpacity(sort)).toBe(1);
+  await sort.focus();
+  await page.mouse.move(900, 500);
+  await expect.poll(() => effectiveOpacity(sort)).toBe(1);
+  await sort.press("Enter");
+  const menu = page.locator('.menu[role="menu"][aria-label="Sort"]');
+  await expect(menu).toBeFocused();
+  await expect.poll(() => effectiveOpacity(sort)).toBe(1);
+  await menu.getByRole("menuitem", { name: "File name (Z to A)", exact: true }).click();
+  await expect(menu).toBeHidden();
+  const rootLabels = tree.locator(":scope > .tree-branch > .tree-row .tree-row__label");
+  await expect(rootLabels).toHaveText(["Zulu parent", "Alpha sibling"]);
+  await page.reload();
+  await expect(rootLabels).toHaveText(["Zulu parent", "Alpha sibling"]);
+  await sort.click();
+  await menu.getByRole("menuitem", { name: "File name (A to Z)", exact: true }).click();
+  await expect(rootLabels).toHaveText(["Alpha sibling", "Zulu parent"]);
+  await toolbar.getByRole("button", { name: "Collapse all", exact: true }).click();
+  await expect(tree.getByRole("button", { name: "Nested child", exact: true })).toHaveCount(0);
+  await expect(tree.getByRole("button", { name: "Expand Zulu parent", exact: true })).toHaveAttribute("aria-expanded", "false");
+  await tree.getByRole("button", { name: "Expand Zulu parent", exact: true }).click();
+  await expect(tree.getByRole("button", { name: "Nested child", exact: true })).toBeVisible();
+  expect((await savedPages(page)).map((row) => row.title).sort()).toEqual(["Alpha sibling", "Nested child", "Zulu parent"]);
+});
+
+test("touch drawer keeps tools visible and saves a new page", async ({ browser }, testInfo) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: "light" });
+  const page = await context.newPage();
+  try {
+    await register(page, "sidebar_touch");
+    const allPages = page.getByRole("button", { name: "All pages", exact: true });
+    await allPages.tap();
+    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await expectNavigationLayout(page);
+    const toolbar = filesToolbar(page);
+    await expect.poll(() => effectiveOpacity(toolbar.getByRole("button", { name: "Change sort order", exact: true }))).toBe(1);
+    await attachLayout(page, testInfo, "light-touch-drawer");
+    await createButton(page).tap();
+    await expect(newMenu(page)).toBeVisible();
+    await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).tap();
+    await expect(allPages).toHaveAttribute("aria-expanded", "false");
+    await page.getByLabel("Page title", { exact: true }).fill("Mobile document");
+    await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Mobile document"]);
+    await page.reload();
+    await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Mobile document");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await allPages.tap();
+    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await attachLayout(page, testInfo, "dark-touch-drawer");
+  } finally {
+    await context.close();
+  }
+});
+
 test("a collaborative startup snapshot preserves the initial workspace settings read", async ({ page }) => {
   await register(page, "sidebar_startup");
-  await filesToolbar(page).getByRole("button", { name: "新建", exact: true }).click();
+  await createButton(page).click();
   await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).click();
   await page.getByLabel("Page title", { exact: true }).fill("启动前页面");
   await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["启动前页面"]);
@@ -299,7 +517,7 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
       const body = response.request().postDataJSON() as { writes: Array<{ value?: { kind?: string } }> };
       return body.writes.some((write) => write.value?.kind === "database");
     });
-    await filesToolbar(page).getByRole("button", { name: "新建", exact: true }).click();
+    await createButton(page).click();
     await newMenu(page).getByRole("menuitem", { name: "数据库", exact: true }).click();
     const response = await creation;
     expect(response.status(), JSON.stringify(await response.json())).toBe(200);

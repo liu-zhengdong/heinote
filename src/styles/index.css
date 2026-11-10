@@ -1135,11 +1135,74 @@ kbd {
 
 .sidebar__head {
   display: flex;
-  height: var(--topbar-h);
   flex: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 10px 6px;
+}
+
+.sidebar__topbar {
+  display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 6px 0 8px;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.sidebar__search {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--ink-3);
+  font-size: 13px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.sidebar__search:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.sidebar__search > svg,
+.sidebar__search > kbd {
+  flex: none;
+}
+
+.sidebar__search > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__search > kbd {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.sidebar__new {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+  transition: box-shadow var(--t-fast) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.sidebar__new:hover,
+.sidebar__new.is-active {
+  box-shadow: var(--shadow-card-hover);
+  color: var(--blue);
 }
 
 /* An empty section is the one place nothing can be hovered and no row can be
@@ -1164,7 +1227,9 @@ kbd {
 }
 
 .sidebar__collapse {
-  opacity: 0;
+  flex: none;
+  opacity: 0.45;
+  transition: opacity var(--t-fast) var(--e-out);
 }
 
 .sidebar:hover .sidebar__collapse,
@@ -1172,61 +1237,118 @@ kbd {
   opacity: 1;
 }
 
-/* Obsidian's side panel: the views as one row of icons, the one showing
-   raised out of its track. */
-.sidebar__views,
-.sidebar__new {
-  min-width: 0;
-  flex: 0 1 130px;
-}
-
 .sidebar__views {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  flex-direction: column;
   gap: 2px;
-  padding: 2px;
-  border-radius: var(--r-md);
-  background: var(--fill);
 }
 
 .sidebar__view {
-  display: grid;
+  display: flex;
   min-width: 0;
-  width: 30px;
-  height: 24px;
-  flex: 1;
-  place-items: center;
-  border-radius: var(--r-sm);
-  color: var(--ink-3);
-  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out), box-shadow var(--t-fast) var(--e-out);
+  height: 32px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
 }
 
 .sidebar__view:hover {
+  background: var(--fill-hover);
   color: var(--ink);
 }
 
 .sidebar__view.is-active {
-  background: var(--paper);
-  box-shadow: var(--shadow-card);
+  background: var(--fill-active);
   color: var(--ink);
+  font-weight: 550;
 }
 
-.sidebar__head-gap {
+.sidebar__view-icon {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.sidebar__view.is-active .sidebar__view-icon--files { color: var(--blue); }
+.sidebar__view.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
+.sidebar__view.is-active .sidebar__view-icon--shared { color: var(--green); }
+.sidebar__view.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
+
+.sidebar__view-label {
+  min-width: 0;
   flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* The tools for the view showing — Obsidian's row under the tabs. */
+.sidebar__view-count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.sidebar__view-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+
 .sidebar__tools {
   display: flex;
+  min-height: 24px;
   flex: none;
   align-items: center;
+  justify-content: space-between;
+  margin: 6px 10px 0;
+  padding: 0 4px 0 8px;
+}
+
+.sidebar__section-title {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.sidebar__section-actions {
+  display: inline-flex;
+  align-items: center;
   gap: 2px;
-  padding: 4px 6px 8px 8px;
+  opacity: 0.25;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.sidebar__tools:hover .sidebar__section-actions,
+.sidebar__section-actions:focus-within,
+.sidebar__section-actions.is-active {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar__section-actions,
+  .sidebar__collapse {
+    opacity: 1;
+  }
 }
 
 .sidebar__tools .icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
   color: var(--ink-3);
 }
 
@@ -1240,7 +1362,8 @@ kbd {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  padding: 2px 6px 24px;
+  gap: 1px;
+  padding: 4px 10px 24px;
   border-radius: var(--r-sm);
 }
 
@@ -1251,10 +1374,9 @@ kbd {
 
 /* ── The file tree ────────────────────────────────────────────────────── */
 
-/* Notion's navigation scale: 30px rows, 14px labels and 18px page icons.
-   The mark also holds the disclosure arrow. */
+/* Keep the tree aligned with the vertical navigation. */
 .sidebar {
-  --tree-inset: 4px;
+  --tree-inset: 6px;
   --tree-indent: 18px;
   --tree-mark: 24px;
 }
@@ -1267,7 +1389,7 @@ kbd {
 .tree-row {
   position: relative;
   display: flex;
-  min-height: 30px;
+  min-height: 31px;
   align-items: center;
   gap: 1px;
   padding-right: 4px;
@@ -2079,12 +2201,6 @@ kbd {
 
 .topbar__actions .proposal-entry {
   font-size: 14px;
-}
-
-.sidebar__view > svg,
-.sidebar__head > .icon-btn > svg {
-  width: 20px;
-  height: 20px;
 }
 
 .topbar__share.is-on {

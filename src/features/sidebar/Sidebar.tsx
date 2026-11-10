@@ -33,7 +33,6 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { Button } from "../../components/Button";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
@@ -84,6 +83,8 @@ function writeExpanded(ids: ReadonlySet<string>): void {
 }
 
 const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints };
+const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "共享空间", graph: "关系图谱" };
+const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
 
@@ -330,6 +331,11 @@ export function Sidebar() {
   );
   const sharedWithMe = sharedRoots.filter((page) => !ownedByMe(page));
   const sharedByMe = sharedRoots.filter((page) => ownedByMe(page));
+  const viewCounts: Partial<Record<SidebarView, number>> = {
+    files: tree.roots.length + [...tree.children.values()].reduce((count, children) => count + children.length, 0),
+    favorites: favorites.length,
+    shared: sharedRoots.length,
+  };
   /* The link mark says something links to a page from outside where it
      lives — by the one rule, a block's too. */
   const linked = linkedFromOutside(pages);
@@ -457,7 +463,8 @@ export function Sidebar() {
 
   const createIn = (parentId: string | null, kind: PageKind) => {
     if (!writable) return;
-    createPage(parentId, kind, { block: true });
+    const id = createPage(parentId, kind, { block: true });
+    if (id && view !== "files") setPreference("sidebar_view", "files");
     setNewMenu(null);
     if (parentId) updateExpanded((current) => new Set([...current, parentId]));
     afterNavigate();
@@ -612,80 +619,103 @@ export function Sidebar() {
 
   const list = (
     <>
-      {/* Obsidian's side panel: the views across the top, the tools for the
-          one showing below them. The row shares its line with the page's top
-          bar. */}
       <div className="sidebar__head">
-        <div className="sidebar__views" role="tablist" aria-label="Page list">
-          {SIDEBAR_VIEWS.map((value) => ({ value, label: capitalized(value), Icon: VIEW_ICONS[value] })).map(({ value, label, Icon }) => (
-            <Tooltip key={value} label={label}>
+        <div className="sidebar__topbar">
+          <button type="button" className="sidebar__search" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
+            <Search size={15} aria-hidden="true" />
+            <span>搜索或跳转…</span>
+            <kbd>⌘K</kbd>
+          </button>
+          <Tooltip label="新建页面或数据库">
+            <button
+              type="button"
+              className={`sidebar__new ${newMenu ? "is-active" : ""}`}
+              aria-label="新建"
+              disabled={!writable}
+              title={!writable ? "当前空间只读" : undefined}
+              aria-haspopup="menu"
+              aria-expanded={Boolean(newMenu)}
+              data-pop-group="sidebar-new"
+              onClick={(event) => toggleNewMenu(event.currentTarget)}
+            >
+              <SquarePen size={15} aria-hidden="true" />
+            </button>
+          </Tooltip>
+          {!folded ? (
+            <Tooltip label="Collapse to rail" hint="⌘\">
               <button
+                type="button"
+                className="icon-btn sidebar__collapse"
+                aria-label="Collapse to rail"
+                onClick={() => setPreference("sidebar_collapsed", true)}
+              >
+                <PanelLeft size={15} />
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
+        <div className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation="vertical">
+          {SIDEBAR_VIEWS.map((value) => {
+            const Icon = VIEW_ICONS[value];
+            return (
+              <button
+                key={value}
                 type="button"
                 role="tab"
                 aria-selected={view === value}
-                aria-label={label}
+                aria-label={capitalized(value)}
+                tabIndex={view === value ? 0 : -1}
                 className={`sidebar__view ${view === value ? "is-active" : ""}`}
                 onClick={() => setPreference("sidebar_view", value)}
+                onKeyDown={(event) => {
+                  const index = SIDEBAR_VIEWS.indexOf(value);
+                  const next = event.key === "ArrowDown" ? (index + 1) % SIDEBAR_VIEWS.length
+                    : event.key === "ArrowUp" ? (index + SIDEBAR_VIEWS.length - 1) % SIDEBAR_VIEWS.length
+                    : event.key === "Home" ? 0
+                    : event.key === "End" ? SIDEBAR_VIEWS.length - 1
+                    : null;
+                  if (next === null) return;
+                  event.preventDefault();
+                  setPreference("sidebar_view", SIDEBAR_VIEWS[next]);
+                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                }}
               >
-                <Icon size={16} />
+                <span className={`sidebar__view-icon sidebar__view-icon--${value}`}><Icon size={15} aria-hidden="true" /></span>
+                <span className="sidebar__view-label">{VIEW_LABELS[value]}</span>
+                {viewCounts[value] !== undefined ? (
+                  <span className="sidebar__view-count" aria-hidden="true">{viewCounts[value]}</span>
+                ) : <span className="sidebar__view-dot" aria-hidden="true" />}
               </button>
-            </Tooltip>
-          ))}
+            );
+          })}
         </div>
-        <span className="sidebar__head-gap" />
-        <Tooltip label="Search" hint="⌘K">
-          <button type="button" className="icon-btn" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
-            <Search size={16} />
-          </button>
-        </Tooltip>
-        {!folded ? (
-          <Tooltip label="Collapse to rail" hint="⌘\">
-            <button
-              type="button"
-              className="icon-btn sidebar__collapse"
-              aria-label="Collapse to rail"
-              onClick={() => setPreference("sidebar_collapsed", true)}
-            >
-              <PanelLeft size={16} />
-            </button>
-          </Tooltip>
-        ) : null}
       </div>
 
-      {view === "files" ? (
-        <div className="sidebar__tools" role="toolbar" aria-label="Files">
-          <Button
-            icon={SquarePen}
-            active={Boolean(newMenu)}
-            disabled={!writable}
-            title={!writable ? "当前空间只读" : undefined}
-            className="sidebar__new"
-            aria-haspopup="menu"
-            aria-expanded={Boolean(newMenu)}
-            data-pop-group="sidebar-new"
-            onClick={(event) => toggleNewMenu(event.currentTarget)}
-          >
-            新建
-          </Button>
-          <span className="sidebar__head-gap" aria-hidden="true" />
-          <Tooltip label="Change sort order">
-            <button
-              type="button"
-              className={`icon-btn ${sortMenu ? "is-active" : ""}`}
-              aria-label="Change sort order"
-              disabled={!writable}
-              onClick={(event) => setSortMenu(rectOf(event.currentTarget))}
-            >
-              <ArrowUpNarrowWide size={16} />
-            </button>
-          </Tooltip>
-          <Tooltip label="Collapse all">
-            <button type="button" className="icon-btn" aria-label="Collapse all" onClick={() => updateExpanded(() => new Set())}>
-              <ChevronsDownUp size={16} />
-            </button>
-          </Tooltip>
-        </div>
-      ) : null}
+      <div className="sidebar__tools" role="toolbar" aria-label={capitalized(view)}>
+        <span className="sidebar__section-title">{SECTION_LABELS[view]}</span>
+        {view === "files" ? (
+          <span className={`sidebar__section-actions ${sortMenu ? "is-active" : ""}`}>
+            <Tooltip label={`排序：${SORT_LABELS[sort]}`}>
+              <button
+                type="button"
+                className={`icon-btn ${sortMenu ? "is-active" : ""}`}
+                aria-label="Change sort order"
+                aria-haspopup="menu"
+                aria-expanded={Boolean(sortMenu)}
+                disabled={!writable}
+                onClick={(event) => setSortMenu(rectOf(event.currentTarget))}
+              >
+                <ArrowUpNarrowWide size={13} />
+              </button>
+            </Tooltip>
+            <Tooltip label="收起全部子页面">
+              <button type="button" className="icon-btn" aria-label="Collapse all" onClick={() => updateExpanded(() => new Set())}>
+                <ChevronsDownUp size={13} />
+              </button>
+            </Tooltip>
+          </span>
+        ) : null}
+      </div>
 
       {view === "graph" ? (
         <Suspense fallback={<div className="graph" aria-busy="true" />}>
@@ -875,8 +905,8 @@ export function Sidebar() {
         }}
       >
         <MenuList label="新建" autoFocus>
-          <MenuItem icon={<FileText size={16} />} label="页面" onSelect={() => createIn(null, "document")} />
-          <MenuItem icon={<Table2 size={16} />} label="数据库" onSelect={() => createIn(null, "database")} />
+          <MenuItem icon={<FileText size={16} />} label="页面" disabled={!writable} onSelect={() => createIn(null, "document")} />
+          <MenuItem icon={<Table2 size={16} />} label="数据库" disabled={!writable} onSelect={() => createIn(null, "database")} />
         </MenuList>
       </Popover>
 
