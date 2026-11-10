@@ -139,12 +139,27 @@
 .account-secret__value { font-family: var(--terminus-font-code, monospace) !important; font-size: 13px !important; user-select: text; }
 .account-secret .account-row__actions { justify-content: flex-end; }
 
-.public-links { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--hairline); }
-.public-links__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.public-links__head h2 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 550; }
-.public-links__url { display: block; width: fit-content; max-width: 100%; overflow-x: auto; scrollbar-width: none; color: var(--ink); font-size: 13px; line-height: 20px; white-space: nowrap; text-decoration: underline; text-decoration-color: var(--hairline-strong); text-underline-offset: 3px; }
-.public-links__url svg { display: inline-block; margin-left: 5px; vertical-align: -1px; }
-.public-links .account-empty { margin: 16px 0; text-align: left; font-size: 13px; }
+.public-links { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline); }
+.public-links__head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.public-links__head h2 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 550; line-height: 22px; }
+.public-links__description { margin: 4px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
+.public-links__create { flex: none; height: 30px; padding-inline: 9px; background: var(--fill); color: var(--ink-2); }
+.public-links__list { display: grid; gap: 12px; list-style: none; margin: 14px 0 0; padding: 0; }
+.public-links__list:empty { display: none; }
+.public-links__item { min-width: 0; }
+.public-links__address { display: flex; min-width: 0; height: 40px; align-items: center; gap: 4px; padding: 4px 6px 4px 12px; border-radius: var(--r-sm); background: var(--fill); }
+.public-links__input { min-width: 0; width: 0; flex: 1; padding: 2px 0; border: 0; border-radius: 2px; background: transparent; color: var(--ink); font-family: inherit; font-size: 13px; line-height: 20px; }
+.public-links__input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.public-links__url { flex: none; width: 28px; height: 28px; color: var(--ink-2); text-decoration: none; }
+.public-links__copy { flex: none; height: 28px; padding-inline: 9px; gap: 5px; border-radius: 4px; background: var(--fill-active); color: var(--ink); }
+.public-links__copy:hover:not(:disabled) { background: var(--hairline-strong); }
+.public-links__meta { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 12px; padding-left: 1px; }
+.public-links__meta small { color: var(--ink-2); font-size: 11.5px; line-height: 18px; }
+.public-links__revoke { height: 28px; padding-inline: 6px; color: var(--ink-2); font-size: 12px; }
+.public-links__revoke:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger); }
+.public-links__confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; padding-top: 4px; }
+.public-links__confirm p { flex: 1 1 180px; margin: 0; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
+.public-links .account-empty { margin: 16px 0 0; text-align: left; font-size: 13px; }
 .share:has(.public-links) { display: flex; max-height: calc(100dvh - 90px); flex-direction: column; }
 .share:has(.public-links) > .share__body { overflow-y: auto; min-height: 0; }
 .share:has(.public-links) > :is(.share__head, .share__access, .share__exit) { flex: none; }
