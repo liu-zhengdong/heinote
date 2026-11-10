@@ -1,5 +1,6 @@
 import { ALargeSmall, Calendar, Hash, ImageIcon, ListFilter, Text as TextIcon, UserRound } from "lucide-react";
 import { Avatar } from "../../components/Avatar";
+import { Select } from "../../components/Select";
 import { imeComposing } from "../../core/keyboard";
 import type { DatabaseProperty, NotePage } from "../../core/types";
 import { propertyName, propertyOptions, STATUS_GROUPS, statusOf, statusOptions } from "./database-model";
@@ -122,31 +123,23 @@ export function PropertyEditor({
     return row ? <ImageProperty row={row} property={property} readOnly={readOnly} /> : null;
   }
   if (property.type === "status") {
-    // A status always reads as one of its options — unset, its default —
-    // because the board groups by it. The platform's own picker lists them
-    // under their groups, as Notion's does.
+    // A status uses its default when unset. Options retain their groups.
     const current = statusOf(property, value).name;
     const options = statusOptions(property);
     return (
       <span className="db__cell db__cell--select">
-        <OptionTag property={property} value={current} />
-        <select
+        <Select
           aria-label={propertyName(property)}
           data-history-field={`property:${property.id}`}
           value={current}
           disabled={readOnly}
-          onChange={(event) => onChange(event.target.value)}
-          className="db__cell-select-input"
-        >
-          {STATUS_GROUPS.map(({ group, label }) => {
-            const inGroup = options.filter((option) => option.group === group);
-            return inGroup.length ? (
-              <optgroup key={group} label={label}>
-                {inGroup.map((option) => <option key={option.id} value={option.name}>{option.name}</option>)}
-              </optgroup>
-            ) : null;
-          })}
-        </select>
+          onValueChange={onChange}
+          variant="cell"
+          className="db__cell-select"
+          options={STATUS_GROUPS.flatMap(({ group, label }) => options
+            .filter((option) => option.group === group)
+            .map((option) => ({ value: option.name, label: option.name, group: label, content: <OptionTag property={property} value={option.name} /> })))}
+        />
       </span>
     );
   }
@@ -155,18 +148,16 @@ export function PropertyEditor({
     const options = propertyOptions(property);
     return (
       <span className="db__cell db__cell--select">
-        {value ? <OptionTag property={property} value={value} /> : null}
-        <select
+        <Select
           aria-label={propertyName(property)}
           data-history-field={`property:${property.id}`}
           value={value}
           disabled={readOnly}
-          onChange={(event) => onChange(event.target.value)}
-          className="db__cell-select-input"
-        >
-          <option value="">Empty</option>
-          {options.map((option) => <option key={option}>{option}</option>)}
-        </select>
+          onValueChange={onChange}
+          variant="cell"
+          className="db__cell-select"
+          options={[{ value: "", label: "Empty" }, ...options.map((option) => ({ value: option, label: option, content: <OptionTag property={property} value={option} /> }))]}
+        />
       </span>
     );
   }

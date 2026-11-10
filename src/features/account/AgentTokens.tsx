@@ -1,5 +1,6 @@
 import { Copy, KeyRound } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
+import { Select } from "../../components/Select";
 import type { AccountPanelProps } from "./AccountMenu";
 import { api, errorMessage } from "./api";
 import { ListStatus } from "./ListStatus";
@@ -15,6 +16,7 @@ interface AgentToken {
 
 export function AgentTokens({ onBusyChange }: AccountPanelProps) {
   const { items, setItems, loading, error, setError, retry } = useAccountList<AgentToken>("/api/tokens");
+  const accessId = useId();
   const [name, setName] = useState("");
   const [access, setAccess] = useState<AgentToken["access"]>("read");
   const [secret, setSecret] = useState<{ value: string; name: string } | null>(null);
@@ -78,11 +80,12 @@ export function AgentTokens({ onBusyChange }: AccountPanelProps) {
       <label className="account-field account-token-form__name">名称
         <input name="tokenName" placeholder="如：我的 Agent" value={name} onChange={(event) => setName(event.target.value)} required disabled={Boolean(pending) || loading} maxLength={100} />
       </label>
-      <label className="account-field">权限
-        <select className="account-select" value={access} disabled={Boolean(pending) || loading} onChange={(event) => setAccess(event.target.value as AgentToken["access"])}>
-          <option value="read">只读</option><option value="write">读写</option>
-        </select>
-      </label>
+      <div className="account-field">
+        <label htmlFor={accessId}>权限</label>
+        <Select id={accessId} className="account-select" aria-label="权限" size="field"
+          value={access} disabled={Boolean(pending) || loading} onValueChange={setAccess}
+          options={[{ value: "read", label: "只读" }, { value: "write", label: "读写" }]} />
+      </div>
       <button type="submit" className="btn btn--primary" disabled={Boolean(pending) || loading || !name.trim()}>{pending === "create" ? "创建中…" : "创建"}</button>
     </form>}
     <ListStatus loading={loading} error={error} retry={retry} empty={!items.length} emptyText="暂无令牌" />

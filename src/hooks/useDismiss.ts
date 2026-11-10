@@ -33,6 +33,8 @@ export function useDismiss(
     const onKeyDown = (event: KeyboardEvent) => {
       // The Escape that cancels a composition in a field inside is not a close.
       if (event.key !== "Escape" || imeComposing(event)) return;
+      // The browser's top-layer picker consumes Escape before this surface.
+      if (document.querySelector('[popover="auto"]:popover-open')) return;
       event.stopPropagation();
       onDismiss("escape");
     };

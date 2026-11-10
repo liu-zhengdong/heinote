@@ -1,6 +1,7 @@
-import { ChevronDown, GripVertical, Plus, Trash2, X } from "lucide-react";
+import { GripVertical, Plus, Trash2, X } from "lucide-react";
 import { useState, type DragEvent, type ReactNode } from "react";
 import { MenuItem, MenuList } from "../../components/Menu";
+import { Select } from "../../components/Select";
 import type { ViewSort } from "../../core/types";
 
 /** A column a view can be sorted by: its id (`TITLE_COLUMN` for the row
@@ -17,8 +18,7 @@ const DIRECTIONS: ReadonlyArray<{ direction: ViewSort["direction"]; label: strin
 ];
 
 /** A view's sorts — Notion's sort panel: a line per key, first key first,
- *  each its column and its direction (the platform's own pickers, as a
- *  cell's are) and × to take it away, dragged by its grip to change which
+ *  each its column and its direction, and × to take it away. Drag its grip to change which
  *  decides first; then Add sort (the next column not yet sorted by) and
  *  Delete sort (every key). Every change is the whole list, handed back. */
 export function SortPanel({
@@ -63,7 +63,6 @@ export function SortPanel({
       <div className="sort-panel__lines" onDragOver={(event) => { if (dragIndex !== null) event.preventDefault(); }} onDrop={drop}>
         {sorts.map((sort, index) => {
           const column = columns.find((item) => item.id === sort.property_id);
-          const direction = DIRECTIONS.find((item) => item.direction === sort.direction) ?? DIRECTIONS[0];
           const before = spot === index;
           const after = spot === sorts.length && index === sorts.length - 1;
           return (
@@ -81,31 +80,17 @@ export function SortPanel({
               onDragOver={(event) => over(event, index)}
             >
               <span className="sort-panel__grip" aria-hidden="true"><GripVertical size={14} /></span>
-              <label className="sort-panel__field sort-panel__field--column">
-                <span className="sort-panel__mark" aria-hidden="true">{column?.icon}</span>
-                <span className="sort-panel__value">{column?.label ?? ""}</span>
-                <ChevronDown size={14} className="sort-panel__chevron" aria-hidden="true" />
-                <select
-                  aria-label={`Sort ${index + 1}: property`}
-                  value={sort.property_id}
-                  onChange={(event) => replace(index, { ...sort, property_id: event.target.value })}
-                >
-                  {columns.filter((item) => item.id === sort.property_id || !used.has(item.id)).map((item) => (
-                    <option key={item.id} value={item.id}>{item.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="sort-panel__field">
-                <span className="sort-panel__value">{direction.label}</span>
-                <ChevronDown size={14} className="sort-panel__chevron" aria-hidden="true" />
-                <select
-                  aria-label={`Sort ${index + 1}: direction`}
-                  value={sort.direction}
-                  onChange={(event) => replace(index, { ...sort, direction: event.target.value === "desc" ? "desc" : "asc" })}
-                >
-                  {DIRECTIONS.map((item) => <option key={item.direction} value={item.direction}>{item.label}</option>)}
-                </select>
-              </label>
+              <Select className="sort-panel__field sort-panel__field--column"
+                aria-label={`Sort ${index + 1}: property`} value={sort.property_id}
+                onValueChange={(property_id) => replace(index, { ...sort, property_id })}
+                options={columns.filter((item) => item.id === sort.property_id || !used.has(item.id)).map((item) => ({
+                  value: item.id, label: item.label,
+                  content: <><span className="sort-panel__mark" aria-hidden="true">{item.icon}</span>{item.label}</>,
+                }))} />
+              <Select className="sort-panel__field"
+                aria-label={`Sort ${index + 1}: direction`} value={sort.direction}
+                onValueChange={(direction) => replace(index, { ...sort, direction })}
+                options={DIRECTIONS.map((item) => ({ value: item.direction, label: item.label }))} />
               <button
                 type="button"
                 className="icon-btn icon-btn--sm sort-panel__remove"

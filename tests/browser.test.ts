@@ -33,7 +33,8 @@ async function token(page: Page) {
   await page.getByRole("button", { name: /^账号：/ }).click();
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill("浏览器 Agent");
-  await page.getByRole("combobox", { name: "权限", exact: true }).selectOption("write");
+  await page.getByRole("combobox", { name: "权限", exact: true }).click();
+  await page.getByRole("option", { name: "读写", exact: true }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const value = await page.getByLabel("令牌", { exact: true }).inputValue();
   await page.getByRole("button", { name: "已保存", exact: true }).click();

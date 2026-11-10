@@ -26,6 +26,7 @@ export function Modal({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !imeComposing(event)) {
+        if (document.querySelector('[popover="auto"]:popover-open')) return;
         event.stopPropagation();
         onClose();
       }

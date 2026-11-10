@@ -55,8 +55,7 @@
 .account-form { display: grid; gap: 16px; }
 .account-field { display: grid; min-width: 0; gap: 7px; color: var(--ink-2); font-size: 14px; }
 .account-hint { color: var(--ink-2); font-size: 12px; line-height: 1.55; font-weight: 400; }
-.account-field input,
-.account-select {
+.account-field input {
   min-width: 0;
   width: 100%;
   min-height: 36px;
@@ -69,13 +68,12 @@
   line-height: 1.4;
   transition: border-color var(--t-fast) var(--e-out), box-shadow var(--t-fast) var(--e-out);
 }
-.account-field input:focus-visible,
-.account-select:focus-visible {
+.account-field input:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;
 }
-.account-field input:disabled,
-.account-select:disabled { opacity: .6; }
+.account-field input:disabled { opacity: .6; }
+.account-select { min-width: 0; width: 100%; }
 .account-gate .account-gate__submit { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 42px; margin-top: 2px; border-radius: 8px; background: #216eaf; color: #fff; font-size: 14px; font-weight: 550; transition: background 140ms ease, transform 80ms ease; }
 .account-gate .account-gate__submit:hover:not(:disabled) { background: #195d98; }
 .account-gate .account-gate__submit:active:not(:disabled) { transform: scale(.985); }

@@ -1,6 +1,7 @@
 import { LogOut, UserRound, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Modal } from "../../components/Modal";
+import { Select } from "../../components/Select";
 import { useWorkspace } from "../../app/workspace-context";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { useSession } from "./AuthGate";
@@ -128,10 +129,9 @@ function AdminUsers({ onBusyChange }: AccountPanelProps) {
       {items.map((item) => <li className="account-row" key={item.id}>
         <ProfileAvatar src={item.avatarUrl} name={personName(item)} size={28} />
         <span className="account-row__text"><strong>{personName(item)}{item.id === user?.id ? "（我）" : ""}</strong><small>@{item.handle}</small></span>
-        <select className="account-select" aria-label={`${personName(item)}的站点角色`} value={item.siteRole} disabled={Boolean(pending)}
-          onChange={(event) => void changeRole(item, event.target.value as SessionUser["siteRole"])}>
-          <option value="user">用户</option><option value="admin">管理员</option>
-        </select>
+        <Select className="account-select" aria-label={`${personName(item)}的站点角色`} value={item.siteRole} disabled={Boolean(pending)}
+          onValueChange={(siteRole) => void changeRole(item, siteRole)}
+          options={[{ value: "user", label: "用户" }, { value: "admin", label: "管理员" }]} />
       </li>)}
     </ul>
   </>;

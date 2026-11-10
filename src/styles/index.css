@@ -3303,20 +3303,7 @@ pre.block__editable {
   gap: 4px;
 }
 
-.block__code-lang {
-  padding: 2px 6px;
-  border: 0;
-  border-radius: var(--r-xs);
-  appearance: none;
-  background: none;
-  color: var(--ink-3);
-  font-size: 12px;
-  transition: background var(--t-tap) var(--e-out);
-}
-
-.block__code-lang:hover {
-  background: var(--fill-hover);
-}
+.block__code-lang { max-width: min(100%, 240px); }
 
 .block__code-bar .icon-btn {
   width: 22px;
@@ -6048,17 +6035,7 @@ button.db__th:hover,
   padding: 0 8px;
 }
 
-/* The chip is the visible control; a transparent native select sits on top so
-   the picker stays the platform's own. */
-.db__cell-select-input {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  inset: 0;
-  appearance: none;
-  opacity: 0;
-}
+.db__cell-select { width: 100%; min-width: 0; }
 
 .db__person {
   display: flex;
@@ -6633,30 +6610,9 @@ button.db__th:hover,
   cursor: grab;
 }
 
-.sort-panel__field {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  height: 30px;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border-radius: var(--r-sm);
-  box-shadow: inset 0 0 0 1px var(--hairline-strong);
-  color: var(--ink);
-  font-size: 13.5px;
-  transition: background var(--t-tap) var(--e-out);
-}
+.sort-panel__field { min-width: 0; flex: 0 1 auto; }
 
-.sort-panel__field:hover {
-  background: var(--fill-hover);
-}
-
-.sort-panel__field--column {
-  flex: 1 1 0;
-  background: var(--fill);
-}
+.sort-panel__field--column { flex: 1 1 0; }
 
 /* Every line's direction is as wide as the widest, so the lines line up. */
 .sort-panel__field:not(.sort-panel__field--column) {
@@ -6669,35 +6625,6 @@ button.db__th:hover,
   flex: none;
   place-items: center;
   color: var(--ink-2);
-}
-
-.sort-panel__value {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sort-panel__chevron {
-  flex: none;
-  color: var(--ink-3);
-}
-
-/* The platform's own picker, unseen, over the face it wears — as a cell's. */
-.sort-panel__field select {
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  border: 0;
-  cursor: pointer;
-  inset: 0;
-  appearance: none;
-  opacity: 0;
-}
-
-.sort-panel__field:has(select:focus-visible) {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
 }
 
 .sort-panel__remove {

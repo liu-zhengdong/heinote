@@ -3,6 +3,7 @@ import { memo, type CSSProperties, type ClipboardEvent, type DragEvent, type Key
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import { rectOf } from "../../hooks/useAnchoredPosition";
 import { Tooltip } from "../../components/Tooltip";
+import { Select } from "../../components/Select";
 import { inlinePlainText } from "../../core/inline-content";
 import type { DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
@@ -337,15 +338,16 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         ) : block.kind === "code" ? (
           <div className="block__code">
             <div className="block__code-bar" contentEditable={false}>
-              <select
+              <Select
                 className="block__code-lang"
                 aria-label="Code language"
                 value={codeLanguage(block.language).id}
                 disabled={readOnly}
-                onChange={(event) => actions.setLanguage(block, event.target.value)}
-              >
-                {CODE_LANGUAGES.map((language) => <option key={language.id} value={language.id}>{language.label}</option>)}
-              </select>
+                onValueChange={(language) => actions.setLanguage(block, language)}
+                options={CODE_LANGUAGES.map((language) => ({ value: language.id, label: language.label }))}
+                size="compact"
+                variant="ghost"
+              />
               <button type="button" className="icon-btn" aria-label="Copy code" onClick={() => actions.copyCode(block)}>
                 <Copy size={14} />
               </button>
