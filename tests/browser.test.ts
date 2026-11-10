@@ -27,10 +27,11 @@ async function register(page: Page, handle: string) {
   await page.locator('input[name="displayName"]').fill(handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${handle}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText(handle);
 }
 async function token(page: Page) {
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill("浏览器 Agent");
   await page.getByRole("combobox", { name: "权限", exact: true }).click();
@@ -74,7 +75,7 @@ test("register, edit, reload, publish, use Agent token, and logout through the r
   const bearer = await token(page);
   const response = await page.request.get(`${server.url}/api/v1/pages`, { headers: { Authorization: `Bearer ${bearer}` } });
   expect(response.status()).toBe(200); expect((await response.json())[0].title).toBe("协作笔记");
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await expect(page.getByRole("heading", { name: "登录", exact: true })).toBeVisible();
   await page.locator('input[name="handle"]').fill("writer");
@@ -85,7 +86,8 @@ test("register, edit, reload, publish, use Agent token, and logout through the r
   await expect(page.locator('input[name="password"]')).toHaveValue("incorrect-password");
   await page.locator('input[name="password"]').fill(password);
   await page.locator('input[name="password"]').press("Enter");
-  await expect(page.getByRole("button", { name: "账号：writer", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText("writer");
   expect(errors).toEqual([]);
 });
 
@@ -104,7 +106,7 @@ test("invited reader accepts in account UI and permission changes reach both bro
   await owner.getByRole("menuitem", { name: "Can view", exact: true }).click();
   await owner.getByRole("button", { name: "Invite", exact: true }).click();
   await expect(owner.getByText("Waiting to accept")).toBeVisible();
-  await member.getByRole("button", { name: /^账号：/ }).click();
+  await member.getByRole("button", { name: "设置", exact: true }).click();
   await member.getByRole("tab", { name: "邀请", exact: true }).click();
   await member.getByRole("button", { name: /^接受「/ }).click();
   await member.getByRole("button", { name: "关闭设置", exact: true }).click();

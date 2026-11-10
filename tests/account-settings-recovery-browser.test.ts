@@ -61,6 +61,14 @@ async function api<T>(page: Page, app: App, path: string, options: { method?: st
 async function sessionUser(page: Page, app: App) {
   return (await api<{ user: User | null }>(page, app, "/api/session")).user;
 }
+async function expectIdentity(page: Page, displayName: string) {
+  const identity = page.getByRole("button", { name: "切换空间", exact: true });
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await identity.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await identity.isVisible()) await pages.click();
+  await expect(identity).toBeVisible();
+  await expect(identity.locator(".space-switcher__user")).toHaveText(displayName);
+}
 async function register(page: Page, app: App, handle: string, displayName: string): Promise<User> {
   await page.goto(app.url);
   await page.getByRole("button", { name: "创建账号", exact: true }).click();
@@ -68,7 +76,7 @@ async function register(page: Page, app: App, handle: string, displayName: strin
   await page.locator('input[name="displayName"]').fill(displayName);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${displayName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, displayName);
   const user = await sessionUser(page, app);
   expect(user).not.toBeNull();
   return user!;
@@ -78,10 +86,14 @@ async function login(page: Page, user: User) {
   await page.locator('input[name="handle"]').fill(user.handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${user.displayName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, user.displayName);
 }
 async function openSettings(page: Page) {
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  const gear = page.getByRole("button", { name: "设置", exact: true });
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await gear.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await gear.isVisible()) await pages.click();
+  await gear.click();
   await expect(settings(page)).toBeVisible();
 }
 async function savedBlocks(page: Page, app: App, pageId: string) {
@@ -275,7 +287,9 @@ test("AC-12/E5: GitHub binding guards an unsaved profile before any OAuth reques
   expect(profilePatches).toBe(0);
   expect(app.github.queue).toHaveLength(0);
   expect(app.github.tokenRequests).toHaveLength(1);
-  expect(await sessionUser(page, app)).toEqual(account);
+  const githubAvatar = "https://avatars.githubusercontent.com/u/81201?s=96";
+  expect(await sessionUser(page, app)).toEqual({ ...account, avatarUrl: githubAvatar });
+  await expect(page.getByRole("button", { name: "切换空间", exact: true }).getByRole("img", { name: account.displayName, exact: true })).toHaveAttribute("src", githubAvatar);
   await expect(category(page, "我的账号")).toHaveAttribute("aria-selected", "true");
   await expect(field).toHaveValue(account.displayName);
   const github = await api<{ identity: { login: string } | null }>(page, app, "/api/auth/github/status");
@@ -321,7 +335,8 @@ test("AC-10/E9: preserve a long document's real scroll position and refresh exte
     await expect(settings(page)).toBeHidden();
     await expect.poll(async () => Math.abs(await main.evaluate((element) => element.scrollTop) - readingPosition)).toBeLessThanOrEqual(1);
     expect(page.url()).toBe(location);
-    await expect(page.getByRole("button", { name: `账号：${account.displayName}`, exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
+    await expectIdentity(page, account.displayName);
     await openSettings(page);
     await category(page, "账号管理").click();
     await expect(settings(page).getByRole("combobox", { name: `${account.displayName}的站点角色`, exact: true })).toBeVisible();

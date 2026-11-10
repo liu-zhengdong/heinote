@@ -71,6 +71,8 @@ export function PageActions({
     canEdit,
     canMovePage,
     canTrashPage,
+    spaces,
+    spaceOf,
   } = useWorkspace();
   const { toast, sharePageId, requestShare, closeShare, closePeek } = useUi();
   const [moreAnchor, setMoreAnchor] = useState<AnchorRect | null>(null);
@@ -84,6 +86,9 @@ export function PageActions({
 
   const editable = canEdit(page.id);
   const trashable = canTrashPage(page.id);
+  const library = spaces[spaceOf(page.id) ?? ""]?.knowledgeBase;
+  const isLibraryHome = library?.homePageId === page.id;
+  const shareLabel = library ? "成员" : "Share";
   // Where to, the picker asks the one move rule.
   const movable = canMovePage(page.id, undefined);
   const font = pageFont(page);
@@ -142,11 +147,11 @@ export function PageActions({
   return (
     <>
       {compact ? (
-        <Tooltip label="Share">
+        <Tooltip label={shareLabel}>
           <button
             type="button"
             className={`icon-btn ${sharing ? "is-on" : ""}`}
-            aria-label="Share"
+            aria-label={shareLabel}
             aria-pressed={sharing}
             onClick={toggleShare}
           >
@@ -160,7 +165,7 @@ export function PageActions({
           aria-pressed={sharing}
           onClick={toggleShare}
         >
-          Share
+          {shareLabel}
         </button>
       )}
       {link ? (
@@ -231,7 +236,7 @@ export function PageActions({
             />
           ) : null}
           {editable ? (
-            <MenuItem icon={<Copy size={16} />} label="Duplicate" onSelect={() => { setMoreAnchor(null); duplicatePage(page.id); }} />
+            <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={isLibraryHome} onSelect={() => { if (!isLibraryHome) { setMoreAnchor(null); duplicatePage(page.id); } }} />
           ) : null}
           {movable ? (
             <MenuItem

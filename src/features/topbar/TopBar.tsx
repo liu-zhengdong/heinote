@@ -1,4 +1,6 @@
-import { Waypoints, X } from "lucide-react";
+import { Settings2, Waypoints, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { KnowledgeBaseSettings } from "../knowledge/KnowledgeBaseSettings";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
 import { useFold } from "../../hooks/useFold";
@@ -36,15 +38,19 @@ function OpenPageActions({ pageId, compact, onHistory }: { pageId: string; compa
 /* The page bar keeps the trail, people, proposals and sharing visible.
    Other page actions remain in the menu. Narrow windows use compact controls. */
 export function TopBar({ onHistory }: { onHistory(): void }) {
-  const { platform, selectedPageId, selectPage, rosters, spaceOf, graphOpen, closeGraph } = useWorkspace();
+  const { platform, selectedPageId, selectPage, rosters, spaceOf, activeSpace, graphOpen, closeGraph } = useWorkspace();
   const { presence, saveStatus } = useActivity();
   const folded = useFold();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   /* The trail: the page and every page it sits in — a block is a step past
      the page it is in, as a sub-page is past its parent. */
   const trail = useWorkspaceState((state) => trailTo(state.pages, selectedPageId), sameTrail);
   // The graph open in the page pane is where you are: no page's trail, faces or actions.
   const opened = trail.length > 0 && !graphOpen;
+  const library = activeSpace?.knowledgeBase && (!opened || spaceOf(selectedPageId) === activeSpace.spaceId) ? activeSpace : null;
+  const canManageLibrary = library && (library.role === "owner" || library.role === "admin");
+  useEffect(() => { setSettingsOpen(false); }, [library?.spaceId]);
   /* A narrow window keeps the page and its parent: "where am I" is answered by
      the last two names, and a trail that truncates every crumb to "Pro…"
      answers nothing. */
@@ -104,7 +110,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                 onClick={() => selectPage(crumb.id)}
               >
                 {crumb.icon ? <span className="crumb__icon" aria-hidden="true">{crumb.icon}</span> : null}
-                <span className="crumb__label">{crumb.label}</span>
+                <span className="crumb__label">{crumb.id === library?.knowledgeBase?.homePageId ? library.name : crumb.label}</span>
               </button>
             ) : <span className="crumb__sep">…</span>}
           </span>
@@ -138,6 +144,10 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
 
         {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${selectedPageId}`} pageId={selectedPageId} compact={folded} /> : null}
         {opened ? <OpenPageActions pageId={selectedPageId} compact={folded} onHistory={onHistory} /> : null}
+        {canManageLibrary ? <Tooltip label="知识库设置">
+          <button type="button" className="icon-btn knowledge-base-settings-entry" aria-label="知识库设置" aria-haspopup="dialog" aria-expanded={settingsOpen}
+            onClick={(event) => { event.currentTarget.focus(); setSettingsOpen(true); }}><Settings2 size={16} aria-hidden="true" /></button>
+        </Tooltip> : null}
         {graphOpen ? (
           <Tooltip label="Close graph">
             <button type="button" className="icon-btn" aria-label="Close graph" onClick={closeGraph}>
@@ -146,6 +156,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
           </Tooltip>
         ) : null}
       </div>
+      {settingsOpen && canManageLibrary && library ? <KnowledgeBaseSettings key={library.spaceId} space={library} onClose={() => setSettingsOpen(false)} /> : null}
     </header>
   );
 }

@@ -6,15 +6,12 @@ import {
   FileText,
   Files,
   Link,
-  Moon,
   MoreHorizontal,
   PanelLeft,
   Plus,
   Search,
-  Settings,
   SquarePen,
   Star,
-  Sun,
   Table2,
   Trash2,
   UserPlus,
@@ -44,9 +41,10 @@ import { Tooltip } from "../../components/Tooltip";
 import { imeComposing } from "../../core/keyboard";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useFold } from "../../hooks/useFold";
-import { SIDEBAR_SORTS, SIDEBAR_VIEWS, THEMES } from "../../../schema";
+import { SIDEBAR_SORTS, SIDEBAR_VIEWS } from "../../../schema";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../core/workspace-state";
-import type { NotePage, PageKind, SidebarSort, SidebarView, SpaceMember, ThemePreference } from "../../core/types";
+import type { NotePage, PageKind, SidebarSort, SidebarView, SpaceMember } from "../../core/types";
+import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
@@ -57,7 +55,9 @@ import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { capitalized } from "../../core/title";
 import { pageGlyph } from "../editor/block-registry";
 import { TrashMenu } from "./TrashMenu";
-import { AccountMenu } from "../account/AccountMenu";
+import { AccountSettingsButton } from "../account/AccountMenu";
+import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
+import "./sidebar.css";
 
 /* The graph is loaded the first time it is looked at. */
 const GraphView = lazy(() => import("./GraphView").then((module) => ({ default: module.GraphView })));
@@ -86,12 +86,6 @@ function writeExpanded(ids: ReadonlySet<string>): void {
 const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
-
-const THEME_CHOICES: Record<ThemePreference, { label: string; icon: typeof Sun }> = {
-  system: { label: "Use system setting", icon: Settings },
-  light: { label: "Light", icon: Sun },
-  dark: { label: "Dark", icon: Moon },
-};
 
 /** The faces of the people a page is shared with, as a small stack: at most
  *  three, and a count for the rest. */
@@ -268,6 +262,10 @@ export function Sidebar() {
     preferences,
     selectedPageId,
     spaces,
+    activeSpaceId,
+    activeSpace,
+    sidebarSort,
+    setSidebarSort,
     rosters,
     archivePage,
     createPage,
@@ -287,7 +285,6 @@ export function Sidebar() {
   const folded = useFold();
 
   const asideRef = useRef<HTMLElement | null>(null);
-  const settingsRef = useRef<HTMLButtonElement | null>(null);
   const newTriggerRef = useRef<HTMLButtonElement | null>(null);
   const trashRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -295,7 +292,6 @@ export function Sidebar() {
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [newMenu, setNewMenu] = useState<AnchorRect | null>(null);
   const [sortMenu, setSortMenu] = useState<AnchorRect | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [resizing, setResizing] = useState(false);
@@ -308,10 +304,12 @@ export function Sidebar() {
      page redraws the list only when it renames the page. Anything written
      from here names the fields it changes, so an older copy of a page here
      never puts back what was written since. */
-  const sort = preferences.sidebar_sort;
-  const pages = useWorkspaceState((state) => state.pages, (left, right) => sameListing(left, right, sort));
+  const sort = sidebarSort;
+  const allPages = useWorkspaceState((state) => state.pages, (left, right) => sameListing(left, right, sort));
+  const pages = useMemo(() => pagesInSpace(allPages, spaces, activeSpaceId), [allPages, spaces, activeSpaceId]);
+  const writable = !activeSpace || Boolean(activeSpace.knowledgeBase && !activeSpace.knowledgeBase.archived && activeSpace.role !== "viewer");
   const view = preferences.sidebar_view;
-  const tree = useMemo(() => buildTree(pages, preferences.sidebar_sort), [pages, preferences.sidebar_sort]);
+  const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
     () => preferences.favorites.flatMap((id): NotePage[] => (pages[id] && !pages[id].archived ? [pages[id]] : [])),
     [pages, preferences.favorites],
@@ -346,12 +344,42 @@ export function Sidebar() {
 
   useEffect(() => {
     if (!drawered) return;
+    const aside = asideRef.current;
+    if (!aside) return;
+    const trigger = document.querySelector<HTMLButtonElement>('.rail [aria-label="All pages"]');
+    const controls = () => [...aside.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]')]
+      .filter((element) => element.tabIndex >= 0 && element.getClientRects().length && !element.closest("[inert]"));
+    const frame = requestAnimationFrame(() => {
+      if (!document.querySelector('.overlay [role="dialog"]')) controls()[0]?.focus({ preventScroll: true });
+    });
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !imeComposing(event)) setDrawerOpen(false);
+      if (event.defaultPrevented || imeComposing(event)) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDrawerOpen(false);
+      } else if (event.key === "Tab") {
+        const items = controls();
+        const first = items[0]; const last = items.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // Native listeners leave portalled menus and modals in control of their keys.
+    aside.addEventListener("keydown", onKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      aside.removeEventListener("keydown", onKeyDown);
+      if (trigger?.getClientRects().length && !document.querySelector('.overlay [role="dialog"]')) trigger.focus({ preventScroll: true });
+    };
   }, [drawered, setDrawerOpen]);
+
+  useEffect(() => {
+    setNewMenu(null);
+    setSortMenu(null);
+    setRowMenu(null);
+    setTrashOpen(false);
+    setRenaming(null);
+  }, [activeSpaceId]);
 
   const afterNavigate = useCallback(() => setDrawerOpen(false), [setDrawerOpen]);
 
@@ -414,18 +442,21 @@ export function Sidebar() {
   /* Sharing is the point of this page, so it is created and handed straight to
      the Share dialog. */
   const createShared = () => {
-    const id = createPage(null, "document");
+    if (!writable) return;
+    const id = createPage();
     if (!id) return;
     requestShare(id);
     afterNavigate();
   };
 
   const toggleNewMenu = (button: HTMLButtonElement) => {
+    if (!writable) return;
     newTriggerRef.current = button;
     setNewMenu((current) => current ? null : rectOf(button));
   };
 
   const createIn = (parentId: string | null, kind: PageKind) => {
+    if (!writable) return;
     createPage(parentId, kind, { block: true });
     setNewMenu(null);
     if (parentId) updateExpanded((current) => new Set([...current, parentId]));
@@ -475,7 +506,7 @@ export function Sidebar() {
         afterNavigate();
       },
       dragOver: (target, event) => {
-        if (!event.dataTransfer.types.includes(PAGE_DRAG)) return false;
+        if (!writable || !event.dataTransfer.types.includes(PAGE_DRAG)) return false;
         // What is dragged is not readable until the drop; the move rule is
         // asked then. Here the target only has to be able to hold it.
         const page = target ? pages[target.pageId] : null;
@@ -545,19 +576,17 @@ export function Sidebar() {
     );
   };
 
-  const accountFoot = (
+  const beforeAccountSettings = useCallback(() => { if (folded) setDrawerOpen(true); }, [folded, setDrawerOpen]);
+
+  const accountFoot = (compact: boolean) => (
     <>
-      <AccountMenu compact={railed} />
+      <SpaceSwitcher compact={compact} onSwitch={afterNavigate} />
       <Tooltip label="Trash" placement="top-start">
         <button type="button" ref={trashRef} className="icon-btn" aria-label="Trash" onClick={() => setTrashOpen(true)}>
           <Trash2 size={16} />
         </button>
       </Tooltip>
-      <Tooltip label="Settings" placement="top-start">
-        <button type="button" ref={settingsRef} className="icon-btn" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
-          <Settings size={16} />
-        </button>
-      </Tooltip>
+      <AccountSettingsButton onOpen={beforeAccountSettings} />
     </>
   );
 
@@ -628,6 +657,8 @@ export function Sidebar() {
           <Button
             icon={SquarePen}
             active={Boolean(newMenu)}
+            disabled={!writable}
+            title={!writable ? "当前空间只读" : undefined}
             className="sidebar__new"
             aria-haspopup="menu"
             aria-expanded={Boolean(newMenu)}
@@ -642,6 +673,7 @@ export function Sidebar() {
               type="button"
               className={`icon-btn ${sortMenu ? "is-active" : ""}`}
               aria-label="Change sort order"
+              disabled={!writable}
               onClick={(event) => setSortMenu(rectOf(event.currentTarget))}
             >
               <ArrowUpNarrowWide size={16} />
@@ -670,7 +702,7 @@ export function Sidebar() {
           role="tree"
           aria-label={capitalized(view)}
           onDragOver={(event) => {
-            if (view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
+            if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
             event.preventDefault();
             setRootDrop(true);
           }}
@@ -684,9 +716,9 @@ export function Sidebar() {
         >
           {view === "files" ? (
             tree.roots.length ? tree.roots.map((page) => branch(page, 0, tree)) : (
-              <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
+              writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
                 <Plus size={15} />New page
-              </button>
+              </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
             )
           ) : null}
 
@@ -711,13 +743,13 @@ export function Sidebar() {
                 <h3 className="sidebar__group-title">
                   <span>Shared by you</span>
                   <Tooltip label="New shared page">
-                    <button type="button" className="icon-btn icon-btn--sm" aria-label="New shared page" onClick={createShared}>
+                    <button type="button" className="icon-btn icon-btn--sm" aria-label="New shared page" disabled={!writable} onClick={createShared}>
                       <Plus size={15} />
                     </button>
                   </Tooltip>
                 </h3>
                 {sharedByMe.length ? sharedByMe.map((page) => branch(page, 0, tree)) : (
-                  <button type="button" className="rail-invite" onClick={createShared}>
+                  <button type="button" className="rail-invite" disabled={!writable} onClick={createShared}>
                     <UserPlus size={15} />New shared page
                   </button>
                 )}
@@ -727,12 +759,13 @@ export function Sidebar() {
         </div>
       )}
 
-      {!railed ? <footer className="sidebar__foot">{accountFoot}</footer> : null}
+      {!railed || folded ? <footer className="sidebar__foot">{accountFoot(false)}</footer> : null}
     </>
   );
 
   const menuEditable = menuPage ? canEdit(menuPage.id) : false;
   const menuTrashable = menuPage ? canTrashPage(menuPage.id) : false;
+  const menuIsHome = Boolean(menuPage && activeSpace?.knowledgeBase?.homePageId === menuPage.id);
 
   return (
     <>
@@ -760,6 +793,7 @@ export function Sidebar() {
                 type="button"
                 className={`icon-btn rail__btn ${newMenu ? "is-active" : ""}`}
                 aria-label="新建"
+                disabled={!writable}
                 aria-haspopup="menu"
                 aria-expanded={Boolean(newMenu)}
                 data-pop-group="sidebar-new"
@@ -795,7 +829,7 @@ export function Sidebar() {
             </div>
           ) : <div className="rail__group rail__group--pages" />}
 
-          <div className="rail__group rail__group--foot">{accountFoot}</div>
+          {!folded ? <div className="rail__group rail__group--foot">{accountFoot(true)}</div> : null}
         </nav>
       ) : null}
 
@@ -808,6 +842,8 @@ export function Sidebar() {
           resizing ? "is-resizing" : "",
         ].filter(Boolean).join(" ")}
         aria-label="Pages"
+        role={drawered ? "dialog" : undefined}
+        aria-modal={drawered ? true : undefined}
         aria-hidden={railed && !drawered ? true : undefined}
         inert={railed && !drawered ? true : undefined}
       >
@@ -824,7 +860,7 @@ export function Sidebar() {
       </aside>
 
       {drawered ? (
-        <button className="sidebar__scrim is-shown" aria-label="Close the page list" onClick={() => setDrawerOpen(false)} />
+        <button type="button" tabIndex={-1} className="sidebar__scrim is-shown" aria-label="Close the page list" onClick={() => setDrawerOpen(false)} />
       ) : null}
 
       <Popover
@@ -851,8 +887,12 @@ export function Sidebar() {
               {index === 2 || index === 4 ? <MenuDivider /> : null}
               <MenuItem
                 label={SORT_LABELS[sort]}
-                selected={preferences.sidebar_sort === sort}
-                onSelect={() => { setPreference("sidebar_sort", sort); setSortMenu(null); }}
+                selected={sidebarSort === sort}
+                disabled={!writable}
+                onSelect={() => {
+                  setSortMenu(null);
+                  if (writable) void setSidebarSort(sort).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法保存排序，请重试。", "error"));
+                }}
               />
             </div>
           ))}
@@ -877,7 +917,7 @@ export function Sidebar() {
             <MenuItem icon={<Link size={16} />} label="Copy link" onSelect={() => { copyPageLink(menuPage.id); setRowMenu(null); }} />
             {menuEditable ? (
               <>
-                <MenuItem icon={<Copy size={16} />} label="Duplicate" onSelect={() => { duplicatePage(menuPage.id); setRowMenu(null); }} />
+                <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={menuIsHome} onSelect={() => { if (!menuIsHome) { duplicatePage(menuPage.id); setRowMenu(null); } }} />
                 <MenuItem icon={<FileText size={16} />} label="Rename" onSelect={() => { setRenaming(menuPage.id); setRowMenu(null); }} />
               </>
             ) : null}
@@ -898,26 +938,6 @@ export function Sidebar() {
 
       {trashOpen ? <TrashMenu anchor={trashRef.current ? rectOf(trashRef.current) : null} onClose={() => setTrashOpen(false)} /> : null}
 
-      <Popover
-        open={settingsOpen}
-        anchor={settingsRef.current ? rectOf(settingsRef.current) : null}
-        placement="top-start"
-        label="Settings"
-        onDismiss={() => setSettingsOpen(false)}
-      >
-        <MenuList label="Appearance" autoFocus>
-          <div className="menu__section-title">Appearance</div>
-          {THEMES.map((value) => ({ value, ...THEME_CHOICES[value] })).map(({ value, label, icon: Icon }) => (
-            <MenuItem
-              key={value}
-              icon={<Icon size={16} />}
-              label={label}
-              selected={preferences.theme === value}
-              onSelect={() => { setPreference("theme", value); setSettingsOpen(false); }}
-            />
-          ))}
-        </MenuList>
-      </Popover>
     </>
   );
 }

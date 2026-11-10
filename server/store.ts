@@ -13,6 +13,7 @@ import type { NotePage, PageVersion, Person, SpaceRole } from "../src/core/types
 import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
+import { KnowledgeBases } from "./knowledge-bases.ts";
 import { pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -51,6 +52,7 @@ export class Store {
   readonly db: DatabaseSync;
   readonly files: FileStore;
   readonly avatars: AvatarStore;
+  readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
   private transactionDepth = 0;
   constructor(dataDir: string) {
@@ -71,6 +73,7 @@ export class Store {
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
     this.files = new FileStore(this.db, dataDir);
     this.avatars = new AvatarStore(this.db, this.files);
+    this.knowledgeBases = new KnowledgeBases(this);
     this.collaboration = new CollaborationStore(this);
     this.collaboration.initialize();
   }
@@ -94,14 +97,29 @@ export class Store {
     this.collaboration?.committed();
     return result;
   }
-  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatars.url(String(row.id)), siteRole: row.site_role as User["siteRole"] }; }
+  private avatarUrl(userId: string): string | null {
+    const uploaded = this.avatars.url(userId);
+    if (uploaded) return uploaded;
+    if (!this.one("SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_identities'")) return null;
+    const github = this.one("SELECT provider_user_id FROM oauth_identities WHERE provider='github' AND user_id=?", userId);
+    return github ? `https://avatars.githubusercontent.com/u/${encodeURIComponent(String(github.provider_user_id))}?s=96` : null;
+  }
+  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatarUrl(String(row.id)), siteRole: row.site_role as User["siteRole"] }; }
   userById(userId: string): User | undefined { const row = this.one("SELECT * FROM users WHERE id=?", userId); return row && this.user(row); }
   scope(actor: Actor, requested: string, write = false): string {
     if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。");
     if (requested === "personal") return `user:${actor.user.id}`;
     const role = this.role(actor, requested);
     if (write && role === "viewer") fail(403, "此空间仅可查看。", "read_only");
+    if (write && this.knowledgeBases.get(requested)?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
     return requested;
+  }
+  private assertPageLocation(scope: string, pageId: string): void {
+    const targetIsLibrary = Boolean(this.knowledgeBases.get(scope));
+    const existing = this.all("SELECT r.scope,k.space_id FROM records r LEFT JOIN knowledge_bases k ON k.space_id=r.scope WHERE r.collection='pages' AND r.id=?", pageId);
+    if (existing.some((row) => row.scope !== scope && (targetIsLibrary || row.space_id !== null))) {
+      fail(403, "页面不能迁入或迁出团队知识库。", "knowledge_base_boundary");
+    }
   }
   role(actor: Actor, spaceId: string): SpaceRole {
     const member = this.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, actor.user.id);
@@ -156,6 +174,12 @@ export class Store {
           return JSON.parse(String(cached.result)) as Array<Row | null>;
         }
       }
+      // Capture ownership before any source record can be deleted in this batch.
+      for (const write of requested) {
+        const scope = this.scope(actor, write.scope, true);
+        const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? parseBlockRecordId(write.id)?.pageId : write.collection === "versions" ? parseHistoryId(write.id)?.pageId : undefined;
+        if (pageId) this.assertPageLocation(scope, pageId);
+      }
       this.collaboration.markRequest(requestId);
       this.collaboration.checkExpected(actor, expectedPages);
       this.collaboration.checkBarriers(actor, requested, expectedPages);
@@ -167,6 +191,11 @@ export class Store {
         const write = this.collaboration.stripProjected(original, scope, approved);
         if (scope !== `user:${actor.user.id}` && write.collection === "workspace_settings") fail(403, "设置仅属于个人。");
         const current = this.record(scope, write.collection, write.id);
+        const library = this.knowledgeBases.get(scope);
+        if (library && write.collection === "pages" && write.action === "delete") {
+          if (write.id === library.homePageId) fail(403, "知识库首页不能删除。", "knowledge_base_home");
+          if (!["owner", "admin"].includes(this.role(actor, scope))) fail(403, "永久删除需要知识库管理权限。", "forbidden");
+        }
         let next: Row | undefined;
         if (write.action === "put") {
           if (!write.value) fail(400, "缺少记录内容。");
@@ -186,6 +215,7 @@ export class Store {
             if (next.id !== write.id) fail(400, "页面 ID 不一致。");
             if (next.share_space_id) {
               if (typeof next.share_space_id !== "string") fail(400, "空间无效。");
+              if (scope.startsWith("user:") && this.knowledgeBases.get(next.share_space_id)) fail(403, "团队知识库不使用个人分享指针。", "knowledge_base_boundary");
               // Changing a tree's sharing home is the owner's operation.
               if ((!current || current.share_space_id !== next.share_space_id) && this.role(actor, next.share_space_id) !== "owner") fail(403, "只有所有者可设置分享位置。");
               if (scope !== `user:${actor.user.id}` && next.share_space_id !== scope) fail(400, "分享空间不一致。");
@@ -211,9 +241,15 @@ export class Store {
       return result;
     });
   }
-  private validatePlane(actor: Actor, scope: string): void {
+  private validatePlane(actor: Actor | undefined, scope: string): void {
     const pages = new Map(this.records(scope, "pages").map((row) => [row.id, row.value]));
+    const library = this.knowledgeBases.get(scope);
+    if (library) {
+      const home = pages.get(library.homePageId);
+      if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
+    }
     for (const [pageId, page] of pages) {
+      if (library && pageId !== library.homePageId && page.share_space_id !== undefined) fail(400, "知识库页面必须继承首页的空间。", "knowledge_base_boundary");
       const seen = new Set([pageId]);
       let parentId = page.parent_id;
       while (typeof parentId === "string") {
@@ -226,6 +262,7 @@ export class Store {
         }
         parentId = parent.parent_id;
       }
+      if (library && !seen.has(library.homePageId)) fail(400, "知识库页面必须位于首页下。", "knowledge_base_boundary");
       if (!scope.startsWith("user:")) {
         let root = page;
         const visited = new Set<string>();
@@ -238,7 +275,7 @@ export class Store {
         if (root.share_space_id !== scope) fail(400, "空间页面必须属于已分享的页面树。");
       }
       // A private sharing pointer must refer to a space the writer can read.
-      if (scope === `user:${actor.user.id}` && typeof page.share_space_id === "string") this.role(actor, page.share_space_id);
+      if (actor && scope === `user:${actor.user.id}` && typeof page.share_space_id === "string") this.role(actor, page.share_space_id);
     }
     for (const collection of ["blocks", "versions"]) for (const row of this.records(scope, collection)) {
       if (!pages.has(String(row.value.page))) fail(400, "记录必须属于当前空间的页面。");
@@ -290,17 +327,23 @@ export class Store {
     return { id: page.id, title: page.title, text, revision, page, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
   }
   savePage(scope: string, page: NotePage): void {
-    const { block_tree, title, title_content, parent_id, ...fields } = page;
-    this.put(scope, "pages", page.id, { ...fields, title_content: title_content ?? [{ text: title }], ...(parent_id ? { parent_id } : {}) });
-    for (const row of this.records(scope, "blocks")) if (row.value.page === page.id) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
-    for (const block of Object.values(block_tree.by_id)) {
-      const { parent_id: parent, ...rest } = block;
-      this.put(scope, "blocks", blockRecordId(page.id, block.id), { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) });
-    }
+    this.transaction(() => {
+      this.assertPageLocation(scope, page.id);
+      const library = this.knowledgeBases.get(scope);
+      if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
+      const { block_tree, title, title_content, parent_id, ...fields } = page;
+      this.put(scope, "pages", page.id, { ...fields, title_content: title_content ?? [{ text: title }], ...(parent_id ? { parent_id } : {}) });
+      for (const row of this.records(scope, "blocks")) if (row.value.page === page.id) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
+      for (const block of Object.values(block_tree.by_id)) {
+        const { parent_id: parent, ...rest } = block;
+        this.put(scope, "blocks", blockRecordId(page.id, block.id), { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) });
+      }
+      if (library) this.validatePlane(undefined, scope);
+    });
   }
   published(token: string): { title: string; pages: NotePage[]; scope: string } {
     const share = this.one("SELECT * FROM shares WHERE token=?", token);
-    if (!share) fail(404, "分享链接已失效。", "not_found");
+    if (!share || this.knowledgeBases.get(String(share.scope))) fail(404, "分享链接已失效。", "not_found");
     const owner = this.userById(String(share.user_id));
     if (!owner) fail(404, "分享链接已失效。");
     let actual;

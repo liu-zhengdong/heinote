@@ -32,7 +32,7 @@ function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: Note
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, graphOpen, restorePage, deletePage,
+    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast } = useUi();
@@ -56,6 +56,14 @@ export function App() {
   // Opened from the trash, the page is read where it is: the page in the
   // trash, itself or above it, is the one Restore brings back.
   const trashedAt = useWorkspaceState((state) => pageAncestry(state.pages, selectedPageId).find((page) => page.archived)?.id ?? null);
+  const [deleting, setDeleting] = useState(false);
+  const removeTrashedPage = useCallback(async () => {
+    if (!trashedAt || deleting) return;
+    setDeleting(true);
+    try { await deletePage(trashedAt); toast("Deleted permanently", "success"); }
+    catch (reason) { toast(reason instanceof Error ? reason.message : "页面未删除。", "error"); }
+    finally { setDeleting(false); }
+  }, [trashedAt, deleting, deletePage, toast]);
   // Gone, the peek closes.
   const peekOpen = useWorkspaceState((state) => {
     const peeked = peekPageId ? state.pages[peekPageId] : undefined;
@@ -246,11 +254,11 @@ export function App() {
               <div className="history-banner trash-banner" role="status">
                 <Trash2 size={14} />
                 <span>In the trash</span>
-                <button type="button" className="btn btn--outline" onClick={() => restorePage(trashedAt, { select: false })}>
+                <button type="button" className="btn btn--outline" disabled={deleting || !canEdit(trashedAt)} onClick={() => restorePage(trashedAt, { select: false })}>
                   <RotateCcw size={13} />Restore
                 </button>
-                {canEdit(trashedAt) ? (
-                  <button type="button" className="btn btn--danger" onClick={() => { deletePage(trashedAt); toast("Deleted permanently", "success"); }}>
+                {canDeletePage(trashedAt) ? (
+                  <button type="button" className="btn btn--danger" disabled={deleting} onClick={() => void removeTrashedPage()}>
                     Delete permanently
                   </button>
                 ) : null}
@@ -269,10 +277,14 @@ export function App() {
             ) : (
               <div className="empty-page">
                 <FileText size={28} strokeWidth={1.4} />
-                <h1>No page open</h1>
-                <button type="button" className="btn btn--primary" onClick={() => createPage(null, "document")}>
-                  <Plus size={15} />New page
-                </button>
+                <h1>{activeSpace?.knowledgeBase ? "知识库首页尚未读取" : "No page open"}</h1>
+                {activeSpace?.knowledgeBase ? (
+                  <button type="button" className="btn" onClick={() => switchSpace(activeSpaceId)}>重试打开</button>
+                ) : (
+                  <button type="button" className="btn btn--primary" onClick={() => createPage(null, "document")}>
+                    <Plus size={15} />New page
+                  </button>
+                )}
               </div>
             )}
           </main>

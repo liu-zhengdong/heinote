@@ -38,6 +38,14 @@ const test = base.extend<{ app: App; account: User }>({
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 function settings(page: Page) { return page.getByRole("dialog", { name: "账号设置", exact: true }); }
+async function expectIdentity(page: Page, displayName: string) {
+  const identity = page.getByRole("button", { name: "切换空间", exact: true });
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await identity.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await identity.isVisible()) await pages.click();
+  await expect(identity).toBeVisible();
+  await expect(identity.locator(".space-switcher__user")).toHaveText(displayName);
+}
 function category(page: Page, name: string) {
   const dialog = settings(page);
   return dialog.getByRole("tab", { name, exact: true }).or(dialog.getByRole("button", { name, exact: true }));
@@ -49,7 +57,7 @@ async function register(page: Page, app: App, handle: string, displayName = hand
   await page.locator('input[name="displayName"]').fill(displayName);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${displayName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, displayName);
   return sessionUser(page, app);
 }
 async function sessionUser(page: Page, app: App): Promise<User> {
@@ -71,7 +79,7 @@ async function tokens(page: Page, app: App): Promise<TokenMetadata[]> {
   return response.json();
 }
 async function openSettings(page: Page) {
-  const entry = page.getByRole("button", { name: /^账号：/ });
+  const entry = page.getByRole("button", { name: "设置", exact: true });
   const pages = page.getByRole("button", { name: "All pages", exact: true });
   await expect.poll(async () => await entry.isVisible() || await pages.isVisible()).toBe(true);
   if (!await entry.isVisible()) await pages.click();
@@ -195,7 +203,8 @@ test("AC-01/02: save a trimmed display name with Enter, refresh identity and fut
   await expect(dialog.getByRole("status").filter({ hasText: /^已保存$/ })).toBeVisible();
   await expect(field).toHaveValue("新的显示名");
   await dialog.getByRole("button", { name: "关闭设置", exact: true }).click();
-  const entry = page.getByRole("button", { name: "账号：新的显示名", exact: true });
+  const entry = page.getByRole("button", { name: "设置", exact: true });
+  await expectIdentity(page, "新的显示名");
   await expect(entry).toBeFocused();
   expect(page.url()).toBe(location);
   await expect(title).toHaveText("设置前的笔记");
@@ -207,7 +216,7 @@ test("AC-01/02: save a trimmed display name with Enter, refresh identity and fut
   expect((await records(page, app, "pages")).find((row) => row.id === originalId)?.value.created_by).toBe(originalAuthor);
   for (const row of originalHistory) expect((await records(page, app, "versions")).find((current) => current.id === row.id)?.value).toEqual(row.value);
   await page.reload();
-  await expect(page.getByRole("button", { name: "账号：新的显示名", exact: true })).toBeVisible();
+  await expectIdentity(page, "新的显示名");
   expect(await sessionUser(page, app)).toEqual({ ...account, displayName: "新的显示名" });
   await openSettings(page);
   await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("新的显示名");
@@ -276,7 +285,8 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await prompt.getByRole("button", { name: "放弃修改", exact: true }).click();
   await expect(settings(page)).toBeHidden();
-  await expect(page.getByRole("button", { name: `账号：${account.displayName}`, exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
+  await expectIdentity(page, account.displayName);
   await openSettings(page);
   await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(account.displayName);
   await category(page, "Agent 令牌").click();
@@ -322,7 +332,7 @@ test("AC-09: pending profile save blocks navigation, Escape, close, logout, and 
   await expect(settings(page)).toBeHidden();
 });
 
-test("AC-04: all themes persist, follow the OS, and share the existing sidebar shortcut", async ({ page, app, account }) => {
+test("AC-04: all themes persist, follow the OS, and use preferences from the sidebar settings gear", async ({ page, app, account }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await openSettings(page);
   await category(page, "偏好").click();
@@ -331,7 +341,7 @@ test("AC-04: all themes persist, follow the OS, and share the existing sidebar s
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme === "system" ? "light" : theme);
     await expect.poll(() => savedTheme(page, app)).toBe(theme);
     await page.reload();
-    await expect(page.getByRole("button", { name: `账号：${account.displayName}`, exact: true })).toBeVisible();
+    await expectIdentity(page, account.displayName);
     await openSettings(page);
     await category(page, "偏好").click();
     await expect(settings(page).getByRole("combobox", { name: "外观", exact: true })).toHaveText({ dark: "深色", light: "浅色", system: "跟随系统" }[theme]);
@@ -341,18 +351,22 @@ test("AC-04: all themes persist, follow the OS, and share the existing sidebar s
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Dark", exact: true }).click();
+  await openSettings(page);
+  await category(page, "偏好").click();
+  await chooseTheme(page, "dark");
   await expect.poll(() => savedTheme(page, app)).toBe("dark");
+  await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await openSettings(page);
   await category(page, "偏好").click();
   await expect(settings(page).getByRole("combobox", { name: "外观", exact: true })).toHaveText("深色");
   await chooseTheme(page, "light");
   await expect.poll(() => savedTheme(page, app)).toBe("light");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Use system setting", exact: true }).click();
+  await openSettings(page);
+  await category(page, "偏好").click();
+  await chooseTheme(page, "system");
   await expect.poll(() => savedTheme(page, app)).toBe("system");
+  await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await openSettings(page);
   await category(page, "偏好").click();
   await expect(settings(page).getByRole("combobox", { name: "外观", exact: true })).toHaveText("跟随系统");
@@ -503,7 +517,8 @@ test.describe("one-time Agent secrets", () => {
     await expect(prompt).toBeVisible();
     await prompt.getByRole("button", { name: "离开并隐藏", exact: true }).click();
     await expect(settings(page)).toBeHidden();
-    await expect(page.getByRole("button", { name: `账号：${account.displayName}`, exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
+    await expectIdentity(page, account.displayName);
     expect((await page.request.get(`${app.url}/api/v1/pages`, { headers: authorization })).status()).toBe(200);
     await openSettings(page);
     await category(page, "Agent 令牌").click();
@@ -586,7 +601,8 @@ test("AC-09: vertical tab keys and Select Escape preserve the parent and restore
   await expect(field).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(settings(page)).toBeHidden();
-  await expect(page.getByRole("button", { name: `账号：${account.displayName}`, exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
+  await expectIdentity(page, account.displayName);
 });
 
 test("AC-09: native IME Enter does not save and IME Escape does not close settings", async ({ page, app, account }) => {
@@ -612,6 +628,7 @@ test("AC-09: native IME Enter does not save and IME Escape does not close settin
 test("AC-11: mobile opens navigation first and returns without losing long-name drafts", async ({ page, app, account }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.getByRole("button", { name: "All pages", exact: true })).toBeVisible();
   await openSettings(page);
   await expect(settings(page).getByLabel("显示名", { exact: true })).toBeHidden();
   for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(category(page, name)).toBeVisible();
@@ -655,7 +672,7 @@ test("AC-11: mobile opens navigation first and returns without losing long-name 
   await expect(settings(page).getByRole("button", { name: "退出登录", exact: true })).toBeInViewport();
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await expect(settings(page)).toBeHidden();
-  await expect(page.getByRole("button", { name: `账号：${longName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, longName);
   expect((await sessionUser(page, app)).id).toBe(account.id);
 });
 

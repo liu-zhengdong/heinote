@@ -531,10 +531,11 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const h = await opened();
       const page = writablePage(h, input.page_id, { trash: true });
       if (!page.archived) refuse("bad_request", `${describe(page)} is not in the trash: only a page in the trash is deleted for good (archive_page first).`);
+      if (!h.workspace.canDeletePage(page.id)) refuse("read_only", "Only a knowledge base owner or administrator can permanently delete its pages.");
       const pages = pagesOf(h);
       const gone = [page.id, ...descendantPageIds(pages, page.id)];
-      return change(h, () => {
-        h.workspace.deletePage(page.id);
+      return change(h, async () => {
+        await h.workspace.deletePage(page.id);
         return { deleted_page_ids: gone };
       });
     },

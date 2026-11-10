@@ -14,6 +14,8 @@ import {
 } from "react";
 import { Tooltip } from "../../components/Tooltip";
 import { useWorkspaceState } from "../../app/workspace-store";
+import { useWorkspace } from "../../app/workspace-context";
+import { pagesInSpace } from "../../core/space-navigation";
 import { groupColors } from "../../core/graph-settings";
 import type { ColorName, WorkspaceState } from "../../core/types";
 import { referenceIndex } from "../editor/mentions";
@@ -180,6 +182,7 @@ export function GraphView({
   /** The panel's "Open as full page": the graph in the page pane. */
   onOpenAsPage?(): void;
 }) {
+  const { activeSpaceId, spaces } = useWorkspace();
   const [scope, setScope] = useState<Scope>(() => readScope(variant));
   const [settings, setSettings] = useGraphSettings();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -196,23 +199,23 @@ export function GraphView({
   /* The graph as it stands, through its filters — redrawn when a dot or a
      line changes, not with every word written in a page. Around a page, the
      page itself always stays, whatever the filters say. */
-  const anchor = useWorkspaceState((state) => graphAnchor(state.pages, selectedPageId));
+  const anchor = useWorkspaceState((state) => graphAnchor(pagesInSpace(state.pages, spaces, activeSpaceId), selectedPageId));
   const local = scope === "local" && anchor !== null;
   const { search, rows, orphans, depth } = settings;
-  const selectGraph = useCallback(
-    (state: WorkspaceState) => filterGraph(buildGraph(state.pages, referenceIndex(state.pages)), state.pages, { search, rows, orphans }, local ? anchor : null),
-    [anchor, local, orphans, rows, search],
-  );
+  const selectGraph = useCallback((state: WorkspaceState) => {
+    const pages = pagesInSpace(state.pages, spaces, activeSpaceId);
+    return filterGraph(buildGraph(pages, referenceIndex(pages)), pages, { search, rows, orphans }, local ? anchor : null);
+  }, [activeSpaceId, spaces, anchor, local, orphans, rows, search]);
   const graph = useWorkspaceState(selectGraph, sameGraph);
   const shown = useMemo(() => (local && anchor ? neighbourhood(graph, [anchor], depth) : graph), [anchor, depth, graph, local]);
   /* Animate grows the graph in the order its pages were made; while it
      grows, only the dots come so far are drawn. */
   const drawnGraph = useMemo(() => (growth ? subgraph(shown, new Set(growth.order.slice(0, growth.count))) : shown), [growth, shown]);
   const shape = useMemo(() => graphShape(drawnGraph), [drawnGraph]);
-  const context = local ? `local:${anchor}` : "all";
+  const context = `${activeSpaceId}:${local ? `local:${anchor}` : "all"}`;
   const drawnIds = useMemo(() => drawnGraph.nodes.map((node) => node.id), [drawnGraph]);
   const { groups } = settings;
-  const selectColors = useCallback((state: WorkspaceState) => groupColors(state.pages, drawnIds, groups), [drawnIds, groups]);
+  const selectColors = useCallback((state: WorkspaceState) => groupColors(pagesInSpace(state.pages, spaces, activeSpaceId), drawnIds, groups), [activeSpaceId, spaces, drawnIds, groups]);
   const colors = useWorkspaceState(selectColors, sameColors);
   // The panel's shape is the layout's too, in steps; nothing before it is measured.
   const aspect = size.width && size.height ? Math.round(Math.min(3, Math.max(0.5, size.height / size.width)) * 4) / 4 : 0;

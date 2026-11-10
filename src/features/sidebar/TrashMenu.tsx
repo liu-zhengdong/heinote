@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "../../components/Popover";
 import { imeComposing } from "../../core/keyboard";
 import { pageName } from "../../core/block-tree";
-import { pageAncestry } from "../../core/page-tree";
+import { inTrash, pageAncestry } from "../../core/page-tree";
+import { pagesInSpace } from "../../core/space-navigation";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
@@ -23,12 +24,17 @@ function when(value: string | undefined): string {
  *  name or by the page each was in. A page opens to be read where it is, in
  *  the trash; Restore and Delete permanently stand beside each. */
 export function TrashMenu({ anchor, onClose }: { anchor: AnchorRect | null; onClose(): void }) {
-  const { selectPage, restorePage, deletePage, canEdit } = useWorkspace();
+  const { selectPage, restorePage, deletePage, canEdit, canDeletePage, spaces, activeSpaceId } = useWorkspace();
   const { toast } = useUi();
-  const pages = usePages();
+  const allPages = usePages();
+  const pages = useMemo(() => pagesInSpace(allPages, spaces, activeSpaceId), [allPages, spaces, activeSpaceId]);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(new Set());
+  const deleting = useRef(new Set<string>());
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => { setQuery(""); setActive(0); }, [activeSpaceId]);
 
   const needle = query.trim().toLowerCase();
   const hits = useMemo(() => Object.values(pages)
@@ -38,8 +44,27 @@ export function TrashMenu({ anchor, onClose }: { anchor: AnchorRect | null; onCl
     .toSorted((left, right) => (right.page.archived_at ?? "").localeCompare(left.page.archived_at ?? "")), [needle, pages]);
 
   useEffect(() => {
+    setActive((index) => Math.min(index, Math.max(0, hits.length - 1)));
+  }, [hits.length]);
+
+  useEffect(() => {
     listRef.current?.querySelector(".is-active")?.scrollIntoView({ block: "nearest" });
   }, [active]);
+
+  const removePermanently = async (pageId: string) => {
+    if (deleting.current.has(pageId) || !canDeletePage(pageId)) return;
+    deleting.current.add(pageId);
+    setPendingIds(new Set(deleting.current));
+    try {
+      await deletePage(pageId);
+      toast("Deleted permanently", "success");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "无法永久删除页面，请重试。", "error");
+    } finally {
+      deleting.current.delete(pageId);
+      setPendingIds(new Set(deleting.current));
+    }
+  };
 
   const open = (pageId: string) => {
     selectPage(pageId);
@@ -69,8 +94,10 @@ export function TrashMenu({ anchor, onClose }: { anchor: AnchorRect | null; onCl
           }}
         />
         <div className="move-to__list" ref={listRef} role="listbox" aria-label="Pages in the trash">
-          {hits.length ? hits.map(({ page, crumb }, index) => (
-            <div
+          {hits.length ? hits.map(({ page, crumb }, index) => {
+            const parentTrashed = Boolean(page.parent_id && inTrash(allPages, page.parent_id));
+            const pending = pendingIds.has(page.id);
+            return <div
               key={page.id}
               role="option"
               aria-selected={index === active}
@@ -82,6 +109,7 @@ export function TrashMenu({ anchor, onClose }: { anchor: AnchorRect | null; onCl
               <span className="move-to__copy">
                 <span className="move-to__title">{pageName(page) || "Untitled"}</span>
                 {crumb ? <span className="move-to__crumb">{crumb}</span> : null}
+                {parentTrashed ? <span className="move-to__crumb">先恢复父页面</span> : null}
               </span>
               <span className="trash__when">{when(page.archived_at)}</span>
               <span className="trash__actions">
@@ -89,23 +117,27 @@ export function TrashMenu({ anchor, onClose }: { anchor: AnchorRect | null; onCl
                   type="button"
                   className="icon-btn icon-btn--sm"
                   aria-label={`Restore ${pageName(page)}`}
-                  onClick={(event) => { event.stopPropagation(); restorePage(page.id); onClose(); }}
+                  disabled={pending || !canEdit(page.id) || parentTrashed}
+                  title={parentTrashed ? "先恢复父页面" : !canEdit(page.id) ? "当前空间只读" : "Restore"}
+                  onClick={(event) => { event.stopPropagation(); if (canEdit(page.id) && !parentTrashed && !pending) { restorePage(page.id); onClose(); } }}
                 >
                   <RotateCcw size={14} />
                 </button>
-                {canEdit(page.id) ? (
+                {canDeletePage(page.id) ? (
                   <button
                     type="button"
                     className="icon-btn icon-btn--sm"
                     aria-label={`Delete ${pageName(page)} permanently`}
-                    onClick={(event) => { event.stopPropagation(); deletePage(page.id); toast("Deleted permanently", "success"); }}
+                    disabled={pending}
+                    aria-busy={pending}
+                    onClick={(event) => { event.stopPropagation(); void removePermanently(page.id); }}
                   >
                     <X size={14} />
                   </button>
                 ) : null}
               </span>
-            </div>
-          )) : <p className="move-to__empty">{needle ? "No pages match" : "Trash is empty"}</p>}
+            </div>;
+          }) : <p className="move-to__empty">{needle ? "No pages match" : "Trash is empty"}</p>}
         </div>
       </div>
     </Popover>

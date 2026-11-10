@@ -33,7 +33,8 @@ async function register(page: Page, handle: string) {
   await page.locator('input[name="displayName"]').fill(handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${handle}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText(handle);
 }
 
 async function createToken(page: Page, name: string, access: "read" | "write") {
@@ -145,7 +146,7 @@ async function currentRevision(token: string, db: Db) {
 
 test("UC-14: agent-built database renders, filters and sorts like HTTP, and edits round-trip", async ({ page }, testInfo) => {
   await register(page, "db_owner");
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   const token = await createToken(page, "验收 Agent", "write");
   await closeSettings(page);
 
@@ -250,7 +251,7 @@ test("UC-14: agent-built database renders, filters and sorts like HTTP, and edit
 
 test("UC-14: a read-only token queries but cannot write", async ({ page }) => {
   await register(page, "db_reader");
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
   const writeToken = await createToken(page, "验收写入", "write");
   const readToken = await createToken(page, "验收只读", "read");
   await closeSettings(page);

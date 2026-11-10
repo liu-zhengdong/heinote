@@ -283,9 +283,8 @@ export interface WorkspaceMutation {
   base?: InlineContent;
 }
 
-/** A person as Terminus names them: their handle, the name they go by, and
- *  their picture — a same-origin address that changes when the picture does,
- *  or null when they have none. */
+/** A person's handle, display name and photo. Uploads use immutable same-origin
+ *  URLs; a bound GitHub identity supplies the fallback. No photo is null. */
 export interface Person {
   id: string;
   handle: string;
@@ -297,6 +296,16 @@ export interface Person {
  *  whoever shared the page. */
 export type SpaceRole = "owner" | "admin" | "editor" | "viewer";
 
+/** Shared metadata for a knowledge base. Content stays in its space. */
+export interface KnowledgeBase {
+  homePageId: string;
+  description: string;
+  archived: boolean;
+  sort: SidebarSort;
+  revision: number;
+  createdAt: string;
+}
+
 /** A space this member belongs to, as Notes needs it: its name, their role
  *  there, and what that role allows. */
 export interface SpaceSummary {
@@ -307,6 +316,8 @@ export interface SpaceSummary {
   canManageRoles: boolean;
   canRemoveMembers: boolean;
   canLeave: boolean;
+  /** Absent for ordinary page sharing. */
+  knowledgeBase?: KnowledgeBase;
 }
 
 export interface SpaceMember extends Person {

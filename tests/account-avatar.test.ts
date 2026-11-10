@@ -8,7 +8,8 @@ import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
 import sharp from "sharp";
 import { startServer } from "../server/index.ts";
-import { Browser, type Json, type Reply } from "./helpers/github.ts";
+import { Store } from "../server/store.ts";
+import { Browser, githubConfig, startGithubStub, type GithubConfig, type Json, type Reply } from "./helpers/github.ts";
 
 // UC-12 acceptance uses real HTTP, image decoders and temporary SQLite files.
 const avatarPath = "/api/account/avatar";
@@ -22,7 +23,7 @@ function status(reply: Reply, expected: number): Json {
   return reply.body;
 }
 
-async function fixture(t: TestContext, seed?: (directory: string) => Promise<void>) {
+async function fixture(t: TestContext, seed?: (directory: string) => Promise<void>, github: GithubConfig | null = null) {
   const directory = await mkdtemp(join(tmpdir(), "terminus-notes-avatar-"));
   let server: RunningServer | undefined;
   t.after(async () => {
@@ -35,7 +36,7 @@ async function fixture(t: TestContext, seed?: (directory: string) => Promise<voi
     }
   });
   await seed?.(directory);
-  const boot = () => startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false, registrationOpen: true, github: null });
+  const boot = () => startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false, registrationOpen: true, github });
   server = await boot();
   return {
     directory,
@@ -104,6 +105,58 @@ test("account avatar normalizes PNG, JPEG and WebP through HTTP", async (t) => {
     assert.deepEqual(await session(browser), user);
     await assertWebp(await readAvatar(f.url(), browser, user.avatarUrl));
   }
+});
+
+test("account avatar sources prefer uploads, fall back to the bound GitHub ID, and clear after unlink", async (t) => {
+  const stub = await startGithubStub();
+  t.after(() => stub.close());
+  const f = await fixture(t, undefined, githubConfig(stub));
+  const browser = f.browser();
+  const local = await register(browser, "local_avatar");
+  assert.equal(local.avatarUrl, null);
+  assert.equal((await session(browser)).avatarUrl, null);
+  const providerId = 7394182;
+  stub.queue.push({ id: providerId, login: "linked-avatar-user" });
+  const binding = status(await browser.request("/api/auth/github/link", { method: "POST" }), 200);
+  const provider = await fetch(binding.url, { redirect: "manual" });
+  await provider.arrayBuffer();
+  assert.equal(provider.status, 302);
+  const location = provider.headers.get("location");
+  assert.ok(location);
+  const callback = new URL(location);
+  const linked = await browser.request(callback.pathname + callback.search);
+  assert.equal(linked.status, 302);
+  assert.equal(linked.headers.get("location"), "/?github=linked");
+  const githubUrl = `https://avatars.githubusercontent.com/u/${providerId}?s=96`;
+  const fallback = { ...local, avatarUrl: githubUrl };
+  assert.deepEqual(await session(browser), fallback);
+  assert.equal(f.database((db) => db.prepare("SELECT count(*) AS count FROM files WHERE scope LIKE 'avatar:%'").get())?.count, 0, "GitHub fallback must not copy remote photo bytes");
+  await f.restart();
+  assert.deepEqual(await session(browser), fallback);
+  const uploaded = await upload(browser, await image());
+  assert.notEqual(uploaded.avatarUrl, githubUrl);
+  assert.deepEqual(await session(browser), uploaded);
+  await assertWebp(await readAvatar(f.url(), browser, uploaded.avatarUrl));
+  assert.deepEqual(status(await browser.request(avatarPath, { method: "DELETE" }), 200), { user: fallback });
+  assert.deepEqual(await session(browser), fallback);
+  status(await browser.request(uploaded.avatarUrl), 404);
+  assert.deepEqual(status(await browser.request(avatarPath, { method: "DELETE" }), 200), { user: fallback });
+  const unlinked = status(await browser.request("/api/auth/github/link", { method: "DELETE" }), 200);
+  assert.equal(unlinked.identity, null);
+  assert.equal(unlinked.hasPassword, true);
+  assert.deepEqual(await session(browser), local);
+  status(await browser.request(uploaded.avatarUrl), 404);
+});
+
+test("standalone Store returns no avatar before the OAuth table is initialized", async (t) => {
+  const f = await fixture(t, async (directory) => {
+    const store = new Store(directory);
+    try {
+      assert.equal(store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='oauth_identities'"), undefined);
+      assert.equal(store.user({ id: "standalone", handle: "standalone", display_name: "Standalone", site_role: "user" }).avatarUrl, null);
+    } finally { store.db.close(); }
+  });
+  assert.equal((await register(f.browser(), "local_only")).avatarUrl, null);
 });
 
 test("account avatar requires a current session before consuming raw bodies", async (t) => {

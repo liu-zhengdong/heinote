@@ -123,7 +123,7 @@ export class CollaborationStore {
     if (!data) fail(404, "页面已移走或不存在。", "not_found");
     const row = this.stored(scope, pageId);
     if (!row) fail(409, "协作文档正在初始化。", "not_ready");
-    const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer");
+    const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
     return { scope: scopeName, pageId, generation: String(row.generation), state: Buffer.from(row.state as Uint8Array).toString("base64"), revision: this.store.revision(scope, pageId), canEdit, records: { page: data.page, blocks: data.blocks } };
   }
   checkExpected(actor: Actor, expected: ExpectedPage[]): void {

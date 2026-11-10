@@ -1,0 +1,7 @@
+/* Keep the existing navigator layout and use its tokens for the new footer. */
+.sidebar__foot > .space-switcher { flex: 1; }
+.sidebar__foot > .icon-btn { flex: none; }
+.sidebar :is(.icon-btn, .rail-invite):disabled,
+.rail .icon-btn:disabled { cursor: default; opacity: .4; }
+.sidebar__foot .space-switcher:focus-visible,
+.rail__group--foot .space-switcher:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }

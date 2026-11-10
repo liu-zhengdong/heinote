@@ -45,7 +45,14 @@ test("AC-11: real Chromium 200 percent page zoom keeps settings operable", async
     await page.locator('input[name="displayName"]').fill("缩放验收用户");
     await page.locator('input[name="password"]').fill("Browser-zoom-password-2026!");
     await page.getByRole("button", { name: "注册", exact: true }).click();
-    await page.getByRole("button", { name: "账号：缩放验收用户", exact: true }).click();
+    const identity = page.getByRole("button", { name: "切换空间", exact: true });
+    const pages = page.getByRole("button", { name: "All pages", exact: true });
+    await expect.poll(async () => await identity.isVisible() || await pages.isVisible()).toBe(true);
+    if (!await identity.isVisible()) await pages.click();
+    await expect(identity).toBeVisible();
+    await expect(identity.locator(".space-switcher__user")).toHaveText("缩放验收用户");
+    const gear = page.getByRole("button", { name: "设置", exact: true });
+    await gear.click();
     const settings = page.getByRole("dialog", { name: "账号设置", exact: true });
     await expect(settings).toBeVisible();
     await settings.getByRole("tab", { name: "偏好", exact: true }).click();
@@ -66,9 +73,13 @@ test("AC-11: real Chromium 200 percent page zoom keeps settings operable", async
     await cdp.detach();
     await writeFile(join(evidence, "chromium-page-zoom.json"), JSON.stringify({ baseline, zoomed }, null, 2) + "\n");
     await settings.getByRole("button", { name: "关闭设置", exact: true }).click();
-    await expect(page.getByRole("button", { name: "账号：200% 下保存成功", exact: true })).toBeFocused();
+    await expect(gear).toBeFocused();
+    await expect(identity.locator(".space-switcher__user")).toHaveText("200% 下保存成功");
     await page.reload();
-    await expect(page.getByRole("button", { name: "账号：200% 下保存成功", exact: true })).toBeVisible();
+    await expect.poll(async () => await identity.isVisible() || await pages.isVisible()).toBe(true);
+    if (!await identity.isVisible()) await pages.click();
+    await expect(identity).toBeVisible();
+    await expect(identity.locator(".space-switcher__user")).toHaveText("200% 下保存成功");
     await testInfo.attach("native-page-zoom", { body: JSON.stringify({ baseline, zoomed }), contentType: "application/json" });
   } finally {
     await context?.close();

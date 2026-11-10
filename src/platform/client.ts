@@ -1,9 +1,16 @@
-import type { AppBootstrap, CollaboratorPresence, Person, PresenceState, SpaceMember, SpaceRoster, SpaceSummary } from "../core/types";
+import type { AppBootstrap, CollaboratorPresence, Person, PresenceState, SidebarSort, SpaceMember, SpaceRoster, SpaceSummary } from "../core/types";
 import type { FileUrl } from "./schema";
-import { poll, request } from "./http";
+import { ApiError, poll, request } from "./http";
 import { configureCollaboration } from "../collaboration/client";
 
 export const SHARED_FILES_BUCKET = "page_files";
+export interface KnowledgeBaseClient {
+  create(input: { requestId: string; name: string; description?: string }): Promise<SpaceSummary>;
+  update(spaceId: string, input: { requestId: string; revision: number; name?: string; description?: string; sort?: SidebarSort }): Promise<SpaceSummary>;
+  archive(spaceId: string, input: { requestId: string; revision: number; archived: boolean }): Promise<SpaceSummary>;
+  transfer(spaceId: string, input: { requestId: string; revision: number; userId: string }): Promise<SpaceSummary>;
+  operation(requestId: string): Promise<SpaceSummary | undefined>;
+}
 export interface PlatformClient {
   readonly bootstrap: AppBootstrap;
   presence: {
@@ -26,8 +33,10 @@ export interface PlatformClient {
     invite(spaceId: string, handle: string, role: "admin" | "editor" | "viewer"): Promise<{ created: boolean }>;
     updateRole(spaceId: string, userId: string, role: "admin" | "editor" | "viewer"): Promise<void>;
     removeMember(spaceId: string, userId: string): Promise<void>;
+    revokeInvitation(spaceId: string, invitationId: string): Promise<void>;
     leave(spaceId: string): Promise<void>;
   };
+  knowledgeBases: KnowledgeBaseClient;
   close(): Promise<void>;
 }
 
@@ -83,6 +92,16 @@ export async function createPlatformClient(): Promise<PlatformClient> {
         return { get url() { return url; }, ready, release() { released = true; if (url) URL.revokeObjectURL(url); } };
       },
     },
+    knowledgeBases: {
+      create: (input) => request("/api/knowledge-bases", json("POST", input)),
+      update: (spaceId, input) => request(`/api/knowledge-bases/${encodeURIComponent(spaceId)}`, json("PATCH", input)),
+      archive: (spaceId, input) => request(`/api/knowledge-bases/${encodeURIComponent(spaceId)}/archive`, json("POST", input)),
+      transfer: (spaceId, input) => request(`/api/knowledge-bases/${encodeURIComponent(spaceId)}/transfer`, json("POST", input)),
+      async operation(requestId) {
+        try { return (await request<{ status: "committed"; result: SpaceSummary }>(`/api/knowledge-bases/operations/${encodeURIComponent(requestId)}`)).result; }
+        catch (error) { if (error instanceof ApiError && error.status === 404) return undefined; throw error; }
+      },
+    },
     spaces: {
       create: (name) => request("/api/spaces", json("POST", { name })),
       installations: () => request("/api/spaces"),
@@ -92,6 +111,7 @@ export async function createPlatformClient(): Promise<PlatformClient> {
       invite: (id, handle, role) => request(`/api/spaces/${id}/invitations`, json("POST", { handle, role })),
       updateRole: (id, userId, role) => request(`/api/spaces/${id}/members/${userId}`, json("PATCH", { role })),
       removeMember: (id, userId) => request(`/api/spaces/${id}/members/${userId}`, json("DELETE")),
+      revokeInvitation: (id, invitationId) => request(`/api/spaces/${encodeURIComponent(id)}/invitations/${encodeURIComponent(invitationId)}`, json("DELETE")),
       leave: (id) => request(`/api/spaces/${id}/leave`, json("POST")),
     },
     async close() { clearInterval(heartbeat); presenceStates.clear(); stops.forEach((stop) => stop()); stops.clear(); },

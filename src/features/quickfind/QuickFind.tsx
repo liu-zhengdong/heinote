@@ -8,7 +8,9 @@ import { readableDescriber } from "../editor/mentions";
 import { orderedBlocks, pageName } from "../../core/block-tree";
 import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
-import { pageAncestry } from "../../core/page-tree";
+import { inTrash, pageAncestry } from "../../core/page-tree";
+import { navigationSpaceOf, pagesInSpace } from "../../core/space-navigation";
+import "./quickfind.css";
 import { useUi } from "../../app/ui-context";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { pageGlyph } from "../editor/block-registry";
@@ -26,7 +28,7 @@ export interface Hit {
  *  find pages with it too (`findPages`). */
 export function quickFind(allPages: Record<string, NotePage>, query: string): Hit[] {
   const normalized = query.trim().toLowerCase();
-  const pages = Object.values(allPages).filter((page) => !page.archived);
+  const pages = Object.values(allPages).filter((page) => !inTrash(allPages, page.id));
   const describe = (page: NotePage): string => pageAncestry(allPages, page.id)
     .slice(0, -1)
     .map((item) => pageName(item))
@@ -72,21 +74,32 @@ export function quickFind(allPages: Record<string, NotePage>, query: string): Hi
 /** ⌘K. Titles first, then the first line of body text that matches — enough to
  *  tell two similarly named pages apart without becoming a search product. */
 export function QuickFind() {
-  const { selectPage } = useWorkspace();
+  const { selectPage, activeSpaceId, activeSpace, spaces } = useWorkspace();
   const { quickFindOpen, setQuickFindOpen } = useUi();
   // Closed, it reads nothing — and is not redrawn as pages change.
   const allPages = useWorkspaceState((state) => (quickFindOpen ? state.pages : null));
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
+  const [scope, setScope] = useState<"current" | "all">("current");
 
   useEffect(() => {
     if (quickFindOpen) {
       setQuery("");
       setActive(0);
+      setScope("current");
     }
   }, [quickFindOpen]);
 
-  const hits = useMemo<Hit[]>(() => (allPages ? quickFind(allPages, query) : []), [allPages, query]);
+  const hits = useMemo<Hit[]>(() => {
+    if (!allPages) return [];
+    const results = quickFind(scope === "all" ? allPages : pagesInSpace(allPages, spaces, activeSpaceId), query);
+    if (scope === "current") return results;
+    return results.map((hit) => {
+      const source = navigationSpaceOf(allPages, spaces, hit.page.id);
+      const name = spaces[source]?.name ?? "个人空间";
+      return { ...hit, crumb: [name, hit.crumb].filter(Boolean).join(" / ") };
+    });
+  }, [allPages, query, scope, spaces, activeSpaceId]);
 
   const open = (page: NotePage) => {
     selectPage(page.id);
@@ -119,6 +132,13 @@ export function QuickFind() {
         />
       </div>
 
+      <label className="quickfind__scope">
+        <span>搜索范围</span>
+        <select aria-label="搜索范围" value={scope} onChange={(event) => { setScope(event.target.value === "all" ? "all" : "current"); setActive(0); }}>
+          <option value="current">当前空间 · {activeSpace?.name ?? "个人空间"}</option>
+          <option value="all">所有可访问空间</option>
+        </select>
+      </label>
       <div className="menu scroller" role="listbox" aria-label="Results">
         {hits.length ? hits.map((hit, index) => (
           <button

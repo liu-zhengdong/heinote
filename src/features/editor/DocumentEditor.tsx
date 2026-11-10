@@ -106,6 +106,7 @@ import { FormatToolbar, type FormatState } from "./FormatToolbar";
 import { TitleField } from "./TitleField";
 import { layout, type Item, type Rendered } from "./layout";
 import { PageFrame } from "./PageFrame";
+import { KnowledgeBaseHome } from "../knowledge/KnowledgeBaseHome";
 import { PageMenu, PageNameEditor } from "./PageMenu";
 import { HISTORY_REPLAY_EVENT, SELECT_BLOCK_EVENT } from "./history-cursor";
 import { MoveToMenu } from "./MoveToMenu";
@@ -2549,6 +2550,8 @@ export function DocumentEditor({
             </div>
           ) : null}
         </div>
+
+        <KnowledgeBaseHome pageId={page.id} />
 
         {properties}
 

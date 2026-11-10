@@ -1,12 +1,13 @@
-import { UserRound } from "lucide-react";
-import { useEffect, useState } from "react";
-import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
+import { Settings } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Tooltip } from "../../components/Tooltip";
 import type { GithubResult } from "../../core/github-auth";
 import { useSession } from "./AuthGate";
 import { AccountSettings } from "./AccountSettings";
 
-export function AccountMenu({ compact = false }: { compact?: boolean }) {
+export function AccountSettingsButton({ onOpen }: { onOpen?(): void } = {}) {
   const { user, githubOutcome, clearGithubOutcome } = useSession();
+  const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [notice, setNotice] = useState<GithubResult | null>(null);
 
@@ -14,18 +15,24 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     if (!user || !githubOutcome) return;
     setNotice(githubOutcome);
+    onOpen?.();
     setOpen(true);
     clearGithubOutcome();
-  }, [user, githubOutcome, clearGithubOutcome]);
+  }, [user, githubOutcome, clearGithubOutcome, onOpen]);
 
   if (!user) return null;
-  return <div className={`account-entry${compact ? " account-entry--compact" : ""}`}>
-    <button type="button" className="account-entry__button" aria-label={`账号：${personName(user)}`} title={`账号：${personName(user)}`}
-      aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-      {user.avatarUrl ? <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={18} /> : <UserRound size={18} aria-hidden="true" />}
-      <span className="account-entry__name">{personName(user)}</span>
-    </button>
+  return <>
+    <Tooltip label="设置" placement="top-start">
+      <button ref={trigger} type="button" className="icon-btn" aria-label="设置"
+        aria-haspopup="dialog" aria-expanded={open} onClick={(event) => { event.currentTarget.focus(); onOpen?.(); setOpen(true); }}>
+        <Settings size={16} aria-hidden="true" />
+      </button>
+    </Tooltip>
     {open ? <AccountSettings key={`${user.id}:${notice || "default"}`} notice={notice}
-      onClose={() => { setOpen(false); setNotice(null); }} /> : null}
-  </div>;
+      onClose={() => {
+        setOpen(false);
+        setNotice(null);
+        if (trigger.current?.getClientRects().length && !trigger.current.closest("[inert]")) trigger.current.focus({ preventScroll: true });
+      }} /> : null}
+  </>;
 }

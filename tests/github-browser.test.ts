@@ -29,8 +29,25 @@ async function photo(page: Page, name: string) {
   await page.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))); });
   await page.screenshot({ path: join(evidence, name), fullPage: true });
 }
+async function expectIdentity(page: Page, displayName: string) {
+  const identity = page.getByRole("button", { name: "切换空间", exact: true });
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await identity.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await identity.isVisible()) await pages.click();
+  await expect(identity).toBeVisible();
+  await expect(identity.locator(".space-switcher__user")).toHaveText(displayName);
+}
+async function openSettings(page: Page) {
+  if (await page.getByRole("dialog", { name: "账号设置", exact: true }).isVisible()) return;
+  const gear = page.getByRole("button", { name: "设置", exact: true });
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await gear.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await gear.isVisible()) await pages.click();
+  await gear.click();
+  await expect(page.getByRole("dialog", { name: "账号设置", exact: true })).toBeVisible();
+}
 async function signOut(page: Page) {
-  if (!await page.getByRole("dialog", { name: "账号设置", exact: true }).isVisible()) await page.getByRole("button", { name: /^账号：/ }).click();
+  await openSettings(page);
   const back = page.getByRole("button", { name: "返回设置", exact: true });
   if (await back.isVisible()) await back.click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
@@ -43,11 +60,11 @@ async function passwordRegister(page: Page, handle: string) {
   await page.locator('input[name="displayName"]').fill(handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${handle}`, exact: true })).toBeVisible();
+  await expectIdentity(page, handle);
 }
 async function session(page: Page) { return (await page.request.get(`${server.url}/api/session`)).json(); }
 async function methods(page: Page) {
-  await page.getByRole("button", { name: /^账号：/ }).click();
+  await openSettings(page);
   const profile = page.getByRole("tab", { name: "我的账号", exact: true }).or(page.getByRole("button", { name: "我的账号", exact: true }));
   await profile.click();
 }
@@ -62,7 +79,7 @@ test("GitHub sign-in follows real redirects, retains its account and protects it
   stub.queue.push({ id: 71001, login: "browser-octocat", name: "GitHub 笔记用户" });
   const github = page.getByRole("link", { name: "使用 GitHub 登录", exact: true });
   await github.focus(); await github.press("Enter");
-  await expect(page.getByRole("button", { name: "账号：GitHub 笔记用户", exact: true })).toBeVisible();
+  await expectIdentity(page, "GitHub 笔记用户");
   const first = (await session(page)).user;
   await methods(page);
   await expect(page.getByText("browser-octocat", { exact: false })).toBeVisible();
@@ -73,7 +90,7 @@ test("GitHub sign-in follows real redirects, retains its account and protects it
   await signOut(page);
   stub.queue.push({ id: 71001, login: "renamed-browser-octocat", name: "GitHub 笔记用户" });
   await page.getByRole("link", { name: "使用 GitHub 登录", exact: true }).click();
-  await expect(page.getByRole("button", { name: "账号：GitHub 笔记用户", exact: true })).toBeVisible();
+  await expectIdentity(page, "GitHub 笔记用户");
   expect((await session(page)).user.id).toBe(first.id);
   expect(errors).toEqual([]);
 });
@@ -117,14 +134,14 @@ test("same-name choice returns to password login or creates a separate account e
   await page.locator('input[name="handle"]').fill("same_name");
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("button", { name: "账号：same_name", exact: true })).toBeVisible();
+  await expectIdentity(page, "same_name");
   expect((await session(page)).user.id).toBe(original.id);
   expect((await (await page.request.get(`${server.url}/api/auth/github/status`)).json()).identity).toBeNull();
   await signOut(page);
   stub.queue.push({ id: 71003, login: "same_name", name: "同名 GitHub 用户" });
   await page.getByRole("link", { name: "使用 GitHub 登录", exact: true }).click();
   await page.getByRole("button", { name: "创建新账号", exact: true }).click();
-  await expect(page.getByRole("button", { name: "账号：同名 GitHub 用户", exact: true })).toBeVisible();
+  await expectIdentity(page, "同名 GitHub 用户");
   const created = (await session(page)).user;
   expect(created.id).not.toBe(original.id); expect(created.handle).not.toBe(original.handle);
 });
@@ -143,5 +160,5 @@ test("cancelled and failed authorizations show recoverable feedback and retain b
   await photo(page, "error-desktop@2x.png");
   stub.queue.push({ id: 71004, login: "retry-user", name: "恢复登录用户" });
   await page.getByRole("link", { name: "使用 GitHub 登录", exact: true }).click();
-  await expect(page.getByRole("button", { name: "账号：恢复登录用户", exact: true })).toBeVisible();
+  await expectIdentity(page, "恢复登录用户");
 });

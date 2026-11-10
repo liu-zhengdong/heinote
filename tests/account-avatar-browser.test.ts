@@ -63,7 +63,14 @@ test.use({ trace: "off", screenshot: "off", video: "off", deviceScaleFactor: 2 }
 function settings(page: Page) { return page.getByRole("dialog", { name: "账号设置", exact: true }); }
 function photoRegion(page: Page) { return settings(page).getByRole("region", { name: "个人照片", exact: true }); }
 function fileInput(page: Page) { return settings(page).getByLabel("选择头像照片", { exact: true }); }
-function entry(page: Page) { return page.getByRole("button", { name: /^账号：/, includeHidden: true }); }
+function entry(page: Page) { return page.getByRole("button", { name: "切换空间", exact: true, includeHidden: true }); }
+async function expectIdentity(page: Page, displayName: string) {
+  const pages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await entry(page).isVisible() || await pages.isVisible()).toBe(true);
+  if (await pages.isVisible() && await pages.getAttribute("aria-expanded") === "false") await pages.click();
+  await expect(entry(page)).toBeVisible();
+  await expect(entry(page).locator(".space-switcher__user")).toHaveText(displayName);
+}
 function category(page: Page, name: string) {
   return settings(page).getByRole("tab", { name, exact: true, includeHidden: true })
     .or(settings(page).getByRole("button", { name, exact: true, includeHidden: true }));
@@ -81,7 +88,7 @@ async function register(page: Page, app: App, handle: string, displayName: strin
   await page.locator('input[name="displayName"]').fill(displayName);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${displayName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, displayName);
   return (await sessionUser(page, app))!;
 }
 async function login(page: Page, user: User) {
@@ -89,13 +96,14 @@ async function login(page: Page, user: User) {
   await page.locator('input[name="handle"]').fill(user.handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${user.displayName}`, exact: true })).toBeVisible();
+  await expectIdentity(page, user.displayName);
 }
 async function openSettings(page: Page) {
+  const gear = page.getByRole("button", { name: "设置", exact: true });
   const pages = page.getByRole("button", { name: "All pages", exact: true });
-  await expect.poll(async () => await entry(page).isVisible() || await pages.isVisible()).toBe(true);
-  if (!await entry(page).isVisible()) await pages.click();
-  await entry(page).click();
+  await expect.poll(async () => await gear.isVisible() || await pages.isVisible()).toBe(true);
+  if (!await gear.isVisible()) await pages.click();
+  await gear.click();
   await expect(settings(page)).toBeVisible();
   if (!await photoRegion(page).isVisible()) await category(page, "我的账号").click();
   await expect(photoRegion(page)).toBeVisible();
@@ -199,7 +207,8 @@ test("AC-13: selecting a PNG saves immediately, preserves the name draft, and sy
   expect(patches).toBe(1);
   expect(await sessionUser(page, app)).toMatchObject({ id: account.id, displayName: draft, avatarUrl: saved.avatarUrl });
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
-  await expect(entry(page)).toHaveAccessibleName(`账号：${draft}`);
+  await expect(entry(page).locator(".space-switcher__user")).toHaveText(draft);
+  await expect(entry(page).locator("img")).toHaveAttribute("alt", draft);
   await loadedPhoto(entry(page).locator("img"), saved.avatarUrl!);
   await page.reload();
   await openSettings(page);
@@ -411,6 +420,7 @@ test("AC-14/17: mobile picker cancellation preserves the photo and draft; light/
   page.on("request", (request) => { if (request.method() === "PUT" && request.url() === `${app.url}/api/account/avatar`) puts++; });
   for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport);
+    if (viewport.width === 390) await expect(page.getByRole("button", { name: "All pages", exact: true })).toBeVisible();
     for (const theme of ["light", "dark"] as const) {
       await openSettings(page);
       await navigate(page, "偏好");

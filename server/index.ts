@@ -14,6 +14,7 @@ import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
+import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 
@@ -85,6 +86,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (!user) fail(401, "请先登录。", "unauthorized");
     return { user };
   };
+  attachKnowledgeBases(app, { store, actor });
   const admin = (req: Request) => {
     const who = actor(req);
     if (who.user.siteRole !== "admin") fail(403, "需要站点管理员权限。");
@@ -153,8 +155,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     actor(req); const query = text(req.query.query).trim().replace(/^@/, "").toLowerCase();
     res.json(query.length < 2 ? [] : store.all("SELECT * FROM users WHERE instr(handle,?)>0 OR instr(lower(display_name),?)>0 ORDER BY handle LIMIT 20", query, query).map((row) => { const { siteRole: _siteRole, ...person } = store.user(row); return person; }));
   });
-  const spaceSummary = (row: Row) => ({ spaceId: row.id, name: row.name, role: row.role, canInvite: ["owner", "admin"].includes(String(row.role)), canManageRoles: ["owner", "admin"].includes(String(row.role)), canRemoveMembers: ["owner", "admin"].includes(String(row.role)), canLeave: row.role !== "owner" });
-  app.get("/api/spaces", (req, res) => { const who = actor(req); res.json(store.all("SELECT s.*,m.role FROM spaces s JOIN members m ON s.id=m.space_id WHERE m.user_id=? ORDER BY s.id", who.user.id).map(spaceSummary)); });
+  app.get("/api/spaces", (req, res) => { const who = actor(req); res.json(store.all("SELECT s.*,m.role FROM spaces s JOIN members m ON s.id=m.space_id WHERE m.user_id=? ORDER BY s.id", who.user.id).map((row) => spaceSummary(store, row))); });
   app.post("/api/spaces", (req, res) => {
     const who = actor(req); const { name } = parse(z.object({ name: z.string().trim().min(1).max(200) }), req.body); const spaceId = id();
     store.transaction(() => { store.db.prepare("INSERT INTO spaces VALUES(?,?,?)").run(spaceId, name, who.user.id); store.db.prepare("INSERT INTO members VALUES(?,?,?)").run(spaceId, who.user.id, "owner"); });
@@ -170,14 +171,33 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.json({ members, invitations });
   });
   app.post("/api/spaces/:id/invitations", (req, res) => {
-    const who = actor(req); const spaceId = text(req.params.id); const myRole = store.manage(who, spaceId);
+    const who = actor(req); const spaceId = text(req.params.id);
     const input = parse(z.object({ handle, role: roleSchema }), req.body);
-    if (input.role === "admin" && myRole !== "owner") fail(403, "只有所有者可以授予管理权限。");
-    const user = store.one("SELECT id FROM users WHERE handle=?", input.handle); if (!user) fail(404, "用户尚未注册。请先让对方注册账号。");
-    const userId = String(user.id);
-    if (store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, userId)) { res.json({ created: false }); return; }
-    if (store.one("SELECT id FROM invitations WHERE space_id=? AND user_id=? AND status='pending' AND expires>?", spaceId, userId, Date.now())) { res.json({ created: false }); return; }
-    store.db.prepare("INSERT INTO invitations VALUES(?,?,?,?,?,?,?)").run(id(), spaceId, userId, who.user.id, input.role, "pending", Date.now() + 7 * 86400000); res.json({ created: true });
+    const result = store.transaction(() => {
+      const myRole = store.manage(who, spaceId);
+      if (store.knowledgeBases.get(spaceId)?.archived) fail(403, "知识库已归档，不能发出新邀请。", "read_only");
+      if (input.role === "admin" && myRole !== "owner") fail(403, "只有所有者可以授予管理权限。");
+      const user = store.one("SELECT id FROM users WHERE handle=?", input.handle); if (!user) fail(404, "用户尚未注册。请先让对方注册账号。");
+      const userId = String(user.id);
+      if (store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, userId)) return { created: false };
+      if (store.one("SELECT id FROM invitations WHERE space_id=? AND user_id=? AND status='pending' AND expires>?", spaceId, userId, Date.now())) return { created: false };
+      store.db.prepare("INSERT INTO invitations VALUES(?,?,?,?,?,?,?)").run(id(), spaceId, userId, who.user.id, input.role, "pending", Date.now() + 7 * 86400000);
+      return { created: true };
+    });
+    res.json(result);
+  });
+  app.delete("/api/spaces/:id/invitations/:invitationId", (req, res) => {
+    const who = actor(req); const spaceId = text(req.params.id);
+    store.transaction(() => {
+      const myRole = store.manage(who, spaceId);
+      const invitation = store.one("SELECT * FROM invitations WHERE id=? AND space_id=?", text(req.params.invitationId), spaceId);
+      if (!invitation) fail(404, "邀请不存在。", "not_found");
+      if (myRole !== "owner" && invitation.role === "admin") fail(403, "只有所有者可以撤销管理员邀请。", "forbidden");
+      if (invitation.status === "revoked") return;
+      if (invitation.status !== "pending") fail(409, "邀请已处理，不能撤销。", "conflict");
+      store.db.prepare("UPDATE invitations SET status='revoked' WHERE id=?").run(String(invitation.id));
+    });
+    res.json({ ok: true });
   });
   app.get("/api/invitations", (req, res) => { const who = actor(req); res.json(store.all("SELECT i.*,s.name,u.display_name FROM invitations i JOIN spaces s ON i.space_id=s.id JOIN users u ON u.id=i.inviter_id WHERE i.user_id=? AND i.status='pending' AND i.expires>?", who.user.id, Date.now()).map((row) => ({ id: row.id, spaceId: row.space_id, spaceName: row.name, role: row.role, inviter: row.display_name, expiresAt: new Date(Number(row.expires)).toISOString() }))); });
   app.post("/api/invitations/:id", (req, res) => {
@@ -186,6 +206,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const invitation = store.one("SELECT * FROM invitations WHERE id=? AND user_id=?", text(req.params.id), who.user.id);
       if (!invitation) fail(404, "邀请不存在。");
       if (invitation.status !== "pending" || Number(invitation.expires) < Date.now()) fail(409, "邀请已处理或过期。");
+      if (input.accept && store.knowledgeBases.get(String(invitation.space_id))?.archived) fail(409, "知识库已归档，此邀请不能接受。", "conflict");
       if (input.accept) store.db.prepare("INSERT INTO members VALUES(?,?,?) ON CONFLICT DO NOTHING").run(String(invitation.space_id), who.user.id, String(invitation.role));
       store.db.prepare("UPDATE invitations SET status=? WHERE id=?").run(input.accept ? "accepted" : "declined", String(invitation.id));
     }); res.json({ ok: true });
@@ -293,6 +314,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.get("/api/shares", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM shares WHERE user_id=? AND page_id=?", who.user.id, text(req.query.pageId)).map(shareDto)); });
   app.post("/api/shares", (req, res) => {
     const who = actor(req); const { pageId } = parse(z.object({ pageId: z.string() }), req.body); const { scope } = store.page(who, pageId);
+    if (store.knowledgeBases.get(scope)) fail(403, "团队知识库页面不能公开分享。", "forbidden");
     if (!scope.startsWith("user:") && store.role(who, scope) !== "owner") fail(403, "只有所有者可以公开分享。");
     const row = { id: id(), token: secret(), created_at: currentTime() };
     store.db.prepare("INSERT INTO shares VALUES(?,?,?,?,?,?)").run(row.id, row.token, who.user.id, scope, pageId, row.created_at);
@@ -320,15 +342,24 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/v1/pages", (req, res) => { const who = actor(req); res.json(Object.values(store.state(who).pages).filter((page) => !page.archived).map((page) => store.pageDto(who, page.id))); });
   app.post("/api/v1/pages", (req, res) => {
-    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), parentId: z.string().optional(), spaceId: z.string().optional() }).strict(), req.body);
-    const parent = input.parentId ? store.page(who, input.parentId) : undefined;
-    const scope = parent?.scope ?? store.scope(who, input.spaceId ?? "personal", true);
-    store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
-    const page = newPage(id(), "document", input.parentId ?? null, { author: who.user.id, now: currentTime() }, id());
-    page.title = input.title;
-    const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text }];
-    if (!parent && !scope.startsWith("user:")) page.share_space_id = scope;
-    store.transaction(() => store.savePage(scope, page)); res.status(201).json(store.pageDto(who, page.id));
+    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
+    const pageId = store.transaction(() => {
+      const parent = input.parentId ? store.page(who, input.parentId) : undefined;
+      const requested = input.scope ?? input.spaceId;
+      const explicitScope = requested ? store.scope(who, requested, true) : undefined;
+      if (input.scope && input.spaceId && store.scope(who, input.spaceId, true) !== explicitScope) fail(400, "指定空间不一致。", "bad_request");
+      if (parent && explicitScope && parent.scope !== explicitScope) fail(400, "父页面与指定空间不一致。", "bad_request");
+      const scope = parent?.scope ?? explicitScope ?? store.scope(who, "personal", true);
+      store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
+      const knowledgeBase = store.knowledgeBases.get(scope);
+      const page = newPage(id(), "document", input.parentId ?? knowledgeBase?.homePageId ?? null, { author: who.user.id, now: currentTime() }, id());
+      page.title = input.title;
+      const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text }];
+      if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
+      store.savePage(scope, page);
+      return page.id;
+    });
+    res.status(201).json(store.pageDto(who, pageId));
   });
   app.get("/api/v1/pages/:id", (req, res) => { const who = actor(req); res.json(store.pageDto(who, text(req.params.id))); });
   app.patch("/api/v1/pages/:id", (req, res) => {

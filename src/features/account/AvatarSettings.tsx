@@ -5,6 +5,7 @@ import { api, ApiError, errorMessage } from "./api";
 
 const photoTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxPhotoBytes = 5 * 1024 * 1024;
+const isUploadedAvatar = (url: string | null | undefined) => Boolean(url?.startsWith("/api/account/avatars/"));
 
 export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; onBusyChange(busy: boolean): void }) {
   const { user, refresh } = useSession();
@@ -16,6 +17,7 @@ export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; 
   const id = useId();
   if (!user) return null;
   const busy = Boolean(pending) || disabled;
+  const hasUploadedAvatar = isUploadedAvatar(user.avatarUrl);
 
   const upload = async (file: File) => {
     if (busy) return;
@@ -42,7 +44,7 @@ export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; 
     }
   };
   const remove = async () => {
-    if (busy || !user.avatarUrl) return;
+    if (busy || !hasUploadedAvatar) return;
     setPending("remove");
     onBusyChange(true);
     setError("");
@@ -57,7 +59,7 @@ export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; 
       if (!(reason instanceof ApiError) || reason.status >= 500) {
         try {
           const next = await api<{ user: typeof user }>("/api/session");
-          if (next.user?.id === user.id && !next.user.avatarUrl) {
+          if (next.user?.id === user.id && !isUploadedAvatar(next.user.avatarUrl)) {
             await refresh();
             setNotice("照片已移除");
             confirmed = true;
@@ -77,7 +79,7 @@ export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; 
       <span className="settings-avatar__label">个人照片</span>
       <div className="settings-avatar__actions">
         <button type="button" className="btn" disabled={busy} onClick={() => input.current?.click()}>{user.avatarUrl ? "更换照片" : "上传照片"}</button>
-        {user.avatarUrl ? <button type="button" className="btn" disabled={busy} onClick={() => void remove()}>移除照片</button> : null}
+        {hasUploadedAvatar ? <button type="button" className="btn" disabled={busy} onClick={() => void remove()}>移除照片</button> : null}
         {retryFile ? <button type="button" className="btn" disabled={busy} onClick={() => void upload(retryFile)}>重试上传</button> : null}
       </div>
       <p id={`${id}-help`} className="settings-avatar__help">JPG、PNG 或 WebP，最大 5 MB。选择后自动保存。</p>

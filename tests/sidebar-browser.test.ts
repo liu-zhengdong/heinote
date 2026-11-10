@@ -32,7 +32,8 @@ async function register(page: Page, handle: string) {
   await page.locator('input[name="displayName"]').fill(handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: `账号：${handle}`, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText(handle);
 }
 
 interface PageRow {

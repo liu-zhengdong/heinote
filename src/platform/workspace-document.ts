@@ -5,7 +5,7 @@ import type { SpaceSummary, WorkspaceMutation, WorkspaceState } from "../core/ty
 import type { PlatformClient } from "./client";
 import { Plane } from "./plane";
 import { blockRecordId } from "./record-ids";
-import { restoreSavedWrites } from "./live";
+import { restoreSavedWrites, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
 import { withStructureText } from "../collaboration/client";
 import {
@@ -92,9 +92,10 @@ export class WorkspaceDocument {
   /** What each plane holds, as its live records say. */
   private readonly held = new Map<string, PlaneRecords>();
   private readonly stops = new Map<string, () => void>();
-  /** Spaces being opened, so one is never read twice: each one's opening,
-   *  which every caller waits for. */
-  private readonly opening = new Map<string, Promise<void>>();
+  /** Spaces the latest membership list or an explicit creation can open. */
+  private readonly desired = new Set<string>();
+  /** Each opening keeps its identity across removal and rejoining. */
+  private readonly opening = new Map<string, { token: symbol; promise: Promise<void> }>();
   private readonly listeners = new Set<(state: WorkspaceState) => void>();
   private readonly syncListeners = new Set<(status: SyncStatus) => void>();
   private syncStatus: SyncStatus = "saved";
@@ -102,7 +103,7 @@ export class WorkspaceDocument {
   private readonly writing = new Set<Promise<void>>();
   /** Writes the platform refused for good in this window. */
   private refusals = 0;
-  /** Spaces this member may only read (Can view): nothing is sent there. */
+  /** Viewer spaces and archived knowledge bases receive no content writes. */
   private readonly readOnly = new Set<string>();
   private loading = true;
   private projecting = false;
@@ -112,9 +113,9 @@ export class WorkspaceDocument {
     this.platform = platform;
   }
 
-  static async open(platform: PlatformClient): Promise<WorkspaceDocument> {
+  static async open(platform: PlatformClient, known?: readonly SpaceSummary[]): Promise<WorkspaceDocument> {
     const document = new WorkspaceDocument(platform);
-    const spaceIds = await document.discoverSpaces();
+    const spaceIds = await document.discoverSpaces(known);
     await document.watch(PERSONAL);
     await Promise.all(spaceIds.map((spaceId) => document.watchSpace(spaceId)));
     await restoreSavedWrites();
@@ -123,43 +124,54 @@ export class WorkspaceDocument {
     return document;
   }
 
-  /** The spaces this member's Notes can read: every page tree shared with
-   *  them, and every one they shared. Empty when the platform cannot say. */
-  private async discoverSpaces(): Promise<string[]> {
-    try {
-      const installations = await this.platform.spaces.installations();
-      for (const space of installations) if (space.role === "viewer") this.readOnly.add(space.spaceId);
-      return [...new Set(installations.map((installation) => installation.spaceId).filter(Boolean))];
-    } catch {
-      return [];
+  /** The spaces this member's Notes can read. Failed discovery leaves only personal records. */
+  private async discoverSpaces(known?: readonly SpaceSummary[]): Promise<string[]> {
+    let list = known;
+    if (!list) {
+      try { list = await this.platform.spaces.installations(); }
+      catch { list = []; }
+    }
+    this.updateSpaces(list);
+    return [...this.desired];
+  }
+
+  /** Keep membership and content write permission without changing member roles. */
+  private updateSpaces(list: readonly SpaceSummary[]): void {
+    this.desired.clear();
+    this.readOnly.clear();
+    for (const space of list) {
+      if (!space.spaceId) continue;
+      this.desired.add(space.spaceId);
+      if (space.role === "viewer" || space.knowledgeBase?.archived) this.readOnly.add(space.spaceId);
     }
   }
 
-  private async watch(key: string): Promise<void> {
+  private async watch(key: string, token?: symbol): Promise<void> {
     const plane = await Plane.open(key === PERSONAL ? undefined : key);
-    if (this.closed || (key !== PERSONAL && !this.opening.has(key))) {
-      void plane.close();
+    if (this.closed || (key !== PERSONAL && (!this.desired.has(key) || this.opening.get(key)?.token !== token))) {
+      await plane.close();
       return;
     }
     this.planes.set(key, plane);
-    this.stops.set(key, plane.watch((records) => this.heard(key, records)));
+    this.stops.set(key, plane.watch((records) => {
+      if (this.planes.get(key) === plane) this.heard(key, records);
+    }));
   }
 
-  /** Reads a space, or waits for the reading of it already under way: a
-   *  page shared into a space just made (whose live list may already be
-   *  opening it) is written there only once its plane is open, or the write
-   *  would find no plane and the page would stay where it was. */
+  /** Share writes wait for the space's plane to open. Concurrent readers share that opening. */
   private watchSpace(spaceId: string): Promise<void> {
-    if (this.closed || this.planes.has(spaceId)) return Promise.resolve();
-    let opening = this.opening.get(spaceId);
-    if (!opening) {
-      opening = this.watch(spaceId)
-        // A space that cannot be read now is read again when it is next added.
-        .catch(() => undefined)
-        .finally(() => this.opening.delete(spaceId));
-      this.opening.set(spaceId, opening);
-    }
-    return opening;
+    if (this.closed || !this.desired.has(spaceId) || this.planes.has(spaceId)) return Promise.resolve();
+    const current = this.opening.get(spaceId);
+    if (current) return current.promise;
+    const token = Symbol(spaceId);
+    const promise = this.watch(spaceId, token)
+      // A space that cannot be read now is retried by the next membership refresh.
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.opening.get(spaceId)?.token === token) this.opening.delete(spaceId);
+      });
+    this.opening.set(spaceId, { token, promise });
+    return promise;
   }
 
   /** What a plane holds now, this window's writes included. */
@@ -187,6 +199,8 @@ export class WorkspaceDocument {
   /** Starts reading a space: one this member just shared a page into, or one
    *  that has been shared with them since the window opened. */
   async addSpace(spaceId: string): Promise<void> {
+    if (this.closed) return;
+    this.desired.add(spaceId);
     await this.watchSpace(spaceId);
   }
 
@@ -195,6 +209,9 @@ export class WorkspaceDocument {
    *  their own writes to it too: those were stored in the space, and a
    *  window opened now would not have them either. */
   removeSpace(spaceId: string): void {
+    this.desired.delete(spaceId);
+    this.opening.delete(spaceId);
+    this.readOnly.delete(spaceId);
     const plane = this.planes.get(spaceId);
     if (!plane) return;
     this.planes.delete(spaceId);
@@ -221,12 +238,11 @@ export class WorkspaceDocument {
         return false;
       }
     }
-    // Moved to Can view, this member writes nothing more there.
-    this.readOnly.clear();
-    for (const space of list) if (space.role === "viewer") this.readOnly.add(space.spaceId);
-    const current = new Set(list.map((space) => space.spaceId));
-    for (const spaceId of [...this.planes.keys()]) if (spaceId !== PERSONAL && !current.has(spaceId)) this.removeSpace(spaceId);
-    for (const spaceId of current) await this.addSpace(spaceId);
+    if (this.closed) return false;
+    this.updateSpaces(list);
+    const followed = new Set([...this.planes.keys(), ...this.opening.keys()]);
+    for (const spaceId of followed) if (spaceId !== PERSONAL && !this.desired.has(spaceId)) this.removeSpace(spaceId);
+    await Promise.all([...this.desired].map((spaceId) => this.watchSpace(spaceId)));
     return true;
   }
 
@@ -283,7 +299,9 @@ export class WorkspaceDocument {
       }
     };
     const structural = [...touched.values()].some((ref) => hasMetadataChange(ref.collection, recordValue(before, ref) as Record<string, unknown> | undefined, recordValue(next, ref) as Record<string, unknown> | undefined));
-    if (structural) withStructureText(writeAll); else writeAll();
+    withRecordTransaction(() => {
+      if (structural) withStructureText(writeAll); else writeAll();
+    });
     this.notify();
   }
 
@@ -413,6 +431,8 @@ export class WorkspaceDocument {
       // A last save that fails goes on trying in the collections' own queue
       // for as long as the page is open; a document nobody holds stops here.
       this.closed = true;
+      this.desired.clear();
+      this.opening.clear();
       for (const stop of this.stops.values()) stop();
       this.stops.clear();
       for (const plane of this.planes.values()) void plane.close();

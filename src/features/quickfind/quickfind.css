@@ -1,0 +1,4 @@
+.quickfind__scope { display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--hairline); color:var(--ink); font-size:12px; }
+.quickfind__scope > span { flex-shrink:0; }
+.quickfind__scope select { min-width:0; max-width:100%; padding:4px 8px; border:1px solid var(--hairline-strong); border-radius:5px; background:var(--paper); color:var(--ink); font:inherit; }
+.quickfind__scope select:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }

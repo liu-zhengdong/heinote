@@ -19,7 +19,7 @@ import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { imeComposing } from "../../core/keyboard";
 import { pageName } from "../../core/block-tree";
-import type { NotePage, Person, SpaceMember } from "../../core/types";
+import type { NotePage, Person, SpaceInvitation, SpaceMember } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
 import { pageAncestry } from "../../core/page-tree";
 import { useUi } from "../../app/ui-context";
@@ -62,9 +62,8 @@ function shareRoot(pages: Record<string, NotePage>, pageId: string, spaceId: str
  * join it (they accept from their Terminus notifications), and everything in
  * the page — every page inside it too — is theirs to read, and to change
  * unless they may only view. The owner and anyone with Full access invite,
- * move people between Full access, Can edit and Can view, and remove them;
- * Terminus cannot take back an invitation once sent (it lapses after seven
- * days). */
+ * move people between Full access, Can edit and Can view, and remove them.
+ * Pending invitations stay in the live roster until accepted or revoked. */
 export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void }) {
   const {
     platform,
@@ -84,6 +83,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
   const [memberMenu, setMemberMenu] = useState<{ member: SpaceMember; anchor: AnchorRect } | null>(null);
   const [roleAnchor, setRoleAnchor] = useState<AnchorRect | null>(null);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<"leave" | "stop" | null>(null);
   const fieldRef = useRef<HTMLDivElement | null>(null);
@@ -91,8 +91,9 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
   const me = platform?.bootstrap.user;
   const spaceId = spaceOf(page.id);
   const root = useWorkspaceState((state) => (spaceId ? shareRoot(state.pages, page.id, spaceId) : undefined));
-  const inherited = Boolean(root && root.id !== page.id);
   const space = spaceId ? spaces[spaceId] : undefined;
+  const library = space?.knowledgeBase;
+  const inherited = Boolean(!library && root && root.id !== page.id);
   /* Who is in the space and who has been asked in, from its live roster:
      current as the space says it changed, so nothing here reads it again. */
   const roster = spaceId ? rosters[spaceId] : undefined;
@@ -106,11 +107,16 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
   );
   const myRole = spaceId ? space?.role ?? members.find((member) => member.id === me?.id)?.role : "owner";
   const manager = myRole === "owner" || myRole === "admin";
-  const canInvite = !spaceId || (space?.canInvite ?? manager);
+  const canInvite = !library?.archived && (!spaceId || (space?.canInvite ?? manager));
   const canManageRoles = Boolean(spaceId) && (space?.canManageRoles ?? manager);
   const canRemove = Boolean(spaceId) && (space?.canRemoveMembers ?? manager);
   const canLeave = Boolean(spaceId) && myRole !== "owner" && (space?.canLeave ?? true);
-  const canStop = Boolean(spaceId) && !inherited && myRole === "owner";
+  const canStop = !library && Boolean(spaceId) && !inherited && myRole === "owner";
+  const canRevoke = (invitation: SpaceInvitation) => manager && (myRole === "owner" || invitation.role !== "admin");
+
+  useEffect(() => {
+    if (myRole !== "owner") setRole((value) => value === "admin" ? "editor" : value);
+  }, [myRole]);
 
   const unavailableUserIds = useMemo(
     () => new Set([
@@ -143,6 +149,8 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
   );
 
   const run = async (work: () => Promise<void>, failure: string) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -150,12 +158,13 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     } catch (reason) {
       setError(reason instanceof Error && reason.message ? reason.message : failure);
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
 
   const invite = (handleOverride?: string) => run(async () => {
-    if (!platform) return;
+    if (!platform || !canInvite) return;
     const handle = (handleOverride ?? chosen?.handle ?? query).trim().replace(/^@/, "");
     if (!handle) return;
     const target = await ensureShareSpace(page.id);
@@ -179,7 +188,13 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     await platform.spaces.removeMember(spaceId, member.id);
   }, "Could not remove that person");
 
+  const revokeInvitation = (invitation: SpaceInvitation) => run(async () => {
+    if (!platform || !spaceId || !canRevoke(invitation)) return;
+    await platform.spaces.revokeInvitation(spaceId, invitation.id);
+  }, "无法撤销邀请，请重试。");
+
   const leave = () => run(async () => {
+    if (!canLeave) return;
     await leaveShare(page.id);
     onClose();
   }, "Could not leave this page");
@@ -199,14 +214,17 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     && !(member.role === "admin" && myRole !== "owner")
   );
 
+  const managedMember = memberMenu ? members.find((member) => member.id === memberMenu.member.id) : undefined;
+
   return (
-    <Modal open label={`Share ${pageName(page)}`} className="share" onClose={onClose}>
+    <Modal open label={library ? `成员 ${space.name}` : `Share ${pageName(page)}`} className={`share${library ? " share--knowledge-base" : ""}`} onClose={() => { if (!busyRef.current) onClose(); }}>
       <header className="share__head">
-        <h1 className="share__title">Share</h1>
-        <button type="button" className="icon-btn" aria-label="Close sharing" onClick={onClose}><X size={17} /></button>
+        <h1 className="share__title">{library ? space.name : "Share"}</h1>
+        <button type="button" className="icon-btn" aria-label="Close sharing" disabled={busy} onClick={onClose}><X size={17} /></button>
       </header>
 
-      <div className="share__body">
+      <div className="share__body" aria-busy={busy}>
+        {library ? <p className="share__note">成员权限适用于整个知识库。</p> : null}
         {inherited && root ? (
           <div className="share__inherited">
             <CornerLeftUp size={15} />
@@ -221,6 +239,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
               <Search size={15} />
               <input
                 value={query}
+                disabled={busy}
                 autoFocus
                 aria-label="Add people by handle"
                 placeholder="Add people by handle…"
@@ -230,7 +249,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                 }}
               />
             </div>
-            <button type="button" className="btn btn--outline" onClick={(event) => setRoleAnchor(rectOf(event.currentTarget))}>
+            <button type="button" className="btn btn--outline" disabled={busy} onClick={(event) => setRoleAnchor(rectOf(event.currentTarget))}>
               {roleLabel(role)}<ChevronDown size={13} />
             </button>
             <button type="button" className="btn btn--primary" onClick={() => void invite()} disabled={busy || !query.trim()}>
@@ -238,7 +257,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
             </button>
           </div>
         ) : (
-          <p className="share__note">Only the owner and people with Full access can invite others.</p>
+          <p className="share__note">{library?.archived ? "知识库已归档，暂不能邀请新成员。" : "Only the owner and people with Full access can invite others."}</p>
         )}
 
         {canInvite && suggestions.length ? (
@@ -250,6 +269,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                 role="option"
                 aria-selected={chosen?.id === suggestion.id}
                 className="share__suggestion"
+                disabled={busy}
                 onClick={() => void invite(suggestion.handle)}
               >
                 <ProfileAvatar src={suggestion.avatarUrl} name={personName(suggestion)} size={24} />
@@ -277,7 +297,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                   <small>@{member.handle}</small>
                 </span>
                 {manageable(member) ? (
-                  <button type="button" className="btn" onClick={(event) => setMemberMenu({ member, anchor: rectOf(event.currentTarget) })}>
+                  <button type="button" className="btn" disabled={busy} onClick={(event) => setMemberMenu({ member, anchor: rectOf(event.currentTarget) })}>
                     {roleLabel(member.role)}<ChevronDown size={13} />
                   </button>
                 ) : (
@@ -298,13 +318,18 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                   <strong>{personName(invitation.invitee)}</strong>
                   <small>@{invitation.invitee.handle} · {roleLabel(invitation.role).toLowerCase()} · {daysLeft(invitation.expiresAt)}</small>
                 </span>
-                <span className="share__pending">Waiting to accept</span>
+                <span className="share__invitation-actions">
+                  <span className="share__pending">Waiting to accept</span>
+                  {canRevoke(invitation) ? <button type="button" className="btn" disabled={busy}
+                    aria-label={`撤销对 @${invitation.invitee.handle} 的邀请`} onClick={() => void revokeInvitation(invitation)}>撤销邀请</button> : null}
+                </span>
               </div>
             ))}
           </section>
         ) : null}
 
-        {myRole === "owner" ? <PublicLinks key={page.id} pageId={page.id} /> : null}
+        {myRole === "owner" && !library ? <PublicLinks key={page.id} pageId={page.id} /> : null}
+        {myRole === "owner" && library ? <p className="share__note">如需退出，请先在知识库设置中移交所有权。</p> : null}
       </div>
 
       <footer className="share__access">
@@ -324,11 +349,11 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
               <span className="share__exit-copy">
                 {confirming === "stop"
                   ? "Everyone else loses access, and the page comes back to your private pages."
-                  : "You will lose access to this page and every page inside it."}
+                  : library ? `退出后，你将失去「${space.name}」的全部访问权限。` : "You will lose access to this page and every page inside it."}
               </span>
               <button type="button" className="btn" onClick={() => setConfirming(null)} disabled={busy}>Cancel</button>
               <button type="button" className="btn btn--danger" disabled={busy} onClick={() => void (confirming === "stop" ? stop() : leave())}>
-                {confirming === "stop" ? "Stop sharing" : "Leave"}
+                {confirming === "stop" ? "Stop sharing" : library ? "确认退出" : "Leave"}
               </button>
             </>
           ) : canStop ? (
@@ -337,14 +362,14 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
             </button>
           ) : (
             <button type="button" className="btn share__exit-button" onClick={() => setConfirming("leave")}>
-              <LogOut size={14} />Leave this page
+              <LogOut size={14} />{library ? "退出知识库" : "Leave this page"}
             </button>
           )}
         </div>
       ) : null}
 
       <Popover
-        open={Boolean(roleAnchor)}
+        open={Boolean(roleAnchor) && canInvite}
         anchor={roleAnchor}
         placement="bottom-end"
         label="Invite as"
@@ -356,6 +381,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
               key={option.value}
               label={option.label}
               selected={role === option.value}
+              disabled={busy || !canInvite}
               onSelect={() => { setRole(option.value); setRoleAnchor(null); }}
             />
           ))}
@@ -363,25 +389,25 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
       </Popover>
 
       <Popover
-        open={Boolean(memberMenu)}
+        open={Boolean(memberMenu && managedMember && manageable(managedMember))}
         anchor={memberMenu?.anchor ?? null}
         placement="bottom-end"
         label="Change access"
         onDismiss={() => setMemberMenu(null)}
       >
-        {memberMenu ? (
+        {managedMember && manageable(managedMember) ? (
           <MenuList label="Change access" autoFocus>
             {canManageRoles ? ROLES.map((option) => {
               const Icon = option.icon;
-              const current = memberMenu.member.role === option.value;
+              const current = managedMember.role === option.value;
               return (
                 <MenuItem
                   key={option.value}
                   icon={<Icon size={16} />}
                   label={option.label}
                   selected={current}
-                  disabled={option.value === "admin" && myRole !== "owner"}
-                  onSelect={() => void changeRole(memberMenu.member, option.value)}
+                  disabled={busy || (option.value === "admin" && myRole !== "owner")}
+                  onSelect={() => void changeRole(managedMember, option.value)}
                 />
               );
             }) : null}
@@ -391,7 +417,8 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                 icon={<Trash2 size={16} />}
                 label="Remove"
                 tone="danger"
-                onSelect={() => void removeMember(memberMenu.member)}
+                disabled={busy}
+                onSelect={() => void removeMember(managedMember)}
               />
             ) : null}
           </MenuList>

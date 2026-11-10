@@ -1,5 +1,7 @@
 import { inlinePlainText } from "./inline-content";
-import type { BlockTree, NotePage, WorkspaceState } from "./types";
+import type { BlockTree, KnowledgeBase, NotePage, WorkspaceState } from "./types";
+
+type PermissionSpace = { role?: string; knowledgeBase?: Pick<KnowledgeBase, "homePageId" | "archived"> };
 
 /* Where a page lives, and where it may go.
 
@@ -119,13 +121,13 @@ export function withoutUnhomed(state: WorkspaceState): WorkspaceState {
  *  everyone else in it. */
 export function canMovePage(
   pages: Record<string, NotePage>,
-  spaces: Record<string, { role?: string }>,
+  spaces: Record<string, PermissionSpace>,
   pageId: string,
   targetId?: string | null,
 ): boolean {
   const editable = (id: string) => {
     const spaceId = spaceOfPage(pages, id);
-    return !spaceId || spaces[spaceId]?.role !== "viewer";
+    return !spaceId || (spaces[spaceId]?.role !== "viewer" && !spaces[spaceId]?.knowledgeBase?.archived);
   };
   const page = pages[pageId];
   if (!page || page.archived || page.share_space_id || !editable(pageId)) return false;
@@ -138,7 +140,9 @@ export function canMovePage(
     if (pageAncestry(pages, targetId).some((page) => page.id === pageId) || inTrash(pages, targetId)) return false;
   }
   const from = spaceOfPage(pages, pageId);
-  if (from && from !== (targetId ? spaceOfPage(pages, targetId) : undefined)) {
+  const to = targetId ? spaceOfPage(pages, targetId) : undefined;
+  if (from !== to && ((from && spaces[from]?.knowledgeBase) || (to && spaces[to]?.knowledgeBase))) return false;
+  if (from && from !== to) {
     const role = spaces[from]?.role;
     return role === "owner" || role === "admin";
   }
@@ -150,15 +154,26 @@ export function canMovePage(
  *  everyone it is shared with. One rule for the window and for agents. */
 export function canTrashPage(
   pages: Record<string, NotePage>,
-  spaces: Record<string, { role?: string }>,
+  spaces: Record<string, PermissionSpace>,
   pageId: string,
 ): boolean {
   const page = pages[pageId];
   if (!page || page.archived) return false;
   const spaceId = spaceOfPage(pages, pageId);
   const role = spaceId ? spaces[spaceId]?.role : "owner";
-  if (role === "viewer") return false;
+  const library = spaceId ? spaces[spaceId]?.knowledgeBase : undefined;
+  if (role === "viewer" || library?.archived || library?.homePageId === pageId) return false;
   return !page.share_space_id || role === "owner" || role === "admin";
+}
+
+/** Knowledge-base permanent removal belongs to its owner and administrators. */
+export function canDeletePage(pages: Record<string, NotePage>, spaces: Record<string, PermissionSpace>, pageId: string): boolean {
+  if (!pages[pageId]) return false;
+  const scope = spaceOfPage(pages, pageId);
+  if (!scope) return true;
+  const space = spaces[scope];
+  if (!space || space.role === "viewer" || space.knowledgeBase?.archived) return false;
+  return !space.knowledgeBase || (space.knowledgeBase.homePageId !== pageId && ["owner", "admin"].includes(space.role ?? ""));
 }
 
 /** Whether a page is in the trash, itself or with a parent. */
