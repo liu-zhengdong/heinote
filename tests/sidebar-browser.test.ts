@@ -122,7 +122,7 @@ test("files toolbar opens one dark creation menu and dismisses without creating"
   await cdp.send("DOM.enable");
   await cdp.send("CSS.enable");
   const { root } = await cdp.send("DOM.getDocument");
-  const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".sidebar__new" });
+  const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: ".sidebar__new span" });
   const platformFonts = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
   const typography = await create.evaluate((element) => {
     const style = getComputedStyle(element);

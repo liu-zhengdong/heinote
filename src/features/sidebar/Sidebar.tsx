@@ -36,6 +36,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { Button } from "../../components/Button";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
@@ -624,17 +625,17 @@ export function Sidebar() {
 
       {view === "files" ? (
         <div className="sidebar__tools" role="toolbar" aria-label="Files">
-          <button
-            type="button"
-            className={`btn sidebar__new ${newMenu ? "is-active" : ""}`}
+          <Button
+            icon={SquarePen}
+            active={Boolean(newMenu)}
+            className="sidebar__new"
             aria-haspopup="menu"
             aria-expanded={Boolean(newMenu)}
             data-pop-group="sidebar-new"
             onClick={(event) => toggleNewMenu(event.currentTarget)}
           >
-            <SquarePen size={14} strokeWidth={1.75} aria-hidden="true" />
-            <span className="sidebar__new-label">新建</span>
-          </button>
+            新建
+          </Button>
           <span className="sidebar__head-gap" aria-hidden="true" />
           <Tooltip label="Change sort order">
             <button
