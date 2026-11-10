@@ -1,6 +1,6 @@
 import { UserRound } from "lucide-react";
 import { useEffect, useState } from "react";
-import { personName } from "../../components/ProfileAvatar";
+import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import type { GithubResult } from "../../core/github-auth";
 import { useSession } from "./AuthGate";
 import { AccountSettings } from "./AccountSettings";
@@ -22,7 +22,7 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
   return <div className={`account-entry${compact ? " account-entry--compact" : ""}`}>
     <button type="button" className="account-entry__button" aria-label={`账号：${personName(user)}`} title={`账号：${personName(user)}`}
       aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(true)}>
-      <UserRound size={18} aria-hidden="true" />
+      {user.avatarUrl ? <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={18} /> : <UserRound size={18} aria-hidden="true" />}
       <span className="account-entry__name">{personName(user)}</span>
     </button>
     {open ? <AccountSettings key={`${user.id}:${notice || "default"}`} notice={notice}

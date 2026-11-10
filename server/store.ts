@@ -12,6 +12,7 @@ import { blockRecordId, parseBlockRecordId, parseHistoryId } from "../src/platfo
 import type { NotePage, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
 import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
+import { AvatarStore } from "./avatars.ts";
 import { pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -49,6 +50,7 @@ export function patched(current: Row, patch: Row, base: Row): Row {
 export class Store {
   readonly db: DatabaseSync;
   readonly files: FileStore;
+  readonly avatars: AvatarStore;
   readonly collaboration: CollaborationStore;
   private transactionDepth = 0;
   constructor(dataDir: string) {
@@ -68,6 +70,7 @@ export class Store {
       PRAGMA user_version=1;`);
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
     this.files = new FileStore(this.db, dataDir);
+    this.avatars = new AvatarStore(this.db, this.files);
     this.collaboration = new CollaborationStore(this);
     this.collaboration.initialize();
   }
@@ -91,7 +94,7 @@ export class Store {
     this.collaboration?.committed();
     return result;
   }
-  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: null, siteRole: row.site_role as User["siteRole"] }; }
+  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatars.url(String(row.id)), siteRole: row.site_role as User["siteRole"] }; }
   userById(userId: string): User | undefined { const row = this.one("SELECT * FROM users WHERE id=?", userId); return row && this.user(row); }
   scope(actor: Actor, requested: string, write = false): string {
     if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。");

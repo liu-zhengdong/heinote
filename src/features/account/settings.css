@@ -35,9 +35,17 @@
 .settings-panel[hidden] { display: none; }
 .settings-group + .settings-group { margin-top: 36px; }
 .settings-group h2 { margin: 0; padding: 0 0 12px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 15px; line-height: 22px; font-weight: 600; }
-.settings-profile { display: flex; align-items: flex-start; gap: 20px; padding-top: 24px; }
-.settings-profile > :first-child { flex: none; margin-top: 22px; }
-.settings-profile__form { min-width: 0; flex: 1; max-width: 380px; }
+.settings-avatar { display: flex; align-items: center; gap: 18px; padding-top: 24px; outline: none; }
+.settings-avatar > .avatar { flex: none; }
+.settings-avatar__content { min-width: 0; flex: 1; }
+.settings-avatar__label { color: var(--ink); font-size: 14px; font-weight: 500; }
+.settings-avatar__actions { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+.settings-avatar__actions .btn { padding-inline: 0; color: var(--blue-press); }
+.settings-avatar__actions .btn + .btn { margin-left: 8px; }
+.settings-avatar__help { margin: 5px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; }
+.settings-avatar .account-error { margin-top: 8px; }
+.settings-profile { padding-top: 24px; }
+.settings-profile__form { min-width: 0; width: 100%; max-width: 380px; }
 .settings-profile__form .account-field input { height: 36px; background: var(--fill); border-color: var(--hairline); color: var(--ink); }
 .settings-profile__username { display: flex; min-width: 0; flex-direction: column; gap: 5px; margin-top: 17px; font-size: 14px; }
 .settings-profile__username > span:first-child { color: var(--ink-2); }
@@ -89,8 +97,11 @@
   .settings-back { min-height: 44px; margin: -8px 40px 22px -8px; }
   .settings-heading { margin-bottom: 30px; }
   .settings-heading h1 { padding-right: 30px; }
-  .settings-profile { gap: 16px; padding-top: 22px; }
-  .settings-profile > :first-child { width: 42px; height: 42px; }
+  .settings-avatar { align-items: flex-start; gap: 16px; }
+  .settings-avatar > .avatar { margin-top: 6px; }
+  .settings-avatar__actions { gap: 4px 12px; }
+  .settings-avatar__actions .btn + .btn { margin-left: 0; }
+  .settings-profile { padding-top: 22px; }
   .account-settings .account-field input { min-height: 44px; font-size: 16px; }
   .account-settings .btn { min-height: 44px; }
   .settings-row { align-items: flex-start; gap: 12px; }

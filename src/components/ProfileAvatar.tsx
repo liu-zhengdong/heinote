@@ -2,9 +2,7 @@ import { useState, type CSSProperties } from "react";
 import type { Person } from "../core/types";
 import { Avatar } from "./Avatar";
 
-/** A member's own profile picture, from Terminus — `src` is the person's
- *  `avatarUrl`, which changes when their picture does — or, when they have
- *  none (or it cannot be loaded), their initials in a colour of their own. */
+/** Render a profile photo. Use initials when no photo loads. */
 export function ProfileAvatar({
   src,
   name,
@@ -53,8 +51,7 @@ export function memberName(handle: string): string {
     .join(" ") || handle;
 }
 
-/** What to call someone: the name they go by — or, when Terminus has none
- *  for them, their handle dressed as one. */
+/** Use the display name, or format the handle. */
 export function personName(person: Pick<Person, "handle" | "displayName">): string {
   return person.displayName.trim() || memberName(person.handle);
 }

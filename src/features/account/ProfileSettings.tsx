@@ -1,6 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { imeComposing } from "../../core/keyboard";
-import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
+import { AvatarSettings } from "./AvatarSettings";
 import { useSession } from "./AuthGate";
 import { api, ApiError, errorMessage } from "./api";
 import type { AccountPanelProps } from "./account-panel";
@@ -9,6 +9,8 @@ export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelPro
   const { user, refresh } = useSession();
   const [draft, setDraft] = useState(user?.displayName ?? "");
   const [pending, setPending] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+  const busy = pending || avatarBusy;
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const id = useId();
@@ -19,7 +21,7 @@ export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelPro
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    if (pending || !dirty) return;
+    if (busy || !dirty) return;
     const displayName = draft.trim();
     if (!displayName || displayName.length > 100) {
       setError(displayName ? "显示名最多 100 个字符" : "请输入显示名");
@@ -59,20 +61,20 @@ export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelPro
 
   return <section className="settings-group" aria-labelledby={`${id}-title`}>
     <h2 id={`${id}-title`}>资料</h2>
+    <AvatarSettings disabled={busy} onBusyChange={(active) => { setAvatarBusy(active); onBusyChange(active); }} />
     <div className="settings-profile">
-      <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={52} />
       <form className="settings-profile__form" noValidate onSubmit={(event) => void save(event)}>
         <label className="account-field" htmlFor={`${id}-name`}>显示名
           <input id={`${id}-name`} name="profileDisplayName" data-setting="displayName" value={draft} autoComplete="name"
-            disabled={pending} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
+            disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
             onChange={(event) => { setDraft(event.target.value); setError(""); setNotice(""); }}
             onKeyDown={(event) => { if (event.key === "Enter" && imeComposing(event)) event.preventDefault(); }} />
         </label>
         <div className="settings-profile__username"><span>用户名</span><span>@{user.handle}</span></div>
         <div className="settings-profile__actions">
           {dirty ? <>
-            <button type="submit" className="btn btn--primary" disabled={pending}>{pending ? "保存中…" : "保存"}</button>
-            <button type="button" className="btn" disabled={pending} onClick={() => { setDraft(user.displayName); setError(""); setNotice(""); }}>取消</button>
+            <button type="submit" className="btn btn--primary" disabled={busy}>{pending ? "保存中…" : "保存"}</button>
+            <button type="button" className="btn" disabled={busy} onClick={() => { setDraft(user.displayName); setError(""); setNotice(""); }}>取消</button>
           </> : null}
           {notice ? <span className="settings-saved" role="status">{notice}</span> : null}
         </div>

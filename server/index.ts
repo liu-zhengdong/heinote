@@ -14,6 +14,7 @@ import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
+import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 
 const derive = promisify(scrypt);
@@ -60,7 +61,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     next();
   });
   const jsonParser = express.json({ limit: "16mb" });
-  app.use((req, res, next) => req.path.startsWith("/api/files/") ? next() : jsonParser(req, res, next));
+  app.use((req, res, next) => req.path.startsWith("/api/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
 
   const cookie = (req: Request) => /(?:^|;\s*)notes_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
   const sessionUser = (req: Request): User | undefined => {
@@ -162,7 +163,10 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.get("/api/spaces/:id/roster", (req, res) => {
     const who = actor(req); const spaceId = text(req.params.id); store.role(who, spaceId);
     const members = store.all("SELECT u.*,m.role FROM users u JOIN members m ON u.id=m.user_id WHERE m.space_id=? ORDER BY u.handle", spaceId).map((row) => ({ ...store.user(row), role: row.role }));
-    const invitations = store.all("SELECT i.*,u.handle,u.display_name FROM invitations i JOIN users u ON u.id=i.user_id WHERE i.space_id=? AND i.status='pending' AND i.expires>?", spaceId, Date.now()).map((row) => ({ id: row.id, invitee: { id: row.user_id, handle: row.handle, displayName: row.display_name, avatarUrl: null }, role: row.role, status: row.status, expiresAt: new Date(Number(row.expires)).toISOString() }));
+    const invitations = store.all("SELECT i.*,u.handle,u.display_name,u.site_role FROM invitations i JOIN users u ON u.id=i.user_id WHERE i.space_id=? AND i.status='pending' AND i.expires>?", spaceId, Date.now()).map((row) => {
+      const { siteRole: _siteRole, ...invitee } = store.user({ ...row, id: row.user_id });
+      return { id: row.id, invitee, role: row.role, status: row.status, expiresAt: new Date(Number(row.expires)).toISOString() };
+    });
     res.json({ members, invitations });
   });
   app.post("/api/spaces/:id/invitations", (req, res) => {
@@ -248,6 +252,28 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(path.split("/").at(-1) ?? "file")}`);
     pipeline(file.stream, res, (error) => { if (error) res.destroy(error); });
   };
+  app.put("/api/account/avatar", (req, _res, next) => { actor(req); next(); }, express.raw({ type: () => true, limit: MAX_AVATAR_BYTES }), async (req, res) => {
+    const who = actor(req);
+    if (!Buffer.isBuffer(req.body)) fail(400, "需要照片内容。", "bad_request");
+    const bytes = await prepareAvatar(req.body, req.get("content-type") ?? "");
+    store.transaction(() => {
+      const current = actor(req);
+      if (current.user.id !== who.user.id) fail(401, "账号已变化，请重新登录。", "unauthorized");
+      store.avatars.put(current.user.id, bytes);
+    });
+    res.json({ user: store.userById(who.user.id) });
+  });
+  app.delete("/api/account/avatar", (req, res) => {
+    const who = actor(req);
+    store.transaction(() => store.avatars.remove(who.user.id));
+    res.json({ user: store.userById(who.user.id) });
+  });
+  app.get("/api/account/avatars/:userId/:revision", (req, res) => {
+    actor(req);
+    const location = store.avatars.current(text(req.params.userId), text(req.params.revision));
+    if (!location) fail(404, "头像不存在。", "not_found");
+    sendFile(res, location.scope, location.path);
+  });
   app.put("/api/files/:scope", express.raw({ type: () => true, limit: "8mb" }), (req, res) => {
     const { scope, path } = fileInput(req, true); if (!Buffer.isBuffer(req.body)) fail(400, "需要附件内容。");
     if (!store.files.write(scope, path, req.get("content-type") ?? "application/octet-stream", req.body)) fail(409, "附件路径已存在。");
