@@ -13,6 +13,7 @@ import type { NotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
+import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -20,6 +21,8 @@ const passwordHash = async (password: string) => {
   return `${salt}:${(await derive(password, salt, 64) as Buffer).toString("hex")}`;
 };
 const passwordMatches = async (password: string, encoded: string) => {
+  // GitHub-only accounts have no password credential.
+  if (!encoded) return false;
   const [salt, expected] = encoded.split(":");
   const actual = await derive(password, salt, 64) as Buffer;
   return timingSafeEqual(actual, Buffer.from(expected, "hex"));
@@ -30,14 +33,17 @@ const parse = <T extends z.ZodType>(schema: T, input: unknown): z.infer<T> => sc
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const currentTime = () => new Date().toISOString();
 
-export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean } = {}) {
+export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean } = {}) {
+  const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
+  const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
   const store = new Store(resolve(options.dataDir ?? process.env.DATA_DIR ?? "data"));
   const app = express();
   let collaborationSocket: ReturnType<typeof attachCollaborationSocket> | undefined;
   app.use((_req, res, next) => { res.once("finish", () => collaborationSocket?.revalidate()); next(); });
   app.disable("x-powered-by");
-  const secure = process.env.PUBLIC_URL?.startsWith("https://") ?? false;
-  const registrationOpen = process.env.REGISTRATION_OPEN !== "false";
+  const secure = publicUrl?.startsWith("https://") ?? false;
+  const registrationOpen = options.registrationOpen ?? process.env.REGISTRATION_OPEN !== "false";
+  const registrationAllowed = () => registrationOpen || !store.one("SELECT id FROM users LIMIT 1");
   const attempts = new Map<string, { count: number; until: number }>();
   const presence = new Map<string, { userId: string; clientId: string; state: unknown; time: number }>();
   app.use((req, res, next) => {
@@ -47,7 +53,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       const origin = req.get("origin");
-      const expected = process.env.PUBLIC_URL ? new URL(process.env.PUBLIC_URL).origin : `${req.protocol}://${req.get("host")}`;
+      const expected = publicUrl ? new URL(publicUrl).origin : `${req.protocol}://${req.get("host")}`;
       if ((origin && origin !== expected) || req.get("sec-fetch-site") === "cross-site") return next(new HttpError(403, "请求来源无效。"));
     }
     next();
@@ -96,8 +102,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     attempts.set(key, { count: previous && previous.until > Date.now() ? previous.count + 1 : 1, until: Date.now() + 10 * 60000 });
     if (attempts.size > 10000) for (const [key, value] of attempts) if (value.until < Date.now()) attempts.delete(key);
   };
+  const github = attachGithubAuth(app, {
+    store, config: githubConfig, secure, establish, registrationAllowed,
+    session: (req) => ({ user: sessionUser(req), key: cookie(req) ? hash(cookie(req)!) : undefined }),
+  });
   app.get("/api/health", (_req, res) => { store.one("SELECT 1"); res.json({ status: "ok" }); });
-  app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationOpen || !store.one("SELECT id FROM users LIMIT 1") }));
+  app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled }));
   app.post("/api/auth/register", async (req, res) => {
     throttle(req);
     const input = parse(z.object({ handle, displayName: z.string().trim().min(1).max(100), password: z.string().min(10).max(256) }), req.body);

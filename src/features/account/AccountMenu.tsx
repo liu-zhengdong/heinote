@@ -5,18 +5,31 @@ import { useWorkspace } from "../../app/workspace-context";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { useSession } from "./AuthGate";
 import { api, errorMessage } from "./api";
+import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { Invitations } from "./Invitations";
 import { AgentTokens } from "./AgentTokens";
+import { GithubLoginMethods } from "./GithubLoginMethods";
 import { useAccountList } from "./useAccountList";
 import { ListStatus } from "./ListStatus";
 import type { SessionUser } from "./AuthGate";
 
 export interface AccountPanelProps { onBusyChange(busy: boolean): void }
-type Tab = "invitations" | "tokens" | "users";
+type Tab = "methods" | "invitations" | "tokens" | "users";
 
 export function AccountMenu({ compact = false }: { compact?: boolean }) {
-  const { user } = useSession();
+  const { user, githubOutcome, clearGithubOutcome } = useSession();
   const [open, setOpen] = useState(false);
+  const [notice, setNotice] = useState<GithubResult | null>(null);
+
+  // A finished OAuth round trip returns to the workspace with a fixed result
+  // code. Open the dialog on the login-methods tab to show the outcome.
+  useEffect(() => {
+    if (!user || !githubOutcome) return;
+    setNotice(githubOutcome);
+    setOpen(true);
+    clearGithubOutcome();
+  }, [user, githubOutcome, clearGithubOutcome]);
+
   if (!user) return null;
   return (
     <div className={`account-entry${compact ? " account-entry--compact" : ""}`}>
@@ -25,22 +38,23 @@ export function AccountMenu({ compact = false }: { compact?: boolean }) {
         <UserRound size={18} aria-hidden="true" />
         <span className="account-entry__name">{personName(user)}</span>
       </button>
-      {open ? <AccountDialog onClose={() => setOpen(false)} /> : null}
+      {open ? <AccountDialog key={notice || "default"} notice={notice} initialTab={notice ? "methods" : "invitations"}
+        onClose={() => { setOpen(false); setNotice(null); }} /> : null}
     </div>
   );
 }
 
-function AccountDialog({ onClose }: { onClose(): void }) {
+function AccountDialog({ onClose, notice, initialTab }: { onClose(): void; notice: GithubResult | null; initialTab: Tab }) {
   const { user, logout } = useSession();
   const { document: workspaceDocument } = useWorkspace();
-  const [tab, setTab] = useState<Tab>("invitations");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const scopeRef = useRef<HTMLDivElement>(null);
   const tabId = useId();
   const effectiveTab = tab === "users" && user?.siteRole !== "admin" ? "invitations" : tab;
   const tabs: { id: Tab; label: string }[] = [
-    { id: "invitations", label: "邀请" }, { id: "tokens", label: "Agent 令牌" },
+    { id: "methods", label: "登录方式" }, { id: "invitations", label: "邀请" }, { id: "tokens", label: "Agent 令牌" },
     ...(user?.siteRole === "admin" ? [{ id: "users" as const, label: "账号管理" }] : []),
   ];
 
@@ -92,7 +106,8 @@ function AccountDialog({ onClose }: { onClose(): void }) {
             }}>{item.label}</button>)}
         </div>
         <section className="account-dialog__body" role="tabpanel" id={`${tabId}-panel`} aria-labelledby={`${tabId}-${effectiveTab}`} tabIndex={0}>
-          {effectiveTab === "invitations" ? <Invitations onBusyChange={setBusy} />
+          {effectiveTab === "methods" ? <GithubLoginMethods onBusyChange={setBusy} notice={notice ? githubMessages[notice] : undefined} noticeError={notice !== "linked"} />
+            : effectiveTab === "invitations" ? <Invitations onBusyChange={setBusy} />
             : effectiveTab === "tokens" ? <AgentTokens onBusyChange={setBusy} />
             : <AdminUsers onBusyChange={setBusy} />}
         </section>

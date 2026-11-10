@@ -60,11 +60,39 @@ podman run -d --name terminus-notes \
 | `NOTES_PORT` | `3000` | Compose 对外端口 |
 | `DATA_DIR` | `data` | 本地数据目录；容器内固定为 `/app/data` |
 | `REGISTRATION_OPEN` | `true` | 设置 `false` 可关闭后续注册；空库仍允许建立首个账号 |
-| `PUBLIC_URL` | 空 | 反向代理后的完整外部源，例如 `https://notes.example.com` |
+| `PUBLIC_URL` | 空 | 完整外部源，例如 `https://notes.example.com`；启用 GitHub 登录时必须设置 |
+| `GITHUB_CLIENT_ID` | 空 | GitHub OAuth App 的 Client ID；空值表示不启用 GitHub 登录 |
+| `GITHUB_CLIENT_SECRET` | 空 | GitHub OAuth App 的服务端密钥 |
 
 使用 HTTPS 反向代理时，设置 `PUBLIC_URL`。它必须与浏览器访问源一致。HTTPS 配置会启用 Secure 会话 Cookie。代理须保留 Host，并转发请求至容器 3000 端口。代理还须为 `/api/collaboration` 转发 WebSocket Upgrade 与 Connection 头。
 
 当前部署使用单个服务实例。不要让多个应用实例同时写入同一个数据目录。
+
+## GitHub 登录
+
+GitHub 登录是可选配置。账号密码登录继续可用。
+
+1. 打开 [GitHub OAuth App 创建页](https://github.com/settings/applications/new)。
+2. 填写应用名称和 Homepage URL。
+3. 把 Authorization callback URL 设为 `PUBLIC_URL/api/auth/github/callback`。
+4. 生成 Client Secret。
+5. 把 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` 和 `PUBLIC_URL` 写入服务端 `.env`。
+6. 重启服务；使用 Compose 时重新创建容器。
+7. 在 Notes 登录页选择“使用 GitHub 登录”，确认返回预期账号。
+
+本地示例使用 `PUBLIC_URL=http://localhost:3000`，回调为 `http://localhost:3000/api/auth/github/callback`。正式环境使用 HTTPS。`PUBLIC_URL` 只包含协议、主机与端口，不包含路径、查询参数或用户信息。浏览器须从同一个源访问应用。开发和生产建议分别注册 OAuth App。
+
+没有配置 Client ID 和 Client Secret 时，页面隐藏 GitHub 入口。只配置部分字段时，服务启动失败并指出缺项。密钥只在服务端使用，不进入浏览器资源。GitHub 登录只读取公开身份，不申请仓库或私有邮箱权限。
+
+已有 Notes 用户先用密码登录，再打开“账号 → 登录方式”绑定 GitHub。绑定保留原账号的笔记与权限。Notes 使用 GitHub 数字用户 ID 识别身份，不按用户名或邮箱自动合并。
+
+新用户首次授权后创建 Notes 账号。同名用户名冲突时，页面提供“创建新账号”与“登录已有账号”。选择新建会生成独立账号，不包含同名账号的笔记。纯 GitHub 账号没有密码，不能解除唯一登录方式。本版本不提供设置密码或账号合并。
+
+`REGISTRATION_OPEN=false` 拒绝新的 GitHub 账号注册；空库仍允许创建首个管理员。已关联账号可以继续登录。已有密码账号仍可绑定或解除绑定。
+
+GitHub 授权请求与同名选择票据有效期为 10 分钟。服务重启会使未完成请求失效，重新发起即可。账号与身份关联保存在 SQLite，随数据副本一起保留。退出 Notes 撤销当前 Notes 会话，不退出 GitHub。在 GitHub 撤销授权后，下次登录需要重新授权；已有 Notes 会话沿用本地有效期。
+
+移除两个 GitHub 配置项可停用新的 GitHub 登录。已保存的关联与 Notes 会话继续保留。恢复原应用配置后，用户继续进入原账号。
 
 ## 账号与权限
 
