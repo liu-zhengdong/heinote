@@ -1,0 +1,371 @@
+import type { Express, Request, Response } from "express";
+import { z } from "zod";
+import { isDeepStrictEqual } from "node:util";
+import schema from "../schema.ts";
+import { newPage } from "../src/core/block-tree.ts";
+import { isImageType, normalizeStoredFile } from "../src/core/files.ts";
+import type { DatabaseConfig, DatabaseProperty, DatabaseView, NotePage } from "../src/core/types.ts";
+import { blockRecordId } from "../src/platform/record-ids.ts";
+import {
+  changePropertyType, changeViewKind, createView, databaseRows, MAX_ROW_IMAGES,
+  propertyOptions, propertyValue, sortable, statusOptions, TITLE_COLUMN, viewRows,
+} from "../src/features/database/database-model.ts";
+import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+
+const safeKey = z.string().min(1).max(256).refine((value) => !["__proto__", "prototype", "constructor"].includes(value), "标识无效。");
+const propertyId = safeKey.refine((value) => value !== TITLE_COLUMN, "name 保留给标题列。");
+const revision = z.string().min(1).max(100);
+const requestFields = { requestId: z.string().min(1).max(256), baseRevision: revision };
+const storedConfig = schema.definition.collections.pages.fields.database.unwrap();
+const propertyShape = storedConfig.shape.properties.element;
+const statusOption = propertyShape.shape.status_options.unwrap().element.strict().extend({ id: safeKey, name: z.string().trim().min(1).max(500) });
+const propertySchema = propertyShape.strict().extend({
+  id: propertyId, name: z.string().max(500), icon: z.string().max(100).optional(),
+  options: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
+  status_options: z.array(statusOption).min(1).max(100).transform((options) => options.toSorted((left, right) => ["todo", "progress", "complete"].indexOf(left.group) - ["todo", "progress", "complete"].indexOf(right.group))).optional(),
+  default_status: safeKey.optional(),
+});
+const propertyPatch = propertySchema.omit({ id: true }).partial().extend({ default_status: safeKey.nullable().optional() }).refine((value) => Object.keys(value).length > 0, "请提供属性修改。");
+const viewShape = storedConfig.shape.views.element;
+const filterSchema = viewShape.shape.filter.unwrap().strict().extend({ property_id: propertyId, value: z.string().max(100000) });
+const sortSchema = viewShape.shape.sorts.unwrap().element.strict().extend({ property_id: safeKey });
+const viewSchema = viewShape.strict().extend({
+  id: safeKey, name: z.string().max(500),
+  filter: filterSchema.optional(), sorts: z.array(sortSchema).max(100).optional(),
+  group_by: propertyId.optional(), date_by: propertyId.optional(), card_preview: safeKey.optional(),
+  card_properties: z.array(propertyId).max(100).optional(),
+  widths: z.record(safeKey, z.number().min(64).max(1200)).optional(),
+  wrap: z.record(safeKey, z.boolean()).optional(),
+});
+const viewPatch = viewSchema.omit({ id: true }).partial().extend({ filter: filterSchema.nullable().optional() }).refine((value) => Object.keys(value).length > 0, "请提供视图修改。");
+const configSchema = storedConfig.strict().extend({
+  properties: z.array(propertySchema).max(100).default([]),
+  views: z.array(viewSchema).min(1).max(100).optional(),
+  title_name: z.string().max(500).optional(), title_icon: z.string().max(100).optional(),
+});
+const fileSchema = schema.definition.collections.pages.fields.cover_image.unwrap().strict().extend({
+  path: z.string().max(320), owner: safeKey, space: safeKey.optional(),
+  name: z.string().min(1).max(255), size: z.number().int().min(0), type: z.string().max(125),
+  width: z.number().int().min(1).max(50000).optional(), height: z.number().int().min(1).max(50000).optional(),
+  preview: z.string().max(320).optional(),
+});
+const rowFields = {
+  title: z.string().max(500).optional(),
+  properties: z.record(propertyId, z.string().max(100000).nullable()).optional(),
+  propertyFiles: z.record(propertyId, z.array(fileSchema).max(MAX_ROW_IMAGES)).optional(),
+};
+const createSchema = z.object({
+  requestId: requestFields.requestId, title: z.string().max(500).default(""),
+  parentId: safeKey.optional(), spaceId: safeKey.optional(), database: configSchema.optional(),
+}).strict();
+const addPropertySchema = z.object({ ...requestFields, property: propertySchema }).strict();
+const updatePropertySchema = z.object({ ...requestFields, property: propertyPatch }).strict();
+const addViewSchema = z.object({ ...requestFields, view: viewSchema }).strict();
+const updateViewSchema = z.object({ ...requestFields, view: viewPatch }).strict();
+const createRowSchema = z.object({ ...requestFields, ...rowFields, text: z.string().max(100000).default("") }).strict();
+const updateRowSchema = z.object({ ...requestFields, databaseRevision: revision, ...rowFields }).strict()
+  .refine((value) => value.title !== undefined || value.properties !== undefined || value.propertyFiles !== undefined, "请提供条目修改。");
+const querySchema = z.object({
+  viewId: safeKey.optional(), filter: filterSchema.nullable().optional(), sorts: z.array(sortSchema).max(100).optional(),
+  query: z.string().max(500).default(""), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
+  limit: z.number().int().min(1).max(100).default(100),
+}).strict();
+
+type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[] };
+type Reply = { status: number; body: ReturnType<Store["pageDto"]>; scope: string; pageIds: string[] };
+const stamp = () => new Date().toISOString();
+const externalScope = (scope: string) => scope.startsWith("user:") ? "personal" : scope;
+function bad(message: string): never { fail(400, message, "bad_request"); }
+
+function distinct(values: readonly string[], label: string): void {
+  if (new Set(values).size !== values.length) bad(`${label}不能重复。`);
+}
+function checkProperty(property: DatabaseProperty): void {
+  if ((property.options?.length ?? 0) > 100 || statusOptions(property).length > 100) bad("单个属性最多包含 100 个选项。");
+  if (property.options) distinct(property.options, "选项名称");
+  if (property.status_options) {
+    distinct(property.status_options.map((option) => option.id), "状态标识");
+    distinct(property.status_options.map((option) => option.name.trim().toLocaleLowerCase()), "状态名称");
+  }
+  if (property.default_status && !statusOptions(property).some((option) => option.id === property.default_status)) bad("默认状态不存在。");
+}
+function checkFilter(filter: NonNullable<DatabaseView["filter"]>, config: DatabaseConfig): void {
+  const property = config.properties.find((item) => item.id === filter.property_id);
+  if (!property || !["select", "status"].includes(property.type)) bad("筛选只支持当前数据库的 Select 或 Status 属性。");
+  if (filter.value !== "" && !propertyOptions(property).includes(filter.value)) bad("筛选选项不存在。");
+}
+function checkSorts(sorts: NonNullable<DatabaseView["sorts"]>, config: DatabaseConfig): void {
+  distinct(sorts.map((sort) => sort.property_id), "排序列");
+  for (const sort of sorts) {
+    if (sort.property_id !== TITLE_COLUMN && !config.properties.some((property) => property.id === sort.property_id && sortable(property))) bad("排序列不存在，或是图片属性。");
+  }
+}
+function checkView(view: Partial<DatabaseView>, config: DatabaseConfig): void {
+  if (view.filter) checkFilter(view.filter, config);
+  if (view.sorts) checkSorts(view.sorts, config);
+  if (view.group_by && !config.properties.some((property) => property.id === view.group_by && (property.type === "status" || property.type === "select" && property.options?.length))) bad("分组列必须是有选项的 Select 或 Status。");
+  if (view.date_by && !config.properties.some((property) => property.id === view.date_by && property.type === "date")) bad("日历列必须是日期属性。");
+  if (view.card_preview && !["cover", "content", "none"].includes(view.card_preview) && !config.properties.some((property) => property.id === view.card_preview && property.type === "image")) bad("卡片预览必须是图片属性、cover、content 或 none。");
+  for (const key of [...view.card_properties ?? [], ...Object.keys(view.widths ?? {}), ...Object.keys(view.wrap ?? {})]) {
+    if (key !== TITLE_COLUMN && !config.properties.some((property) => property.id === key)) bad("视图引用了不存在的属性。");
+  }
+}
+function activePage(store: Store, who: Actor, pageId: string, write = false) {
+  const found = store.page(who, pageId);
+  store.scope(who, externalScope(found.scope), write);
+  const pages = store.state(who).pages;
+  for (let page: NotePage | undefined = found.page; page; page = page.parent_id ? pages[page.parent_id] : undefined) {
+    if (page.archived) fail(409, "页面或父页面已归档。", "conflict");
+  }
+  return found;
+}
+function database(store: Store, who: Actor, pageId: string, write = false): Database {
+  const found = activePage(store, who, pageId, write);
+  if (found.page.kind !== "database") bad("目标页面不是 Database。");
+  const config = found.page.database ?? { properties: [], views: [{ id: "table", name: "Table", kind: "table" }] };
+  return { ...found, config, scopeName: externalScope(found.scope), rows: databaseRows(store.state(who).pages, pageId) };
+}
+function checkRevision(store: Store, scope: string, pageId: string, expected: string): void {
+  if (store.revision(scope, pageId) !== expected) fail(409, "内容已被修改。请重新读取。", "conflict");
+}
+function pagePatch(store: Store, who: Actor, scope: string, pageId: string, patch: Row): Write {
+  return { scope: externalScope(scope), collection: "pages", id: pageId, action: "patch", base: store.record(scope, "pages", pageId)!, patch: { ...patch, updated_at: stamp(), updated_by: who.user.id } };
+}
+function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[] = []): void {
+  for (const pageId of new Set(checkpoints)) store.checkpoint(who, pageId, "Agent 数据库修改前");
+  store.apply(who, writes);
+  store.collaboration.flush();
+}
+function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string, extra: Row): string {
+  const page = newPage(id(), kind, parentId, { now: stamp(), author: who.user.id }, id());
+  const { title: _title, parent_id: _parent, block_tree, ...fields } = page;
+  const block = Object.values(block_tree.by_id)[0];
+  const { parent_id: _blockParent, ...blockFields } = block;
+  commit(store, who, [
+    { scope: externalScope(scope), collection: "pages", id: page.id, action: "put", base: null, value: { ...fields, title_content: [{ text: title }], ...(parentId ? { parent_id: parentId } : {}), ...extra } },
+    { scope: externalScope(scope), collection: "blocks", id: blockRecordId(page.id, block.id), action: "put", base: null, value: { ...blockFields, page: page.id, content: [{ text }] } },
+  ]);
+  return page.id;
+}
+function rowDto(store: Store, who: Actor, rowId: string, config: DatabaseConfig) {
+  const dto = store.pageDto(who, rowId);
+  return { ...dto, values: Object.fromEntries(config.properties.filter((property) => property.type !== "image").map((property) => [property.id, propertyValue(dto.page, property)])) };
+}
+function rowPatch(store: Store, who: Actor, db: Database, input: Pick<z.infer<typeof createRowSchema>, "title" | "properties" | "propertyFiles">): Row {
+  const patch: Row = {};
+  if (input.title !== undefined) patch.title_content = [{ text: input.title }];
+  if (input.properties) {
+    for (const [key, value] of Object.entries(input.properties)) {
+      const property = db.config.properties.find((item) => item.id === key);
+      if (!property || property.type === "image") bad("属性不存在，或图片应使用 propertyFiles。");
+      if (value === null || value === "") continue;
+      if (["status", "select"].includes(property.type) && !propertyOptions(property).includes(value)) bad("属性值不在选项中。");
+      if (property.type === "date" && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value + "T00:00:00Z")) || new Date(value + "T00:00:00Z").toISOString().slice(0, 10) !== value)) bad("日期必须是真实的 YYYY-MM-DD。");
+    }
+    patch.properties = input.properties;
+  }
+  if (input.propertyFiles) {
+    for (const [key, files] of Object.entries(input.propertyFiles)) {
+      if (!db.config.properties.some((property) => property.id === key && property.type === "image")) bad("图片属性不存在。");
+      for (const file of files) {
+        const normalized = normalizeStoredFile(file);
+        if (!normalized || !isDeepStrictEqual(normalized, file) || !isImageType(file.type)) bad("图片引用无效。");
+        if (db.scope.startsWith("user:") ? file.owner !== who.user.id || file.space !== undefined : file.space !== db.scope) bad("图片必须属于条目所在空间。");
+        const known = store.one("SELECT type,size FROM files WHERE scope=? AND path=?", db.scope, file.path);
+        if (!known || known.type !== file.type || known.size !== file.size) bad("图片不存在，或附件元数据不匹配。");
+        if (file.preview) {
+          const preview = store.one("SELECT type FROM files WHERE scope=? AND path=?", db.scope, file.preview);
+          if (!preview || !isImageType(String(preview.type))) bad("图片预览不存在。");
+        }
+      }
+    }
+    patch.property_files = input.propertyFiles;
+  }
+  return patch;
+}
+
+/** Own the Agent database boundary; all writes use the existing record transaction. */
+export function attachAgentDatabases(app: Express, store: Store, actor: (req: Request) => Actor): void {
+  function mutation<T extends { requestId: string }, Target>(
+    req: Request, res: Response, input: T, authorize: (who: Actor) => Target,
+    execute: (who: Actor, target: Target) => Reply,
+  ): void {
+    const who = actor(req);
+    const reply = store.transaction(() => {
+      const target = authorize(who);
+      const requestId = `agent-db:${input.requestId}`;
+      const digest = hash(JSON.stringify({ method: req.method, path: req.path, input }));
+      const cached = store.one("SELECT digest,result FROM requests WHERE user_id=? AND request_id=?", who.user.id, requestId);
+      if (cached) {
+        if (cached.digest !== digest) fail(409, "请求 ID 已用于其他操作。", "conflict");
+        const result = JSON.parse(String(cached.result)) as Reply;
+        for (const pageId of result.pageIds) {
+          const current = activePage(store, who, pageId, true);
+          if (current.scope !== result.scope) fail(409, "内容位置已变化。请重新读取。", "conflict");
+        }
+        return result;
+      }
+      store.collaboration.markRequest(input.requestId);
+      const result = execute(who, target);
+      store.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(who.user.id, requestId, digest, JSON.stringify(result));
+      return result;
+    });
+    res.status(reply.status).json(reply.body);
+  }
+  const reply = (who: Actor, db: Database, status = 200, pageIds = [db.page.id]): Reply => ({ status, body: store.pageDto(who, db.page.id), scope: db.scope, pageIds });
+  const load = (req: Request) => (who: Actor) => database(store, who, safeKey.parse(req.params.id), true);
+
+  app.post("/api/v1/databases", (req, res) => {
+    const input = createSchema.parse(req.body);
+    mutation(req, res, input, (who) => {
+      const parent = input.parentId ? activePage(store, who, input.parentId, true) : undefined;
+      const scope = parent?.scope ?? store.scope(who, input.spaceId ?? "personal", true);
+      if (parent && input.spaceId && store.scope(who, input.spaceId, true) !== scope) bad("父页面与指定空间不一致。");
+      return scope;
+    }, (who, scope) => {
+      const supplied = input.database ?? { properties: [] };
+      distinct(supplied.properties.map((property) => property.id), "属性标识");
+      supplied.properties.forEach(checkProperty);
+      let config: DatabaseConfig = { ...supplied, views: [] };
+      for (const view of supplied.views ?? [{ id: "table", name: "Table", kind: "table" as const }]) {
+        if (config.views.some((item) => item.id === view.id)) bad("视图标识不能重复。");
+        const made = createView(view.id, view.kind, config, () => `property_${id()}`);
+        const actual = { ...made.view, ...view };
+        config = { ...made.config, views: [...config.views, actual] };
+      }
+      if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
+      config.views.forEach((view) => checkView(view, config));
+      const pageId = createPage(store, who, scope, "database", input.parentId ?? null, input.title, "", { database: config, ...(!input.parentId && !scope.startsWith("user:") ? { share_space_id: scope } : {}) });
+      return { status: 201, body: store.pageDto(who, pageId), scope, pageIds: [pageId] };
+    });
+  });
+  app.get("/api/v1/databases/:id", (req, res) => {
+    const who = actor(req); const db = database(store, who, safeKey.parse(req.params.id));
+    res.json(store.pageDto(who, db.page.id));
+  });
+  app.post("/api/v1/databases/:id/properties", (req, res) => {
+    const input = addPropertySchema.parse(req.body);
+    mutation(req, res, input, load(req), (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      if (db.config.properties.some((property) => property.id === input.property.id)) bad("属性标识已存在。");
+      if (db.config.properties.length >= 100) bad("数据库最多包含 100 个属性。");
+      checkProperty(input.property);
+      commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: { ...db.config, properties: [...db.config.properties, input.property] } })], [db.page.id]);
+      return reply(who, db, 201);
+    });
+  });
+  app.patch("/api/v1/databases/:id/properties/:propertyId", (req, res) => {
+    const input = updatePropertySchema.parse(req.body); const key = propertyId.parse(req.params.propertyId);
+    mutation(req, res, input, load(req), (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      const previous = db.config.properties.find((property) => property.id === key);
+      if (!previous) fail(404, "属性不存在。", "not_found");
+      let config = input.property.type ? changePropertyType(db.config, key, input.property.type, db.rows) : db.config;
+      const current = config.properties.find((property) => property.id === key)!;
+      const { default_status, ...fields } = input.property;
+      const property: DatabaseProperty = { ...current, ...fields };
+      if (default_status === null) delete property.default_status;
+      else if (default_status !== undefined) property.default_status = default_status;
+      else if (input.property.status_options && !statusOptions(property).some((option) => option.id === property.default_status)) delete property.default_status;
+      checkProperty(property);
+      if (previous.type !== "status" && property.type === "status" && db.rows.some((row) => {
+        const value = row.properties?.[key]?.trim();
+        return value && !propertyOptions(property).includes(value);
+      })) bad("状态类型变更无法保留全部现有值。请先整理选项。");
+      config = { ...config, properties: config.properties.map((item) => item.id === key ? property : item) };
+      const rowWrites: Write[] = [];
+      if (previous.type === "status" && property.type === "status" && input.property.status_options) {
+        const options = statusOptions(property);
+        const before = statusOptions(previous);
+        const remap = (value: string): string | undefined => {
+          const option = before.find((item) => item.name === value || item.name === value.trim());
+          return option ? options.find((item) => item.id === option.id)?.name ?? "" : undefined;
+        };
+        for (const row of db.rows) {
+          const value = row.properties?.[key]; const next = typeof value === "string" ? remap(value) : undefined;
+          if (next !== undefined && next !== value) rowWrites.push(pagePatch(store, who, db.scope, row.id, { properties: { [key]: next } }));
+        }
+        config.views = config.views.map((view) => {
+          if (view.filter?.property_id !== key) return view;
+          const next = remap(view.filter.value);
+          if (next === undefined) return view;
+          const changed = { ...view };
+          if (next) changed.filter = { property_id: key, value: next }; else delete changed.filter;
+          return changed;
+        });
+      }
+      const writes = [pagePatch(store, who, db.scope, db.page.id, { database: config }), ...rowWrites];
+      commit(store, who, writes, [db.page.id, ...rowWrites.map((write) => write.id)]);
+      return reply(who, db, 200, writes.map((write) => write.id));
+    });
+  });
+  app.post("/api/v1/databases/:id/views", (req, res) => {
+    const input = addViewSchema.parse(req.body);
+    mutation(req, res, input, load(req), (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      if (db.config.views.some((view) => view.id === input.view.id)) bad("视图标识已存在。");
+      if (db.config.views.length >= 100) bad("数据库最多包含 100 个视图。");
+      const made = createView(input.view.id, input.view.kind, db.config, () => `property_${id()}`);
+      const view = { ...made.view, ...input.view };
+      const config = { ...made.config, views: [...db.config.views, view] };
+      if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
+      checkView(view, config);
+      commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: config })], [db.page.id]);
+      return reply(who, db, 201);
+    });
+  });
+  app.patch("/api/v1/databases/:id/views/:viewId", (req, res) => {
+    const input = updateViewSchema.parse(req.body); const key = safeKey.parse(req.params.viewId);
+    mutation(req, res, input, load(req), (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      const previous = db.config.views.find((view) => view.id === key);
+      if (!previous) fail(404, "视图不存在。", "not_found");
+      const changed = input.view.kind ? changeViewKind(previous, input.view.kind, db.config, () => `property_${id()}`) : { config: db.config, view: previous };
+      const { filter, ...fields } = input.view;
+      const view: DatabaseView = { ...changed.view, ...fields };
+      if (filter === null) delete view.filter; else if (filter !== undefined) view.filter = filter;
+      checkView({ ...fields, ...(filter ? { filter } : {}) }, changed.config);
+      const config = { ...changed.config, views: changed.config.views.map((item) => item.id === key ? view : item) };
+      if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
+      commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: config })], [db.page.id]);
+      return reply(who, db);
+    });
+  });
+  app.post("/api/v1/databases/:id/rows", (req, res) => {
+    const input = createRowSchema.parse(req.body);
+    mutation(req, res, input, load(req), (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      const patch = rowPatch(store, who, db, input);
+      if (input.properties) patch.properties = Object.fromEntries(Object.entries(input.properties).filter(([, value]) => value !== null));
+      const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
+      return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId] };
+    });
+  });
+  app.patch("/api/v1/databases/:id/rows/:rowId", (req, res) => {
+    const input = updateRowSchema.parse(req.body); const rowId = safeKey.parse(req.params.rowId);
+    mutation(req, res, input, (who) => {
+      const db = database(store, who, safeKey.parse(req.params.id), true);
+      const row = activePage(store, who, rowId, true);
+      if (row.scope !== db.scope || row.page.parent_id !== db.page.id || row.page.kind !== "document") bad("条目不属于此数据库。");
+      return db;
+    }, (who, db) => {
+      checkRevision(store, db.scope, db.page.id, input.databaseRevision);
+      checkRevision(store, db.scope, rowId, input.baseRevision);
+      commit(store, who, [pagePatch(store, who, db.scope, rowId, rowPatch(store, who, db, input))], [rowId]);
+      return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
+    });
+  });
+  app.post("/api/v1/databases/:id/query", (req, res) => {
+    const who = actor(req); const db = database(store, who, safeKey.parse(req.params.id));
+    const input = querySchema.parse(req.body ?? {});
+    const view = input.viewId ? db.config.views.find((item) => item.id === input.viewId) : db.config.views[0];
+    if (!view) fail(404, "视图不存在。", "not_found");
+    if (input.filter) checkFilter(input.filter, db.config);
+    if (input.sorts) checkSorts(input.sorts, db.config);
+    const actual: DatabaseView = { ...view, ...(input.filter !== undefined ? { filter: input.filter ?? undefined } : {}), ...(input.sorts !== undefined ? { sorts: input.sorts } : {}) };
+    const rows = viewRows(db.rows, actual, db.config.properties, input.query);
+    const selected = rows.slice(input.offset, input.offset + input.limit);
+    const hasMore = input.offset + selected.length < rows.length;
+    res.json({ databaseId: db.page.id, revision: store.revision(db.scope, db.page.id), rows: selected.map((row) => rowDto(store, who, row.id, db.config)), total: rows.length, hasMore, nextOffset: hasMore ? input.offset + selected.length : null });
+  });
+}

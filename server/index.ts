@@ -13,6 +13,7 @@ import type { NotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
+import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 
 const derive = promisify(scrypt);
@@ -293,7 +294,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/v1/pages", (req, res) => { const who = actor(req); res.json(Object.values(store.state(who).pages).filter((page) => !page.archived).map((page) => store.pageDto(who, page.id))); });
   app.post("/api/v1/pages", (req, res) => {
-    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), parentId: z.string().optional(), spaceId: z.string().optional() }), req.body);
+    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), parentId: z.string().optional(), spaceId: z.string().optional() }).strict(), req.body);
     const parent = input.parentId ? store.page(who, input.parentId) : undefined;
     const scope = parent?.scope ?? store.scope(who, input.spaceId ?? "personal", true);
     store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
@@ -306,7 +307,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.get("/api/v1/pages/:id", (req, res) => { const who = actor(req); res.json(store.pageDto(who, text(req.params.id))); });
   app.patch("/api/v1/pages/:id", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId);
-    const input = parse(z.object({ title: z.string().max(500).optional(), text: z.string().max(100000).optional(), baseRevision: z.string() }), req.body);
+    const input = parse(z.object({ title: z.string().max(500).optional(), text: z.string().max(100000).optional(), baseRevision: z.string() }).strict(), req.body);
     store.transaction(() => {
       const { page, scope } = store.page(who, pageId); store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       if (input.baseRevision !== store.revision(scope, pageId)) fail(409, "页面已被修改。请重新读取。", "conflict");
@@ -334,6 +335,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     }); res.json(store.pageDto(who, pageId));
   });
 
+  attachAgentDatabases(app, store, actor);
   attachAgentOperations(app, store, actor);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
   let vite: { close(): Promise<void> } | undefined;

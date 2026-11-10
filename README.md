@@ -148,6 +148,8 @@ curl "$NOTES_URL/api/v1/pages" \
 
 多人编辑时，优先使用幂等的结构化操作。`GET /api/v1/pages/:id` 返回块 ID、修订和协作代次。`POST /api/v1/pages/:id/operations` 支持文字插入、删除、格式及块操作。`mode: "suggest"` 保存提案，用户从页头“Agent 提案”审核。旧全文 PATCH 继续表示明确替换。
 
+数据库内容使用 `/api/v1/databases`。Agent 可以创建 Database，新增和修改属性、视图与条目，并按属性筛选和排序。所有新写请求要求 `requestId`，配置与条目修改检查修订。查询复用界面语义，允许只读令牌调用 `POST /databases/:id/query`。普通 `/pages` 入口严格拒绝未知字段。
+
 完整契约与示例见 [Agent API](docs/agent-api.md)。当前提供 HTTP REST。原 Terminus 窗口命令不是外部 Agent 协议。MCP 可通过这些接口另行适配。
 
 ## 附件存储
