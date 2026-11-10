@@ -27,6 +27,6 @@ GitHub 同名账号选择页提供新注册与原账号密码登录入口，不�
 
 查看 [桌面登录](../evidence/auth-interface/login-desktop.png)、[手机登录](../evidence/auth-interface/login-mobile.png)和[手机注册](../evidence/auth-interface/register-mobile.png)。这些截图记录界面优化时的状态；品牌图标随后更新，当前图标见 [登录页图标证据](../evidence/notes-icon/login@2x.png)。
 
-GitHub 流程新增 16 项 HTTP 验收与 4 项浏览器验收。浏览器实际执行授权跳转、同名选择、绑定、解除绑定和失败恢复。GitHub 由本地 HTTP 替身提供，真实 OAuth App 回调尚未实测。查看 [GitHub 登录页](../evidence/github-auth/login-desktop@2x.png)、[手机登录页](../evidence/github-auth/login-mobile@2x.png)、[绑定状态](../evidence/github-auth/linked-desktop@2x.png)和[同名选择](../evidence/github-auth/same-name-desktop@2x.png)。
+GitHub 流程新增 17 项 HTTP 验收与 4 项浏览器验收。浏览器实际执行授权跳转、同名选择、绑定、解除绑定和失败恢复。GitHub 由本地 HTTP 替身提供，真实 OAuth App 回调尚未实测。查看 [GitHub 登录页](../evidence/github-auth/login-desktop@2x.png)、[手机登录页](../evidence/github-auth/login-mobile@2x.png)、[绑定状态](../evidence/github-auth/linked-desktop@2x.png)和[同名选择](../evidence/github-auth/same-name-desktop@2x.png)。
 
 设计取舍与完整验收记录见 [归档执行稿](../dev/archive/auth-interface.md)和[交付记录](../dev/archive/auth-interface-delivery.md)。
