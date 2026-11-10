@@ -22,7 +22,7 @@ export function Button({
       type={type}
       className={[styles.button, active ? styles.active : "", className].filter(Boolean).join(" ")}
     >
-      {Icon ? <Icon size={14} strokeWidth={1.75} aria-hidden="true" /> : null}
+      {Icon ? <Icon size={16} strokeWidth={1.75} aria-hidden="true" /> : null}
       <span className={styles.label}>{children}</span>
     </button>
   );

@@ -1,49 +1,11 @@
-/* ============================================================================
-   Notes — design system
-   ----------------------------------------------------------------------------
-   Notes wears Notion's surface and lives in a Terminus window, and the window
-   opens at 640×460 and can be dragged down to 400×300. Five rules follow from
-   those two facts, and every value in this file answers to one of them.
+/* Notes follows Notion's typography and surface scale.
+   Desktop: 44px top bar, 14px navigation, 16px body and 40px page titles.
+   Narrow views retain the rail and drawer. User sidebar widths remain saved.
+   Page controls appear on hover or focus. The concrete data-theme owns dark
+   colours; motion tokens govern feedback and panel transitions. */
 
-     1. THE WINDOW IS THE VIEWPORT, AND IT IS SMALL. An app is handed its
-        window's content box, so the media queries below describe the WINDOW.
-        640×430 is the ordinary case and 400×272 is the hard case; a wide
-        window is the treat. Chrome is measured against a 460px column of
-        height, which is why the top bar is 38px and the document's head costs
-        under 100px before the first word.
-
-     2. NAVIGATION NEVER LEAVES. There is no width at which the page list
-        vanishes and no width at which it owns the window. It is a list when
-        there is room, a rail of marks when there is not, and the rail can put
-        the full list up as a drawer — a visit, not a layout you are left in.
-        `--fold` is that threshold and React knows the same number.
-
-     3. NOTION'S SURFACE: ONE INK, ONE ACCENT. Text is Notion's warm near-black
-        (#37352f) stepped down through opacities; surfaces are white paper and
-        the #f7f7f5 sidebar; every hover, every selected row and every menu
-        highlight is the same warm grey wash. Notion's blue (#2383e2) is spent
-        on the primary button, focus, checkboxes, the drop line, a column's
-        edge while it is sized and the text selection — nowhere else; a link
-        is the ink it stands in, lighter, over a faint underline, as
-        Notion's is. Nothing is frosted, tinted or poured:
-        floating surfaces are white with Notion's ring-and-shadow.
-
-     4. CHROME IS QUIET UNTIL YOU APPROACH IT. Drag handles, row actions, the
-        add-block button and the icon controls stay out of sight until their
-        row is hovered or focused. The page at rest is text on paper.
-
-     5. ONE MOTION VOCABULARY, ONE DARK BLOCK. Hover fills settle in --t-tap so
-        they read as a state rather than an animation, floating surfaces rise
-        and fade in --t-fast, panels travel in --t-base. Nothing bounces and
-        nothing loops. `data-theme` is always a concrete value (ui-context
-        resolves "system" against the media query), so dark is described
-        exactly once, below.
-   ========================================================================== */
-
-/* Notes ships no font files. Terminus Sans, Serif and Code are Terminus's
-   system fonts: the host writes their faces and the `--terminus-font-*`
-   variables into every page, and Notes is set in those variables. The
-   Chinese families they name load when a page needs them (`platform/fonts.ts`). */
+/* Font stacks come from standalone.css. macOS uses the same system sans
+   and PingFang as Notion; other systems retain the bundled Noto Sans SC. */
 :root {
   color-scheme: light dark;
 
@@ -181,9 +143,9 @@
   --sidebar-w: 216px;
   --sidebar-rail: 46px;
   --sidebar-drawer: 232px;
-  --column: 700px;
+  --column: 708px;
   --gutter: 28px;
-  --topbar-h: 38px;
+  --topbar-h: 44px;
 
   color: var(--ink);
   background: var(--paper);
@@ -198,10 +160,10 @@
    concrete attribute, so there is no second copy of this block behind a media
    query to keep in step. */
 :root[data-theme="dark"] {
-  --ink: rgba(255, 255, 255, 0.81);
-  --ink-2: rgba(255, 255, 255, 0.55);
-  --ink-3: rgba(255, 255, 255, 0.44);
-  --ink-4: rgba(255, 255, 255, 0.28);
+  --ink: #f0efed;
+  --ink-2: #bcbab6;
+  --ink-3: #ada9a3;
+  --ink-4: #7d7a75;
 
   --paper: #191919;
   --sidebar: #202020;
@@ -566,7 +528,7 @@ kbd {
   padding: 4px 9px;
   border-radius: var(--r-sm);
   color: var(--ink);
-  font-size: 13.5px;
+  font-size: 14px;
   text-align: left;
 }
 
@@ -1045,7 +1007,7 @@ kbd {
   grid-area: 1 / 1;
   background: var(--sidebar);
   box-shadow: inset -1px 0 0 rgba(55, 53, 47, 0.06);
-  font-size: 13.5px;
+  font-size: 14px;
 }
 
 /* The rail is the list folded: the same pane, 46px of it. Search, the list
@@ -1267,8 +1229,8 @@ kbd {
   border-radius: var(--r-md);
   background-color: var(--fill);
   color: var(--ink-2);
-  font-family: "PingFang SC", var(--terminus-font-body);
-  font-size: 12.5px;
+  font-family: var(--terminus-font-body);
+  font-size: 14px;
   font-weight: 400;
   line-height: 1;
 }
@@ -1309,14 +1271,12 @@ kbd {
 
 /* ── The file tree ────────────────────────────────────────────────────── */
 
-/* 24px rows, 13px names, 12px a level. A row's mark is its icon and its
-   arrow at once (Notion's list), so no column goes on an arrow and a name
-   sits one step in from its parent's. One place says how deep a level is;
-   rows and their indent guides both read it. */
+/* Notion's navigation scale: 30px rows, 14px labels and 18px page icons.
+   The mark also holds the disclosure arrow. */
 .sidebar {
   --tree-inset: 4px;
-  --tree-indent: 12px;
-  --tree-mark: 20px;
+  --tree-indent: 18px;
+  --tree-mark: 24px;
 }
 
 .tree-branch {
@@ -1327,7 +1287,7 @@ kbd {
 .tree-row {
   position: relative;
   display: flex;
-  min-height: 24px;
+  min-height: 30px;
   align-items: center;
   gap: 1px;
   padding-right: 4px;
@@ -1357,7 +1317,7 @@ kbd {
 .tree-row__mark {
   display: grid;
   width: var(--tree-mark);
-  height: 20px;
+  height: 24px;
   flex: none;
   place-items: center;
   border-radius: var(--r-xs);
@@ -1399,10 +1359,10 @@ kbd {
   flex: 1;
   align-items: center;
   gap: 4px;
-  padding: 3px 2px 3px 4px;
+  padding: 4px 2px 5px 4px;
   color: inherit;
-  font-size: 13px;
-  line-height: 18px;
+  font-size: 14px;
+  line-height: 21px;
   text-align: left;
 }
 
@@ -1412,13 +1372,18 @@ kbd {
 
 .tree-row__glyph {
   display: grid;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   flex: none;
   place-items: center;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: 18px;
   line-height: 1;
+}
+
+.tree-row__glyph > svg {
+  width: 18px;
+  height: 18px;
 }
 
 .tree-row__label {
@@ -1443,7 +1408,8 @@ kbd {
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--blue);
   color: var(--ink);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 21px;
   outline: 0;
 }
 
@@ -2110,9 +2076,7 @@ kbd {
    Top bar
    ========================================================================== */
 
-/* The page's bar: Notion's, white and borderless, over the page it names.
-   38px because it is 8% of a 460px window and every pixel of it is height the
-   reader does not get. The page scrolls beneath it and the paper hides it. */
+/* The page bar matches Notion's 44px height. */
 .topbar {
   position: absolute;
   z-index: 30;
@@ -2123,8 +2087,24 @@ kbd {
   height: var(--topbar-h);
   align-items: center;
   gap: 3px;
-  padding: 0 7px 0 10px;
+  padding: 0 12px;
   background: var(--paper);
+}
+
+.topbar__actions .icon-btn > svg,
+.topbar__actions .proposal-entry > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.topbar__actions .proposal-entry {
+  font-size: 14px;
+}
+
+.sidebar__view > svg,
+.sidebar__head > .icon-btn > svg {
+  width: 20px;
+  height: 20px;
 }
 
 .topbar__share.is-on {
@@ -2153,11 +2133,12 @@ kbd {
   min-width: 0;
   max-width: 220px;
   align-items: center;
-  gap: 5px;
-  padding: 2px 6px;
+  gap: 6px;
+  padding: 4px 6px;
   border-radius: var(--r-sm);
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
   transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
 }
 
@@ -2173,7 +2154,7 @@ kbd {
 
 .crumb__icon {
   flex: none;
-  font-size: 12px;
+  font-size: 18px;
   line-height: 1;
 }
 
@@ -2261,23 +2242,11 @@ kbd {
    drag handle can never reflow a paragraph.
    ========================================================================== */
 
-/* THE READING SCALE. One number sets the document's register and everything
-   else is a ratio of it, so the page can be re-pitched without hunting through
-   forty font-size declarations.
-
-   It is sized against the COLUMN, not the window: how large a word should be
-   is a question about the measure it sits on, and that measure changes when
-   the list folds while the window itself does not move at all. At the default
-   640×460 window the column is 424px and this lands on 15px/23 — about 55
-   characters to a line. Given a wide window it opens to Notion's 16px/25.
-
-   Notion's flat 16px was drawn for a 1440px browser page. In a 460px-tall
-   window it costs four lines of what is on screen and buys nothing: the
-   measure was already at the bottom of the comfortable range. */
+/* Match Notion's 16px body and 24px line height at every viewport. */
 .doc,
 .db {
-  --read: clamp(15px, 0.9cqi + 11.2px, 16px);
-  --lead: 1.55;
+  --read: 16px;
+  --lead: 1.5;
 }
 
 .doc {
@@ -2285,7 +2254,7 @@ kbd {
   /* The air above a page's title — where "Add icon · Add cover" appears when
      the head is approached. Every head keeps this much, so the row always
      has room of its own and never lands on the title. */
-  --head-top: 28px;
+  --head-top: 80px;
   position: relative;
   display: block;
   padding: 0 var(--gutter-end) 0 var(--gutter-start);
@@ -2374,10 +2343,7 @@ kbd {
   box-shadow: var(--shadow-card);
 }
 
-/* The head's whole job is to get out of the way. 28px of air above the title
-   is also where the decorate row lives when the head is approached — it is
-   hover chrome, so it is taken out of flow and costs the page nothing at rest.
-   Before this the head spent 78px on 28px of buttons nobody had asked for. */
+/* The desktop page head keeps Notion's space above the title. */
 .doc__head {
   position: relative;
   /* Its own block: an icon hung over the cover by a negative margin must
@@ -2406,8 +2372,9 @@ kbd {
 .doc__icon {
   display: block;
   margin-left: -4px;
-  font-size: clamp(40px, 11cqi, 64px);
-  line-height: 1.1;
+  margin-bottom: 32px;
+  font-size: 72px;
+  line-height: 1;
   border-radius: var(--r-sm);
   transition: background var(--t-tap) var(--e-out);
 }
@@ -2425,10 +2392,10 @@ kbd {
    so a finished page is just a title. */
 .doc__decorate {
   position: absolute;
-  top: 1px;
+  top: max(0px, calc(var(--head-top) - 32px));
   left: -6px;
   display: flex;
-  height: calc(var(--head-top) - 2px);
+  height: 28px;
   align-items: center;
   gap: 2px;
   opacity: 0;
@@ -2441,28 +2408,26 @@ kbd {
 }
 
 .doc__decorate .btn {
-  height: calc(var(--head-top) - 2px);
+  height: 28px;
   min-height: 0;
   color: var(--ink-3);
   font-size: 13px;
   font-weight: 500;
 }
 
-/* Sized against the COLUMN, not the window: how big the title should be is a
-   question about the measure it sits on, and the measure changes when the list
-   folds without the window changing at all. */
+/* Page titles use Notion's 40px / 48px scale. */
 .doc__title {
   width: 100%;
   min-height: calc(1lh + 4px);
   padding: 2px 2px;
   border: 0;
-  margin: 0 0 2px -2px;
+  margin: 0 0 16px -2px;
   background: none;
   color: var(--ink);
-  font-size: clamp(26px, calc(var(--read) * 2), 34px);
+  font-size: 40px;
   font-weight: 700;
-  line-height: 1.18;
-  letter-spacing: -0.022em;
+  line-height: 1.2;
+  letter-spacing: normal;
   outline: 0;
 }
 
@@ -2826,9 +2791,9 @@ kbd {
   --head-center: calc(3px + var(--read) * var(--lead) / 2);
 }
 
-.page-frame[data-head-kind="heading1"] { --head-center: calc(var(--read) * 1.5 + var(--read) * 1.5 * 1.26 / 2); }
-.page-frame[data-head-kind="heading2"] { --head-center: calc(var(--read) * 1.2 + var(--read) * 1.26 * 1.3 / 2); }
-.page-frame[data-head-kind="heading3"] { --head-center: calc(var(--read) * 0.95 + var(--read) * 1.07 * 1.35 / 2); }
+.page-frame[data-head-kind="heading1"] { --head-center: calc(var(--read) * 1.5 + var(--read) * 1.875 * 1.3 / 2); }
+.page-frame[data-head-kind="heading2"] { --head-center: calc(var(--read) * 1.2 + var(--read) * 1.5 * 1.3 / 2); }
+.page-frame[data-head-kind="heading3"] { --head-center: calc(var(--read) * 0.95 + var(--read) * 1.25 * 1.3 / 2); }
 .page-frame[data-head-kind="page-title"] { --head-center: calc(3px + var(--read) * 1.125 * 1.35 / 2); }
 .page-frame[data-head-kind="callout"] { --head-center: calc(18px + var(--read) * var(--lead) / 2); }
 
@@ -3155,27 +3120,26 @@ kbd {
   line-height: 1.4;
 }
 
-/* Three steps of one ratio, and optical tracking that tightens as the size
-   grows — a heading set at the body's tracking reads loose. */
+/* Notion's document headings: 30px, 24px and 20px. */
 h1.block__editable {
-  font-size: calc(var(--read) * 1.5);
+  font-size: calc(var(--read) * 1.875);
   font-weight: 600;
-  line-height: 1.26;
-  letter-spacing: -0.021em;
+  line-height: 1.3;
+  letter-spacing: normal;
 }
 
 h2.block__editable {
-  font-size: calc(var(--read) * 1.26);
+  font-size: calc(var(--read) * 1.5);
   font-weight: 600;
   line-height: 1.3;
-  letter-spacing: -0.014em;
+  letter-spacing: normal;
 }
 
 h3.block__editable {
-  font-size: calc(var(--read) * 1.07);
+  font-size: calc(var(--read) * 1.25);
   font-weight: 600;
-  line-height: 1.35;
-  letter-spacing: -0.006em;
+  line-height: 1.3;
+  letter-spacing: normal;
 }
 
 /* Markers sit in their own fixed column so the text edges of a list and a
@@ -3513,12 +3477,12 @@ pre.block__editable {
 
 /* A heading's pair is beside its first line, not up in the room it keeps
    above. */
-.block--heading1 > .block__content > .block__add { top: calc(var(--read) * 1.5 + (var(--read) * 1.5 * 1.26 - 22px) / 2); }
-.block--heading2 > .block__content > .block__add { top: calc(var(--read) * 1.2 + (var(--read) * 1.26 * 1.3 - 22px) / 2); }
-.block--heading3 > .block__content > .block__add { top: calc(var(--read) * 0.95 + (var(--read) * 1.07 * 1.35 - 22px) / 2); }
-.block--heading1 > .block__content > .block__handle { top: calc(var(--read) * 1.5 + (var(--read) * 1.5 * 1.26 - 24px) / 2); }
-.block--heading2 > .block__content > .block__handle { top: calc(var(--read) * 1.2 + (var(--read) * 1.26 * 1.3 - 24px) / 2); }
-.block--heading3 > .block__content > .block__handle { top: calc(var(--read) * 0.95 + (var(--read) * 1.07 * 1.35 - 24px) / 2); }
+.block--heading1 > .block__content > .block__add { top: calc(var(--read) * 1.5 + (var(--read) * 1.875 * 1.3 - 22px) / 2); }
+.block--heading2 > .block__content > .block__add { top: calc(var(--read) * 1.2 + (var(--read) * 1.5 * 1.3 - 22px) / 2); }
+.block--heading3 > .block__content > .block__add { top: calc(var(--read) * 0.95 + (var(--read) * 1.25 * 1.3 - 22px) / 2); }
+.block--heading1 > .block__content > .block__handle { top: calc(var(--read) * 1.5 + (var(--read) * 1.875 * 1.3 - 24px) / 2); }
+.block--heading2 > .block__content > .block__handle { top: calc(var(--read) * 1.2 + (var(--read) * 1.5 * 1.3 - 24px) / 2); }
+.block--heading3 > .block__content > .block__handle { top: calc(var(--read) * 0.95 + (var(--read) * 1.25 * 1.3 - 24px) / 2); }
 
 .block.is-link-line > .block__content > :is(.block__add, .block__handle) {
   top: 50%;
@@ -3554,6 +3518,11 @@ pre.block__editable {
   font-size: 18px;
   line-height: 1;
   transition: opacity var(--t-fast) var(--e-out);
+}
+
+.block__page-icon > svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* A page's row — a sub-page's, a folded block's, a line that is nothing but
@@ -8528,7 +8497,7 @@ button.db__th:hover,
   .doc,
   .db,
   .history-banner {
-    --gutter: 72px;
+    --gutter: 96px;
   }
 }
 
@@ -8543,6 +8512,14 @@ button.db__th:hover,
 /* Narrow, the margins keep just the room they need: the left one the "+"
    (see `.doc`), the right one little. */
 @container page (max-width: 520px) {
+  .doc {
+    --head-top: 40px;
+  }
+
+  .doc__title {
+    font-size: 32px;
+  }
+
   .doc,
   .db,
   .history-banner {
@@ -8588,7 +8565,7 @@ button.db__th:hover,
    BANDS that give way, never the scrollers. */
 @media (max-height: 420px) {
   .doc {
-    --head-top: 22px;
+    --head-top: 32px;
   }
 
   .doc__cover {
