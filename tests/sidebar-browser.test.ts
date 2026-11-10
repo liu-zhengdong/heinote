@@ -79,7 +79,7 @@ const views = [
 
 async function expectToolbarLayout(toolbar: Locator) {
   await expect(toolbar).toBeVisible();
-  await expect(toolbar).toContainText("目录树");
+  await expect(toolbar).toContainText("笔记");
   await expect(toolbar.getByRole("button", { name: "Change sort order", exact: true })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "Collapse all", exact: true })).toBeVisible();
   await expect(toolbar.getByRole("button")).toHaveCount(2);

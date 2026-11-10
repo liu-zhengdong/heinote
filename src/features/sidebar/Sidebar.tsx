@@ -84,7 +84,7 @@ function writeExpanded(ids: ReadonlySet<string>): void {
 
 const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints };
 const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "共享空间", graph: "关系图谱" };
-const SECTION_LABELS: Record<SidebarView, string> = { files: "目录树", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑" };
+const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
 
