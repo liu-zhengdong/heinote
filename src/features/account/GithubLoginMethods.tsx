@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 import type { GithubStatus } from "../../core/github-auth";
 import { useWorkspace } from "../../app/workspace-context";
-import { api, errorMessage } from "./api";
+import { api, ApiError, errorMessage } from "./api";
 import { GithubMark } from "./Github";
 import { ListStatus } from "./ListStatus";
-import type { AccountPanelProps } from "./AccountMenu";
+import type { AccountPanelProps } from "./account-panel";
 
-/** "登录方式" tab: shows the GitHub identity bound to the current account and
- * the link/unlink actions. The OAuth round trip leaves the app, so unsaved
- * edits are flushed before navigating away. */
-export function GithubLoginMethods({ onBusyChange, notice, noticeError }: AccountPanelProps & { notice?: string; noticeError?: boolean }) {
+/** Show the bound GitHub identity. Check settings drafts before leaving Notes. */
+export function GithubLoginMethods({ onBusyChange, active = true, notice, noticeError, requestExternal }: AccountPanelProps & {
+  notice?: string;
+  noticeError?: boolean;
+  requestExternal(action: () => void): void;
+}) {
   const { document: workspaceDocument } = useWorkspace();
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -19,6 +21,7 @@ export function GithubLoginMethods({ onBusyChange, notice, noticeError }: Accoun
   const retry = useCallback(() => setRevision((value) => value + 1), []);
 
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -27,7 +30,7 @@ export function GithubLoginMethods({ onBusyChange, notice, noticeError }: Accoun
       .catch((reason) => { if (!controller.signal.aborted) setError(errorMessage(reason)); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [revision]);
+  }, [revision, active]);
 
   const link = async () => {
     if (pending || !status?.enabled) return;
@@ -53,7 +56,13 @@ export function GithubLoginMethods({ onBusyChange, notice, noticeError }: Accoun
     setError("");
     try {
       setStatus(await api<GithubStatus>("/api/auth/github/link", { method: "DELETE" }));
-    } catch (reason) { setError(errorMessage(reason)); }
+    } catch (reason) {
+      setError(errorMessage(reason));
+      if (!(reason instanceof ApiError) || reason.status >= 500) {
+        try { setStatus(await api<GithubStatus>("/api/auth/github/status")); }
+        catch { retry(); }
+      }
+    }
     setPending("");
     onBusyChange(false);
   };
@@ -78,7 +87,7 @@ export function GithubLoginMethods({ onBusyChange, notice, noticeError }: Accoun
                 </button>
               ) : null
             ) : status.enabled ? (
-              <button type="button" className="btn" aria-label="绑定 GitHub" disabled={Boolean(pending)} onClick={() => void link()}>
+              <button type="button" className="btn" aria-label="绑定 GitHub" disabled={Boolean(pending)} onClick={() => requestExternal(() => void link())}>
                 {pending === "link" ? "正在跳转…" : "绑定"}
               </button>
             ) : null}

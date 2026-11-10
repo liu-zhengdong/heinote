@@ -38,7 +38,7 @@ async function token(page: Page) {
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const value = await page.getByLabel("令牌", { exact: true }).inputValue();
   await page.getByRole("button", { name: "已保存", exact: true }).click();
-  await page.getByRole("button", { name: "关闭账号", exact: true }).click();
+  await page.getByRole("button", { name: "关闭设置", exact: true }).click();
   return value;
 }
 
@@ -105,8 +105,9 @@ test("invited reader accepts in account UI and permission changes reach both bro
   await owner.getByRole("button", { name: "Invite", exact: true }).click();
   await expect(owner.getByText("Waiting to accept")).toBeVisible();
   await member.getByRole("button", { name: /^账号：/ }).click();
+  await member.getByRole("tab", { name: "邀请", exact: true }).click();
   await member.getByRole("button", { name: /^接受「/ }).click();
-  await member.getByRole("button", { name: "关闭账号", exact: true }).click();
+  await member.getByRole("button", { name: "关闭设置", exact: true }).click();
   await expect(member.getByText("项目协作", { exact: true }).first()).toBeVisible();
   await member.goto(`${server.url}/?page=${createdPage.id}`);
   await expect(member.locator('.block__editable[contenteditable="true"]')).toHaveCount(0);

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, errorMessage } from "./api";
 
-export function useAccountList<T>(path: string) {
+export function useAccountList<T>(path: string, active = true) {
   const [items, setItems] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const retry = useCallback(() => setRevision((current) => current + 1), []);
   useEffect(() => {
+    if (!active) return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -19,7 +20,7 @@ export function useAccountList<T>(path: string) {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [path, revision]);
+  }, [path, revision, active]);
   return { items, setItems, loading, error, setError, retry };
 }
 

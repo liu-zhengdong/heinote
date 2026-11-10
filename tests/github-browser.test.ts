@@ -30,7 +30,9 @@ async function photo(page: Page, name: string) {
   await page.screenshot({ path: join(evidence, name), fullPage: true });
 }
 async function signOut(page: Page) {
-  if (!await page.getByRole("dialog", { name: "账号", exact: true }).isVisible()) await page.getByRole("button", { name: /^账号：/ }).click();
+  if (!await page.getByRole("dialog", { name: "账号设置", exact: true }).isVisible()) await page.getByRole("button", { name: /^账号：/ }).click();
+  const back = page.getByRole("button", { name: "返回设置", exact: true });
+  if (await back.isVisible()) await back.click();
   await page.getByRole("button", { name: "退出登录", exact: true }).click();
   await expect(page.getByRole("heading", { name: "登录", exact: true })).toBeVisible();
 }
@@ -46,7 +48,8 @@ async function passwordRegister(page: Page, handle: string) {
 async function session(page: Page) { return (await page.request.get(`${server.url}/api/session`)).json(); }
 async function methods(page: Page) {
   await page.getByRole("button", { name: /^账号：/ }).click();
-  await page.getByRole("tab", { name: "登录方式", exact: true }).click();
+  const profile = page.getByRole("tab", { name: "我的账号", exact: true }).or(page.getByRole("button", { name: "我的账号", exact: true }));
+  await profile.click();
 }
 
 test("GitHub sign-in follows real redirects, retains its account and protects its only login method", async ({ page }) => {
@@ -87,7 +90,7 @@ test("existing user binds and unbinds GitHub without losing private content", as
   await photo(page, "unlinked-desktop@2x.png");
   stub.queue.push({ id: 71002, login: "github-owner", name: "外部显示名" });
   await page.getByRole("button", { name: "绑定 GitHub", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "登录方式", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "我的账号", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("button", { name: "解除绑定", exact: true })).toBeEnabled();
   expect((await session(page)).user.id).toBe(original.id);
   const read = await page.request.get(`${server.url}/api/v1/pages/${note.id}`, { headers: { Authorization: `Bearer ${token}` } });

@@ -57,6 +57,7 @@ import { publishRecovery } from "../collaboration/recovery";
 import { pageOfRef, recordValue, recordsOfPath, refKey } from "../platform/records";
 import { withStrictRecordReplay } from "../platform/live";
 import { request } from "../platform/http";
+import { useSession } from "../features/account/AuthGate";
 
 /** What changes rarely — the actions, the selection, the member's spaces
  *  and preferences — so a view reading it is not redrawn by every keystroke.
@@ -221,7 +222,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
      provider keeps its own copy only for the few things it decides itself. */
   const [store] = useState(() => new WorkspaceStateStore());
   const [document, setDocument] = useState<WorkspaceDocument | null>(null);
-  const [platform, setPlatform] = useState<PlatformClient | null>(null);
+  const [platformClient, setPlatform] = useState<PlatformClient | null>(null);
+  const { user: sessionUser } = useSession();
+  // Keep the live client and document. Derive author details from the session.
+  const platform = useMemo(() => platformClient && sessionUser?.id === platformClient.bootstrap.user.id
+    ? { ...platformClient, bootstrap: { ...platformClient.bootstrap, user: sessionUser } }
+    : platformClient, [platformClient, sessionUser]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

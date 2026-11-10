@@ -108,6 +108,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/health", (_req, res) => { store.one("SELECT 1"); res.json({ status: "ok" }); });
   app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled }));
+  app.patch("/api/account/profile", (req, res) => {
+    const who = actor(req); const { displayName } = parse(z.object({ displayName: z.string().trim().min(1).max(100) }).strict(), req.body);
+    store.db.prepare("UPDATE users SET display_name=? WHERE id=?").run(displayName, who.user.id);
+    res.json({ user: store.userById(who.user.id) });
+  });
   app.post("/api/auth/register", async (req, res) => {
     throttle(req);
     const input = parse(z.object({ handle, displayName: z.string().trim().min(1).max(100), password: z.string().min(10).max(256) }), req.body);

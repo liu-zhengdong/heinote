@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { SpaceRole } from "../../core/types";
-import type { AccountPanelProps } from "./AccountMenu";
-import { api, errorMessage } from "./api";
+import type { AccountPanelProps } from "./account-panel";
+import { api, ApiError, errorMessage } from "./api";
 import { ListStatus } from "./ListStatus";
 import { formatDate, useAccountList } from "./useAccountList";
 
@@ -15,8 +15,8 @@ interface Invitation {
 }
 const roles = { admin: "管理", editor: "编辑", viewer: "只读" };
 
-export function Invitations({ onBusyChange }: AccountPanelProps) {
-  const { items, setItems, loading, error, setError, retry } = useAccountList<Invitation>("/api/invitations");
+export function Invitations({ onBusyChange, active }: AccountPanelProps) {
+  const { items, setItems, loading, error, setError, retry } = useAccountList<Invitation>("/api/invitations", active);
   const [pending, setPending] = useState("");
   const [notice, setNotice] = useState("");
   const answer = async (invitation: Invitation, accept: boolean) => {
@@ -30,7 +30,13 @@ export function Invitations({ onBusyChange }: AccountPanelProps) {
       setItems((current) => current.filter((item) => item.id !== invitation.id));
       setNotice(accept ? `已加入「${invitation.spaceName}」` : "已拒绝邀请");
       if (accept) window.dispatchEvent(new Event("notes:spaces-changed"));
-    } catch (reason) { setError(errorMessage(reason)); }
+    } catch (reason) {
+      setError(errorMessage(reason));
+      if (!(reason instanceof ApiError) || reason.status >= 500) {
+        retry();
+        window.dispatchEvent(new Event("notes:spaces-changed"));
+      }
+    }
     finally { setPending(""); onBusyChange(false); }
   };
   return <>

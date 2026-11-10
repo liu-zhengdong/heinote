@@ -1,6 +1,6 @@
 /* Account surfaces inherit Notes' colours, controls and motion. */
 .account-gate,
-.account-dialog,
+.account-settings,
 .account-entry,
 .public-links,
 .public-reader {
@@ -131,18 +131,6 @@
   .account-entry__name { display: none; }
 }
 
-.account-dialog { width: min(560px, calc(100vw - 40px)); margin-top: min(7vh, 36px); }
-.account-dialog__scope { display: flex; max-height: calc(100dvh - 90px); flex-direction: column; }
-.account-dialog__head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; }
-.account-identity { display: flex; min-width: 0; align-items: center; gap: 10px; }
-.account-tabs { display: flex; flex: none; gap: 6px; padding: 0 16px 8px; border-bottom: 1px solid var(--hairline); overflow-x: auto; scrollbar-width: none; }
-.account-tabs::-webkit-scrollbar { display: none; }
-.account-tabs__tab { min-height: 34px; padding: 6px 12px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 14px; white-space: nowrap; transition: background var(--t-fast) var(--e-out); }
-.account-tabs__tab:hover { background: var(--fill-hover); }
-.account-tabs__tab[aria-selected="true"] { background: var(--fill-active); color: var(--ink); font-weight: 550; }
-.account-dialog__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 20px 20px; }
-.account-dialog__foot { display: flex; flex: none; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--hairline); }
-.account-dialog__foot .account-error { flex: 1; }
 .account-list { list-style: none; margin: 0; padding: 0; }
 .account-row { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 12px 0; }
 .account-row + .account-row { border-top: 1px solid var(--hairline); }
@@ -254,12 +242,6 @@
   .account-gate .account-gate__github { min-height: 44px; }
   .account-password__toggle { width: 44px; }
   .account-field input, .account-select { font-size: 16px; }
-  .account-dialog { width: calc(100vw - 32px); margin-top: 0; }
-  .account-dialog__scope { max-height: calc(100dvh - 48px); }
-  .account-dialog__head { padding: 14px 16px; }
-  .account-dialog__body { padding: 12px 16px 16px; }
-  .account-tabs { gap: 2px; padding-inline: 10px; }
-  .account-tabs__tab { padding-inline: 9px; }
   .account-row--wrap { flex-wrap: wrap; }
   .account-row--wrap > .account-row__text { flex-basis: 55%; }
   .account-row--wrap > .account-row__actions { margin-left: auto; }
@@ -275,6 +257,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .account-gate__card, .public-reader__document { animation: none; }
-  .account-tabs__tab, .account-field input, .account-select, .account-password__toggle, .account-gate .account-gate__submit { transition: none; }
+  .account-field input, .account-select, .account-password__toggle, .account-gate .account-gate__submit { transition: none; }
   .account-gate__progress { animation: none; }
 }

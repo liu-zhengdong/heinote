@@ -1,8 +1,8 @@
 import { Copy, KeyRound } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { Select } from "../../components/Select";
-import type { AccountPanelProps } from "./AccountMenu";
-import { api, errorMessage } from "./api";
+import type { AccountPanelProps, TokenSecret } from "./account-panel";
+import { api, ApiError, errorMessage } from "./api";
 import { ListStatus } from "./ListStatus";
 import { formatDate, useAccountList } from "./useAccountList";
 
@@ -14,12 +14,14 @@ interface AgentToken {
   lastUsedAt: string | null;
 }
 
-export function AgentTokens({ onBusyChange }: AccountPanelProps) {
-  const { items, setItems, loading, error, setError, retry } = useAccountList<AgentToken>("/api/tokens");
+export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setSecret }: AccountPanelProps & {
+  secret: TokenSecret | null;
+  onSecretChange(secret: TokenSecret | null): void;
+}) {
+  const { items, setItems, loading, error, setError, retry } = useAccountList<AgentToken>("/api/tokens", active);
   const accessId = useId();
   const [name, setName] = useState("");
   const [access, setAccess] = useState<AgentToken["access"]>("read");
-  const [secret, setSecret] = useState<{ value: string; name: string } | null>(null);
   const [pending, setPending] = useState("");
   const [confirming, setConfirming] = useState("");
   const [notice, setNotice] = useState("");
@@ -39,7 +41,15 @@ export function AgentTokens({ onBusyChange }: AccountPanelProps) {
       const { token: _token, ...metadata } = created;
       setItems((current) => [metadata, ...current]);
       setName("");
-    } catch (reason) { setError(errorMessage(reason)); }
+    } catch (reason) {
+      setError(errorMessage(reason));
+      if (!(reason instanceof ApiError) || reason.status >= 500) {
+        setError(`${errorMessage(reason)}。创建结果未确认，原文无法找回。`);
+        setNotice("请核对令牌列表。撤销本次令牌后可重新创建。");
+        try { setItems(await api<AgentToken[]>("/api/tokens")); }
+        catch { retry(); }
+      }
+    }
     finally { setPending(""); onBusyChange(false); }
   };
 
@@ -54,7 +64,10 @@ export function AgentTokens({ onBusyChange }: AccountPanelProps) {
       setItems((current) => current.filter((token) => token.id !== item.id));
       setConfirming("");
       setNotice(`已撤销「${item.name}」`);
-    } catch (reason) { setError(errorMessage(reason)); }
+    } catch (reason) {
+      setError(errorMessage(reason));
+      if (!(reason instanceof ApiError) || reason.status >= 500) retry();
+    }
     finally { setPending(""); onBusyChange(false); }
   };
 
