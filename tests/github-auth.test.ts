@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { request as httpRequest } from "node:http";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -821,4 +822,58 @@ test("production GitHub configuration is validated before the server accepts tra
   } finally {
     restore();
   }
+});
+
+test("a committed first sign-in survives a lost callback response and replays nothing", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  const identity = { id: 7991, login: "lost_response" };
+
+  // Authorize in the real browser; it keeps the browser-binding cookie but has
+  // no notes_session yet.
+  const authorize = await startGithubLogin(browser, f.stub, identity);
+  const callback = await followProvider(authorize);
+  assert.ok(browser.cookie, "the flow must bind a browser cookie");
+  assert.ok(!/notes_session=/.test(browser.cookie), "no session may exist before the callback");
+
+  // Issue the callback over raw HTTP and destroy the response at the headers:
+  // the server commits the account, but the client never adopts Set-Cookie.
+  const lost = await new Promise<{ status: number; location: string; setCookie: string[] }>((resolve, reject) => {
+    const req = httpRequest(`${f.url()}${callback}`, {
+      method: "GET",
+      headers: { Cookie: browser.cookie },
+    }, (res) => {
+      const result = {
+        status: res.statusCode ?? 0,
+        location: String(res.headers.location ?? ""),
+        setCookie: res.headers["set-cookie"] ?? [],
+      };
+      res.destroy();
+      resolve(result);
+    });
+    req.on("error", reject);
+    req.end();
+  });
+  assert.equal(lost.status, 302);
+  assert.ok(lost.setCookie.some((cookie) => cookie.startsWith("notes_session=")), "the committed login must offer a session cookie");
+
+  // The browser stayed anonymous: it never received the session.
+  assert.ok(!/notes_session=/.test(browser.cookie));
+  assert.equal(status(await browser.request("/api/session"), 200).user, null);
+
+  // The same GitHub identity authorizes again and lands on the committed
+  // account, without creating a duplicate.
+  const authorize2 = await startGithubLogin(browser, f.stub, identity);
+  const callback2 = await followProvider(authorize2);
+  const reply = await browser.request(callback2);
+  const home = redirectTo(reply);
+  assert.equal(home.pathname, "/");
+  assert.equal(home.search, "");
+  const user = status(await browser.request("/api/session"), 200).user;
+  assert.ok(user?.id, "the retry must sign into the committed account");
+  assert.equal(status(await browser.request("/api/admin/users"), 200).length, 1, "exactly one account exists for the identity");
+
+  // Neither the lost nor the successful callback can be replayed.
+  githubError(await browser.request(callback), "invalid_request");
+  githubError(await browser.request(callback2), "invalid_request");
 });
