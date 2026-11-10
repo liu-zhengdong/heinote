@@ -1,0 +1,47 @@
+{
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "name": "terminus-notes",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --import tsx server/index.ts --dev",
+    "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
+    "backup": "node --env-file-if-exists=.env scripts/backup.mjs",
+    "test:e2e": "playwright test",
+    "test:container": "node tests/container-smoke.mjs",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
+    "test": "vitest run src && npm run test:server",
+    "test:server": "tsx --test tests/server.test.ts tests/collaboration.test.ts tests/files.test.ts",
+    "test:watch": "vitest src"
+  },
+  "dependencies": {
+    "@fontsource/noto-sans-sc": "^5.3.1",
+    "diff": "^9.0.0",
+    "express": "^5.1.0",
+    "highlight.js": "11.12.0",
+    "lib0": "^0.2.119",
+    "lucide-react": "1.31.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tsx": "^4.20.0",
+    "ws": "^8.22.1",
+    "yjs": "^13.6.33",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1",
+    "@types/express": "^5.0.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "6.0.5",
+    "typescript": "7.0.2",
+    "vite": "8.3.4",
+    "vitest": "4.1.10"
+  }
+}

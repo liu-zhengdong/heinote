@@ -1,0 +1,20 @@
+services:
+  notes:
+    build: .
+    ports:
+      - "${NOTES_PORT:-3000}:3000"
+    environment:
+      REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
+      PUBLIC_URL: "${PUBLIC_URL:-}"
+    volumes:
+      - notes_data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    init: true
+    restart: unless-stopped
+volumes:
+  notes_data:

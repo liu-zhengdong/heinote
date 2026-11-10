@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-labelledby="title" color="#216eaf">
+<title id="title">Notes</title>
+
+<rect x="23" y="28" width="23" height="72" rx="8" fill="currentColor"/>
+<rect x="81" y="27" width="24" height="73" rx="7" fill="currentColor"/>
+
+<path d="M31 28 L42 28 Q46 28 49 32 L105 91 Q104 100 96 100 L85 100 Q82 100 79 97 L23 40 L23 36 Q23 28 31 28 Z" fill="currentColor"/>
+
+</svg>

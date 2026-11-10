@@ -1,0 +1,12 @@
+node_modules
+ui
+dist
+data
+backups
+.git
+.terminus
+.visual-design
+test-results
+playwright-report
+.env*
+*.log

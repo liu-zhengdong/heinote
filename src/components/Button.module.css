@@ -1,0 +1,37 @@
+.button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r-md);
+  background-color: var(--fill);
+  color: var(--ink-2);
+  font-family: "PingFang SC", var(--terminus-font-body);
+  font-size: 12.5px;
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.button:hover:not(:disabled) {
+  background-color: var(--fill-hover);
+  color: var(--ink);
+}
+
+.button:active:not(:disabled),
+.active {
+  background-color: var(--fill-active);
+  color: var(--ink);
+}
+
+.button > svg {
+  flex: none;
+}
+
+.label {
+  line-height: 1;
+}

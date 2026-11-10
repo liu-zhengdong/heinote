@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b1c1f" />
+    <title>Notes</title>
+    <link rel="icon" href="/brand/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/brand/notes-icon-small.svg" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
+    <script>
+      /* Account and public pages start in light mode. Signed-in preferences
+         take effect when the workspace opens. */
+      document.documentElement.dataset.theme = "light";
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

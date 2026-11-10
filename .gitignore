@@ -1,0 +1,12 @@
+node_modules/
+dist/
+/ui/
+.terminus/
+.env*
+.DS_Store
+*.log
+data/
+backups/
+test-results/
+playwright-report/
+!.env.example
