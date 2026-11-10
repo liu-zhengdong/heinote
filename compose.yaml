@@ -6,6 +6,8 @@ services:
     environment:
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
       PUBLIC_URL: "${PUBLIC_URL:-}"
+      GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID:-}"
+      GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET:-}"
     volumes:
       - notes_data:/app/data
     healthcheck:

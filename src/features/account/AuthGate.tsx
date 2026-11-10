@@ -1,12 +1,16 @@
 import { Eye, EyeOff, LoaderCircle } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { Person } from "../../core/types";
+import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { api, errorMessage } from "./api";
+import { GithubMark, GithubSignupChoice } from "./Github";
 
 export type SessionUser = Person & { siteRole: "admin" | "user" };
-interface SessionResponse { user: SessionUser | null; registrationOpen: boolean }
+interface SessionResponse { user: SessionUser | null; registrationOpen: boolean; githubEnabled?: boolean }
 interface SessionContextValue {
   user: SessionUser | null;
+  githubOutcome: GithubResult | null;
+  clearGithubOutcome(): void;
   refresh(): Promise<void>;
   logout(): Promise<void>;
 }
@@ -31,6 +35,27 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const requestId = useRef(0);
   const identity = useRef<string | null>(null);
   const fieldId = useId();
+  const [githubOutcome, setGithubOutcome] = useState<GithubResult | null>(null);
+  const [signupTicket, setSignupTicket] = useState<string | null>(null);
+  const parsedQuery = useRef(false);
+
+  // AuthGate is the only consumer of the OAuth callback query. The ticket is
+  // kept in component state while the address bar is cleaned immediately.
+  useEffect(() => {
+    if (parsedQuery.current) return;
+    parsedQuery.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("github");
+    if (code && Object.hasOwn(githubMessages, code)) setGithubOutcome(code as GithubResult);
+    const ticket = params.get("github_signup");
+    if (!code && ticket) setSignupTicket(ticket);
+    if (params.has("github") || params.has("github_signup")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("github");
+      url.searchParams.delete("github_signup");
+      window.history.replaceState(null, "", url);
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     const id = ++requestId.current;
@@ -71,7 +96,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
     window.location.reload();
   }, []);
 
-  const value = useMemo<SessionContextValue>(() => ({ user: session?.user ?? null, refresh, logout }), [session?.user, refresh, logout]);
+  const clearGithubOutcome = useCallback(() => setGithubOutcome(null), []);
+  const value = useMemo<SessionContextValue>(() => (
+    { user: session?.user ?? null, githubOutcome, clearGithubOutcome, refresh, logout }
+  ), [session?.user, githubOutcome, clearGithubOutcome, refresh, logout]);
   const registering = mode === "register" && Boolean(session?.registrationOpen);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -96,18 +124,38 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (session?.user) return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 
+  // The signup ticket confirms a new account, then refreshes the session.
+  // onCreate resolves with an empty result so the choice keeps its busy state
+  // until this gate unmounts.
+  const createWithTicket = async (ticket: string) => {
+    try {
+      await api("/api/auth/github/signup", { method: "POST", body: JSON.stringify({ ticket }) });
+      await refresh();
+      return {};
+    } catch (reason) {
+      const status = (reason as { status?: number }).status;
+      return { message: errorMessage(reason), bad: status === 400 || status === 404 || status === 410 };
+    }
+  };
+  const signupMode = Boolean(signupTicket);
+
   return (
     <SessionContext.Provider value={value}>
       <main className="account-gate">
-        <section className="account-gate__card" aria-label={registering ? "创建 Notes 账号" : "登录 Notes"} aria-busy={loading || busy}>
+        <section className="account-gate__card" aria-label={signupMode ? "GitHub 登录选择" : registering ? "创建 Notes 账号" : "登录 Notes"} aria-busy={loading || busy}>
           <div className="account-gate__brand"><span className="account-gate__mark"><img src="/brand/notes-icon.svg" width="34" height="34" alt="" /></span>Notes</div>
-          <h1>{loading ? "正在连接" : registering ? "创建账号" : "登录"}</h1>
+          <h1>{loading ? "正在连接" : signupMode ? "GitHub 登录" : registering ? "创建账号" : "登录"}</h1>
           {loading ? <p className="account-muted" role="status">正在读取登录状态…</p> : !session ? (
             <>
               <p className="account-error" role="alert">{error || "无法连接服务器"}</p>
               <button type="button" className="btn btn--primary account-gate__submit" onClick={() => void load()}>重试</button>
             </>
+          ) : signupMode && signupTicket ? (
+            <GithubSignupChoice ticket={signupTicket} enabled={Boolean(session.githubEnabled)}
+              onCreate={createWithTicket} onDismissed={() => setSignupTicket(null)} />
           ) : (
+            <>
+            {githubOutcome ? <p className="account-notice" role={githubOutcome === "linked" ? "status" : "alert"}>{githubMessages[githubOutcome]}</p> : null}
             <form className="account-form" onSubmit={(event) => void submit(event)}>
               <label className="account-field">账号
                 <input name="handle" autoComplete="username" autoCapitalize="none" spellCheck={false} value={handle}
@@ -135,9 +183,14 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 {busy ? <><LoaderCircle size={16} className="account-gate__progress" aria-hidden="true" />{registering ? "注册中…" : "登录中…"}</> : registering ? "注册" : "登录"}
               </button>
             </form>
+            {session.githubEnabled ? (
+              <a className="btn account-gate__github" href="/api/auth/github" aria-disabled={busy} tabIndex={busy ? -1 : undefined}
+                onClick={(event) => { if (busy) event.preventDefault(); }}><GithubMark />使用 GitHub 登录</a>
+            ) : null}
+            </>
           )}
         </section>
-        {!loading && session ? <div className="account-gate__footer">
+        {!loading && session && !signupMode ? <div className="account-gate__footer">
           {session.registrationOpen ? <><span>{registering ? "已经有账号？" : "还没有账号？"}</span><button type="button" className="account-gate__switch" aria-label={registering ? "已有账号，登录" : "创建账号"} disabled={busy}
             onClick={() => { setMode(registering ? "login" : "register"); setPasswordVisible(false); setError(""); }}>
             {registering ? "登录" : "创建账号"}

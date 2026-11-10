@@ -78,6 +78,29 @@
 .account-gate .account-gate__submit:hover:not(:disabled) { background: #195d98; }
 .account-gate .account-gate__submit:active:not(:disabled) { transform: scale(.985); }
 .account-muted { margin: 8px 0; color: var(--ink-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-notice { margin: 0 0 6px; color: var(--ink-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-gate__github {
+  width: 100%;
+  min-height: 42px;
+  margin-top: 12px;
+  padding: 0 14px;
+  gap: 8px;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.account-gate__github:hover:not(:disabled),
+.account-gate__github:active:not(:disabled) { text-decoration: none; }
+.account-gate__github > svg { flex: none; }
+.account-gate__github[aria-disabled="true"] { cursor: default; opacity: .5; }
+.account-github-choice { display: grid; gap: 12px; }
+.account-github-choice__identity { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.account-github-choice__identity > svg { flex: none; }
+.account-github-choice .account-gate__github,
+.account-github-choice .account-gate__submit { margin-top: 0; }
+.account-github__mark { display: grid; place-items: center; flex: none; width: 32px; height: 32px; color: var(--ink); }
 .account-error { margin: 8px 0; color: var(--danger); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .account-status { display: flex; align-items: center; gap: 10px; }
 .account-status .account-error { flex: 1; }
@@ -112,7 +135,8 @@
 .account-dialog__scope { display: flex; max-height: calc(100dvh - 90px); flex-direction: column; }
 .account-dialog__head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; }
 .account-identity { display: flex; min-width: 0; align-items: center; gap: 10px; }
-.account-tabs { display: flex; flex: none; gap: 6px; padding: 0 16px 8px; border-bottom: 1px solid var(--hairline); }
+.account-tabs { display: flex; flex: none; gap: 6px; padding: 0 16px 8px; border-bottom: 1px solid var(--hairline); overflow-x: auto; scrollbar-width: none; }
+.account-tabs::-webkit-scrollbar { display: none; }
 .account-tabs__tab { min-height: 34px; padding: 6px 12px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 14px; white-space: nowrap; transition: background var(--t-fast) var(--e-out); }
 .account-tabs__tab:hover { background: var(--fill-hover); }
 .account-tabs__tab[aria-selected="true"] { background: var(--fill-active); color: var(--ink); font-weight: 550; }
@@ -226,7 +250,8 @@
   .account-gate { padding: 24px 20px; gap: 20px; }
   .account-gate__card { padding: 28px; }
   .account-gate .account-field input { min-height: 44px; font-size: 16px; }
-  .account-gate .account-gate__submit { min-height: 44px; }
+  .account-gate .account-gate__submit,
+  .account-gate .account-gate__github { min-height: 44px; }
   .account-password__toggle { width: 44px; }
   .account-field input, .account-select { font-size: 16px; }
   .account-dialog { width: calc(100vw - 32px); margin-top: 0; }
