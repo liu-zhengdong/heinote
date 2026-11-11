@@ -164,6 +164,23 @@ export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
   const blocks = readRecords(scope, "blocks").filter((row) => row.value.page === pageId);
   return { scope, pageId, generation: session.snapshot.generation, revision: pageRevision(page, blocks) };
 }
+/** A structural write (sharing a page into a space, moving it out) is only
+ *  allowed when the client can name the page's live collaborative document —
+ *  the server refuses it without that basis. The session opens on its own,
+ *  but a share that follows a page's creation closely can race it, so this
+ *  waits briefly for the snapshot to exist rather than leave a write doomed
+ *  to fail. */
+export async function awaitCollaborativeBasis(scope: string, pageId: string): Promise<void> {
+  if (sessionFor(scope, pageId)) return;
+  const deadline = Date.now() + 3000;
+  let delay = 100;
+  while (Date.now() < deadline) {
+    await openCollaborativePage(scope, pageId).catch(() => undefined);
+    if (sessionFor(scope, pageId)) return;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(delay * 2, 800);
+  }
+}
 function registeredField(session: Session, key: string): RegisteredField | null {
   const text = session.doc.getMap<Y.Text>("fields").get(key);
   return text instanceof Y.Text ? { userId: accountId, scope: session.snapshot.scope, pageId: session.snapshot.pageId, key, generation: session.snapshot.generation, text, canEdit: session.snapshot.canEdit, revision: pageBasis(session.snapshot.scope, session.snapshot.pageId)?.revision } : null;

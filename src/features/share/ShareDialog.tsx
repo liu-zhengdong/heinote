@@ -26,6 +26,7 @@ import { useUi } from "../../app/ui-context";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { PublicLinks } from "./PublicLinks";
+import { usePublicLinks } from "./usePublicLinks";
 
 type InviteRole = "admin" | "editor" | "viewer";
 
@@ -106,6 +107,13 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     [roster],
   );
   const myRole = spaceId ? space?.role ?? members.find((member) => member.id === me?.id)?.role : "owner";
+  /* The status line names what sharing state this page is in, so "Share"
+     stops being one button that hides two different ideas — membership
+     (collaborators) and public links (read-only publishing). */
+  const linkCount = usePublicLinks().filter((link) => link.pageId === page.id).length;
+  const statusText = library
+    ? "仅知识库成员可见"
+    : [spaceId ? `已共享 · ${members.length} 位成员` : "", linkCount ? "公开链接已开启" : ""].filter(Boolean).join(" · ") || "私有";
   const manager = myRole === "owner" || myRole === "admin";
   const canInvite = !library?.archived && (!spaceId || (space?.canInvite ?? manager));
   const canManageRoles = Boolean(spaceId) && (space?.canManageRoles ?? manager);
@@ -224,7 +232,8 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
       </header>
 
       <div className="share__body" aria-busy={busy}>
-        {library ? <p className="share__note">成员权限适用于整个知识库。</p> : null}
+        <p className="share__status">{statusText}</p>
+        {library ? <p className="share__note">成员权限适用于整个知识库。知识库页面不能公开分享；如需对外发布，请先将页面拷贝到个人空间。</p> : null}
         {inherited && root ? (
           <div className="share__inherited">
             <CornerLeftUp size={15} />
@@ -285,7 +294,8 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
         {error ? <div className="share__error" role="alert">{error}</div> : null}
 
         <section className="share__section">
-          <h2>People with access</h2>
+          <h2>{library ? "成员" : "成员共享"}</h2>
+          {!library ? <p className="share__note">受邀者接受后成为协作者。</p> : null}
           {members.map((member) => {
             const name = personName(member);
             const you = member.id === me?.id;

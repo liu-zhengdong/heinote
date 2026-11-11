@@ -469,8 +469,16 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.status(201).json({ id: tokenId, token, ...input, createdAt, lastUsedAt: null });
   });
   app.delete("/api/tokens/:id", (req, res) => { const who = actor(req); store.db.prepare("DELETE FROM tokens WHERE id=? AND user_id=?").run(text(req.params.id), who.user.id); res.json({ ok: true }); });
-  const shareDto = (row: Row) => ({ id: row.id, url: `/s/${row.token}`, createdAt: row.created_at });
-  app.get("/api/shares", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM shares WHERE user_id=? AND page_id=?", who.user.id, text(req.query.pageId)).map(shareDto)); });
+  const shareDto = (row: Row) => ({ id: row.id, url: `/s/${row.token}`, pageId: row.page_id, createdAt: row.created_at });
+  app.get("/api/shares", (req, res) => {
+    const who = actor(req);
+    const pageId = req.query.pageId ? text(req.query.pageId) : "";
+    // Without pageId: every public link of this user — the sidebar's
+    // "公开链接" section groups them by page.
+    res.json((pageId
+      ? store.all("SELECT * FROM shares WHERE user_id=? AND page_id=?", who.user.id, pageId)
+      : store.all("SELECT * FROM shares WHERE user_id=?", who.user.id)).map(shareDto));
+  });
   app.post("/api/shares", (req, res) => {
     const who = actor(req); const { pageId } = parse(z.object({ pageId: z.string() }), req.body); const { scope } = store.page(who, pageId);
     if (store.knowledgeBases.get(scope)) fail(403, "团队知识库页面不能公开分享。", "forbidden");

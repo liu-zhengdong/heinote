@@ -4,6 +4,7 @@ import { useUi } from "../../app/ui-context";
 import { api, errorMessage } from "../account/api";
 import { ListStatus } from "../account/ListStatus";
 import { formatDate, useAccountList } from "../account/useAccountList";
+import { notifyPublicLinksChanged } from "./usePublicLinks";
 
 interface PublicLink { id: string; url: string; createdAt: string }
 
@@ -19,6 +20,7 @@ export function PublicLinks({ pageId }: { pageId: string }) {
     try {
       const link = await api<PublicLink>("/api/shares", { method: "POST", body: JSON.stringify({ pageId }) });
       setItems((current) => [...current, link]);
+      notifyPublicLinksChanged();
       toast("公开链接已创建", "success");
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setPending(""); }
@@ -31,6 +33,7 @@ export function PublicLinks({ pageId }: { pageId: string }) {
       await api(`/api/shares/${encodeURIComponent(link.id)}`, { method: "DELETE" });
       setItems((current) => current.filter((item) => item.id !== link.id));
       setConfirming("");
+      notifyPublicLinksChanged();
       toast("公开链接已撤销", "success");
     } catch (reason) { setError(errorMessage(reason)); }
     finally { setPending(""); }
@@ -40,11 +43,11 @@ export function PublicLinks({ pageId }: { pageId: string }) {
     try { await navigator.clipboard.writeText(absolute); toast("链接已复制", "success"); }
     catch { toast("复制失败，请选中地址手动复制", "error"); }
   };
-  return <section className="public-links" aria-label="公开链接" aria-busy={loading || Boolean(pending)}>
+  return <section className="public-links" aria-label="公开只读链接" aria-busy={loading || Boolean(pending)}>
     <div className="public-links__head">
       <div>
-        <h2><Link size={15} aria-hidden="true" />公开链接</h2>
-        <p className="public-links__description">获得链接的人可以阅读此页及其子页。</p>
+        <h2><Link size={15} aria-hidden="true" />公开只读链接</h2>
+        <p className="public-links__description">获得链接的人无需账号即可阅读此页及子页；他们不会成为协作者。</p>
       </div>
       <button type="button" className="btn public-links__create" disabled={loading || Boolean(pending)} onClick={() => void create()}>
         <Plus size={14} aria-hidden="true" />{pending === "create" ? "创建中…" : "创建链接"}

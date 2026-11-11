@@ -96,7 +96,10 @@ export interface WorkspaceContextValue {
    *  the original's in their parent — unless `block` is false, for a caller
    *  (the editor) that places the row itself. `sameTitle` keeps the name as it
    *  is, as a block copied in its page does. */
-  duplicatePage(pageId: string, options?: { block?: boolean; sameTitle?: boolean }): string | null;
+  /** Copies a page tree. `toPersonal`: the copy's root lands at the top
+   *  level of the member's own space — the sanctioned way content leaves a
+   *  shared space or a knowledge base. */
+  duplicatePage(pageId: string, options?: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean }): string | null;
   /** Moves a page to another folder: every link to it stays where it is. */
   movePage(pageId: string, parentId: string | null): void;
   /** `record: false` keeps a change out of undo — for bookkeeping the
@@ -506,13 +509,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ]);
   }, [commit, document, platform]);
 
-  const duplicatePage = useCallback((pageId: string, options: { block?: boolean; sameTitle?: boolean } = {}) => {
+  const duplicatePage = useCallback((pageId: string, options: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean } = {}) => {
     if (!document || !platform) return null;
     const source = document.state.pages[pageId];
     if (!source) return null;
     const sourceScope = spaceOfPage(document.state.pages, pageId);
     const sourceSpace = sourceScope ? spacesRef.current[sourceScope] : undefined;
-    if (sourceSpace?.knowledgeBase && (sourceSpace.knowledgeBase.homePageId === pageId || sourceSpace.knowledgeBase.archived || sourceSpace.role === "viewer")) return null;
+    /* Copying out to the member's own space is allowed even for viewers —
+       they can already read every word; blocking the copy would be
+       ceremonial. The copy is a new page, not a move, so the knowledge-base
+       boundary (pages never move in or out) is untouched. */
+    if (sourceSpace?.knowledgeBase && !options.toPersonal
+        && (sourceSpace.knowledgeBase.homePageId === pageId || sourceSpace.knowledgeBase.archived || sourceSpace.role === "viewer")) return null;
     const now = new Date().toISOString();
     const author = platform.bootstrap.user.displayName;
     const idByOriginal = new Map<string, string>([[pageId, createId(source.kind === "database" ? "database" : "page")]]);
@@ -529,9 +537,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         id: copyId,
         // The copy's name keeps the original's links.
         ...renamedTitle(original, title),
-        parent_id: original.parent_id && idByOriginal.has(original.parent_id)
-          ? idByOriginal.get(original.parent_id)!
-          : original.parent_id,
+        // To the personal space: the copy's root detaches, so its records
+        // land in the member's own plane — a fresh private page that can be
+        // shared or published like any other.
+        parent_id: options.toPersonal && originalId === pageId ? null
+          : original.parent_id && idByOriginal.has(original.parent_id)
+            ? idByOriginal.get(original.parent_id)!
+            : original.parent_id,
         created_at: now,
         updated_at: now,
         created_by: author,
@@ -550,8 +562,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
 
     const rootCopyId = idByOriginal.get(pageId)!;
-    // The copy's line goes right after the original's, in their parent.
-    const holder = source.parent_id ? document.state.pages[source.parent_id] : undefined;
+    // The copy's line goes right after the original's, in their parent. A
+    // copy bound for the personal space has no parent there — skip the
+    // back-reference entirely.
+    const holder = !options.toPersonal && source.parent_id ? document.state.pages[source.parent_id] : undefined;
     const home = options.block !== false && holder?.kind === "document" ? linesFor(holder.block_tree, pageId)[0] : undefined;
     if (holder && home) {
       const siblings = orderedBlocks(holder.block_tree, home.parent_id);
@@ -563,9 +577,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         value: { ...home, id: blockId, content: relinkContent(home.content, new Map([[pageId, rootCopyId]])), order: next ? (home.order + next.order) / 2 : home.order + BLOCK_ORDER_STEP },
       });
     }
-    if (!source.parent_id) {
+    if (!source.parent_id || options.toPersonal) {
       const roots = [...document.state.roots];
-      roots.splice(roots.indexOf(pageId) + 1, 0, rootCopyId);
+      roots.splice(options.toPersonal ? roots.length : roots.indexOf(pageId) + 1, 0, rootCopyId);
       mutations.push({ type: "set", path: ["roots"], value: roots });
     }
     commit(mutations);

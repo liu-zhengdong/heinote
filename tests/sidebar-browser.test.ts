@@ -85,7 +85,7 @@ function createButton(page: Page) {
 const views = [
   { name: "Files", label: "全部页面" },
   { name: "Favorites", label: "收藏夹" },
-  { name: "Shared", label: "共享空间" },
+  { name: "Shared", label: "已分享" },
   { name: "Graph", label: "关系图谱" },
   { name: "Trash", label: "回收站" },
 ] as const;
@@ -320,7 +320,7 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   const shared = tabs.getByRole("tab", { name: "Shared", exact: true });
   await expect(files).toHaveText(/全部页面\s*2$/);
   await expect(favorites).toHaveText(/收藏夹\s*0$/);
-  await expect(shared).toHaveText(/共享空间\s*0$/);
+  await expect(shared).toHaveText(/已分享\s*0$/);
   await page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Alpha reference", exact: true }).hover();
   await page.getByRole("button", { name: "Actions for Alpha reference", exact: true }).click();
   await page.getByRole("menuitem", { name: "Add to favorites", exact: true }).click();
@@ -623,4 +623,35 @@ test("the trash banner asks before deleting permanently too", async ({ page }) =
   await confirm.getByRole("button", { name: "Delete permanently", exact: true }).click();
   await expect(page.getByText("In the trash", { exact: true })).toBeHidden();
   await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual([]);
+});
+
+test("the shared view lists public links and shares pages at once", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await register(page, "sidebar_shared");
+  await createDocument(page, "Published notes");
+  await page.getByRole("button", { name: "Share", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: /^Share / });
+  await expect(dialog.locator(".share__status")).toHaveText("私有");
+  await dialog.getByRole("button", { name: "创建链接", exact: true }).click();
+  await expect(dialog.locator(".public-links__url")).toHaveCount(1);
+  await expect(dialog.locator(".share__status")).toHaveText("公开链接已开启");
+  await dialog.getByRole("button", { name: "Close sharing", exact: true }).click();
+
+  const sharedTab = page.getByRole("tab", { name: "Shared", exact: true });
+  await sharedTab.click();
+  const tree = page.getByRole("tree", { name: "Shared", exact: true });
+  await expect(tree.getByRole("heading", { name: "公开链接", exact: true })).toBeVisible();
+  await expect(tree.getByRole("button", { name: "Published notes", exact: true })).toHaveCount(1);
+  await expect(sharedTab).toHaveText(/已分享\s*1$/);
+
+  // "新建共享页面" makes the page a shared root at once — the page must not
+  // stay private until somebody is invited.
+  await tree.getByRole("button", { name: "新建共享页面", exact: true }).first().click();
+  const created = page.getByRole("dialog", { name: /^Share / });
+  await expect(created.locator(".share__status")).toContainText("已共享");
+  await created.getByRole("button", { name: "Close sharing", exact: true }).click();
+  await expect(tree.getByRole("heading", { name: "我共享的" })).toBeVisible();
+  await expect.poll(async () => JSON.stringify(await (await page.request.get(`${server.url}/api/records/personal/pages`)).json())).toContain("share_space_id");
+  await expect(sharedTab).toHaveText(/已分享\s*2$/);
+  expect(errors).toEqual([]);
 });
