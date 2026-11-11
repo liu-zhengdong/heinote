@@ -101,29 +101,28 @@ export type AppMsg =
  *  archive, not by the bridge. */
 export type AppOp = "schema" | "rows.list" | "rows.query" | "rows.create" | "rows.update";
 
-const SCRIPT_RE =
-  /<\s*script\b|\bon[a-z]+\s*=|javascript\s*:|<\s*(?:object|embed|iframe)\b|<\s*meta[^>]+http-equiv\s*=\s*["']?refresh/i;
-
-/** Whether a source wants to run: a script tag, an inline `on*=` handler,
- *  a `javascript:` URI, an `<object>`/`<embed>`/`<iframe>` (which can nest a
- *  document), or a `meta refresh`. Anything unclear counts as scripted —
- *  the sandbox, not this check, is the actual isolation. */
-export function hasScript(source: string): boolean {
-  return SCRIPT_RE.test(source);
-}
-
 /** The source with the bridge shim and the CSP injected. If it names a
  *  `<head>`, the tags go inside it; otherwise they lead the document.
  *  `<!--%SHIM%-->` etc. in the source itself are no risk — the sandbox's
  *  first script defines `window.notes` before anything else runs. */
-export function appDocument(source: string): string {
+export function appDocument(source: string, theme?: "light" | "dark"): string {
   const meta = `<meta http-equiv="Content-Security-Policy" content="${APP_CSP.replace(/"/g, "&quot;")}">`;
+  /* The app's own colors follow the member's theme unless it declares a
+   *  color-scheme itself. A `data-theme` attribute mirrors it for CSS:
+   *  sandboxed srcdoc iframes do not map meta color-scheme onto the
+   *  prefers-color-scheme media query in Chromium. */
+  const scheme = theme ? `<meta name="color-scheme" content="${theme}">` : "";
+  const themeAttr = theme ? ` data-theme="${theme}"` : "";
   const shim = `<script>${APP_SHIM}</script>`;
-  const head = /<\s*head(?:\s[^>]*)?>/i.exec(source);
-  if (head) return `${source.slice(0, head.index + head[0].length)}${meta}${shim}${source.slice(head.index + head[0].length)}`;
+  /* Mirror the theme onto <html> first, wherever it is. */
   const html = /<\s*html(?:\s[^>]*)?>/i.exec(source);
-  if (html) return `${source.slice(0, html.index + html[0].length)}<head>${meta}${shim}</head>${source.slice(html.index + html[0].length)}`;
-  return `${meta}${shim}${source}`;
+  const themed = html && themeAttr && !/data-theme\s*=/i.test(html[0])
+    ? `${source.slice(0, html.index)}${html[0].replace(/<\s*html/i, `<html${themeAttr}`)}${source.slice(html.index + html[0].length)}`
+    : source;
+  const head = /<\s*head(?:\s[^>]*)?>/i.exec(themed);
+  if (head) return `${themed.slice(0, head.index + head[0].length)}${meta}${scheme}${shim}${themed.slice(head.index + head[0].length)}`;
+  if (html) return `${themed.slice(0, html.index + html[0].length)}<head>${meta}${scheme}${shim}</head>${themed.slice(html.index + html[0].length)}`;
+  return `${meta}${scheme}${shim}${themed}`;
 }
 
 /** The binding list a stored app record gives the host, validated and

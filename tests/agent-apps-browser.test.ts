@@ -106,8 +106,8 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   // Open the app page in the UI: it draws its surface, not a page of words.
   await page.goto(`${server.url}/?page=${app.body.id}`);
   await expect(page.locator(".app-surface")).toBeVisible();
-  // A scripted app never runs by itself: it waits for the member.
-  await expect(page.frameLocator("iframe.app-surface__frame").locator("#title")).not.toBeVisible({ timeout: 2000 }).catch(() => {});
+  // Nothing enabled yet: the surface sits collapsed, not pretending to run.
+  await expect(page.locator(".app-surface__empty")).toContainText("未配置源码");
 
   // Preview the draft (read-only), then enable it.
   await page.getByRole("button", { name: "启用", exact: true }).click();
@@ -116,8 +116,7 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
     return dto.body.page.app?.enabled ? "enabled" : "draft";
   }).toBe("enabled");
 
-  // Run it; the bridge answers its calls with the bound database's rows.
-  await page.getByRole("button", { name: /^运行/, exact: false }).click();
+  // The bridge answers its calls with the bound database's rows.
   const frame = page.frameLocator("iframe.app-surface__frame");
   await expect(frame.locator("#rows")).toContainText("databases:1");
   await frame.locator("#load").click();
@@ -133,7 +132,7 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   expect(errors).toEqual([]);
 });
 
-test("UC-15: an app embedded in a page is its surface; scripted stays stopped until run; plain HTML runs on sight", async ({ page }) => {
+test("UC-15: apps embedded in a page are their surfaces; plain and scripted both run on sight", async ({ page }) => {
   await register(page, "embedder");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const token = await createToken(page, "嵌入 Agent", "write");
@@ -181,10 +180,10 @@ test("UC-15: an app embedded in a page is its surface; scripted stays stopped un
 
   await page.goto(`${server.url}/?page=${doc.body.id}`);
   const frames = page.locator("iframe.app-surface__frame");
-  // Plain HTML ran on sight; the scripted one waited.
-  await expect(frames).toHaveCount(1);
-  await expect(page.frameLocator("iframe.app-surface__frame").locator("h2")).toHaveText("静态卡片");
-  await expect(page.locator(".app-surface").filter({ hasText: "脚本应用" }).locator(".app-surface__empty")).toContainText("未运行");
+  // Both enabled apps run on sight — the scripted one too.
+  await expect(frames).toHaveCount(2);
+  await expect(page.frameLocator('iframe[title="静态卡片"]').locator("h2")).toHaveText("静态卡片");
+  await expect(page.frameLocator('iframe[title="脚本应用"]').locator("#title")).toHaveText("计数器");
 
   await page.screenshot({ path: join(evidence, "app-embedded.png"), fullPage: false });
 });

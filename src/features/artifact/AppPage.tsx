@@ -90,7 +90,7 @@ export function AppPage({ page }: Props) {
             className="app-editor__source"
             value={shown}
             spellCheck={false}
-            placeholder="粘贴或编写 HTML 小应用的源码。包含脚本的应用需要成员手动运行。"
+            placeholder="粘贴或编写 HTML 小应用的源码。启用后打开即运行。"
             onChange={(event) => { setDraft(event.target.value); setDirty(true); }}
           />
           <p className="app-editor__hint">

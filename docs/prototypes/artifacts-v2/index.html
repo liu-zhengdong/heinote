@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Artifact v2 · 原型索引 — Terminus Notes</title>
+<link rel="stylesheet" href="assets/proto.css">
+</head>
+<body style="max-width:720px;margin:0 auto">
+
+<div class="theme" data-theme="light">
+  <h1 class="proto-title">Artifact v2 原型</h1>
+  <p class="proto-note">三款候选修复两件事：暗色适配缺失、打开应用多一步「运行」。都假设启用即授权运行。</p>
+
+  <a class="index-card" href="a-autorun.html">
+    <strong>方向 A · 即运行</strong>
+    <p>打开即运行，工具栏常显。最小改动，「停止」回到今天的一行态。</p>
+  </a>
+  <div style="height:10px"></div>
+  <a class="index-card" href="b-immersive.html">
+    <strong>方向 B · 沉浸</strong>
+    <p>页面主体就是应用；控制条只在悬停时浮现，嵌入块不占「未运行」高度。</p>
+  </a>
+  <div style="height:10px"></div>
+  <a class="index-card" href="c-collapsible.html">
+    <strong>方向 C · 折叠态</strong>
+    <p>默认运行；「停止」改为「折叠」，收起卸 iframe、省资源，语义从「待启动」变「已收起」。</p>
+  </a>
+
+  <p class="proto-note" style="margin-top:20px">每款都含：亮色应用页、暗色应用页、暗色文档内嵌。应用自身配色由其源码声明（`color-scheme`），宿主只保证 chrome 跟随主题。</p>
+</div>
+
+</body>
+</html>

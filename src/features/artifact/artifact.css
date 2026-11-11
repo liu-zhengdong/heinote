@@ -6,7 +6,7 @@
   display: flex;
   flex-direction: column;
   border-radius: 10px;
-  background: var(--bg-primary, #fff);
+  background: var(--paper, #fff);
   overflow: hidden;
 }
 
@@ -20,7 +20,7 @@
   height: 420px;
   border: 0;
   border-radius: 10px 10px 0 0;
-  background: #fff;
+  background: var(--paper, #fff);
 }
 
 .app-surface__empty {
@@ -29,9 +29,9 @@
   gap: 8px;
   min-height: 44px;
   padding: 10px 14px;
-  color: var(--text-secondary, #787774);
+  color: var(--ink-3, #787774);
   font-size: 13px;
-  background: var(--bg-secondary, #f7f7f5);
+  background: var(--sidebar, #f7f7f5);
 }
 
 .app-surface__bar {
@@ -39,11 +39,11 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  border-top: 1px solid var(--border-weak, #efefed);
-  background: var(--bg-secondary, #f7f7f5);
+  border-top: 1px solid var(--hairline, #efefed);
+  background: var(--sidebar, #f7f7f5);
   border-radius: 0 0 10px 10px;
   font-size: 12px;
-  color: var(--text-secondary, #787774);
+  color: var(--ink-3, #787774);
   flex-wrap: wrap;
 }
 
@@ -52,7 +52,7 @@
   border: 0;
   padding: 0;
   font: inherit;
-  color: var(--text-primary, #37352f);
+  color: var(--ink, #37352f);
   cursor: pointer;
   max-width: 40%;
   overflow: hidden;
@@ -74,11 +74,11 @@
 .app-surface__tag {
   padding: 1px 6px;
   border-radius: 4px;
-  background: var(--border-weak, #efefed);
+  background: var(--hairline, #efefed);
   font-size: 11px;
 }
 
-.app-surface__error { color: var(--text-error, #eb5757); }
+.app-surface__error { color: var(--danger, #eb5757); }
 .app-surface__spacer { flex: 1; }
 
 .app-surface__action {
@@ -90,15 +90,24 @@
   padding: 3px 9px;
   font: inherit;
   cursor: pointer;
-  color: var(--text-primary, #37352f);
+  color: var(--ink, #37352f);
   background: transparent;
 }
-.app-surface__action:hover { background: var(--border-weak, #efefed); }
+.app-surface__action:hover { background: var(--fill-hover, #efefed); }
 .app-surface__action--run {
-  background: var(--text-primary, #37352f);
-  color: var(--bg-primary, #fff);
+  background: var(--ink, #37352f);
+  color: var(--paper, #fff);
 }
-.app-surface__action--run:hover { background: var(--text-primary, #37352f); opacity: 0.88; }
+.app-surface__action--run:hover { background: var(--ink, #37352f); opacity: 0.88; }
+
+/* A small live dot while a run is up; the shell already styles its bar. */
+.app-surface__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #46a758;
+}
+:root[data-theme="dark"] .app-surface__dot { background: #4dab9a; }
 
 .app-page {
   max-width: 820px;
@@ -110,7 +119,7 @@
 }
 
 .app-editor {
-  border: 1px solid var(--border-weak, #efefed);
+  border: 1px solid var(--hairline, #efefed);
   border-radius: 10px;
   padding: 10px 12px;
   display: flex;
@@ -122,50 +131,50 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--text-secondary, #787774);
+  color: var(--ink-3, #787774);
   font-size: 12.5px;
 }
-.app-editor__title { color: var(--text-primary, #37352f); font-weight: 500; }
+.app-editor__title { color: var(--ink, #37352f); font-weight: 500; }
 .app-editor__spacer { flex: 1; }
 
 .app-editor__btn {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--border-weak, #efefed);
+  border: 1px solid var(--hairline, #efefed);
   border-radius: 6px;
   padding: 3px 10px;
   font-size: 12px;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #37352f);
+  background: var(--paper, #fff);
+  color: var(--ink, #37352f);
   cursor: pointer;
 }
-.app-editor__btn:hover:not(:disabled) { background: var(--bg-secondary, #f7f7f5); }
+.app-editor__btn:hover:not(:disabled) { background: var(--sidebar, #f7f7f5); }
 .app-editor__btn:disabled { opacity: 0.45; cursor: default; }
 .app-editor__btn--primary {
-  background: var(--text-primary, #37352f);
-  border-color: var(--text-primary, #37352f);
-  color: var(--bg-primary, #fff);
+  background: var(--ink, #37352f);
+  border-color: var(--ink, #37352f);
+  color: var(--paper, #fff);
 }
-.app-editor__btn--primary:hover:not(:disabled) { background: var(--text-primary, #37352f); opacity: 0.88; }
-.app-editor__btn--danger { color: var(--text-error, #eb5757); }
+.app-editor__btn--primary:hover:not(:disabled) { background: var(--ink, #37352f); opacity: 0.88; }
+.app-editor__btn--danger { color: var(--danger, #eb5757); }
 
 .app-editor__source {
   width: 100%;
   min-height: 220px;
-  border: 1px solid var(--border-weak, #efefed);
+  border: 1px solid var(--hairline, #efefed);
   border-radius: 8px;
   padding: 10px 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.55;
   resize: vertical;
-  background: var(--bg-primary, #fff);
-  color: var(--text-primary, #37352f);
+  background: var(--paper, #fff);
+  color: var(--ink, #37352f);
 }
-.app-editor__source:focus { outline: 2px solid var(--border-weak, #d3d1cb); outline-offset: -1px; }
+.app-editor__source:focus { outline: 2px solid var(--hairline-strong, #d3d1cb); outline-offset: -1px; }
 
-.app-editor__hint { margin: 0; font-size: 12px; color: var(--text-secondary, #787774); }
+.app-editor__hint { margin: 0; font-size: 12px; color: var(--ink-3, #787774); }
 
 .app-editor__binding {
   display: flex;
@@ -175,7 +184,7 @@
   font-size: 13px;
 }
 .app-editor__binding-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-editor__binding-caps { color: var(--text-secondary, #787774); font-size: 12px; }
+.app-editor__binding-caps { color: var(--ink-3, #787774); font-size: 12px; }
 
 .app-editor__picker {
   display: flex;
@@ -189,8 +198,8 @@
   font: inherit;
   font-size: 13px;
   padding: 4px 6px;
-  border: 1px solid var(--border-weak, #efefed);
+  border: 1px solid var(--hairline, #efefed);
   border-radius: 6px;
-  background: var(--bg-primary, #fff);
+  background: var(--paper, #fff);
 }
-.app-editor__check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--text-secondary, #787774); }
+.app-editor__check { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-3, #787774); }
