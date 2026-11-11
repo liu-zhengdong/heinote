@@ -5,6 +5,8 @@ import { pageTitleContent, titleFields } from "../../core/title";
 import type { NotePage } from "../../core/types";
 import { linkedPageId } from "../editor/mentions";
 import { TitleField } from "../editor/TitleField";
+import { IconImage } from "../editor/PageIcon";
+import { pageIcon } from "../editor/page-decoration";
 import { DatabaseViews } from "./DatabaseViews";
 import { usePage } from "../../app/workspace-store";
 
@@ -40,17 +42,21 @@ export function DatabaseSheet({ database, readOnly: heldReadOnly = false }: {
   return (
     <article className="db db--page" data-page-id={database.id}>
       <div className="db__head">
-        {database.icon ? (
-          <button
-            type="button"
-            className="doc__icon"
-            aria-label="Remove database icon"
-            disabled={readOnly}
-            onClick={() => updatePage(database.id, { icon: "" })}
-          >
-            {database.icon}
-          </button>
-        ) : null}
+        {(() => {
+          const icon = pageIcon(database);
+          if (!icon) return null;
+          return (
+            <button
+              type="button"
+              className="doc__icon"
+              aria-label="Remove database icon"
+              disabled={readOnly}
+              onClick={() => updatePage(database.id, { icon: "" })}
+            >
+              {icon.kind === "image" ? <IconImage file={icon.file} size={72} className="doc__icon-img" /> : icon.emoji}
+            </button>
+          );
+        })()}
         <TitleField
           elementRef={(element) => { titleRef.current = element; }}
           className="doc__title"

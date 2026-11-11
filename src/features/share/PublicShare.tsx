@@ -2,6 +2,7 @@ import { FileText, Globe, Paperclip } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { orderedBlocks, pageFirstLine } from "../../core/block-tree";
 import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../../core/types";
+import { pageIcon } from "../editor/page-decoration";
 import { api, ApiError, errorMessage } from "../account/api";
 
 interface PublicDocument { title: string; pages: NotePage[] }
@@ -25,6 +26,20 @@ function tokenFromPath(): string {
 }
 function fileHref(file: StoredFile, token: string): string {
   return `/api/public/${encodeURIComponent(token)}/files?path=${encodeURIComponent(file.path)}`;
+}
+function filePathHref(path: string, token: string): string {
+  return `/api/public/${encodeURIComponent(token)}/files?path=${encodeURIComponent(path)}`;
+}
+
+/** A page's mark in the shared document: the picture or emoji it was given,
+ *  else the page glyph — as it reads in the page list back in Notes. */
+function PublicPageIcon({ page, token, size = 16 }: { page: NotePage; token: string; size?: number }) {
+  const icon = pageIcon(page);
+  if (icon?.kind === "image") {
+    return <img className="public-reader__page-icon" src={filePathHref(icon.file.preview ?? icon.file.path, token)} alt="" width={size} height={size} />;
+  }
+  if (icon?.kind === "emoji") return <span aria-hidden="true">{icon.emoji}</span>;
+  return <FileText size={size} aria-hidden="true" />;
 }
 
 /** Only public pages can resolve internal links. External links use safe schemes. */
@@ -183,11 +198,11 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
         <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(active)}>
           {active.cover_image ? <img className="public-reader__cover" src={fileHref(active.cover_image, token)} alt="" /> : null}
           <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
-            {active.icon ? <div className="public-reader__icon" aria-hidden="true">{active.icon}</div> : null}
+            {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><PublicPageIcon page={active} token={token} size={72} /></div> : null}
             <h1>{active.title_content?.length ? <Inline content={active.title_content} context={context} /> : titleOf(active)}</h1>
             <BlockChildren tree={active.block_tree} context={context} />
             {document ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
-              <a key={page.id} href={pageHref(page.id)}><FileText size={16} aria-hidden="true" />{titleOf(page)}</a>)}</nav> : null}
+              <a key={page.id} href={pageHref(page.id)}><PublicPageIcon page={page} token={token} size={16} />{titleOf(page)}</a>)}</nav> : null}
           </div>
         </article>
       </div>}

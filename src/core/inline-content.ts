@@ -1,6 +1,6 @@
 import { isContentColor } from "./colors";
 import { isImageType, normalizeStoredFile } from "./files";
-import type { InlineContent, InlineMarks, InlineRun, Mention } from "./types";
+import type { InlineContent, InlineMarks, InlineRun, Mention, StoredFile } from "./types";
 
 /** A link a run may carry: an http(s) address, or a page of this workspace
  *  (`#<page id>`). "javascript:", "data:" and the rest are never kept. */
@@ -110,6 +110,9 @@ export function normalizeInlineContent(value: unknown): InlineContent {
 export interface MentionView {
   label: string;
   icon?: string;
+  /** A page's icon from the computer: its bytes are painted in, as an image
+   *  mention's are — `data-file` holds its record, `data-icon` stays empty. */
+  iconFile?: StoredFile;
   /** What it names, when that has a glyph of its own: a database's table. */
   glyph?: "database";
   /** `here`: a page or block on screen already, which is never shown twice. */
@@ -304,7 +307,7 @@ export function mentionHtml(mention: Mention, describe?: DescribeMention): strin
     : `data-mention="date" data-date="${mention.date}"`;
   const view = describe?.(mention);
   const looks = view
-    ? ` data-label="${escapeHtml(view.label)}"${view.icon ? ` data-icon="${escapeHtml(view.icon)}"` : ""}${view.glyph ? ` data-glyph="${view.glyph}"` : ""}${view.state ? ` data-state="${view.state}"` : ""}`
+    ? ` data-label="${escapeHtml(view.label)}"${view.icon ? ` data-icon="${escapeHtml(view.icon)}"` : ""}${view.iconFile ? ` data-icon-file="${escapeHtml(JSON.stringify(view.iconFile))}"` : ""}${view.glyph ? ` data-glyph="${view.glyph}"` : ""}${view.state ? ` data-state="${view.state}"` : ""}`
     : "";
   return `<span class="mention" contenteditable="false" ${identity}${looks}>${MENTION_CHAR}</span>`;
 }

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import type { ElementType, ReactNode } from "react";
 import type { BlockKind, NotePage } from "../../core/types";
+import { PageIconMark } from "./PageIcon";
 
 export interface BlockDefinition {
   kind: BlockKind;
@@ -152,9 +153,8 @@ export function blockShortcut(value: string): { kind: BlockKind; checked?: boole
 export { Table2 as DatabaseIcon, FileText as PageIcon };
 
 /** How a page is marked wherever it is named — its row, its link, a menu:
- *  the emoji it was given, or its glyph, a database's being its table. A
- *  block is marked as a page is. */
-export function pageGlyph(page: Pick<NotePage, "icon" | "kind"> | undefined, size = 16): ReactNode {
-  if (page?.icon) return page.icon;
-  return page?.kind === "database" ? <Table2 size={size} /> : <FileText size={size} />;
+ *  the picture or emoji it was given, or its glyph, a database's being its
+ *  table. A block is marked as a page is. */
+export function pageGlyph(page: Pick<NotePage, "icon" | "icon_image" | "kind"> | undefined, size = 16): ReactNode {
+  return <PageIconMark page={page} size={size} />;
 }

@@ -1,4 +1,4 @@
-import { FileText, Files, Users } from "lucide-react";
+import { Files, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Popover } from "../../components/Popover";
 import { imeComposing } from "../../core/keyboard";
@@ -8,6 +8,7 @@ import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
 import { pageAncestry } from "../../core/page-tree";
 import { usePages } from "../../app/workspace-store";
+import { PageIconMark } from "./PageIcon";
 
 /** Notion's "Move to": the page picker that sends blocks — or a whole page —
  *  to another page. Recently edited pages come first; typing filters by title
@@ -100,7 +101,7 @@ export function MoveToMenu({
               onClick={() => choose(hit)}
             >
               <span className="move-to__icon" aria-hidden="true">
-                {hit ? hit.page.icon || <FileText size={15} /> : <Files size={15} />}
+                {hit ? <PageIconMark page={hit.page} size={15} /> : <Files size={15} />}
               </span>
               <span className="move-to__copy">
                 <span className="move-to__title">{hit ? pageName(hit.page) : "Top level"}</span>

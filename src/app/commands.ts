@@ -160,6 +160,7 @@ function summary(pages: Record<string, NotePage>, page: NotePage) {
     kind: page.kind,
     parent_id: page.parent_id,
     ...(page.icon ? { icon: page.icon } : {}),
+    ...(page.icon_image ? { icon_image: true } : {}),
     ...(inTrash(pages, page.id) ? { in_trash: true } : {}),
     updated_at: page.updated_at,
   };

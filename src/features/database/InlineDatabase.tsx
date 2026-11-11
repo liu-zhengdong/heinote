@@ -1,6 +1,7 @@
 import { Table2 } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { useWorkspace } from "../../app/workspace-context";
+import { PageIconMark } from "../editor/PageIcon";
 import { DatabaseViews } from "./DatabaseViews";
 import { consumeFresh } from "./fresh";
 import { usePage } from "../../app/workspace-store";
@@ -81,7 +82,7 @@ export function InlineDatabase({
         // inline database stands — no column of its own for a mark.
         title={(
           <>
-            <span className="dbv-inline__icon" aria-hidden="true">{database.icon || <Table2 size={16} />}</span>
+            <span className="dbv-inline__icon" aria-hidden="true"><PageIconMark page={database} size={16} /></span>
             <input
               ref={nameRef}
               className="dbv-inline__title t-control-size-keep"

@@ -9,6 +9,8 @@ import { useActivity, useWorkspace } from "../../app/workspace-context";
 import { pageAncestry } from "../../core/page-tree";
 import { usePage, useWorkspaceState } from "../../app/workspace-store";
 import type { NotePage } from "../../core/types";
+import { pageIcon, type PageIcon } from "../editor/page-decoration";
+import { PageIconMark } from "../editor/PageIcon";
 import { PageActions } from "./PageActions";
 import { AgentProposals } from "../collaboration/AgentProposals";
 
@@ -17,17 +19,24 @@ const MAX_CRUMBS = 4;
 /** One step of the trail: a page, or a block open as a page of its own. */
 interface Crumb {
   id: string;
-  icon?: string;
+  /** Its page, when an icon is drawn — a picture icon needs the record. */
+  page?: NotePage;
+  icon: PageIcon | null;
   label: string;
 }
+
+const sameIcon = (left: PageIcon | null, right: PageIcon | null) =>
+  left === right || (!!left && !!right
+    && (left.kind === "emoji" ? right.kind === "emoji" && left.emoji === right.emoji
+      : left.kind === "image" && right.kind === "image" && left.file === right.file));
 
 /** The trail to a page as it reads — each step's name and icon — so the bar
  *  is redrawn when one of those changes, not with every keystroke. */
 function trailTo(pages: Record<string, NotePage>, pageId: string): Crumb[] {
-  return pageAncestry(pages, pageId).map((page) => ({ id: page.id, ...(page.icon ? { icon: page.icon } : {}), label: pageName(page) }));
+  return pageAncestry(pages, pageId).map((page) => ({ id: page.id, page, icon: pageIcon(page), label: pageName(page) }));
 }
 const sameTrail = (left: readonly Crumb[], right: readonly Crumb[]) => left.length === right.length
-  && left.every((crumb, index) => crumb.id === right[index].id && crumb.icon === right[index].icon && crumb.label === right[index].label);
+  && left.every((crumb, index) => crumb.id === right[index].id && sameIcon(crumb.icon, right[index].icon) && crumb.label === right[index].label);
 
 /** The open page's own actions, redrawn as the page changes — the bar is not. */
 function OpenPageActions({ pageId, compact, onHistory }: { pageId: string; compact: boolean; onHistory(): void }) {
@@ -109,7 +118,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                 aria-current={index === crumbs.length - 1 ? "page" : undefined}
                 onClick={() => selectPage(crumb.id)}
               >
-                {crumb.icon ? <span className="crumb__icon" aria-hidden="true">{crumb.icon}</span> : null}
+                {crumb.icon ? <span className="crumb__icon" aria-hidden="true"><PageIconMark page={crumb.page} size={14} /></span> : null}
                 <span className="crumb__label">{crumb.id === library?.knowledgeBase?.homePageId ? library.name : crumb.label}</span>
               </button>
             ) : <span className="crumb__sep">…</span>}

@@ -9,30 +9,32 @@ import { COVER_IDS } from "../../../schema";
 import { isImageType, normalizeStoredFile } from "../../core/files";
 import type { NotePage, PageFont, StoredFile } from "../../core/types";
 
-export interface EmojiGroup {
-  name: string;
-  emoji: string[];
+/** What a page's icon is, as it should be drawn. */
+export type PageIcon =
+  | { kind: "image"; file: StoredFile }
+  | { kind: "emoji"; emoji: string };
+
+/** A page's icon, read defensively — another member's client wrote it: a
+ *  picture when the page holds a well-formed one, else the emoji it keeps.
+ *  The two fields set each other out on write (`updatePage`); a record that
+ *  still holds both draws the picture. */
+export function pageIcon(page: Pick<NotePage, "icon" | "icon_image">): PageIcon | null {
+  const file = normalizeStoredFile(page.icon_image);
+  if (file && isImageType(file.type)) return { kind: "image", file };
+  return page.icon ? { kind: "emoji", emoji: page.icon } : null;
 }
 
-export const EMOJI_GROUPS: readonly EmojiGroup[] = [
-  {
-    name: "Objects",
-    emoji: ["📄", "📝", "📋", "📌", "📎", "🗂️", "📁", "📚", "📓", "🗒️", "📊", "📈", "🗓️", "⏰", "🔖", "🔑", "🧭", "🧱", "🧩", "🔧", "🧪", "💼", "🖇️", "📦"],
-  },
-  {
-    name: "Symbols",
-    emoji: ["✅", "⭐", "🔥", "💡", "⚡", "🎯", "🚀", "🏁", "🧠", "❤️", "🌱", "🌿", "🌊", "🌙", "☀️", "❄️", "🎨", "🎵", "🏷️", "♻️", "⚙️", "🔒", "🧿", "✨"],
-  },
-  {
-    name: "People & places",
-    emoji: ["👋", "🧑‍💻", "👥", "🗣️", "🤝", "🏢", "🏠", "🏝️", "🗺️", "🧳", "☕", "🍜", "🐝", "🐙", "🦉", "🐢", "🦊", "🌵", "🍀", "🪴", "🧊", "🛠️", "🧵", "🪄"],
-  },
+/** A small curated set for "Random icon". The picker's full emoji list is
+ *  generated data (`emoji-data.ts`, lazy with the picker); this keeps the
+ *  eager import light. */
+const RANDOM_EMOJI: readonly string[] = [
+  "📄", "📝", "📋", "📌", "📎", "🗂️", "📁", "📚", "📊", "📈", "🗓️", "⏰", "🔖", "🔑", "🧭", "🧩", "🔧", "🧪", "💼", "📦",
+  "✅", "⭐", "🔥", "💡", "⚡", "🎯", "🚀", "🏁", "🧠", "❤️", "🌱", "🌿", "🌊", "🌙", "☀️", "❄️", "🎨", "🎵", "🏷️", "♻️", "⚙️", "🔒", "✨",
+  "👋", "🤝", "🏢", "🏠", "🏝️", "🗺️", "☕", "🍜", "🐝", "🐙", "🦉", "🐢", "🦊", "🌵", "🍀", "🪴", "🧊", "🧵", "🪄",
 ] as const;
 
-const ALL_EMOJI = EMOJI_GROUPS.flatMap((group) => group.emoji);
-
 export function randomEmoji(): string {
-  return ALL_EMOJI[Math.floor(Math.random() * ALL_EMOJI.length)] ?? "📄";
+  return RANDOM_EMOJI[Math.floor(Math.random() * RANDOM_EMOJI.length)] ?? "📄";
 }
 
 /** A gradient a cover may be: one schema.ts declares. */

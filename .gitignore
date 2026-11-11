@@ -10,3 +10,7 @@ backups/
 test-results/
 playwright-report/
 !.env.example
+
+# Local tool state and temp scripts
+.smyw/
+.tmp-*

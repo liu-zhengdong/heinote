@@ -523,6 +523,45 @@
               "type"
             ]
           },
+          "icon_image": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "owner": {
+                "type": "string"
+              },
+              "space": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "size": {
+                "type": "number"
+              },
+              "type": {
+                "type": "string"
+              },
+              "width": {
+                "type": "number"
+              },
+              "height": {
+                "type": "number"
+              },
+              "preview": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "owner",
+              "name",
+              "size",
+              "type"
+            ]
+          },
           "full_width": {
             "type": "boolean"
           },

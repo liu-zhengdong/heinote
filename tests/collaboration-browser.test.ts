@@ -210,7 +210,7 @@ async function agentInsert(pair: Pair, text: string): Promise<void> {
   await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, data: { requestId: randomUUID(), generation: snapshot.generation, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text }] } });
 }
 async function downloadDraft(page: Page, contains: string): Promise<void> {
-  const button = page.getByRole("button", { name: "下载草稿", exact: true }); await expect(button).toBeVisible();
+  const button = page.getByRole("button", { name: "下载为文件", exact: false }); await expect(button).toBeVisible();
   const downloaded = page.waitForEvent("download"); await button.click();
   const download = await downloaded; expect(download.suggestedFilename()).toBe("notes-unsaved-draft.json");
   const path = await download.path(); expect(path).not.toBeNull();
@@ -344,7 +344,7 @@ test("native Enter and Backspace retain structural undo and redo for split and m
   await focusEdge(body(pair), "start"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight");
   await pair.owner.keyboard.press("Enter");
   await expect(paragraphs(pair)).toHaveText(["前半", "后半"]); await persisted(pair, "前半\n后半");
-  await expect(pair.owner.getByRole("button", { name: "下载草稿", exact: true })).toHaveCount(0);
+  await expect(pair.owner.getByRole("button", { name: "下载为文件", exact: false })).toHaveCount(0);
   await pair.owner.keyboard.press("ControlOrMeta+z"); await expect(paragraphs(pair)).toHaveText(["前半后半"]); await persisted(pair, "前半后半");
   await pair.owner.keyboard.press("ControlOrMeta+Shift+z"); await expect(paragraphs(pair)).toHaveText(["前半", "后半"]); await persisted(pair, "前半\n后半");
   await focusEdge(paragraphs(pair).nth(1), "start"); await pair.owner.keyboard.press("Backspace");
@@ -470,7 +470,7 @@ test("a refused generation can escape its halted journal into a durable private 
   expect((await gate.release()).status).toBe(409); await gate.close();
   await persisted(pair, "私人恢复基线"); await downloadDraft(pair.owner, "仅在我的草稿");
   const creation = pair.owner.waitForResponse((response) => response.url().endsWith("/api/v1/pages") && response.request().method() === "POST");
-  await pair.owner.getByRole("button", { name: "保存为私人草稿", exact: true }).click();
+  await pair.owner.getByRole("button", { name: "存为新页面「恢复草稿」" }).click();
   const response = await creation; expect(response.status()).toBe(201);
   // Recovery deliberately reloads the page. Inspect the committed public API
   // instead of reading an old CDP response body after that navigation.
@@ -505,7 +505,7 @@ test("an unchanged original host can split after a peer's other-paragraph edit h
   expect((await committed).status()).toBe(200);
   await expect(paragraphs(pair)).toHaveText(["前半", "后半", "另一段乙的修改"]); await persisted(pair, "前半\n后半\n另一段乙的修改");
   await expect(paragraphs(pair, pair.peer)).toHaveText(["前半", "后半", "另一段乙的修改"]);
-  await expect(pair.owner.getByRole("button", { name: "下载草稿", exact: true })).toHaveCount(0);
+  await expect(pair.owner.getByRole("button", { name: "下载为文件", exact: false })).toHaveCount(0);
 });
 
 test("typing in a new paragraph before split acknowledgement retains its own undo and redo step", async ({ app }) => {

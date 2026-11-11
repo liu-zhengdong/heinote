@@ -484,6 +484,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const fields: PagePatch = patch.title !== undefined && !("title_content" in patch)
       ? { ...patch, ...renamedTitle(current, patch.title) }
       : patch;
+    /* An emoji icon and a picture icon set one another out. Setting `icon`
+     *  to anything — emoji or nothing — drops `icon_image`; setting
+     *  `icon_image` empties `icon` (a page record keeps it always: "" is its
+     *  empty). */
+    if ("icon" in fields && !("icon_image" in fields)) fields.icon_image = undefined;
+    else if ("icon_image" in fields && !("icon" in fields)) fields.icon = "";
     const mutations: WorkspaceMutation[] = [];
     for (const [key, value] of Object.entries(fields)) {
       if (JSON.stringify(current[key as keyof NotePage]) === JSON.stringify(value)) continue;

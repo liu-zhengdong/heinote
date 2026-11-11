@@ -266,7 +266,12 @@ export function routeTransaction(
       }
       const page = pages[id];
       if (page && (now.name ?? "") !== page.title) fields.push({ type: "set", path: ["pages", id, "title"], value: now.name ?? "" });
-      if (page && (now.icon ?? "") !== page.icon) fields.push({ type: "set", path: ["pages", id, "icon"], value: now.icon ?? "" });
+      if (page && (now.icon ?? "") !== page.icon) {
+        fields.push({ type: "set", path: ["pages", id, "icon"], value: now.icon ?? "" });
+        // An emoji icon a block sets wins over a picture icon — the same
+        // mutual exclusion `updatePage` enforces.
+        if (page.icon_image) fields.push({ type: "delete", path: ["pages", id, "icon_image"] });
+      }
       if (page && ((now.name ?? "") !== page.title || (now.icon ?? "") !== page.icon)) touched.add(id);
       continue;
     }

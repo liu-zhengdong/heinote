@@ -41,6 +41,7 @@
     "@types/react-dom": "19.2.4",
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "6.0.5",
+    "emojibase-data": "^18.0.0",
     "typescript": "7.0.2",
     "vite": "8.3.4",
     "vitest": "4.1.10"

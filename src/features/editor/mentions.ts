@@ -1,5 +1,6 @@
 import { blocksInOrder, pageName } from "../../core/block-tree";
 import { dateLabel, isoDate, mentionFromAttributes, type DescribeMention } from "../../core/inline-content";
+import { isImageType, normalizeStoredFile } from "../../core/files";
 import type { BlockTree, NotePage } from "../../core/types";
 
 /* Mentions — `@` and `[[` — as Notion has them: a page named among the words
@@ -26,9 +27,11 @@ export function mentionDescriber(
     // link to — but never by a first line again, which could go round
     // forever: an unnamed one reads "…".
     const inner: DescribeMention = (link) => (link.kind === "page" ? { label: pages()[link.page_id]?.title || "…" } : describe(link));
+    const iconFile = normalizeStoredFile(page.icon_image);
     return {
       label: pageName(page, inner),
       ...(page.icon ? { icon: page.icon } : {}),
+      ...(iconFile && isImageType(iconFile.type) && !page.icon ? { iconFile } : {}),
       ...(page.kind === "database" ? { glyph: "database" as const } : {}),
       ...(state ? { state } : {}),
     };
@@ -206,7 +209,7 @@ export function referenceIndex(pages: Record<string, NotePage>): ReadonlyMap<str
   return index;
 }
 
-function setData(element: HTMLElement, key: "label" | "icon" | "glyph" | "state", value: string | undefined): void {
+function setData(element: HTMLElement, key: "label" | "icon" | "iconFile" | "glyph" | "state", value: string | undefined): void {
   if (value) {
     if (element.dataset[key] !== value) element.dataset[key] = value;
   } else if (key in element.dataset) {
@@ -224,6 +227,7 @@ export function repaintMentions(root: HTMLElement, describe: DescribeMention): v
     const view = describe(mention);
     setData(token, "label", view.label);
     setData(token, "icon", view.icon);
+    setData(token, "iconFile", view.iconFile ? JSON.stringify(view.iconFile) : undefined);
     setData(token, "glyph", view.glyph);
     setData(token, "state", view.state);
   }

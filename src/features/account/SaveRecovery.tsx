@@ -1,4 +1,4 @@
-import { Download, FilePlus2, RefreshCw } from "lucide-react";
+import { Download, FilePlus2, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useWorkspace } from "../../app/workspace-context";
 import { addRecovery, clearRecovery, getRecovery, type RecoveryDraft, type RecoveryEntry } from "../../collaboration/recovery";
@@ -52,14 +52,17 @@ export function SaveRecovery() {
   const [notice, setNotice] = useState("");
   const [privatePage, setPrivatePage] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string[]>([]);
+  const [deferred, setDeferred] = useState(false);
+  const [discardArmed, setDiscardArmed] = useState(false);
   const identity = useRef(userId);
   identity.current = userId;
 
   useEffect(() => {
     const refresh = () => setState({ userId, entries: userId ? getRecovery(userId) : [] });
-    setNotice(""); setPrivatePage(null); setDownloaded([]); setBusy(false); refresh();
+    setNotice(""); setPrivatePage(null); setDownloaded([]); setBusy(false);
+    setDeferred(false); setDiscardArmed(false); refresh();
     const changed = (event: Event) => {
-      if ((event as CustomEvent<{ userId?: string }>).detail?.userId === userId) refresh();
+      if ((event as CustomEvent<{ userId?: string }>).detail?.userId === userId) { refresh(); setDiscardArmed(false); }
     };
     const refused = (event: Event) => {
       if (!userId) return;
@@ -81,10 +84,21 @@ export function SaveRecovery() {
   }, [userId, platformId]);
 
   const entries = state.userId === userId ? state.entries : [];
-  if (!userId || !entries.length) return null;
+  const hasEntries = Boolean(userId && entries.length);
+  // Escape defers the dialog, same as「稍后处理」. Listeners stay light: only while open.
+  useEffect(() => {
+    if (!hasEntries || deferred) return;
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setDeferred(true); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [hasEntries, deferred]);
+
+  if (!hasEntries || !userId) return null;
   const preview = previewOf(entries);
   const volatile = entries.some((entry) => !entry.persisted);
   const backedUp = entries.every((entry) => downloaded.includes(entry.id));
+  const canDownload = !busy;
+  const canSave = !busy && preview.length > 0 && !privatePage && !(volatile && !backedUp);
   const download = () => {
     const payload = {
       version: 1, userId, createdAt: new Date().toISOString(),
@@ -100,7 +114,7 @@ export function SaveRecovery() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const savePrivate = async () => {
-    if (busy || !preview.length || volatile && !backedUp) return;
+    if (!canSave) return;
     const owner = userId;
     setBusy(true); setNotice("");
     try {
@@ -111,31 +125,60 @@ export function SaveRecovery() {
       setPrivatePage(page.id);
       const pending = getRecovery(owner);
       if (pending.some((entry) => !entry.persisted && !downloaded.includes(entry.id))) {
-        setNotice("私人草稿已保存。请先下载新增的恢复草稿，再重新加载。");
+        setNotice("已存为新页面。请先下载新增的恢复草稿，再刷新页面。");
       } else window.location.reload();
     } catch (reason) {
-      if (identity.current === owner) setNotice(reason instanceof Error ? reason.message : "保存失败，恢复草稿仍保留。");
+      if (identity.current === owner) setNotice(reason instanceof Error ? reason.message : "保存失败，草稿仍保留。");
     } finally { if (identity.current === owner) setBusy(false); }
   };
+  const discard = () => { clearRecovery(userId); setDiscardArmed(false); };
 
-  return <aside className="save-recovery save-recovery--drafts" role="alert" aria-label="未保存草稿">
-    <div className="recovery-head"><strong>有 {entries.length} 份未保存草稿</strong><span>已保留</span></div>
-    <p>{entries.at(-1)?.message}</p>
-    {volatile ? <p className="recovery-warning">浏览器存储空间不足或不可用。草稿暂存在当前窗口，请立即下载。</p> : null}
-    <details className="recovery-preview">
-      <summary>查看草稿文字{preview.length ? `（${preview.length} 段）` : ""}</summary>
-      <div className="recovery-preview__body">
-        {preview.length ? preview.map((item, index) => <label className="recovery-preview__item" key={`${item.label}-${index}`}>
-          <span>{item.label}</span><textarea readOnly value={item.text} aria-label={`草稿文字 ${index + 1}`} rows={3} />
-        </label>) : <p>没有可显示的文字。下载文件可保留完整修改数据。</p>}
+  if (deferred) {
+    return <button type="button" className={`save-recovery-pill${volatile ? " save-recovery-pill--urgent" : ""}`} onClick={() => { setDeferred(false); setDiscardArmed(false); }} aria-label="处理未保存草稿">
+      <RefreshCw size={15} aria-hidden />
+      {entries.length === 1 ? "1 件事待处理" : `${entries.length} 件事待处理`}
+    </button>;
+  }
+
+  return <div className="save-recovery-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeferred(true); }}>
+    <div className="save-recovery" role="alertdialog" aria-modal="true" aria-labelledby="save-recovery-title">
+      <h2 id="save-recovery-title">你写的内容已经保留</h2>
+      <p className="save-recovery__lead">
+        最新输入没能存进页面，已为你完整保留。相关页面已暂停保存，处理完草稿、刷新后即可继续。
+        {entries.at(-1)?.message ? <span className="save-recovery__reason">{entries.at(-1)?.message}</span> : null}
+      </p>
+      <div className="save-recovery__keep" aria-label="保留的内容">
+        <div className="save-recovery__keep-label">{preview.length ? `保住了 ${preview.length} 段文字` : "保留了完整修改数据"}</div>
+        <div className="save-recovery__keep-items">
+          {preview.length ? preview.map((item, index) => <div className="save-recovery__keep-item" key={`${item.label}-${index}`}>
+            <div className="save-recovery__keep-page">{item.label}</div>
+            <div className="save-recovery__keep-text">{item.text}</div>
+          </div>) : <p className="save-recovery__empty">没有可显示的文字。下载文件可保留完整修改数据。</p>}
+        </div>
       </div>
-    </details>
-    {notice ? <p role="status">{notice}</p> : null}
-    <div className="recovery-actions">
-      <button type="button" className="btn btn--primary" onClick={download}><Download size={14} />下载草稿</button>
-      <button type="button" className="btn btn--outline" disabled={busy || !preview.length || Boolean(privatePage) || volatile && !backedUp} title={volatile && !backedUp ? "请先下载完整草稿" : undefined} onClick={() => void savePrivate()}><FilePlus2 size={14} />{busy ? "保存中…" : privatePage ? "已保存私人草稿" : "保存为私人草稿"}</button>
-      <button type="button" className="btn" disabled={busy || volatile && !backedUp} title={volatile && !backedUp ? "请先下载草稿" : undefined} onClick={() => window.location.reload()}><RefreshCw size={14} />重新加载</button>
-      <button type="button" className="btn" disabled={busy} onClick={() => clearRecovery(userId)}>关闭已处理草稿</button>
+      {volatile ? <p className="save-recovery__warning" role="alert">草稿只留在当前窗口（浏览器存储不可用）。请先下载文件。</p> : null}
+      {notice ? <p className="save-recovery__notice" role="status">{notice}</p> : null}
+      <div className="save-recovery__choices">
+        {volatile && !backedUp ? <button type="button" className="save-recovery__choice is-primary" disabled={!canDownload} onClick={download}>
+          <Download size={16} aria-hidden />
+          <span className="save-recovery__choice-t"><strong>先下载文件</strong><span>草稿只存在当前窗口，下载后才能离开</span></span>
+        </button> : <button type="button" className="save-recovery__choice is-primary" disabled={!canSave} title={volatile && !backedUp ? "请先下载文件" : undefined} onClick={() => void savePrivate()}>
+          <FilePlus2 size={16} aria-hidden />
+          <span className="save-recovery__choice-t"><strong>{busy ? "保存中…" : privatePage ? "已存为新页面" : "存为新页面「恢复草稿」"}</strong><span>推荐：文字直接回到笔记里</span></span>
+        </button>}
+        {volatile && !backedUp ? null : <button type="button" className="save-recovery__choice" disabled={!canDownload} onClick={download}>
+          <Download size={16} aria-hidden />
+          <span className="save-recovery__choice-t"><strong>下载为文件</strong><span>保留完整修改数据，含表格与结构</span></span>
+        </button>}
+        <button type="button" className={`save-recovery__choice${discardArmed ? " is-armed" : ""}`} disabled={busy} onClick={() => { if (discardArmed) discard(); else setDiscardArmed(true); }}>
+          <Trash2 size={16} aria-hidden />
+          <span className={`save-recovery__choice-t${discardArmed ? " is-danger" : ""}`}><strong>{discardArmed ? "确认丢弃" : "丢弃"}</strong><span>{discardArmed ? "这些草稿将永久删除" : "这些内容不再需要"}</span></span>
+        </button>
+      </div>
+      <div className="save-recovery__foot">
+        <p className="save-recovery__hint">现在不想处理？其他页面的编辑不受影响。</p>
+        <button type="button" className="btn" onClick={() => setDeferred(true)}>稍后处理</button>
+      </div>
     </div>
-  </aside>;
+  </div>;
 }

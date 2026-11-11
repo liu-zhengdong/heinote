@@ -2480,6 +2480,20 @@ kbd {
   background: var(--fill-hover);
 }
 
+/* A page's icon wherever a picture stands in for it — the list, a menu, a
+   mention's mark, the page's head: round-cornered, drawn to its box. */
+.page-icon-image {
+  display: inline-block;
+  vertical-align: middle;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.doc__icon-img {
+  border-radius: var(--r-sm);
+  object-fit: cover;
+}
+
 .doc--covered .doc__icon {
   position: relative;
   margin-top: -0.55em;
@@ -5060,6 +5074,19 @@ pre.block__editable {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18'/%3E%3C/svg%3E") center / 88% no-repeat;
 }
 
+/* A page mention marked by a picture icon: the mark is painted with the
+   file's bytes once they are read (`data-icon-painted` set by
+   pictures.ts), round-cornered as the page list draws it. */
+.mention[data-mention="page"][data-icon-painted]::before {
+  background-image: var(--mention-icon);
+  background-position: center;
+  background-size: cover;
+  border-radius: 22%;
+  -webkit-mask: none;
+  mask: none;
+  content: "";
+}
+
 .blocks:not(.is-read-only) .mention[data-mention="page"]:not([data-state]):hover::before,
 .mention[data-mention="page"][data-expanded]:not([data-state])::before {
   background: var(--ink-3);
@@ -5243,9 +5270,58 @@ pre.block__editable {
 }
 
 .picker__body {
-  max-height: 260px;
+  max-height: 300px;
   padding: 4px 8px 10px;
   overflow-y: auto;
+}
+
+/* The jump-to-a-group chips — a category's name and one of its emoji — that
+   stay put while the grid scrolls. */
+.picker__cats {
+  position: sticky;
+  z-index: 1;
+  top: -4px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin: 0 -8px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--elevated);
+}
+
+.picker__cats::-webkit-scrollbar {
+  display: none;
+}
+
+.picker__cat {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.picker__cat:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.picker__group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
+.picker__cell--img {
+  font-size: 0;
+}
+
+.picker__cell--img img {
+  border-radius: 3px;
 }
 
 .picker__group-title {
@@ -5314,6 +5390,13 @@ pre.block__editable {
 .picker__tab-group {
   display: flex;
   gap: 14px;
+}
+
+.picker__headactions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 4px;
 }
 
 .picker__tab {

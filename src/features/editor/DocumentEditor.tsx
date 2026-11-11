@@ -69,6 +69,7 @@ import { editableHtml } from "./block-html";
 import { blockDefinition, DatabaseIcon, PageIcon, pageGlyph } from "./block-registry";
 import { downloadFile, isImageType, notShown, refuseFiles, showFile, stageFile, type StagedFile } from "./file-store";
 import { CoverImage, settleCover, useHomedCovers } from "./CoverImage";
+import { IconImage, PageIconMark, recentsFile, rememberIconFile, settleIcon, useHomedIcons } from "./PageIcon";
 import { ImageViewer } from "./MediaBlocks";
 import { rememberCodeLanguage } from "./code-highlight";
 import { BlockMenu } from "./BlockMenu";
@@ -126,7 +127,7 @@ import {
 } from "./mentions";
 import { BlockBacklinks } from "./BlockBacklinks";
 import { composeTree, duplicateSelection, routeTransaction, storedFragment } from "./composite";
-import { coverId, pageCover, pageFont, randomCoverId, randomEmoji } from "./page-decoration";
+import { coverId, pageCover, pageFont, pageIcon, randomCoverId, randomEmoji } from "./page-decoration";
 import { loadPageFonts } from "../../platform/fonts";
 import {
   caretOnLastLine,
@@ -1684,7 +1685,7 @@ export function DocumentEditor({
 
   const cover = useMemo(() => pageCover({ cover: page.cover, cover_image: page.cover_image }), [page.cover, page.cover_image]);
   const titleContent = useMemo(() => pageTitleContent({ title: page.title, title_content: page.title_content }), [page.title, page.title_content]);
-  const icon = page.icon;
+  const icon = useMemo(() => pageIcon({ icon: page.icon, icon_image: page.icon_image }), [page.icon, page.icon_image]);
   const font = pageFont(page);
   /* A cover from the member's computer is drawn at once from the bytes in
      hand and saved behind them, as an image block is; its smaller copy, once
@@ -1725,9 +1726,50 @@ export function DocumentEditor({
     }
   }, [commitWrites, page.cover, page.cover_image, page.id, pages, platform, readOnly, toast, updatePage, workspace]);
 
-  // A cover uploaded before the page was shared moves to where its readers
-  // can reach it — the page's own editor sees to it, never a page shown here.
+  /* An icon from the member's computer: the picture is drawn at once from
+     the bytes in hand and saved behind them, as a cover is; its smaller
+     copy, once made, is swapped in as bookkeeping. One that cannot be saved
+     is taken back out, and the reader told. */
+  const uploadIcon = useCallback(async (source: File, pageId: string) => {
+    if (!platform || readOnly) return;
+    if (!isImageType(source.type)) {
+      toast("An icon is a picture — PNG, JPEG, GIF or WebP.", "error");
+      return;
+    }
+    const refusal = refuseFiles([source]);
+    if (refusal) {
+      toast(refusal, "error");
+      return;
+    }
+    const before = { icon: pages[pageId]?.icon, icon_image: pages[pageId]?.icon_image };
+    let staged: StagedFile;
+    try {
+      staged = await stageFile(platform.files, source, { pageId, owner: platform.bootstrap.user.id, space: spaceOfPage(pages, pageId) });
+    } catch {
+      toast("Could not read that picture", "error");
+      return;
+    }
+    updatePage(pageId, { icon_image: staged.file });
+    try {
+      const stored = await staged.transfer();
+      if (stored.preview) settleIcon({ document: workspace, commitWrites }, pageId, staged.file.path, stored);
+      rememberIconFile(platform.bootstrap.user.id, stored);
+    } catch {
+      const current = workspace?.state.pages[pageId];
+      if (current && normalizeStoredFile(current.icon_image)?.path === staged.file.path) {
+        commitWrites((["icon", "icon_image"] as const).map((key) => (before[key] === undefined
+          ? { type: "delete" as const, path: ["pages", pageId, key] }
+          : { type: "set" as const, path: ["pages", pageId, key], value: before[key] })), false);
+      }
+      toast("Could not upload that picture", "error");
+    }
+  }, [commitWrites, pages, platform, readOnly, toast, updatePage, workspace]);
+
+  // A cover or icon uploaded before the page was shared moves to where its
+  // readers can reach it — the page's own editor sees to it, never a page
+  // shown here.
   useHomedCovers(embed || readOnly ? [] : [page], spaceOfPage(pages, page.id));
+  useHomedIcons(embed || readOnly ? [] : [page], spaceOfPage(pages, page.id));
 
   // What the words here are set in: this page's font — or, shown inside
   // another page, that page's, which sets the font for everything it shows.
@@ -2180,10 +2222,20 @@ export function DocumentEditor({
     if (!target) return null;
     return {
       tab: "emoji",
-      current: target.icon || undefined,
-      onPick: (icon) => {
-        updatePage(target.id, { icon });
+      current: target.icon || (target.icon_image ? "upload" : undefined),
+      onPick: (picked) => {
+        if (picked.startsWith("file:")) {
+          const file = recentsFile(picked.slice(5), platform?.bootstrap.user.id);
+          if (file) updatePage(target.id, { icon_image: file });
+          close();
+          return;
+        }
+        updatePage(target.id, { icon: picked });
         close();
+      },
+      onUpload: (file) => {
+        close();
+        void uploadIcon(file, target.id);
       },
       onRemove: () => {
         updatePage(target.id, { icon: "" });
@@ -2406,7 +2458,7 @@ export function DocumentEditor({
           onReferences={(anchor) => setBacklinksFor({ id: page.id, anchor })}
           // Its mark is the page's icon, where a block's is: pressed, the
           // page folds back into its row or link.
-          mark={page.icon ? <span className="page-frame__mark-emoji">{page.icon}</span> : <PageIcon size={16} />}
+          mark={page.icon || page.icon_image ? <span className="page-frame__mark-emoji"><PageIconMark page={page} size={15} /></span> : <PageIcon size={16} />}
           headKind={page.title ? "page-title" : headKindOf(items)}
           onToggle={() => mount?.showAsLink()}
         >
@@ -2489,7 +2541,7 @@ export function DocumentEditor({
               disabled={readOnly}
               onClick={(event) => setPicker({ kind: "icon", pageId: page.id, anchor: rectOf(event.currentTarget) })}
             >
-              {icon}
+              {icon.kind === "image" ? <IconImage file={icon.file} size={72} className="doc__icon-img" fallback={<PageIcon size={72} />} /> : icon.emoji}
             </button>
           ) : null}
 

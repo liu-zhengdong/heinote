@@ -56,7 +56,7 @@ export function pageHolders(pages: Record<string, NotePage>): ReadonlySet<string
  *  the table, its place in the page list — and goes back to being only its
  *  values when what was in it is gone. */
 export function isBareRow(pages: Record<string, NotePage>, page: NotePage | undefined): boolean {
-  if (!page || !isRow(pages, page) || page.icon || page.cover || page.cover_image) return false;
+  if (!page || !isRow(pages, page) || page.icon || page.icon_image || page.cover || page.cover_image) return false;
   return !pageHolders(pages).has(page.id) && !bodyHolds(page.block_tree);
 }
 

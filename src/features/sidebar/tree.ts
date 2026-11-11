@@ -107,7 +107,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
     const after = right[id];
     if (before === after) continue;
     if (!after) return false;
-    if (before.title !== after.title || before.icon !== after.icon || before.parent_id !== after.parent_id
+    if (before.title !== after.title || before.icon !== after.icon || before.icon_image !== after.icon_image || before.parent_id !== after.parent_id
       || before.archived !== after.archived || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
     if (byTime && (before.updated_at !== after.updated_at || before.created_at !== after.created_at)) return false;
     if (!after.title && pageName(before) !== pageName(after)) return false;

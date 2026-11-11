@@ -15,6 +15,9 @@ import type { UploadState } from "./MediaBlocks";
 type Picture = Extract<Mention, { kind: "image" }>;
 
 const TOKEN = '.mention[data-mention="image"]';
+/** A page mention whose icon is a picture — its file is an attribute, its
+ *  bytes painted into the mention's mark as a picture's are into its box. */
+const ICON_TOKEN = '.mention[data-mention="page"][data-icon-file]';
 /** What a press carries: a picture, or a link to a page — a sub-page's own
  *  line is nothing but one, and its mark at the start of the line carries
  *  it too. */
@@ -24,6 +27,19 @@ const LINE_MARK = ".is-link-line .block__page-toggle";
  *  its side bar stands in. */
 const EDGE = 12;
 const LEAST = 32;
+
+/** The file a page mention's icon names, well-formed — its attribute is one
+ *  another member's client wrote too, so it is read defensively. */
+function iconFileOf(token: HTMLElement): StoredFile | null {
+  const raw = token.getAttribute("data-icon-file");
+  if (!raw) return null;
+  try {
+    const file = JSON.parse(raw) as StoredFile | null;
+    return file && typeof file === "object" && typeof file.path === "string" && file.path ? file : null;
+  } catch {
+    return null;
+  }
+}
 
 function pictureOf(token: HTMLElement): Picture | null {
   const mention = mentionFromAttributes((name) => token.getAttribute(`data-${name}`) ?? undefined);
@@ -70,6 +86,7 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
     const element = root.current;
     if (!element) return;
     const shown = new Map<HTMLElement, { path: string; view: ShownFile }>();
+    const icons = new Map<HTMLElement, { path: string; view: ShownFile }>();
     const paint = () => {
       for (const [token, held] of shown) {
         if (token.isConnected && token.closest(TOKEN) === token && pictureOf(token)?.file.path === held.path) continue;
@@ -95,6 +112,31 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
           .then((url) => { token.style.backgroundImage = `url("${url}")`; })
           .catch(() => { token.dataset.state = "missing"; });
       }
+      /* A page mention marked by a picture icon: the mark wears its file's
+         bytes the same way, and lets them go once the icon is drawn another
+         way or the mention is gone. */
+      for (const [token, held] of icons) {
+        if (token.isConnected && token.closest(ICON_TOKEN) === token && iconFileOf(token)?.path === held.path) continue;
+        held.view.release();
+        icons.delete(token);
+        if (token.isConnected) {
+          token.style.removeProperty("--mention-icon");
+          delete token.dataset.iconPainted;
+        }
+      }
+      for (const token of element.querySelectorAll<HTMLElement>(ICON_TOKEN)) {
+        if (token.closest(".blocks") !== element || icons.has(token)) continue;
+        const file = iconFileOf(token);
+        if (!file) continue;
+        const view = context.current.show(file);
+        icons.set(token, { path: file.path, view });
+        view.ready
+          .then((url) => {
+            token.style.setProperty("--mention-icon", `url("${url}")`);
+            token.dataset.iconPainted = "";
+          })
+          .catch(() => { token.removeAttribute("data-icon-file"); icons.delete(token); view.release(); });
+      }
     };
     paint();
     repaint.current = paint;
@@ -103,6 +145,7 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
     return () => {
       observer.disconnect();
       for (const held of shown.values()) held.view.release();
+      for (const held of icons.values()) held.view.release();
     };
   }, [root]);
 

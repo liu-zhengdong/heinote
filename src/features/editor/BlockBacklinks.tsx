@@ -45,7 +45,7 @@ export function BlockBacklinks({
           return (
             <MenuItem
               key={`${reference.pageId}:${reference.paragraphId}`}
-              icon={page.icon ? <span className="block-backlinks__icon">{page.icon}</span> : pageGlyph(page)}
+              icon={<span className="block-backlinks__icon">{pageGlyph(page)}</span>}
               label={pageName(page, describe)}
               description={passage.length > PASSAGE_LIMIT ? `${passage.slice(0, PASSAGE_LIMIT - 1).trimEnd()}…` : passage}
               onSelect={() => { onClose(); onOpen(reference); }}

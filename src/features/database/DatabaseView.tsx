@@ -128,6 +128,7 @@ import { followHref } from "../editor/RichField";
 import { isBareRow, spaceOfPage } from "../../core/page-tree";
 import { pageCover } from "../editor/page-decoration";
 import { CoverImage, useHomedCovers } from "../editor/CoverImage";
+import { useHomedIcons, PageIconMark } from "../editor/PageIcon";
 import type { CardPreview } from "./database-model";
 import { sameItems, usePage, useWorkspaceState } from "../../app/workspace-store";
 import { VIEW_KINDS } from "../../../schema";
@@ -317,7 +318,7 @@ function RowPageMark({ row, className, size, onOpen }: {
         onOpen(row.id, fullPage(event));
       }}
     >
-      {row.icon || <FileText size={size} />}
+      <PageIconMark page={row} size={size} />
     </button>
   );
 }
@@ -799,7 +800,7 @@ function CardTitle({
         else onOpen(row.id, fullPage(event));
       }}
     >
-      {row.icon ? <span aria-hidden="true">{row.icon}</span> : null}
+      {row.icon || row.icon_image ? <span aria-hidden="true"><PageIconMark page={row} size={15} /></span> : null}
       <span className="card-open__name">{row.title ? <NameWords content={pageTitleContent(row)} /> : "Untitled"}</span>
     </button>
   );
@@ -890,7 +891,7 @@ function ListLayout({
 function CardTop({ row, preview }: { row: NotePage; preview: CardPreview }) {
   if (preview.kind === "none") return null;
   if (preview.kind === "image") return <CardImage row={row} property={preview.property} />;
-  const blank = <span className="db-card__glyph">{row.icon || <FileText size={22} strokeWidth={1.5} />}</span>;
+  const blank = <span className="db-card__glyph">{row.icon || row.icon_image ? <PageIconMark page={row} size={22} /> : <FileText size={22} strokeWidth={1.5} />}</span>;
   if (preview.kind === "cover") {
     const cover = pageCover(row);
     if (cover?.kind === "image") {
@@ -1206,6 +1207,7 @@ export function DatabaseView({
   const space = useWorkspaceState((state) => spaceOfPage(state.pages, databaseId));
   useHomedImages(allRows, properties, space);
   useHomedCovers(allRows, space);
+  useHomedIcons(allRows, space);
 
   const rows = useMemo(() => {
     if (!config || !view) return [];
