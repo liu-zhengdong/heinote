@@ -9,7 +9,8 @@ import { blockRecordId } from "../src/platform/record-ids.ts";
 import {
   boardGroupableProperties, calcKinds, changePropertyType, changeViewKind, createView, databaseRows, dateRange,
   defaultFilterOp, FILTER_OPS, filterable, filterNeedsValue, groupableProperties, isDay, isMetaType, mapViewFilters,
-  MAX_ROW_IMAGES, OPTION_COLORS, propertyOptions, propertyValue, sortable,
+  MAX_ROW_IMAGES, OPTION_COLORS, propertyOptions, propertyValue, relationIds, relationMirrorProperty, relationPeer,
+  relationPeerWrites, removeProperty, sortable,
   statusOptions, TITLE_COLUMN, toMultiValue, viewRows,
 } from "../src/features/database/database-model.ts";
 import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
@@ -28,6 +29,15 @@ const propertySchema = propertyShape.strict().extend({
   option_colors: z.record(safeKey, z.enum(OPTION_COLORS)).optional(),
   status_options: z.array(statusOption).min(1).max(100).transform((options) => options.toSorted((left, right) => ["todo", "progress", "complete"].indexOf(left.group) - ["todo", "progress", "complete"].indexOf(right.group))).optional(),
   default_status: safeKey.optional(),
+  /* 关联字段。正向属性：relation_database（目标数据库，必填）、
+   *  relation_limit、relation_two_way、relation_backlink_name；
+   *  目标库上的镜像属性：relation_database 指回来源库、
+   *  relation_origin 是正向属性标识，不持有方向字段。 */
+  relation_database: safeKey.optional(),
+  relation_limit: z.enum(["unlimited", "1"]).optional(),
+  relation_two_way: z.boolean().optional(),
+  relation_backlink_name: z.string().max(500).optional(),
+  relation_origin: safeKey.optional(),
 });
 const propertyPatch = propertySchema.omit({ id: true }).partial().extend({ default_status: safeKey.nullable().optional() }).refine((value) => Object.keys(value).length > 0, "请提供属性修改。");
 const viewShape = storedConfig.shape.views.element;
@@ -113,6 +123,11 @@ function checkProperty(property: DatabaseProperty): void {
     }
   }
   if (property.default_status && !statusOptions(property).some((option) => option.id === property.default_status)) bad("默认状态不存在。");
+  if (property.type === "relation") {
+    if (!property.relation_database) bad("关联属性必须指定目标数据库。");
+    if (property.relation_origin && (property.relation_two_way !== undefined || property.relation_limit !== undefined || property.relation_backlink_name !== undefined)) bad("镜像属性不持有方向字段。");
+    if (!property.relation_origin && property.relation_backlink_name !== undefined && !property.relation_two_way) bad("relation_backlink_name 属于双向关联。");
+  } else if (property.relation_database !== undefined || property.relation_origin !== undefined) bad("关联字段仅属于关联属性。");
 }
 function checkFilter(filter: NonNullable<DatabaseView["filter"]>, config: DatabaseConfig): void {
   const property = config.properties.find((item) => item.id === filter.property_id);
@@ -190,6 +205,82 @@ function database(store: Store, who: Actor, pageId: string, write = false): Data
   const config = found.page.database ?? { properties: [], views: [{ id: "table", name: "Table", kind: "table" }] };
   return { ...found, config, scopeName: externalScope(found.scope), rows: databaseRows(store.state(who).pages, pageId) };
 }
+// 关联的目标必须是个能看见的数据库；镜像字段交给 checkProperty 把关。
+function checkRelationTarget(store: Store, who: Actor, property: DatabaseProperty): Database | undefined {
+  if (property.type !== "relation" || !property.relation_database) return undefined;
+  return database(store, who, property.relation_database);
+}
+
+/** The peer writes a relation change owes the other database's rows: this
+ *  row's id under the mirror property on rows newly linked, removed from
+ *  rows dropped — written in the same commit, so the two sides never drift.
+ *  `previous` is the row's stored values (undefined for a new row). */
+function relationPeers(
+  store: Store, who: Actor, db: Database,
+  rowId: string, previous: Record<string, string> | undefined,
+  normalized: Record<string, string | null>,
+): Write[] {
+  const writes: Write[] = [];
+  for (const [key, value] of Object.entries(normalized)) {
+    const property = db.config.properties.find((item) => item.id === key);
+    if (!property || property.type !== "relation") continue;
+    const target = checkRelationTarget(store, who, property);
+    if (!target) continue;
+    const peer = relationPeerWrites(property, target.config, target.rows, rowId, relationIds(previous?.[key] ?? ""), relationIds(value ?? ""));
+    if (!peer) continue;
+    for (const write of peer.writes) {
+      const found = store.page(who, write.rowId);
+      writes.push(pagePatch(store, who, found.scope, write.rowId, { properties: { [peer.peerId]: write.value } }));
+    }
+  }
+  return writes;
+}
+
+/** The mirror change a relation property change owes its target database:
+ *  a two-way relation adds its mirror there (`add`), a one-way one or a
+ *  property going away takes the mirror with it (`removeId`), and a forward
+ *  property keeps the mirror named after `relation_backlink_name`
+ *  (`rename`). `property` null removes the mirror outright. The caller
+ *  applies the delta to the config it already writes — the same commit, so
+ *  the pair changes together or not at all; on a self-relation the target
+ *  is the caller's own database. */
+interface MirrorDelta {
+  target: Database;
+  add?: DatabaseProperty;
+  removeId?: string;
+  rename?: { id: string; name: string };
+}
+function mirrorDelta(
+  store: Store, who: Actor, source: { id: string; title: string },
+  property: DatabaseProperty, rename: boolean,
+): MirrorDelta | null {
+  if (!property.relation_database) return null;
+  const target = database(store, who, property.relation_database);
+  const mirror = target.config.properties.find((item) => item.type === "relation" && item.relation_origin === property.id);
+  const delta: MirrorDelta = { target };
+  if (property.relation_two_way && !mirror) {
+    delta.add = relationMirrorProperty(property, source.id, source.title, `property_${id()}`, target.config.properties.map((item) => item.name));
+  } else if (mirror && !property.relation_two_way) {
+    delta.removeId = mirror.id;
+  } else if (mirror && rename && property.relation_backlink_name !== undefined) {
+    const name = property.relation_backlink_name.trim() || source.title.trim() || "Relation";
+    if (name !== mirror.name) delta.rename = { id: mirror.id, name };
+  }
+  if (!delta.add && !delta.removeId && !delta.rename) return delta;
+  // A mirror write needs write rights on the target: re-resolve with the
+  // write check, so a one-way relation to a read-only database still works.
+  delta.target = target.page.id === source.id ? target : database(store, who, property.relation_database, true);
+  return delta;
+}
+
+/** The delta applied to a config — the caller's own, or the target's. */
+function applyMirrorDelta(config: DatabaseConfig, delta: MirrorDelta): DatabaseConfig {
+  let next = config;
+  if (delta.removeId) next = removeProperty(next, delta.removeId);
+  if (delta.rename) next = { ...next, properties: next.properties.map((item) => (item.id === delta.rename!.id ? { ...item, name: delta.rename!.name } : item)) };
+  if (delta.add) next = { ...next, properties: [...next.properties, delta.add] };
+  return next;
+}
 function checkRevision(store: Store, scope: string, pageId: string, expected: string): void {
   if (store.revision(scope, pageId) !== expected) fail(409, "内容已被修改。请重新读取。", "conflict");
 }
@@ -216,7 +307,10 @@ function rowDto(store: Store, who: Actor, rowId: string, config: DatabaseConfig)
   const dto = store.pageDto(who, rowId);
   return { ...dto, values: Object.fromEntries(config.properties.filter((property) => property.type !== "image").map((property) => [property.id, propertyValue(dto.page, property)])) };
 }
-function rowPatch(store: Store, who: Actor, db: Database, input: Pick<z.infer<typeof createRowSchema>, "title" | "properties" | "propertyFiles">): Row {
+function rowPatch(
+  store: Store, who: Actor, db: Database,
+  input: Pick<z.infer<typeof createRowSchema>, "title" | "properties" | "propertyFiles">,
+): Row {
   const patch: Row = {};
   if (input.title !== undefined) patch.title_content = [{ text: input.title }];
   if (input.properties) {
@@ -227,6 +321,26 @@ function rowPatch(store: Store, who: Actor, db: Database, input: Pick<z.infer<ty
       // 元数据列读取条目自身记录（创建、更新、归属、标识），不可写。
       if (isMetaType(property.type)) bad("该属性为只读的系统列。");
       normalized[key] = value;
+      if (property.type === "relation") {
+        // 关联存页面 ID 的 JSON 数组：每个必须是目标库的一条现有行，
+        // relation_limit "1" 最多挂一条。镜像写由 relationPeers 补，
+        // 与本行在同一事务里落。
+        if (value === null || value === "") continue;
+        let ids: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((id) => typeof id === "string")) ids = parsed;
+        } catch { /* not JSON: one id */ }
+        ids = [...new Set(ids ?? [value].map((id) => id.trim()).filter(Boolean))];
+        if (!ids.length) bad("关联值必须是页面 ID 的 JSON 数组。");
+        if (property.relation_limit === "1" && ids.length > 1) bad("该关联最多链接一个页面。");
+        const target = checkRelationTarget(store, who, property);
+        for (const linked of ids) {
+          if (!target!.rows.some((item) => item.id === linked)) bad("关联引用的页面不是目标数据库的条目。");
+        }
+        normalized[key] = toMultiValue(ids);
+        continue;
+      }
       if (value === null || value === "") continue;
       if (["status", "select"].includes(property.type) && !propertyOptions(property).includes(value)) bad("属性值不在选项中。");
       if (property.type === "multi_select") {
@@ -312,6 +426,13 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const supplied = input.database ?? { properties: [] };
       distinct(supplied.properties.map((property) => property.id), "属性标识");
       supplied.properties.forEach(checkProperty);
+      // 建库时就写双向无法落镜像（库自身还没有页面）；先建库，再加属性。
+      for (const property of supplied.properties) {
+        if (property.type === "relation") {
+          if (property.relation_two_way) bad("新建数据库上的关联暂不支持双向：先建库，再加属性。");
+          checkRelationTarget(store, who, property);
+        }
+      }
       let config: DatabaseConfig = { ...supplied, views: [] };
       for (const view of supplied.views ?? [{ id: "table", name: "Table", kind: "table" as const }]) {
         if (config.views.some((item) => item.id === view.id)) bad("视图标识不能重复。");
@@ -337,8 +458,19 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       if (db.config.properties.some((property) => property.id === input.property.id)) bad("属性标识已存在。");
       if (db.config.properties.length >= 100) bad("数据库最多包含 100 个属性。");
       checkProperty(input.property);
-      commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: { ...db.config, properties: [...db.config.properties, input.property] } })], [db.page.id]);
-      return reply(who, db, 201);
+      const writes: Write[] = [];
+      let config: DatabaseConfig = { ...db.config, properties: [...db.config.properties, input.property] };
+      if (input.property.type === "relation") {
+        const delta = mirrorDelta(store, who, { id: db.page.id, title: db.page.title }, input.property, false);
+        if (delta) {
+          if (delta.target.page.id === db.page.id) config = applyMirrorDelta(config, delta);
+          else writes.push(pagePatch(store, who, delta.target.scope, delta.target.page.id, { database: applyMirrorDelta(delta.target.config, delta) }));
+        }
+      }
+      if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
+      writes.unshift(pagePatch(store, who, db.scope, db.page.id, { database: config }));
+      commit(store, who, writes, [db.page.id]);
+      return reply(who, db, 201, writes.map((write) => write.id));
     });
   });
   app.patch("/api/v1/databases/:id/properties/:propertyId", (req, res) => {
@@ -355,6 +487,25 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       else if (default_status !== undefined) property.default_status = default_status;
       else if (input.property.status_options && !statusOptions(property).some((option) => option.id === property.default_status)) delete property.default_status;
       checkProperty(property);
+      // 关联的骨架是不可变的：目标、镜像的配对关系，和一个已建关联的类型。
+      // 镜像的属性留在目标库上编辑（改它的名字），这里不能动。
+      if (previous.type === "relation" && property.relation_origin && input.property.type !== undefined) bad("镜像属性的类型不能更改。");
+      if (previous.type === "relation" && property.type === "relation" && property.relation_database !== previous.relation_database) bad("关联的目标数据库创建后不可更改。");
+      if (property.relation_origin !== undefined && property.relation_origin !== previous.relation_origin) bad("镜像的配对关系创建后不可更改。");
+      const peerWrites: Write[] = [];
+      if (property.type === "relation" && !property.relation_origin) {
+        const delta = mirrorDelta(store, who, { id: db.page.id, title: db.page.title }, property, true);
+        if (delta) {
+          if (delta.target.page.id === db.page.id) config = applyMirrorDelta(config, delta);
+          else peerWrites.push(pagePatch(store, who, delta.target.scope, delta.target.page.id, { database: applyMirrorDelta(delta.target.config, delta) }));
+        }
+      } else if (previous.type === "relation" && property.type !== "relation" && !previous.relation_origin) {
+        // 类型不再是关联：目标库上的镜像随之删除。
+        const target = database(store, who, previous.relation_database!, true);
+        const mirror = target.config.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (mirror) peerWrites.push(pagePatch(store, who, target.scope, target.page.id, { database: removeProperty(target.config, mirror.id) }));
+      }
+      if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
       if (previous.type !== "status" && property.type === "status" && db.rows.some((row) => {
         const value = row.properties?.[key]?.trim();
         return value && !propertyOptions(property).includes(value);
@@ -379,7 +530,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
           return next ? { ...condition, value: next } : null;
         }));
       }
-      const writes = [pagePatch(store, who, db.scope, db.page.id, { database: config }), ...rowWrites];
+      const writes = [pagePatch(store, who, db.scope, db.page.id, { database: config }), ...peerWrites, ...rowWrites];
       commit(store, who, writes, [db.page.id, ...rowWrites.map((write) => write.id)]);
       return reply(who, db, 200, writes.map((write) => write.id));
     });
@@ -439,7 +590,9 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const patch = rowPatch(store, who, db, input);
       if (patch.properties) patch.properties = Object.fromEntries(Object.entries(patch.properties).filter(([, value]) => value !== null));
       const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
-      return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId] };
+      const peers = patch.properties ? relationPeers(store, who, db, pageId, undefined, patch.properties) : [];
+      if (peers.length) commit(store, who, peers);
+      return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId, ...peers.map((write) => write.id)] };
     });
   });
   app.patch("/api/v1/databases/:id/rows/:rowId", (req, res) => {
@@ -452,8 +605,10 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
     }, (who, db) => {
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
-      commit(store, who, [pagePatch(store, who, db.scope, rowId, rowPatch(store, who, db, input))], [rowId]);
-      return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
+      const patch = rowPatch(store, who, db, input);
+      const peers = patch.properties ? relationPeers(store, who, db, rowId, store.state(who).pages[rowId]?.properties, patch.properties) : [];
+      commit(store, who, [pagePatch(store, who, db.scope, rowId, patch), ...peers], [rowId]);
+      return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId, ...peers.map((write) => write.id)] };
     });
   });
   app.post("/api/v1/databases/:id/query", (req, res) => {
@@ -468,7 +623,8 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       // filters 给了就用它，并压住视图自带的旧字段；单写 filter 仍是旧语义。
       ...(input.filters !== undefined ? { filter: undefined, filters: input.filters } : input.filter !== undefined ? { filter: input.filter ?? undefined } : {}),
       ...(input.sorts !== undefined ? { sorts: input.sorts } : {}) };
-    const rows = viewRows(db.rows, actual, db.config.properties, input.query);
+    const pages = store.state(who).pages;
+    const rows = viewRows(db.rows, actual, db.config.properties, input.query, (pageId) => pages[pageId]?.title);
     const selected = rows.slice(input.offset, input.offset + input.limit);
     const hasMore = input.offset + selected.length < rows.length;
     res.json({ databaseId: db.page.id, revision: store.revision(db.scope, db.page.id), rows: selected.map((row) => rowDto(store, who, row.id, db.config)), total: rows.length, hasMore, nextOffset: hasMore ? input.offset + selected.length : null });

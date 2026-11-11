@@ -63,7 +63,7 @@ export function viewKindLabel(kind: DatabaseViewKind): string {
   return capitalized(kind);
 }
 
-function availableName(taken: string[], base: string): string {
+export function availableName(taken: string[], base: string): string {
   const existing = new Set(taken.map((name) => name.toLowerCase()));
   if (!existing.has(base.toLowerCase())) return base;
   let suffix = 2;
@@ -883,8 +883,9 @@ export function relationMirrorProperty(
   sourceDatabaseId: string,
   sourceTitle: string,
   id: string,
+  taken: string[],
 ): DatabaseProperty {
-  const name = forward.relation_backlink_name?.trim() || sourceTitle.trim() || "Relation";
+  const name = availableName(taken, forward.relation_backlink_name?.trim() || sourceTitle.trim() || "Relation");
   return { id, name, type: "relation", relation_database: sourceDatabaseId, relation_origin: forward.id };
 }
 
