@@ -8,7 +8,7 @@ import type { DatabaseProperty, PropertyType } from "../../core/types";
 import { PROPERTY_LABELS, PROPERTY_TYPES, sortable, TITLE_COLUMN } from "./database-model";
 import { PropertyIcon, TitleIcon, TypeIcon } from "./properties";
 import { PropertyIconPicker } from "./PropertyIconPicker";
-import { StatusOptionsMenu, type StatusEditing } from "./StatusOptions";
+import { OptionsEditorMenu, StatusOptionsMenu, type SelectEditing, type StatusEditing } from "./StatusOptions";
 
 const GROUP = "property-menu";
 
@@ -32,6 +32,7 @@ export function PropertyMenu({
   sort,
   wrap,
   statusEditing,
+  selectEditing,
   onRename,
   onIcon,
   onChangeType,
@@ -58,6 +59,8 @@ export function PropertyMenu({
   wrap?: boolean;
   /** A Status's options, edited; absent for every other column. */
   statusEditing?: StatusEditing;
+  /** A Select's or Multi-select's options, edited; absent otherwise. */
+  selectEditing?: SelectEditing;
   onRename(name: string): void;
   /** A mark for the column, or null for its type's own. */
   onIcon(icon: string | null): void;
@@ -75,9 +78,10 @@ export function PropertyMenu({
   const glyphRef = useRef<HTMLButtonElement | null>(null);
   const typeRef = useRef<HTMLButtonElement | null>(null);
   const statusRef = useRef<HTMLButtonElement | null>(null);
+  const optionsRef = useRef<HTMLButtonElement | null>(null);
   // One thing opens beside the menu at a time: the mark's picker, the
-  // status's options, or the types.
-  const [side, setSide] = useState<"icon" | "status" | "type" | null>(null);
+  // optioned types' options, or the types.
+  const [side, setSide] = useState<"icon" | "status" | "options" | "type" | null>(null);
   const column = property?.id ?? TITLE_COLUMN;
   const typeOpen = side === "type";
 
@@ -147,6 +151,23 @@ export function PropertyMenu({
                 className={`menu__item ${side === "status" ? "is-active" : ""}`}
                 onMouseDown={(event) => event.preventDefault()}
                 onClick={() => setSide((open) => (open === "status" ? null : "status"))}
+              >
+                <span className="menu__icon"><SlidersHorizontal size={16} /></span>
+                <span className="menu__copy"><span className="menu__label">Edit property</span></span>
+                <span className="menu__hint"><ChevronRight size={14} /></span>
+              </button>
+            ) : null}
+            {(property?.type === "select" || property?.type === "multi_select") && selectEditing ? (
+              <button
+                type="button"
+                ref={optionsRef}
+                data-menu-item
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={side === "options"}
+                className={`menu__item ${side === "options" ? "is-active" : ""}`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSide((open) => (open === "options" ? null : "options"))}
               >
                 <span className="menu__icon"><SlidersHorizontal size={16} /></span>
                 <span className="menu__copy"><span className="menu__label">Edit property</span></span>
@@ -228,6 +249,16 @@ export function PropertyMenu({
           group={GROUP}
           property={property}
           editing={statusEditing}
+          onClose={() => setSide(null)}
+        />
+      ) : null}
+
+      {side === "options" && (property?.type === "select" || property?.type === "multi_select") && selectEditing && optionsRef.current ? (
+        <OptionsEditorMenu
+          anchor={rectOf(optionsRef.current)}
+          group={GROUP}
+          property={property}
+          editing={selectEditing}
           onClose={() => setSide(null)}
         />
       ) : null}

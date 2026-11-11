@@ -6237,6 +6237,230 @@ button.db__th:hover,
 
 .db__cell-select { width: 100%; min-width: 0; }
 
+/* The single-line values: number, url, email and phone type in one input
+   on the row's line. A number stands right-aligned in tabular figures, the
+   way Notion's does, so a column of them lines up. */
+.db__line {
+  display: block;
+  min-width: 0;
+}
+
+.db__cell--line {
+  height: var(--db-row, 33px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__cell--number {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A set address reads as the link it is — the same ink at 70% over a 40%
+   underline the words' own links wear — and, where the cell cannot be
+   typed, is the link, so it can be followed. */
+.db__link,
+.db__cell--link {
+  color: inherit;
+  opacity: 0.7;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-decoration-thickness: max(1px, 0.05em);
+  text-underline-offset: 0.2em;
+}
+
+.db__link {
+  display: inline-block;
+  height: var(--db-row, 33px);
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: pointer;
+  line-height: var(--db-row, 33px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__line > .db__link {
+  height: auto;
+  max-width: 160px;
+  padding: 0;
+  line-height: inherit;
+}
+
+/* A checkbox is its box — the to-do block's, so the app has one kind of
+   tick — on the row's line. */
+.db__check {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  padding-left: 8px;
+}
+
+/* The meta columns read the row's own record; they are drawn as words, not
+   inputs — nothing writes them. */
+.db__meta {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--ink-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__meta[data-meta="id"] .db__meta-value {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.db__meta-value:empty::after {
+  color: var(--ink-4);
+  content: "Empty";
+}
+
+/* A multi-select is its options as pills, the ones it holds — as many as
+   fit, the list a click away. */
+.db__multi {
+  display: block;
+  min-width: 0;
+}
+
+.db__multi-cell {
+  display: flex;
+  width: 100%;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: default;
+}
+
+.db__multi-pills {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__multi-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.db__multi-remove {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+}
+
+.db__multi-remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__multi-empty {
+  color: var(--ink-4);
+}
+
+/* The multi-select's own menu: a filter at the top, the offered options —
+   picked ones marked — under it, and the quiet note that options are born
+   in the column's menu. */
+.db-multi-menu {
+  width: 220px;
+  padding: 6px;
+}
+
+.db-multi-menu__search {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+.db-multi-menu__list {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.db-multi-menu__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-2);
+  font-size: 13px;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.db-multi-menu__option:hover,
+.db-multi-menu__option.is-active {
+  background: var(--fill-hover);
+}
+
+.db-multi-menu__option > svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-multi-menu__empty,
+.db-multi-menu__none {
+  padding: 5px 8px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.db-multi-menu__hint {
+  display: flex;
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-4);
+  font-size: 11px;
+  gap: 12px;
+}
+
+.db-multi-menu__hint svg {
+  vertical-align: -1px;
+}
+
+/* A range is the two days with an arrow between; the end field joins once
+   a start is set, the way Notion's "End date" does. */
+.db__date:not(.is-empty) {
+  display: flex;
+  align-items: center;
+}
+
+.db__date > .db__cell {
+  flex: 1;
+  min-width: 0;
+}
+
+.db__date-arrow {
+  padding: 0 2px;
+  color: var(--ink-4);
+}
+
 .db__person {
   display: flex;
   height: var(--db-row, 33px);
@@ -6769,6 +6993,37 @@ button.db__th:hover,
   font-size: 12px;
 }
 
+/* A select's or multi-select's options: the status menu's flat sibling —
+   the same pills and settings, no groups and no grips, each row whole. */
+.options-menu__option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+
+.options-menu__option:hover {
+  background: var(--fill-hover);
+}
+
+.options-menu__option .status-menu__chevron {
+  margin-left: auto;
+}
+
+.options-menu__none {
+  padding: 8px 9px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.options-menu .status-menu__new {
+  padding-left: 4px;
+}
+
 /* A view's sorts — Notion's sort panel: a line per key, first key first,
    its column (on a grey face, with its mark) and its direction as the
    platform's own pickers under a quiet face, × to take it away; Add sort
@@ -6954,6 +7209,20 @@ button.db__th:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A multi-select's pills go bare on a card — each is already its own tag;
+   a box around them would say nothing more. A checkbox chip holds the
+   column's name beside its box. */
+.db-chip--multi {
+  height: auto;
+  padding: 0;
+  background: none;
+}
+
+.db-chip--check .checkbox {
+  width: 13px;
+  height: 13px;
 }
 
 /* ── Pictures in properties ───────────────────────────────────────────── */

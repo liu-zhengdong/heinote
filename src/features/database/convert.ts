@@ -40,6 +40,7 @@ import {
   columnWidth,
   createDatabaseProperty,
   databaseRows,
+  multiValues,
   newDatabaseConfig,
   propertyName,
   propertyValue,
@@ -49,7 +50,7 @@ import {
   titleName,
   viewRows,
 } from "./database-model";
-import { formatDay } from "./properties";
+import { formatDay, formatMoment } from "./properties";
 
 export interface ConversionIds {
   page(kind: "database" | "page"): string;
@@ -199,9 +200,14 @@ export function databaseConvertible(pages: Record<string, NotePage>, databaseId:
   };
 }
 
-/** A property's value as its view shows it (5). */
+/** A property's value as its view shows it (5): a multi-select its names
+ *  joined, a checkbox its mark, a meta column what the record reads (its
+ *  moment formatted), a date or a range as formatDay says. */
 function shownValue(row: NotePage, property: DatabaseProperty): string {
   const value = propertyValue(row, property);
+  if (property.type === "multi_select") return multiValues(value).join(", ");
+  if (property.type === "checkbox") return value === "true" ? "✓" : "";
+  if (property.type === "created_time" || property.type === "last_edited_time") return value ? formatMoment(value) : "";
   return property.type === "date" ? (value ? formatDay(value) : "") : value;
 }
 

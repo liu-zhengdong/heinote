@@ -11,6 +11,7 @@ import {
   Copy,
   EyeOff,
   FileText,
+  Check,
   Filter,
   LayoutGrid,
   LayoutList,
@@ -64,6 +65,7 @@ import { useWorkspace, type PagePatch } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import {
   activeView,
+  addSelectOption,
   addStatusOption,
   boardProperty,
   calendarProperty,
@@ -78,6 +80,7 @@ import {
   copiedColumn,
   createView,
   databaseRows,
+  dateRange,
   duplicateProperty,
   duplicateView,
   groupableProperties,
@@ -85,16 +88,20 @@ import {
   localeWeekStart,
   monthGrid,
   moveStatusOption,
+  multiValues,
   PROPERTY_LABELS,
   PROPERTY_TYPES,
   propertyName,
   propertyOptions,
   propertyValue,
+  recolorSelectOption,
   recolorStatusOption,
   removeProperty,
+  removeSelectOption,
   removeStatusOption,
   removeView,
   renameProperty,
+  renameSelectOption,
   renameStatusOption,
   rowImages,
   rowValues,
@@ -114,9 +121,9 @@ import {
   withView,
   type RowWrite,
 } from "./database-model";
-import { formatDay, ISO_DAY, OptionTag, PropertyEditor, PropertyIcon, TitleIcon, TypeIcon } from "./properties";
+import { formatDay, formatMoment, OptionTag, PropertyEditor, PropertyIcon, PropertyLink, TitleIcon, TypeIcon } from "./properties";
 import { PropertyMenu } from "./PropertyMenu";
-import type { StatusEditing } from "./StatusOptions";
+import type { SelectEditing, StatusEditing } from "./StatusOptions";
 import { SortPanel, type SortColumn } from "./SortPanel";
 import * as columnIcons from "./property-icons";
 import { provideIcons } from "./property-icon-store";
@@ -160,7 +167,7 @@ function RowChips({
 }) {
   const chips = properties
     .filter((property) => property.id !== exclude)
-    .map((property) => ({ property, value: row.properties?.[property.id] ?? "" }))
+    .map((property) => ({ property, value: propertyValue(row, property) }))
     .filter((chip) => (chip.property.type === "image" ? rowImages(row, chip.property.id).length > 0 : chip.value))
     .slice(0, limit);
   if (!chips.length) return null;
@@ -170,6 +177,40 @@ function RowChips({
         if (property.type === "image") return <ImageStrip key={property.id} row={row} property={property} />;
         if (property.type === "status") return <OptionTag key={property.id} property={property} value={propertyValue(row, property)} />;
         if (property.type === "select") return <OptionTag key={property.id} property={property} value={value} />;
+        // A multi-select is its pills; only as many as the chip limit gives.
+        if (property.type === "multi_select") {
+          return (
+            <span key={property.id} className="db-chip db-chip--multi">
+              {multiValues(value).map((name) => <OptionTag key={name} property={property} value={name} />)}
+            </span>
+          );
+        }
+        // Checked or not, the box is what a checkbox says on a card.
+        if (property.type === "checkbox") {
+          return (
+            <span key={property.id} className={`db-chip db-chip--check ${value === "true" ? "is-checked" : ""}`} aria-label={value === "true" ? "Checked" : "Unchecked"}>
+              <span className={`checkbox ${value === "true" ? "is-checked" : ""}`}>{value === "true" ? <Check size={11} strokeWidth={3} /> : null}</span>
+              {propertyName(property)}
+            </span>
+          );
+        }
+        // A url/email/phone chip is the link it names, clickable — stopped
+        // before it opens the row the chip sits on.
+        if (property.type === "url" || property.type === "email" || property.type === "phone") {
+          return (
+            <span key={property.id} className="db-chip">
+              <PropertyLink property={property} value={value} />
+            </span>
+          );
+        }
+        // A meta chip reads the row's own record, formatted as the column is.
+        if (property.type === "created_time" || property.type === "last_edited_time") {
+          return <span key={property.id} className="db-chip">{formatMoment(propertyValue(row, property))}</span>;
+        }
+        if (property.type === "created_by" || property.type === "last_edited_by") {
+          const who = propertyValue(row, property);
+          return <span key={property.id} className="db-chip"><Avatar name={who} size={16} />{who}</span>;
+        }
         if (property.type === "person") {
           return <span key={property.id} className="db-chip"><Avatar name={value} size={16} />{value}</span>;
         }
@@ -990,9 +1031,10 @@ function CalendarLayout({
     const map = new Map<string, NotePage[]>();
     for (const row of rows) {
       const value = propertyValue(row, property);
-      if (!ISO_DAY.test(value)) continue;
-      const key = value.slice(0, 10);
-      map.set(key, [...(map.get(key) ?? []), row]);
+      // A range sits on the day it starts.
+      const start = dateRange(value)?.start;
+      if (!start) continue;
+      map.set(start, [...(map.get(start) ?? []), row]);
     }
     return map;
   }, [property, rows]);
@@ -1387,6 +1429,31 @@ export function DatabaseView({
     },
   });
 
+  /* A select's or multi-select's options, the same way a status's are — by
+     name, where a status works by id; a rename or delete writes the rows
+     holding it (inside a multi-select's lists too), in the same step. */
+  const selectEditing = (propertyId: string): SelectEditing => ({
+    add: (name) => {
+      const made = readOnly ? null : addSelectOption(config, propertyId, name);
+      if (made) saveConfig(made.config);
+      return Boolean(made);
+    },
+    rename: (option, name) => {
+      const renamed = readOnly ? null : renameSelectOption(config, propertyId, option, name, allRows);
+      if (!renamed) return false;
+      saveConfig(renamed.config);
+      writeRows(propertyId, renamed.writes);
+      return true;
+    },
+    recolor: (option, color) => saveConfig(recolorSelectOption(config, propertyId, option, color)),
+    remove: (option) => {
+      const removed = readOnly ? null : removeSelectOption(config, propertyId, option, allRows);
+      if (!removed) return;
+      saveConfig(removed.config);
+      writeRows(propertyId, removed.writes);
+    },
+  });
+
   const board = view.kind === "board" ? boardProperty(view, properties) : undefined;
   const dates = view.kind === "calendar" ? calendarProperty(view, properties) : undefined;
   // The side peek is the window's; this database marks the row it shows, if
@@ -1654,6 +1721,7 @@ export function DatabaseView({
           sort={sorts.find((sort) => sort.property_id === menuColumn)?.direction}
           wrap={menuColumn === TITLE_COLUMN || menuProperty?.type === "text" ? columnWraps(view, menuColumn) : undefined}
           statusEditing={menuProperty?.type === "status" ? statusEditing(menuProperty.id) : undefined}
+          selectEditing={menuProperty && (menuProperty.type === "select" || menuProperty.type === "multi_select") ? selectEditing(menuProperty.id) : undefined}
           onRename={(name) => saveConfig(renameProperty(config, menuColumn, name))}
           onIcon={(icon) => saveConfig(setPropertyIcon(config, menuColumn, icon))}
           onChangeType={(type) => saveConfig(changePropertyType(config, menuColumn, type, allRows))}
