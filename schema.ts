@@ -50,7 +50,7 @@ export const VIEW_KINDS = ["table", "board", "list", "gallery", "calendar"] as c
 export const THEMES = ["system", "light", "dark"] as const;
 
 /** The page list's four views and the file tree's six orders. */
-export const SIDEBAR_VIEWS = ["files", "favorites", "shared", "graph"] as const;
+export const SIDEBAR_VIEWS = ["files", "favorites", "shared", "graph", "trash"] as const;
 export const SIDEBAR_SORTS = ["name", "name-desc", "modified", "modified-asc", "created", "created-asc"] as const;
 
 /** How much history a page keeps: the host retires what is past them. */
@@ -265,6 +265,9 @@ export default schema({
          *  over it: whatever sets one clears the other. */
         cover: t.choice(...COVER_IDS).optional(),
         cover_image: storedFile.optional(),
+        /** A picture icon from the member's computer. It and `icon` set
+         *  one another out: whatever sets one clears the other. */
+        icon_image: storedFile.optional(),
         /** Notion's "Full width" and font, which travel with the page. */
         full_width: t.bool().optional(),
         font: t.choice("default", "serif", "mono").optional(),

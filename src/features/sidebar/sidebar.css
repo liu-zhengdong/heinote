@@ -5,3 +5,21 @@
 .rail .icon-btn:disabled { cursor: default; opacity: .4; }
 .sidebar__foot .space-switcher:focus-visible,
 .rail__group--foot .space-switcher:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+/* The trash as a tab: the same rows as the old trash menu, but the list owns
+   the whole section — a search under the toolbar, then every trashed page. */
+.trash-view { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.trash-view__search { flex: none; padding: 2px 8px 6px; }
+.trash-view__search .move-to__search { width: 100%; }
+.trash-view__list { flex: 1; min-height: 0; max-height: none; margin-top: 0; padding: 0 2px 8px; overflow-y: auto; }
+.trash-view .move-to__icon { font-size: 16px; }
+.trash-view .trash__item { align-items: flex-start; min-height: 42px; padding-top: 6px; padding-bottom: 6px; }
+.trash-view .trash__item .move-to__icon { margin-top: 1px; }
+.trash-view .trash__actions { margin-top: 0; align-self: center; }
+.trash-view .move-to__empty { padding: 20px 8px; text-align: center; }
+
+/* The permanent-deletion ask: a small card over the dimmed page. */
+.confirm { width: min(380px, 100%); padding: 24px; }
+.confirm h2 { margin: 0 0 12px; color: var(--ink); font-size: 17px; line-height: 1.4; }
+.confirm p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.7; }
+.confirm__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }

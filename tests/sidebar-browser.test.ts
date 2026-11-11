@@ -87,6 +87,7 @@ const views = [
   { name: "Favorites", label: "收藏夹" },
   { name: "Shared", label: "共享空间" },
   { name: "Graph", label: "关系图谱" },
+  { name: "Trash", label: "回收站" },
 ] as const;
 
 async function expectToolbarLayout(toolbar: Locator) {
@@ -114,7 +115,7 @@ async function expectNavigationLayout(page: Page) {
   const topbar = sidebar.locator(".sidebar__topbar");
   const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
   await expect(tabs).toHaveAttribute("aria-orientation", "vertical");
-  await expect(tabs.getByRole("tab")).toHaveCount(4);
+  await expect(tabs.getByRole("tab")).toHaveCount(5);
   await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
   await expect(createButton(page)).toBeVisible();
   await expect(createButton(page)).toHaveText("");
@@ -335,6 +336,10 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   await expect(favorites).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tree", { name: "Favorites", exact: true }).locator(".tree-row__label")).toHaveText(["Alpha reference"]);
   await favorites.press("End");
+  const trash = tabs.getByRole("tab", { name: "Trash", exact: true });
+  await expect(trash).toBeFocused();
+  await expect(trash).toHaveAttribute("aria-selected", "true");
+  await trash.press("ArrowUp");
   const graph = tabs.getByRole("tab", { name: "Graph", exact: true });
   await expect(graph).toBeFocused();
   await expect(graph).toHaveAttribute("aria-selected", "true");
@@ -543,4 +548,79 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
     releaseSettings();
     await page.unroute(settingsPattern);
   }
+});
+
+test("trash tab lists archived pages and asks before deleting permanently", async ({ page }, testInfo) => {
+  await register(page, "sidebar_trash");
+  await createDocument(page, "Disposable note");
+  await createDocument(page, "Keep forever");
+  const trashTab = page.getByRole("tab", { name: "Trash", exact: true });
+  const files = page.getByRole("tree", { name: "Files", exact: true });
+
+  await files.getByRole("button", { name: "Disposable note", exact: true }).hover();
+  await page.getByRole("button", { name: "Actions for Disposable note", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
+  await expect(trashTab).toContainText("1");
+  await expect(files.getByRole("button", { name: "Disposable note", exact: true })).toHaveCount(0);
+
+  await trashTab.click();
+  const list = page.getByRole("listbox", { name: "Pages in the trash", exact: true });
+  await expect(list.getByRole("option")).toHaveCount(1);
+  await expect(list.getByRole("option", { name: /Disposable note/ })).toBeVisible();
+
+  // Opening a trashed page keeps it read-only under the banner.
+  await list.getByRole("option", { name: /Disposable note/ }).click();
+  await expect(page.getByText("In the trash", { exact: true })).toBeVisible();
+  await attachLayout(page, testInfo, "trash-tab");
+
+  // Restore returns the page to the tree and empties the tab count.
+  await list.getByRole("option", { name: /Disposable note/ }).hover();
+  await list.getByRole("button", { name: "Restore Disposable note", exact: true }).click();
+  await expect(list).toHaveText(/Trash is empty/);
+  await expect(trashTab).not.toContainText(/[1-9]/);
+  await expect.poll(async () => (await savedPages(page)).map((row) => row.title).sort()).toEqual(["Disposable note", "Keep forever"]);
+
+  // Delete permanently asks first; canceling changes nothing, confirming removes it.
+  await page.getByRole("tab", { name: "Files", exact: true }).click();
+  await files.getByRole("button", { name: "Disposable note", exact: true }).hover();
+  await page.getByRole("button", { name: "Actions for Disposable note", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
+  await trashTab.click();
+  await list.getByRole("option", { name: /Disposable note/ }).hover();
+  await list.getByRole("button", { name: "Delete Disposable note permanently", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete permanently", exact: true });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(list.getByRole("option", { name: /Disposable note/ })).toBeVisible();
+
+  await list.getByRole("option", { name: /Disposable note/ }).hover();
+  await list.getByRole("button", { name: "Delete Disposable note permanently", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await expect(list).toHaveText(/Trash is empty/);
+  await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Keep forever"]);
+});
+
+test("the trash banner asks before deleting permanently too", async ({ page }) => {
+  await register(page, "sidebar_trash_banner");
+  await createDocument(page, "Banner victim");
+  const files = page.getByRole("tree", { name: "Files", exact: true });
+  await files.getByRole("button", { name: "Banner victim", exact: true }).hover();
+  await page.getByRole("button", { name: "Actions for Banner victim", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
+  await page.getByRole("tab", { name: "Trash", exact: true }).click();
+  await page.getByRole("listbox", { name: "Pages in the trash", exact: true }).getByRole("option", { name: /Banner victim/ }).click();
+  await expect(page.getByText("In the trash", { exact: true })).toBeVisible();
+
+  await page.locator(".trash-banner").getByRole("button", { name: "Delete permanently", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete permanently", exact: true });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.getByText("In the trash", { exact: true })).toBeVisible();
+
+  await page.locator(".trash-banner").getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete permanently", exact: true }).click();
+  await expect(page.getByText("In the trash", { exact: true })).toBeHidden();
+  await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual([]);
 });

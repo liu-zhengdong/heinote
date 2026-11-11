@@ -122,11 +122,11 @@ async function screenshot(page: Page, info: TestInfo, name: string) {
   await info.attach(name, { path, contentType: "image/png" });
 }
 
-test("UC-13 browser: create from the username menu and keep the four Notes views and original settings", async ({ page, app }, info) => {
+test("UC-13 browser: create from the username menu and keep the Notes views and original settings", async ({ page, app }, info) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await register(page, app, "creator", "创建验收用户");
-  await expect(page.getByRole("tablist", { name: "Page list", exact: true }).getByRole("tab")).toHaveCount(4);
-  for (const name of ["Files", "Favorites", "Shared", "Graph"]) await expect(page.getByRole("tab", { name, exact: true })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Page list", exact: true }).getByRole("tab")).toHaveCount(5);
+  for (const name of ["Files", "Favorites", "Shared", "Graph", "Trash"]) await expect(page.getByRole("tab", { name, exact: true })).toBeVisible();
   await switcher(page).click();
   await expect(spaceMenu(page)).toContainText("个人空间"); await expect(spaceMenu(page)).toContainText("团队");
   await expect(spaceMenu(page).getByRole("menuitem").last()).toHaveText("新建团队知识库");

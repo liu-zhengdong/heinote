@@ -1281,6 +1281,7 @@ kbd {
 .sidebar__view.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
 .sidebar__view.is-active .sidebar__view-icon--shared { color: var(--green); }
 .sidebar__view.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
+.sidebar__view.is-active .sidebar__view-icon--trash { color: var(--danger); }
 
 .sidebar__view-label {
   min-width: 0;

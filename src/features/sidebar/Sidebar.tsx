@@ -53,7 +53,7 @@ import { useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { capitalized } from "../../core/title";
 import { pageGlyph } from "../editor/block-registry";
-import { TrashMenu } from "./TrashMenu";
+import { EmptyTrashConfirm, TrashView } from "./TrashView";
 import { AccountSettingsButton } from "../account/AccountMenu";
 import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
 import "./sidebar.css";
@@ -82,9 +82,9 @@ function writeExpanded(ids: ReadonlySet<string>): void {
   }
 }
 
-const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints };
-const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "共享空间", graph: "关系图谱" };
-const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑" };
+const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints, trash: Trash2 };
+const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "共享空间", graph: "关系图谱", trash: "回收站" };
+const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑", trash: "回收站" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
 
@@ -278,6 +278,8 @@ export function Sidebar() {
     canEdit,
     canMovePage,
     canTrashPage,
+    canDeletePage,
+    deletePage,
     isFavorite,
     toggleFavorite,
     openGraph,
@@ -287,13 +289,12 @@ export function Sidebar() {
 
   const asideRef = useRef<HTMLElement | null>(null);
   const newTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const trashRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [newMenu, setNewMenu] = useState<AnchorRect | null>(null);
   const [sortMenu, setSortMenu] = useState<AnchorRect | null>(null);
-  const [trashOpen, setTrashOpen] = useState(false);
+  const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [resizing, setResizing] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(readExpanded);
@@ -331,10 +332,12 @@ export function Sidebar() {
   );
   const sharedWithMe = sharedRoots.filter((page) => !ownedByMe(page));
   const sharedByMe = sharedRoots.filter((page) => ownedByMe(page));
+  const trashed = useMemo(() => Object.values(pages).filter((page) => page.archived), [pages]);
   const viewCounts: Partial<Record<SidebarView, number>> = {
     files: tree.roots.length + [...tree.children.values()].reduce((count, children) => count + children.length, 0),
     favorites: favorites.length,
     shared: sharedRoots.length,
+    trash: trashed.length,
   };
   /* The link mark says something links to a page from outside where it
      lives — by the one rule, a block's too. */
@@ -383,7 +386,7 @@ export function Sidebar() {
     setNewMenu(null);
     setSortMenu(null);
     setRowMenu(null);
-    setTrashOpen(false);
+    setEmptyTrashConfirm(false);
     setRenaming(null);
   }, [activeSpaceId]);
 
@@ -583,16 +586,29 @@ export function Sidebar() {
     );
   };
 
+  /** Every deletable page in the trash, gone for good one by one: the trash
+   *  API takes a page at a time. */
+  const emptyTrash = useCallback(async () => {
+    const targets = trashed.filter((page) => canDeletePage(page.id));
+    setEmptyTrashConfirm(false);
+    if (!targets.length) return;
+    let done = 0;
+    for (const page of targets) {
+      try {
+        await deletePage(page.id);
+        done += 1;
+      } catch (reason) {
+        toast(reason instanceof Error ? reason.message : "无法永久删除页面，请重试。", "error");
+      }
+    }
+    if (done) toast(`${done} 个页面已永久删除`, "success");
+  }, [canDeletePage, deletePage, toast, trashed]);
+
   const beforeAccountSettings = useCallback(() => { if (folded) setDrawerOpen(true); }, [folded, setDrawerOpen]);
 
   const accountFoot = (compact: boolean) => (
     <>
       <SpaceSwitcher compact={compact} onSwitch={afterNavigate} />
-      <Tooltip label="Trash" placement="top-start">
-        <button type="button" ref={trashRef} className="icon-btn" aria-label="Trash" onClick={() => setTrashOpen(true)}>
-          <Trash2 size={16} />
-        </button>
-      </Tooltip>
       <AccountSettingsButton onOpen={beforeAccountSettings} />
     </>
   );
@@ -693,6 +709,21 @@ export function Sidebar() {
 
       <div className="sidebar__tools" role="toolbar" aria-label={capitalized(view)}>
         <span className="sidebar__section-title">{SECTION_LABELS[view]}</span>
+        {view === "trash" ? (
+          <span className="sidebar__section-actions">
+            <Tooltip label="Empty trash">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Empty trash"
+                disabled={!trashed.length || !writable}
+                onClick={() => setEmptyTrashConfirm(true)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </Tooltip>
+          </span>
+        ) : null}
         {view === "files" ? (
           <span className={`sidebar__section-actions ${sortMenu ? "is-active" : ""}`}>
             <Tooltip label={`排序：${SORT_LABELS[sort]}`}>
@@ -729,7 +760,7 @@ export function Sidebar() {
         <div
           ref={scrollRef}
           className={`sidebar__scroll scroller ${rootDrop ? "is-drop-target" : ""}`}
-          role="tree"
+          role={view === "trash" ? undefined : "tree"}
           aria-label={capitalized(view)}
           onDragOver={(event) => {
             if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
@@ -759,6 +790,13 @@ export function Sidebar() {
                 <p>Star a page or a block to keep it here.</p>
               </div>
             )
+          ) : null}
+
+          {view === "trash" ? (
+            <TrashView
+              pages={pages}
+              onOpenPage={(pageId) => { selectPage(pageId); afterNavigate(); }}
+            />
           ) : null}
 
           {view === "shared" ? (
@@ -966,7 +1004,12 @@ export function Sidebar() {
         ) : null}
       </Popover>
 
-      {trashOpen ? <TrashMenu anchor={trashRef.current ? rectOf(trashRef.current) : null} onClose={() => setTrashOpen(false)} /> : null}
+      <EmptyTrashConfirm
+        open={emptyTrashConfirm}
+        count={trashed.filter((page) => canDeletePage(page.id)).length}
+        onCancel={() => setEmptyTrashConfirm(false)}
+        onConfirm={() => void emptyTrash()}
+      />
 
     </>
   );

@@ -225,6 +225,13 @@ export class Store {
           this.put(scope, write.collection, write.id, next);
         } else {
           this.db.prepare("DELETE FROM records WHERE scope=? AND collection=? AND id=?").run(scope, write.collection, write.id);
+          if (write.collection === "pages" && current) {
+            // Gone for good means all of it: the record sweep below still
+            // holds this write, so paragraphs and history leave with the
+            // page or the whole batch is refused.
+            this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
+            this.db.prepare("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
+          }
           if (write.collection === "pages" && current?.share_space_id === scope) {
             if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。");
             this.db.prepare("DELETE FROM members WHERE space_id=? AND role!='owner'").run(scope);

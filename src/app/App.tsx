@@ -7,12 +7,14 @@ import { DocumentEditor } from "../features/editor/DocumentEditor";
 import { linkedPageId } from "../features/editor/mentions";
 import { QuickFind } from "../features/quickfind/QuickFind";
 import { Sidebar } from "../features/sidebar/Sidebar";
+import { DeletePageConfirm } from "../features/sidebar/TrashView";
 import { TopBar } from "../features/topbar/TopBar";
 import { useFold } from "../hooks/useFold";
 import type { NotePage } from "../core/types";
 import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
 import { imeComposing } from "../core/keyboard";
 import { useUi } from "./ui-context";
+import { pageName } from "../core/block-tree";
 import { pageAncestry } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
@@ -56,10 +58,13 @@ export function App() {
   // Opened from the trash, the page is read where it is: the page in the
   // trash, itself or above it, is the one Restore brings back.
   const trashedAt = useWorkspaceState((state) => pageAncestry(state.pages, selectedPageId).find((page) => page.archived)?.id ?? null);
+  const trashedTitle = useWorkspaceState((state) => trashedAt && state.pages[trashedAt] ? pageName(state.pages[trashedAt]) || "Untitled" : "");
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const removeTrashedPage = useCallback(async () => {
     if (!trashedAt || deleting) return;
     setDeleting(true);
+    setConfirmDelete(false);
     try { await deletePage(trashedAt); toast("Deleted permanently", "success"); }
     catch (reason) { toast(reason instanceof Error ? reason.message : "页面未删除。", "error"); }
     finally { setDeleting(false); }
@@ -258,7 +263,7 @@ export function App() {
                   <RotateCcw size={13} />Restore
                 </button>
                 {canDeletePage(trashedAt) ? (
-                  <button type="button" className="btn btn--danger" disabled={deleting} onClick={() => void removeTrashedPage()}>
+                  <button type="button" className="btn btn--danger" disabled={deleting} onClick={() => setConfirmDelete(true)}>
                     Delete permanently
                   </button>
                 ) : null}
@@ -308,6 +313,12 @@ export function App() {
           <ShareDialog page={sharePage} onClose={closeShare} />
         </Suspense>
       ) : null}
+      <DeletePageConfirm
+        open={confirmDelete}
+        title={trashedTitle}
+        onCancel={() => setConfirmDelete(false)}
+        onConfirm={() => void removeTrashedPage()}
+      />
       <QuickFind />
     </div>
   );
