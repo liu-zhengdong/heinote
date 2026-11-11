@@ -1,4 +1,4 @@
-import { ArrowUpRight, ImageIcon, RefreshCw, Smile, X } from "lucide-react";
+import { AppWindow, ArrowUpRight, ImageIcon, RefreshCw, Smile, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -107,6 +107,7 @@ import { FormatToolbar, type FormatState } from "./FormatToolbar";
 import { TitleField } from "./TitleField";
 import { layout, type Item, type Rendered } from "../../core/block-layout";
 import { PageFrame } from "./PageFrame";
+import { AppSurface } from "../artifact/AppSurface";
 import { KnowledgeBaseHome } from "../knowledge/KnowledgeBaseHome";
 import { PageMenu, PageNameEditor } from "./PageMenu";
 import { HISTORY_REPLAY_EVENT, SELECT_BLOCK_EVENT } from "./history-cursor";
@@ -193,7 +194,7 @@ type PageMenuOpen =
   | { from: "block"; id: string; anchor: AnchorRect }
   | { from: "frame"; anchor: AnchorRect }
   | { from: "link"; blockId: string; anchor: AnchorRect }
-  | { from: "database"; key: string; pageId: string; anchor: AnchorRect; mount: MountHandle };
+  | { from: "database" | "app"; key: string; pageId: string; anchor: AnchorRect; mount: MountHandle };
 
 /** The picker open: a page's icon (this page's, or a block's — a block is a
  *  page), this page's cover, or a callout's emoji. */
@@ -1880,10 +1881,38 @@ export function DocumentEditor({
     </div>
   );
 
+  /* An app shown in a page is its run surface, not a page's words: the same
+   *  surface its own page gives it, framed as a database is. Unscripted
+   *  HTML renders on sight; a scripted app waits for the member to run it. */
+  const renderApp = (key: string, target: NotePage, handle: MountHandle): ReactNode => (
+    <div key={key} className="db-frame">
+      <PageFrame
+        pageId={target.id}
+        name={pageName(target)}
+        depth={0}
+        readOnly={!handle.movable}
+        locked={handle.locked}
+        menuOpen={pageMenu?.from === "app" && pageMenu.key === key}
+        dragging={false}
+        references={linksOf(target.id).length}
+        onMenu={(anchor) => setPageMenu({ from: "app", key, pageId: target.id, anchor, mount: handle })}
+        onDragStart={handle.dragStart}
+        onDragEnd={handle.dragEnd}
+        onReferences={(anchor) => setBacklinksFor({ id: target.id, anchor })}
+        mark={target.icon ? <span className="page-frame__mark-emoji">{target.icon}</span> : <AppWindow size={16} />}
+        headKind="app"
+        onToggle={handle.showAsLink}
+      >
+        <AppSurface page={target} embedded onOpen={() => selectPage(target.id)} />
+      </PageFrame>
+    </div>
+  );
+
   const renderPage = (key: string, target: NotePage, handle: MountHandle): ReactNode => {
     if (target.id === here) return null;
     // A database is drawn as the database it is, never as a page's words.
     if (target.kind === "database") return renderDatabase(key, target, handle);
+    if (target.kind === "app") return renderApp(key, target, handle);
     if (shownPages.includes(target.id)) return <p key={key} className="mount-note" role="note">This page is shown above.</p>;
     return mountFrame(key, (
       <DocumentEditor
@@ -1945,7 +1974,7 @@ export function DocumentEditor({
     return {
       target,
       label: view.label,
-      mark: view.icon || (view.glyph === "database" ? <DatabaseIcon size={16} /> : <PageIcon size={16} />),
+      mark: view.icon || (view.glyph === "database" ? <DatabaseIcon size={16} /> : view.glyph === "app" ? <AppWindow size={16} /> : <PageIcon size={16} />),
       count: view.state === "missing" ? 0 : linksOf(target).length,
       still: Boolean(view.state),
     };
@@ -2172,7 +2201,8 @@ export function DocumentEditor({
           ...(readOnly || !canEdit(link.page_id) || pages[link.page_id]?.parent_id !== ownerOf(line.id) ? {} : blockActions(link.page_id, line.id, open.anchor)),
         };
       }
-      case "database": {
+      case "database":
+      case "app": {
         const target = pages[open.pageId];
         return target ? { pageId: target.id, name: pageName(target), ...shownActions(open.mount) } : null;
       }

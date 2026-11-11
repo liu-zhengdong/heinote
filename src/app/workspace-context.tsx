@@ -214,6 +214,8 @@ function blankPage(id: string, kind: NotePage["kind"], parentId: string | null, 
     ...newPage(id, kind, parentId, { now: new Date().toISOString(), author }, createId("block")),
     // A database starts as Notion's blank one: a table, and every row's name.
     ...(kind === "database" ? { database: newDatabaseConfig("table", createId("view"), () => createId("property")) } : {}),
+    // An app starts unconfigured: no source, no bindings.
+    ...(kind === "app" ? { app: {} } : {}),
   };
 }
 

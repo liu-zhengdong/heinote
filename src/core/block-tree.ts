@@ -314,6 +314,6 @@ export function normalizePage(value: unknown, ensureParagraph = true): NotePage 
     const block = createBlock(`block_${candidate.id}_root`);
     blockTree.by_id[block.id] = block;
   }
-  const kind = candidate.kind === "database" ? "database" : "document";
+  const kind = candidate.kind === "database" ? "database" : candidate.kind === "app" ? "app" : "document";
   return { ...candidate, kind, block_tree: blockTree } as unknown as NotePage;
 }

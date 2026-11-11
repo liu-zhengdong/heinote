@@ -194,7 +194,7 @@ test("files toolbar opens one dark creation menu and dismisses without creating"
   await create.click();
   await expect(create).toHaveAttribute("aria-expanded", "true");
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库"]);
+  await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库", "小应用"]);
   expect(await savedPages(page)).toEqual(baseline);
   await attachLayout(page, testInfo, "dark-creation-menu");
 
@@ -294,7 +294,7 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await createButton(page).click();
   const menu = newMenu(page);
   await expect(menu).toBeVisible();
-  await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库"]);
+  await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库", "小应用"]);
   const bounds = await menu.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);

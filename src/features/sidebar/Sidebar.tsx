@@ -1,4 +1,5 @@
 import {
+  AppWindow,
   ArrowUpNarrowWide,
   ChevronRight,
   ChevronsDownUp,
@@ -245,7 +246,7 @@ const TreeRow = memo(function TreeRow({
         >
           <MoreHorizontal size={14} />
         </button>
-        {editable ? (
+        {editable && page.kind !== "app" ? (
           <Tooltip label={page.kind === "database" ? "Add a row" : "Add a page inside"}>
             <button type="button" className="icon-btn" aria-label={`New page inside ${label}`} onClick={() => actions.createInside(page.id)}>
               <Plus size={14} />
@@ -520,7 +521,7 @@ export function Sidebar() {
         // What is dragged is not readable until the drop; the move rule is
         // asked then. Here the target only has to be able to hold it.
         const page = target ? pages[target.pageId] : null;
-        if (page && (page.kind === "database" || !canEdit(page.id))) return false;
+        if (page && (page.kind === "database" || page.kind === "app" || !canEdit(page.id))) return false;
         event.preventDefault();
         return true;
       },
@@ -945,6 +946,7 @@ export function Sidebar() {
         <MenuList label="新建" autoFocus>
           <MenuItem icon={<FileText size={16} />} label="页面" disabled={!writable} onSelect={() => createIn(null, "document")} />
           <MenuItem icon={<Table2 size={16} />} label="数据库" disabled={!writable} onSelect={() => createIn(null, "database")} />
+          <MenuItem icon={<AppWindow size={16} />} label="小应用" disabled={!writable} onSelect={() => createIn(null, "app")} />
         </MenuList>
       </Popover>
 

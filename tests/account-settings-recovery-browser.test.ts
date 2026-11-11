@@ -121,6 +121,7 @@ test("AC-10/E8: session expiry hides a new token and keeps old account drafts ou
     await openSettings(page);
     await settings(page).getByLabel("显示名", { exact: true }).fill("只能属于旧账号的草稿");
     await category(page, "Agent 令牌").click();
+    await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
     await settings(page).locator('input[name="tokenName"]').fill("会话失效前创建的 Agent");
     await settings(page).getByRole("button", { name: "创建", exact: true }).click();
     const raw = settings(page).getByLabel("令牌", { exact: true });

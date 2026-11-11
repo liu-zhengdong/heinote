@@ -10,7 +10,8 @@ import {
   changePropertyType, changeViewKind, createView, databaseRows, MAX_ROW_IMAGES,
   propertyOptions, propertyValue, sortable, statusOptions, TITLE_COLUMN, viewRows,
 } from "../src/features/database/database-model.ts";
-import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { fail, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { activePage, externalScope, mutation as mutationShared, type Reply } from "./mutation.ts";
 
 const safeKey = z.string().min(1).max(256).refine((value) => !["__proto__", "prototype", "constructor"].includes(value), "标识无效。");
 const propertyId = safeKey.refine((value) => value !== TITLE_COLUMN, "name 保留给标题列。");
@@ -72,9 +73,7 @@ const querySchema = z.object({
 }).strict();
 
 type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[] };
-type Reply = { status: number; body: ReturnType<Store["pageDto"]>; scope: string; pageIds: string[] };
 const stamp = () => new Date().toISOString();
-const externalScope = (scope: string) => scope.startsWith("user:") ? "personal" : scope;
 function bad(message: string): never { fail(400, message, "bad_request"); }
 
 function distinct(values: readonly string[], label: string): void {
@@ -109,15 +108,6 @@ function checkView(view: Partial<DatabaseView>, config: DatabaseConfig): void {
   for (const key of [...view.card_properties ?? [], ...Object.keys(view.widths ?? {}), ...Object.keys(view.wrap ?? {})]) {
     if (key !== TITLE_COLUMN && !config.properties.some((property) => property.id === key)) bad("视图引用了不存在的属性。");
   }
-}
-function activePage(store: Store, who: Actor, pageId: string, write = false) {
-  const found = store.page(who, pageId);
-  store.scope(who, externalScope(found.scope), write);
-  const pages = store.state(who).pages;
-  for (let page: NotePage | undefined = found.page; page; page = page.parent_id ? pages[page.parent_id] : undefined) {
-    if (page.archived) fail(409, "页面或父页面已归档。", "conflict");
-  }
-  return found;
 }
 function database(store: Store, who: Actor, pageId: string, write = false): Database {
   const found = activePage(store, who, pageId, write);
@@ -186,32 +176,8 @@ function rowPatch(store: Store, who: Actor, db: Database, input: Pick<z.infer<ty
 
 /** Own the Agent database boundary; all writes use the existing record transaction. */
 export function attachAgentDatabases(app: Express, store: Store, actor: (req: Request) => Actor): void {
-  function mutation<T extends { requestId: string }, Target>(
-    req: Request, res: Response, input: T, authorize: (who: Actor) => Target,
-    execute: (who: Actor, target: Target) => Reply,
-  ): void {
-    const who = actor(req);
-    const reply = store.transaction(() => {
-      const target = authorize(who);
-      const requestId = `agent-db:${input.requestId}`;
-      const digest = hash(JSON.stringify({ method: req.method, path: req.path, input }));
-      const cached = store.one("SELECT digest,result FROM requests WHERE user_id=? AND request_id=?", who.user.id, requestId);
-      if (cached) {
-        if (cached.digest !== digest) fail(409, "请求 ID 已用于其他操作。", "conflict");
-        const result = JSON.parse(String(cached.result)) as Reply;
-        for (const pageId of result.pageIds) {
-          const current = activePage(store, who, pageId, true);
-          if (current.scope !== result.scope) fail(409, "内容位置已变化。请重新读取。", "conflict");
-        }
-        return result;
-      }
-      store.collaboration.markRequest(input.requestId);
-      const result = execute(who, target);
-      store.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(who.user.id, requestId, digest, JSON.stringify(result));
-      return result;
-    });
-    res.status(reply.status).json(reply.body);
-  }
+  const mutation = <T extends { requestId: string }, Target>(req: Request, res: Response, input: T, authorize: (who: Actor) => Target, execute: (who: Actor, target: Target) => Reply) =>
+    mutationShared(store, actor, req, res, input, authorize, execute);
   const reply = (who: Actor, db: Database, status = 200, pageIds = [db.page.id]): Reply => ({ status, body: store.pageDto(who, db.page.id), scope: db.scope, pageIds });
   const load = (req: Request) => (who: Actor) => database(store, who, safeKey.parse(req.params.id), true);
 
@@ -352,6 +318,26 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
       commit(store, who, [pagePatch(store, who, db.scope, rowId, rowPatch(store, who, db, input))], [rowId]);
+      return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
+    });
+  });
+  app.delete("/api/v1/databases/:id/rows/:rowId", (req, res) => {
+    const input = z.object({ requestId: requestFields.requestId, baseRevision: revision, databaseRevision: revision }).strict().parse(req.body ?? {});
+    const rowId = safeKey.parse(req.params.rowId);
+    mutation(req, res, input, (who) => {
+      const db = database(store, who, safeKey.parse(req.params.id), true);
+      const row = activePage(store, who, rowId, true);
+      if (row.scope !== db.scope || row.page.parent_id !== db.page.id || row.page.kind !== "document") bad("条目不属于此数据库。");
+      return { db, row };
+    }, (who, { db }) => {
+      checkRevision(store, db.scope, db.page.id, input.databaseRevision);
+      checkRevision(store, db.scope, rowId, input.baseRevision);
+      // Archiving is structural: the row's collaboration document asks for
+      // the full basis, as any structure change does.
+      const snapshot = store.collaboration.snapshot(who, externalScope(db.scope), rowId);
+      store.apply(who, [pagePatch(store, who, db.scope, rowId, { archived: true, archived_at: stamp() })], undefined, [],
+        [{ scope: snapshot.scope, pageId: rowId, generation: snapshot.generation, revision: snapshot.revision }]);
+      store.collaboration.flush();
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
     });
   });

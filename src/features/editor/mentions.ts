@@ -33,6 +33,7 @@ export function mentionDescriber(
       ...(page.icon ? { icon: page.icon } : {}),
       ...(iconFile && isImageType(iconFile.type) && !page.icon ? { iconFile } : {}),
       ...(page.kind === "database" ? { glyph: "database" as const } : {}),
+      ...(page.kind === "app" ? { glyph: "app" as const } : {}),
       ...(state ? { state } : {}),
     };
   };

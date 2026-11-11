@@ -14,6 +14,8 @@ import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
+import { activePage, mutation } from "./mutation.ts";
+import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
@@ -499,7 +501,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/v1/pages", (req, res) => { const who = actor(req); res.json(Object.values(store.state(who).pages).filter((page) => !page.archived).map((page) => store.pageDto(who, page.id))); });
   app.post("/api/v1/pages", (req, res) => {
-    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
+    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), kind: z.enum(["document", "app"]).default("document"), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
+    if (input.kind === "app" && input.text) fail(400, "应用页面没有正文。", "bad_request");
     const pageId = store.transaction(() => {
       const parent = input.parentId ? store.page(who, input.parentId) : undefined;
       const requested = input.scope ?? input.spaceId;
@@ -509,7 +512,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const scope = parent?.scope ?? explicitScope ?? store.scope(who, "personal", true);
       store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       const knowledgeBase = store.knowledgeBases.get(scope);
-      const page = newPage(id(), "document", input.parentId ?? knowledgeBase?.homePageId ?? null, { author: who.user.id, now: currentTime() }, id());
+      const page = newPage(id(), input.kind, input.parentId ?? knowledgeBase?.homePageId ?? null, { author: who.user.id, now: currentTime() }, id());
       page.title = input.title;
       const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text }];
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
@@ -521,18 +524,61 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.get("/api/v1/pages/:id", (req, res) => { const who = actor(req); res.json(store.pageDto(who, text(req.params.id))); });
   app.patch("/api/v1/pages/:id", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId);
-    const input = parse(z.object({ title: z.string().max(500).optional(), text: z.string().max(100000).optional(), baseRevision: z.string() }).strict(), req.body);
+    const input = parse(z.object({
+      title: z.string().max(500).optional(), text: z.string().max(100000).optional(), baseRevision: z.string(),
+      app: z.object({
+        draft: z.string().max(APP_SOURCE_BUDGET_BYTES).optional(),
+        databases: z.array(z.object({ id: z.string().min(1).max(256), read: z.boolean(), write: z.boolean() }).strict()).max(50).optional(),
+      }).strict().optional(),
+    }).strict(), req.body);
     store.transaction(() => {
       const { page, scope } = store.page(who, pageId); store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       if (input.baseRevision !== store.revision(scope, pageId)) fail(409, "页面已被修改。请重新读取。", "conflict");
+      if (input.app && page.kind !== "app") fail(400, "只有应用页面接受 app 字段。", "bad_request");
+      if (input.app?.draft !== undefined && Buffer.byteLength(input.app.draft, "utf8") > APP_SOURCE_BUDGET_BYTES) fail(400, "源码超过 2MB 上限。", "bad_request");
+      const bindings = input.app?.databases ? normalizeBindings(input.app.databases) : undefined;
+      if (bindings) {
+        if (bindings.length !== input.app!.databases!.length) fail(400, "数据源绑定重复或无效。", "bad_request");
+        for (const binding of bindings) {
+          let target;
+          try { target = store.page(who, binding.id); } catch { fail(400, "数据源不存在或不可访问。", "bad_request"); }
+          if (target!.page.kind !== "database") fail(400, "数据源必须是 Database 页面。", "bad_request");
+          if (target!.scope !== scope) fail(400, "数据源必须与应用处于同一权限范围。", "bad_request");
+        }
+      }
       store.checkpoint(who, pageId, "Agent 修改前");
       const next = { ...page, updated_at: currentTime(), updated_by: who.user.id };
       if (input.title !== undefined) { next.title = input.title; delete next.title_content; }
       if (input.text !== undefined) {
         const blockId = id(); next.block_tree = { by_id: { [blockId]: { id: blockId, kind: "text", parent_id: null, order: 1024, content: [{ text: input.text }] } } };
       }
+      if (input.app) {
+        next.app = {
+          ...(next.app ?? {}),
+          ...(input.app.draft !== undefined ? (input.app.draft ? { draft: input.app.draft } : {}) : {}),
+          ...(bindings !== undefined ? { databases: bindings } : {}),
+        };
+        if (input.app.draft === "") delete next.app.draft;
+      }
       store.savePage(scope, next);
     }); res.json(store.pageDto(who, pageId));
+  });
+  app.post("/api/v1/pages/:id/enable", (req, res) => {
+    const input = parse(z.object({ requestId: z.string().min(1).max(256), baseRevision: z.string().min(1).max(100) }).strict(), req.body);
+    mutation(store, actor, req, res, input,
+      (who) => activePage(store, who, text(req.params.id), true),
+      (who, found) => {
+        const { page, scope } = found;
+        if (page.kind !== "app") fail(400, "只有应用页面可以启用源码。", "bad_request");
+        if (store.revision(scope, page.id) !== input.baseRevision) fail(409, "页面已被修改。请重新读取。", "conflict");
+        const draft = page.app?.draft;
+        if (!draft || !draft.trim()) fail(400, "没有可启用的草稿。", "bad_request");
+        store.checkpoint(who, page.id, "启用应用源码前");
+        const next = { ...page, updated_at: currentTime(), updated_by: who.user.id, app: { ...(page.app ?? {}), enabled: draft } };
+        delete next.app!.draft;
+        store.savePage(scope, next);
+        return { status: 200, body: store.pageDto(who, page.id), scope, pageIds: [page.id] };
+      });
   });
   app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).versions[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
   app.post("/api/v1/pages/:id/checkpoint", (req, res) => { const who = actor(req); const version = store.transaction(() => store.checkpoint(who, text(req.params.id), text(req.body?.summary).slice(0, 200) || "手动保存")); res.json(version); });

@@ -2,6 +2,7 @@ import { CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { routes } from "../platform/schema";
 import { DatabasePage } from "../features/database/DatabasePage";
+import { AppPage } from "../features/artifact/AppPage";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
 import { DocumentEditor } from "../features/editor/DocumentEditor";
 import { linkedPageId } from "../features/editor/mentions";
@@ -31,6 +32,13 @@ function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: Note
   const page = usePage(pageId);
   if (!page) return null;
   return <DocumentEditor page={preview ?? page} readOnly={readOnly} historical={Boolean(preview)} />;
+}
+
+/** An app page redrawn as the page changes — its run surface and editor. */
+function AppPageShell({ pageId }: { pageId: string }) {
+  const page = usePage(pageId);
+  if (!page) return null;
+  return <AppPage page={page} />;
 }
 
 export function App() {
@@ -280,6 +288,8 @@ export function App() {
 
             {selectedKind === "database" && !historyPreview ? (
               <DatabasePage readOnly={Boolean(trashedAt)} />
+            ) : selectedKind === "app" && !historyPreview ? (
+              <AppPageShell pageId={selectedPageId} />
             ) : selectedKind ? (
               <OpenPage key="page" pageId={selectedPageId} preview={historyPreview} readOnly={Boolean(historyPreview) || Boolean(trashedAt) || !canEdit(selectedPageId)} />
             ) : (

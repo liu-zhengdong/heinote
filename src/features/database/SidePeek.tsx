@@ -14,6 +14,7 @@ import { imeComposing } from "../../core/keyboard";
 import { useWorkspace, type PagePatch } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { DocumentEditor } from "../editor/DocumentEditor";
+import { AppPage } from "../artifact/AppPage";
 import { PageActions } from "../topbar/PageActions";
 import { DatabaseSheet } from "./DatabasePage";
 import { PropertyEditor, PropertyIcon } from "./properties";
@@ -264,9 +265,11 @@ export function SidePeek({
           <PageActions page={drawn} compact={width < COMPACT_BELOW} link />
         </header>
         <div ref={scrollRef} className="side-peek__scroll scroller">
-          {/* A database is its views, never a page's words. */}
+          {/* A database is its views, an app its surface — never a page's words. */}
           {drawn.kind === "database" ? (
             <DatabaseSheet database={drawn} />
+          ) : drawn.kind === "app" ? (
+            <AppPage page={drawn} />
           ) : (
             <DocumentEditor key="page" page={drawn} readOnly={!canEdit(drawn.id)} properties={<PageProperties page={drawn} />} />
           )}
