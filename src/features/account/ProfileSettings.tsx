@@ -59,27 +59,22 @@ export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelPro
     }
   };
 
-  return <section className="settings-group" aria-labelledby={`${id}-title`}>
-    <h2 id={`${id}-title`}>资料</h2>
-    <AvatarSettings disabled={busy} onBusyChange={(active) => { setAvatarBusy(active); onBusyChange(active); }} />
-    <div className="settings-profile">
-      <form className="settings-profile__form" noValidate onSubmit={(event) => void save(event)}>
-        <label className="account-field" htmlFor={`${id}-name`}>显示名
-          <input id={`${id}-name`} name="profileDisplayName" data-setting="displayName" value={draft} autoComplete="name"
-            disabled={busy} aria-invalid={Boolean(error)} aria-describedby={error ? `${id}-error` : undefined}
-            onChange={(event) => { setDraft(event.target.value); setError(""); setNotice(""); }}
-            onKeyDown={(event) => { if (event.key === "Enter" && imeComposing(event)) event.preventDefault(); }} />
-        </label>
-        <div className="settings-profile__username"><span>用户名</span><span>@{user.handle}</span></div>
-        <div className="settings-profile__actions">
-          {dirty ? <>
-            <button type="submit" className="btn btn--primary" disabled={busy}>{pending ? "保存中…" : "保存"}</button>
-            <button type="button" className="btn" disabled={busy} onClick={() => { setDraft(user.displayName); setError(""); setNotice(""); }}>取消</button>
-          </> : null}
-          {notice ? <span className="settings-saved" role="status">{notice}</span> : null}
-        </div>
+  return <AvatarSettings disabled={busy} onBusyChange={(active) => { setAvatarBusy(active); onBusyChange(active); }}>
+    <form className="settings-hero__identity" noValidate onSubmit={(event) => void save(event)}>
+      <input id={`${id}-name`} name="profileDisplayName" data-setting="displayName" value={draft} autoComplete="name"
+        aria-label="显示名" title="显示名，点击修改" disabled={busy} aria-invalid={Boolean(error)}
+        aria-describedby={error ? `${id}-error` : undefined}
+        onChange={(event) => { setDraft(event.target.value); setError(""); setNotice(""); }}
+        onKeyDown={(event) => { if (event.key === "Enter" && imeComposing(event)) event.preventDefault(); }} />
+      <div className="settings-hero__handle">@{user.handle}</div>
+      {dirty || notice || error ? <div className="settings-hero__actions">
+        {dirty ? <>
+          <button type="submit" className="btn btn--primary" disabled={busy}>{pending ? "保存中…" : "保存"}</button>
+          <button type="button" className="btn" disabled={busy} onClick={() => { setDraft(user.displayName); setError(""); setNotice(""); }}>取消</button>
+        </> : null}
+        {notice ? <span className="settings-saved" role="status">{notice}</span> : null}
         {error ? <p id={`${id}-error`} className="account-error" role="alert">{error}</p> : null}
-      </form>
-    </div>
-  </section>;
+      </div> : null}
+    </form>
+  </AvatarSettings>;
 }

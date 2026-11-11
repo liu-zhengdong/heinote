@@ -35,24 +35,38 @@
 .settings-panel[hidden] { display: none; }
 .settings-group + .settings-group { margin-top: 36px; }
 .settings-group h2 { margin: 0; padding: 0 0 12px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 15px; line-height: 22px; font-weight: 600; }
-.settings-avatar { display: flex; align-items: center; gap: 18px; padding-top: 24px; outline: none; }
-.settings-avatar > .avatar { flex: none; }
-.settings-avatar__content { min-width: 0; flex: 1; }
-.settings-avatar__label { color: var(--ink); font-size: 14px; font-weight: 500; }
-.settings-avatar__actions { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
-.settings-avatar__actions .btn { padding-inline: 0; color: var(--blue-press); }
-.settings-avatar__actions .btn + .btn { margin-left: 8px; }
-.settings-avatar__help { margin: 5px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; }
-.settings-avatar .account-error { margin-top: 8px; }
-.settings-profile { padding-top: 24px; }
-.settings-profile__form { min-width: 0; width: 100%; max-width: 380px; }
-.settings-profile__form .account-field input { height: 36px; background: var(--fill); border-color: var(--hairline); color: var(--ink); }
-.settings-profile__username { display: flex; min-width: 0; flex-direction: column; gap: 5px; margin-top: 17px; font-size: 14px; }
-.settings-profile__username > span:first-child { color: var(--ink-2); }
-.settings-profile__username > span:last-child { color: var(--ink); overflow-wrap: anywhere; }
-.settings-profile__actions { display: flex; min-height: 32px; align-items: center; gap: 8px; margin-top: 18px; }
+/* 身份主体：大头像 + 可编辑显示名 + handle，照片控件同一区域。 */
+.settings-hero { outline: none; }
+.settings-hero + .settings-group { margin-top: 36px; }
+.settings-hero__frame { display: flex; align-items: center; gap: 20px; }
+.settings-avatar__wrap { position: relative; flex: none; }
+.settings-avatar__pick {
+  position: absolute; right: -2px; bottom: -2px; display: grid;
+  width: 26px; height: 26px; place-items: center;
+  border-radius: 50%; background: var(--paper);
+  box-shadow: 0 0 0 1px var(--hairline-strong); color: var(--ink-2);
+  transition: background var(--t-fast) var(--e-out), color var(--t-fast) var(--e-out);
+}
+.settings-avatar__pick:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+.settings-hero__identity { min-width: 0; flex: 1; }
+.settings-hero__identity input {
+  min-width: 0; width: 100%; max-width: 340px; margin: 0 0 2px -9px; padding: 3px 8px;
+  border: 1px solid transparent; border-radius: var(--r-sm); background: transparent;
+  color: var(--ink); font-size: 19px; font-weight: 650; letter-spacing: -0.02em; line-height: 1.4;
+  transition: border-color var(--t-fast) var(--e-out), background var(--t-fast) var(--e-out);
+}
+.settings-hero__identity input:hover:not(:disabled):not(:focus) { border-color: var(--hairline); }
+.settings-hero__identity input:focus { background: var(--fill); border-color: var(--hairline); }
+.settings-hero__identity input:disabled { opacity: .55; }
+.settings-hero__handle { color: var(--ink-2); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-hero__actions { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.settings-hero__actions .account-error { flex-basis: 100%; margin: 0; }
+.settings-avatar__meta { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 14px; color: var(--ink-2); font-size: 12.5px; line-height: 20px; }
+.settings-avatar__meta > p { margin: 0; }
+.settings-avatar__meta .btn { min-height: 0; padding: 0; color: var(--blue-press); font-size: 12.5px; }
+.settings-avatar__meta .account-error { flex-basis: 100%; margin: 4px 0 0; }
 .settings-saved { margin: 10px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 20px; }
-.settings-profile__actions .settings-saved { margin: 0; }
+.settings-hero__actions .settings-saved, .settings-avatar__meta .settings-saved { margin: 0; }
 .settings-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 0; }
 .settings-row + .settings-row { border-top: 1px solid var(--hairline); }
 .settings-row__text { min-width: 0; }
@@ -97,11 +111,9 @@
   .settings-back { min-height: 44px; margin: -8px 40px 22px -8px; }
   .settings-heading { margin-bottom: 30px; }
   .settings-heading h1 { padding-right: 30px; }
-  .settings-avatar { align-items: flex-start; gap: 16px; }
-  .settings-avatar > .avatar { margin-top: 6px; }
-  .settings-avatar__actions { gap: 4px 12px; }
-  .settings-avatar__actions .btn + .btn { margin-left: 0; }
-  .settings-profile { padding-top: 22px; }
+  .settings-hero__frame { align-items: flex-start; gap: 16px; }
+  .settings-hero__identity input { font-size: 18px; }
+  .settings-avatar__meta { gap: 6px 14px; }
   .account-settings .account-field input { min-height: 44px; font-size: 16px; }
   .account-settings .btn { min-height: 44px; }
   .settings-row { align-items: flex-start; gap: 12px; }

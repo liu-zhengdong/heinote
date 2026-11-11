@@ -1,4 +1,5 @@
-import { useId, useRef, useState } from "react";
+import { Pencil } from "lucide-react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { useSession } from "./AuthGate";
 import { api, ApiError, errorMessage } from "./api";
@@ -7,7 +8,7 @@ const photoTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxPhotoBytes = 5 * 1024 * 1024;
 const isUploadedAvatar = (url: string | null | undefined) => Boolean(url?.startsWith("/api/account/avatars/"));
 
-export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; onBusyChange(busy: boolean): void }) {
+export function AvatarSettings({ disabled, onBusyChange, children }: { disabled: boolean; onBusyChange(busy: boolean): void; children?: ReactNode }) {
   const { user, refresh } = useSession();
   const [pending, setPending] = useState<"" | "upload" | "remove">("");
   const [retryFile, setRetryFile] = useState<File | null>(null);
@@ -73,24 +74,29 @@ export function AvatarSettings({ disabled, onBusyChange }: { disabled: boolean; 
     }
   };
 
-  return <section className="settings-avatar" aria-label="个人照片" data-setting="avatar" tabIndex={-1}>
-    <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={64} />
-    <div className="settings-avatar__content">
-      <span className="settings-avatar__label">个人照片</span>
-      <div className="settings-avatar__actions">
-        <button type="button" className="btn" disabled={busy} onClick={() => input.current?.click()}>{user.avatarUrl ? "更换照片" : "上传照片"}</button>
-        {hasUploadedAvatar ? <button type="button" className="btn" disabled={busy} onClick={() => void remove()}>移除照片</button> : null}
-        {retryFile ? <button type="button" className="btn" disabled={busy} onClick={() => void upload(retryFile)}>重试上传</button> : null}
+  return <section className="settings-hero" aria-label="个人照片" data-setting="avatar" tabIndex={-1}>
+    <div className="settings-hero__frame">
+      <div className="settings-avatar__wrap">
+        <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={72} />
+        <button type="button" className="settings-avatar__pick" title={user.avatarUrl ? "更换照片" : "上传照片"}
+          aria-label={user.avatarUrl ? "更换照片" : "上传照片"} disabled={busy} onClick={() => input.current?.click()}>
+          <Pencil size={12} aria-hidden="true" />
+        </button>
+        <input ref={input} type="file" accept={photoTypes.join(",")} hidden aria-label="选择头像照片" aria-describedby={`${id}-help`} disabled={busy}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) void upload(file);
+          }} />
       </div>
-      <p id={`${id}-help`} className="settings-avatar__help">JPG、PNG 或 WebP，最大 5 MB。选择后自动保存。</p>
-      <input ref={input} type="file" accept={photoTypes.join(",")} hidden aria-label="选择头像照片" aria-describedby={`${id}-help`} disabled={busy}
-        onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
-          event.currentTarget.value = "";
-          if (file) void upload(file);
-        }} />
-      {pending ? <p className="settings-saved" role="status">{pending === "upload" ? "上传中…" : "正在移除…"}</p> : null}
-      {notice ? <p className="settings-saved" role="status">{notice}</p> : null}
+      {children}
+    </div>
+    <div className="settings-avatar__meta">
+      <p id={`${id}-help`}>JPG、PNG 或 WebP，最大 5 MB。选择后自动保存。</p>
+      {hasUploadedAvatar ? <button type="button" className="btn" disabled={busy} onClick={() => void remove()}>移除照片</button> : null}
+      {retryFile ? <button type="button" className="btn" disabled={busy} onClick={() => void upload(retryFile)}>重试上传</button> : null}
+      {pending ? <span className="settings-saved" role="status">{pending === "upload" ? "上传中…" : "正在移除…"}</span> : null}
+      {notice ? <span className="settings-saved" role="status">{notice}</span> : null}
       {error ? <p className="account-error" role="alert">{error}</p> : null}
     </div>
   </section>;
