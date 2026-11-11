@@ -107,13 +107,18 @@
 .ac-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 48px 20px; color: var(--ink-3, rgba(55,53,47,.5)); }
 
 /* ————— inline edit ————— */
-.ac-edit { width: 100%; margin-top: 4px; padding: 12px; border: 1px solid var(--hairline-strong, rgba(55,53,47,.16)); border-radius: 8px; }
-.ac-edit__row { display: flex; align-items: center; gap: 8px; }
+.ac-edit { flex-basis: 100%; margin-top: 6px; }
+.ac-edit__row { display: flex; align-items: center; gap: 10px; }
 .ac-edit__row input {
-  width: 120px; padding: 6px 8px; font: inherit; color: inherit;
+  width: 130px; height: 30px; padding: 0 8px; font: inherit; color: inherit;
   border: 1px solid var(--hairline-strong, rgba(55,53,47,.16)); border-radius: 6px; background: none; outline: none;
 }
 .ac-edit__row input:focus { border-color: var(--blue, #2383e2); }
+.ac-edit__row input::-webkit-outer-spin-button,
+.ac-edit__row input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ac-edit__row input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.ac-edit__gap { flex: 1; }
+.ac-edit__note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-3, rgba(55,53,47,.5)); }
 .ac-edit__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
 /* ————— quota settings ————— */

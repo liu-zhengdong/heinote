@@ -76,7 +76,7 @@ test("UC-16 console: overview, users, teams and quota settings render", async ({
   // Adjust storage limit inline.
   await page.locator(".ac-field", { hasText: "存储限额" }).getByRole("button", { name: "调整", exact: true }).click();
   await page.locator(".ac-edit__row input").fill("2");
-  await page.locator(".ac-edit__actions").getByRole("button", { name: "保存", exact: true }).click();
+  await page.locator(".ac-edit__row").getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.locator(".ac-field", { hasText: "存储限额" })).toContainText("2 GB");
   await expect(page.locator(".ac-field", { hasText: "存储限额" })).toContainText("单独设置");
   await shots("user-limit-custom");

@@ -46,6 +46,10 @@ test("capture admin console screenshots", async () => {
   await page.locator(".ac-item", { hasText: "刘云" }).click();
   await page.locator(".ac-ins__inner").waitFor();
   await page.screenshot({ path: "docs/evidence/admin-console/admin-user@2x.png" });
+  await page.locator(".ac-ins__inner .btn", { hasText: "调整" }).first().click();
+  await page.locator(".ac-edit__row input").waitFor();
+  await page.screenshot({ path: "docs/evidence/admin-console/admin-user-edit@2x.png" });
+  await page.getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("tab", { name: "团队知识库", exact: true }).click();
   await page.locator(".ac-item", { hasText: "工程知识库" }).click();
   await page.locator(".ac-ins__inner").waitFor();

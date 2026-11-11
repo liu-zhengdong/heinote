@@ -250,12 +250,13 @@ function UsersPanel({ selected, onSelect, onBack }: {
   </div>;
 }
 
-function LimitEditor({ edit, setEdit, used, source, unit, onSave }: {
+function LimitEditor({ edit, setEdit, used, source, unit, busy, onSave }: {
   edit: LimitEdit;
   setEdit(edit: LimitEdit): void;
   used: number;
   source: string;
   unit: "GB" | "个";
+  busy: boolean;
   onSave(value: number | null): void;
 }) {
   if (!edit) return null;
@@ -264,18 +265,19 @@ function LimitEditor({ edit, setEdit, used, source, unit, onSave }: {
   const lowered = valid && value < used;
   const restored = source === "custom";
   return <div className="ac-edit">
-    <label className="ac-edit__row">
+    <div className="ac-edit__row">
       <input type="number" min={unit === "GB" ? "1" : "0"} step="1" value={edit.input} autoFocus
+        aria-label={unit === "GB" ? "存储限额 GB" : "团队创建上限"}
         onChange={(event) => setEdit({ ...edit, input: event.target.value })} />
       <span className="ac-muted">{unit === "GB" ? "GB" : "个"}</span>
-    </label>
+      <span className="ac-edit__gap" />
+      {restored ? <button type="button" className="btn" disabled={busy} onClick={() => onSave(null)}>恢复默认</button> : null}
+      <button type="button" className="btn" disabled={busy} onClick={() => setEdit(null)}>取消</button>
+      <button type="button" className="btn btn--primary" disabled={busy || !valid} onClick={() => onSave(value)}>保存</button>
+    </div>
     {edit.input.trim() !== "" && !valid ? <p className="ac-error">{unit === "GB" ? "限额必须是正数。" : "上限必须是非负整数。"}</p> : null}
     {lowered ? <p className="ac-warn"><AlertTriangle size={13} /> 新{unit === "GB" ? "限额" : "上限"}低于当前用量 {unit === "GB" ? formatBytes(used) : `${used} 个`}。已有内容保留，对象进入超额状态。</p> : null}
-    <div className="ac-edit__actions">
-      {restored ? <button type="button" className="btn" onClick={() => onSave(null)}>恢复默认</button> : null}
-      <button type="button" className="btn" onClick={() => setEdit(null)}>取消</button>
-      <button type="button" className="btn btn--primary" disabled={!valid} onClick={() => onSave(value)}>保存</button>
-    </div>
+    {valid ? <p className="ac-edit__note">当前已用 {unit === "GB" ? formatBytes(used) : `${used} 个`}。</p> : null}
   </div>;
 }
 
@@ -314,7 +316,7 @@ function UserInspector({ user, me, busy, edit, setEdit, onBack, onRole, onSave }
           <Meter used={user.storageBytes} limit={user.storageLimit} />
           <OverBadge bytes={user.storageOver} />
           <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(user.storageLimit / 1e8) / 10) })}>调整</button>
-          {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.storageBytes} source={user.storageSource} unit="GB" onSave={(value) => onSave("storage", value)} /> : null}
+          {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.storageBytes} source={user.storageSource} unit="GB" busy={busy} onSave={(value) => onSave("storage", value)} /> : null}
         </dd>
       </div>
       <div className="ac-field">
@@ -322,7 +324,7 @@ function UserInspector({ user, me, busy, edit, setEdit, onBack, onRole, onSave }
         <dd>
           <span className="ac-teams-line">已拥有 {user.teamCount} 个 · 上限 {user.teamLimit} 个{user.teamCount > user.teamLimit ? <span className="ac-over"><AlertTriangle size={12} /> 超额 {user.teamCount - user.teamLimit} 个</span> : null}</span>
           <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "teams", input: String(user.teamLimit) })}>调整</button>
-          {edit?.kind === "teams" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.teamCount} source={user.teamLimitSource} unit="个" onSave={(value) => onSave("teams", value)} /> : null}
+          {edit?.kind === "teams" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.teamCount} source={user.teamLimitSource} unit="个" busy={busy} onSave={(value) => onSave("teams", value)} /> : null}
         </dd>
       </div>
     </dl>
@@ -413,7 +415,7 @@ function TeamsPanel({ selected, onSelect, onBack }: {
               <Meter used={current.storageBytes} limit={current.storageLimit} />
               <OverBadge bytes={current.storageOver} />
               <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(current.storageLimit / 1e8) / 10) })}>调整</button>
-              {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={current.storageBytes} source={current.storageSource} unit="GB" onSave={(value) => void saveLimit(current, value)} /> : null}
+              {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={current.storageBytes} source={current.storageSource} unit="GB" busy={busy} onSave={(value) => void saveLimit(current, value)} /> : null}
             </dd>
           </div>
         </dl>
