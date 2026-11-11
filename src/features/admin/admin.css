@@ -86,9 +86,10 @@
 .ac-head p { margin: 3px 0 0; }
 
 .ac-fields { margin: 0; display: flex; flex-direction: column; }
-.ac-field { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 18px; padding: 14px 0; border-top: 1px solid var(--hairline, rgba(55,53,47,.09)); }
+.ac-field { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 6px 18px; align-items: baseline; padding: 14px 0; border-top: 1px solid var(--hairline, rgba(55,53,47,.09)); }
 .ac-field dt { color: var(--ink-2, rgba(55,53,47,.65)); font-weight: 500; }
-.ac-field dd { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ac-field dd { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.ac-field dd .btn { align-self: baseline; }
 .ac-src { font-weight: 400; font-size: 11px; color: var(--ink-3, rgba(55,53,47,.5)); }
 .ac-teams-line { font-variant-numeric: tabular-nums; }
 
