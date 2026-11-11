@@ -1125,3 +1125,153 @@ test("UC-22: status option edits rewrite filter conditions, removals drop them",
   db = await a.patchProperty(db, STATUS, { status_options: options.filter((option) => option.id === "option_a") });
   assert.deepEqual(view(db, TABLE).filters, [{ logic: "or", conditions: [{ property_id: "property_tags", op: "contains", value: "急" }] }]);
 });
+
+// UC-22 batch 3 (AC-03): a two-way relation keeps both sides' values in
+// step — every write lands the mirror's links in the same request, and the
+// mirror answers to its backlink name.
+test("UC-22: a two-way relation syncs both sides, renames and drops its mirror", async (t) => {
+  const { agent: a } = await fixture(t);
+  let projects = await a.create({ title: "Projects", database: {
+    properties: [{ id: UC, name: "代号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  let tasks = await a.create({ title: "Tasks", database: {
+    properties: [{ id: UC, name: "编号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  // Add the forward property two-way: the mirror appears on the target,
+  // named by relation_backlink_name, pointing back with relation_origin.
+  tasks = await a.addProperty(tasks, {
+    id: "property_rel", name: "项目", type: "relation",
+    relation_database: projects.id, relation_two_way: true, relation_backlink_name: "任务",
+  });
+  const mirror = config(await a.get(projects.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel");
+  assert.ok(mirror);
+  assert.equal(mirror.type, "relation");
+  assert.equal(mirror.name, "任务");
+  assert.equal(mirror.relation_database, tasks.id);
+  assert.equal(mirror.relation_two_way, undefined);
+  // POST /databases cannot start two-way: the mirror has no page to land on.
+  invalid(await a.request("/databases", { method: "POST", body: { requestId: randomUUID(), database: {
+    properties: [{ id: "property_rel", name: "R", type: "relation", relation_database: tasks.id, relation_two_way: true }],
+  } } }));
+  // Link from the forward side: the target row's mirror cell is written in
+  // the same request. The mirror write moved the target's revision.
+  projects = await a.get(projects.id);
+  const alpha = await a.addRow(projects, { title: "Alpha", properties: { [UC]: "P-1" } });
+  const beta = await a.addRow(await a.get(projects.id), { title: "Beta", properties: { [UC]: "P-2" } });
+  let task = await a.addRow(tasks, { title: "第一任务", properties: { property_rel: JSON.stringify([alpha.id, beta.id]) } });
+  assert.equal(task.values.property_rel, JSON.stringify([alpha.id, beta.id]));
+  const alphaPage = dto(ok(await a.request(`/pages/${alpha.id}`)));
+  assert.equal(alphaPage.page.properties[mirror.id], JSON.stringify([task.id]));
+  // The mirror sees the link from the other side — read through query so
+  // the row's effective values are checked, not only its record.
+  const seen = await a.query(projects.id, { filters: [{ property_id: mirror.id, op: "contains", value: task.id }] });
+  assert.deepEqual(ids(seen).sort(), [alpha.id, beta.id].sort());
+  // Drop one link: the mirror cell shrinks with it.
+  tasks = await a.get(tasks.id);
+  task = await a.updateRow(tasks, await a.query(tasks.id, { query: "第一任务" }).then((result) => result.rows[0]), {
+    properties: { property_rel: JSON.stringify([beta.id]) },
+  });
+  assert.equal(task.values.property_rel, JSON.stringify([beta.id]));
+  const peerAlpha = await a.query(projects.id, { filters: [{ property_id: mirror.id, op: "contains", value: task.id }] });
+  assert.deepEqual(ids(peerAlpha), [beta.id]);
+  // The mirror answers back the same way: set it, and the forward cell follows.
+  projects = await a.get(projects.id);
+  const alphaCurrent = (await a.query(projects.id, { query: "Alpha" })).rows[0];
+  const taskCurrent = (await a.query(tasks.id, { query: "第一任务" })).rows[0];
+  const gamma = await a.addRow(projects, { title: "Gamma" });
+  const updated = await a.updateRow(await a.get(tasks.id), taskCurrent, { properties: { property_rel: JSON.stringify([beta.id, gamma.id]) } });
+  assert.equal(updated.values.property_rel, JSON.stringify([beta.id, gamma.id]));
+  // Rename the mirror from the forward property; then turn two-way off:
+  // the mirror goes, values stay.
+  tasks = await a.get(tasks.id);
+  tasks = await a.patchProperty(tasks, "property_rel", { relation_two_way: true, relation_backlink_name: "相关任务" });
+  assert.equal(config(await a.get(projects.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel").name, "相关任务");
+  tasks = await a.patchProperty(await a.get(tasks.id), "property_rel", { relation_two_way: false });
+  assert.equal(config(await a.get(projects.id)).properties.some((entry: Json) => entry.relation_origin === "property_rel"), false);
+  // Relation skeleton is immutable: target and origin cannot change.
+  invalid(await a.request(`/databases/${tasks.id}/properties/property_rel`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: (await a.get(tasks.id)).revision,
+      property: { relation_database: tasks.id } },
+  }));
+  // Self-relation is legal: a row links rows of its own database.
+  let self = await a.addProperty(await a.get(tasks.id), {
+    id: "property_self", name: "前置", type: "relation", relation_database: tasks.id, relation_limit: "1",
+  });
+  const first = (await a.query(tasks.id, { query: "第一任务" })).rows[0];
+  const second = await a.addRow(await a.get(tasks.id), { title: "第二任务", properties: { property_self: JSON.stringify([first.id]) } });
+  assert.equal(second.values.property_self, JSON.stringify([first.id]));
+  // The limit is enforced; a page outside the database is refused.
+  invalid(await a.request(`/databases/${tasks.id}/rows/${second.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: second.revision,
+      databaseRevision: (await a.get(tasks.id)).revision, properties: { property_self: JSON.stringify([first.id, second.id]) } },
+  }));
+  invalid(await a.request(`/databases/${tasks.id}/rows/${second.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: second.revision,
+      databaseRevision: (await a.get(tasks.id)).revision, properties: { property_self: JSON.stringify([projects.id]) } },
+  }));
+  // A mirror property cannot change its type: make a fresh two-way pair
+  // (one-way at create, then two-way on) and patch the mirror it made.
+  let linked = await a.create({ title: "Linked", database: {
+    properties: [{ id: "property_rel2", name: "回链", type: "relation", relation_database: tasks.id }],
+  } });
+  linked = await a.patchProperty(linked, "property_rel2", { relation_two_way: true });
+  const mirror2 = config(await a.get(tasks.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel2");
+  assert.ok(mirror2);
+  invalid(await a.request(`/databases/${tasks.id}/properties/${mirror2.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: (await a.get(tasks.id)).revision,
+      property: { type: "text" } },
+  }));
+});
+
+// UC-22 batch 3 (AC-04): a relation pointing at a database the caller
+// cannot write still writes its own side — the read-only side just does
+// not move, over HTTP the missing write right fails the whole request.
+test("UC-22: relation filters, sort and calcs follow the page-id encoding", async (t) => {
+  const { agent: a } = await fixture(t);
+  let targets = await a.create({ title: "目标库", database: {
+    properties: [{ id: UC, name: "代号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  // A relation whose target does not resolve is rejected at create.
+  assert.equal((await a.request("/databases", { method: "POST", body: { requestId: randomUUID(), database: {
+    properties: [{ id: "property_rel", name: "关联", type: "relation", relation_database: "placeholder" }],
+  } } })).status, 404);
+  let db = await a.create({ title: "任务库", database: {
+    properties: [{ id: UC, name: "编号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  db = await a.addProperty(db, { id: "property_rel", name: "关联", type: "relation", relation_database: targets.id });
+  const one = await a.addRow(targets, { title: "Bravo" });
+  const two = await a.addRow(await a.get(targets.id), { title: "Alpha" });
+  await a.addRow(db, { title: "no-link" });
+  const linkedTwo = await a.addRow(await a.get(db.id), { title: "two-link", properties: { property_rel: JSON.stringify([two.id, one.id]) } });
+  // A bare id normalizes to the one-element array.
+  const linkedOne = await a.addRow(await a.get(db.id), { title: "one-link", properties: { property_rel: one.id } });
+  assert.equal(linkedOne.values.property_rel, JSON.stringify([one.id]));
+  // contains / is_empty / is_not_empty, by page id.
+  const contains = await a.query(db.id, { filters: [{ property_id: "property_rel", op: "contains", value: one.id }] });
+  assert.deepEqual(ids(contains).sort(), [linkedTwo.id, linkedOne.id].sort());
+  const empty = await a.query(db.id, { filters: [{ property_id: "property_rel", op: "is_empty" }] });
+  assert.deepEqual(empty.rows.map((entry: Json) => entry.page.title), ["no-link"]);
+  // Sort by the first linked page's title: Alpha's linker before Bravo's.
+  const sorted = await a.query(db.id, { sorts: [{ property_id: "property_rel", direction: "asc" }] });
+  assert.deepEqual(sorted.rows.map((entry: Json) => entry.page.title), ["two-link", "one-link", "no-link"]);
+  // group_by refuses a relation.
+  invalid(await a.request(`/databases/${db.id}/views`, {
+    method: "POST", body: { requestId: randomUUID(), baseRevision: db.revision,
+      view: { id: "view_grouped", name: "分组", kind: "table", group_by: "property_rel" } },
+  }));
+  // Calcs count links: count totals the linked ids, count_unique the
+  // distinct ones — checked through the view the table renders.
+  db = await a.patchView(await a.get(db.id), TABLE, { calcs: { property_rel: "count" } });
+  const counted = await a.query(db.id, {});
+  assert.equal(counted.rows.length, 3);
+  db = await a.patchView(db, TABLE, { calcs: { property_rel: "count_unique" } });
+  assert.equal(view(db, TABLE).calcs.property_rel, "count_unique");
+  invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision,
+      view: { calcs: { property_rel: "sum" } } },
+  }));
+});

@@ -479,6 +479,10 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       checkRevision(store, db.scope, db.page.id, input.baseRevision);
       const previous = db.config.properties.find((property) => property.id === key);
       if (!previous) fail(404, "属性不存在。", "not_found");
+      // A mirror's type is not its owner's to change — it answers to the
+      // forward property, which may only rename it. Check before the type
+      // change rebuilds the property and loses relation_origin.
+      if (previous.type === "relation" && previous.relation_origin && input.property.type !== undefined) bad("镜像属性的类型不能更改。");
       let config = input.property.type ? changePropertyType(db.config, key, input.property.type, db.rows) : db.config;
       const current = config.properties.find((property) => property.id === key)!;
       const { default_status, ...fields } = input.property;
@@ -486,10 +490,11 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       if (default_status === null) delete property.default_status;
       else if (default_status !== undefined) property.default_status = default_status;
       else if (input.property.status_options && !statusOptions(property).some((option) => option.id === property.default_status)) delete property.default_status;
+      // 单向化时镜像名一并失去意义——名字属于那个将要删掉的镜像。
+      if (property.type === "relation" && !property.relation_origin && property.relation_two_way === false) delete property.relation_backlink_name;
       checkProperty(property);
       // 关联的骨架是不可变的：目标、镜像的配对关系，和一个已建关联的类型。
       // 镜像的属性留在目标库上编辑（改它的名字），这里不能动。
-      if (previous.type === "relation" && property.relation_origin && input.property.type !== undefined) bad("镜像属性的类型不能更改。");
       if (previous.type === "relation" && property.type === "relation" && property.relation_database !== previous.relation_database) bad("关联的目标数据库创建后不可更改。");
       if (property.relation_origin !== undefined && property.relation_origin !== previous.relation_origin) bad("镜像的配对关系创建后不可更改。");
       const peerWrites: Write[] = [];
