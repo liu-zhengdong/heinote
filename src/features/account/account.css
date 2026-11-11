@@ -140,14 +140,57 @@
 .account-row__actions { display: flex; flex: none; align-items: center; gap: 4px; }
 .account-row__icon { flex: none; color: var(--ink-3); }
 .account-row > .account-select { width: auto; max-width: 120px; font-size: 14px; }
-.account-token-form { display: flex; align-items: end; gap: 8px; padding: 12px 0 18px; }
+
+/* A small icon-only button, for copy and row actions. */
+.account-icon-btn {
+  display: inline-grid; width: 26px; height: 26px; flex: none; place-items: center;
+  border-radius: var(--r-sm); color: var(--ink-2);
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out), opacity var(--t-fast) var(--e-out);
+}
+.account-icon-btn:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+
+/* Agent 令牌：一行一个令牌，页脚 + 新建令牌就地展开，行内二次确认。 */
+.account-token-list { list-style: none; margin: 18px 0 0; padding: 0; }
+.account-token { display: flex; min-height: 44px; align-items: center; gap: 10px; margin: 0 -8px; padding: 6px 8px; border-radius: var(--r-sm); }
+.account-token:hover { background: var(--fill-hover); }
+.account-token.is-confirming { background: var(--danger-tint); }
+.account-token__icon { flex: none; color: var(--ink-3); }
+.account-token__name { min-width: 0; color: var(--ink); font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-token__tag { flex: none; }
+.account-token__time { flex: none; margin-left: auto; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.account-token.is-confirming .account-token__time { display: none; }
+.account-token__revoke { opacity: 0; }
+.account-token:hover .account-token__revoke,
+.account-token:focus-within .account-token__revoke { opacity: 1; }
+.account-token__confirm { display: flex; flex: none; align-items: center; gap: 2px; margin-left: auto; }
+.account-token__prompt { padding: 0 4px; color: var(--ink); font-size: 12.5px; }
+.account-token__confirm .btn { min-height: 26px; }
+
+.account-token-new {
+  display: flex; width: calc(100% + 16px); min-height: 40px; align-items: center; gap: 9px;
+  margin: 4px -8px 0; padding: 6px 8px; border-radius: var(--r-sm);
+  color: var(--ink-3); font-size: 14px; text-align: left;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+.account-token-new:hover:not(:disabled) { background: var(--fill-hover); color: var(--ink); }
+.account-token-new > svg { flex: none; }
+
+.account-token-empty { padding: 32px 16px 8px; text-align: center; }
+.account-token-empty p { margin: 0 0 12px; color: var(--ink-3); font-size: 13.5px; }
+
+.account-token-form { display: flex; align-items: end; gap: 8px; padding: 10px; margin: 14px 0 6px; border-radius: var(--r-md); background: var(--fill); }
 .account-token-form__name { flex: 1; }
 .account-token-form > .btn { min-height: 36px; }
-.account-secret { margin: 12px 0 18px; padding: 16px; border-radius: var(--r-md); background: var(--fill); }
-.account-secret > strong { font-size: 14px; font-weight: 550; }
-.account-secret .account-field { margin: 12px 0; }
-.account-secret__value { font-family: var(--terminus-font-code, monospace) !important; font-size: 13px !important; user-select: text; }
-.account-secret .account-row__actions { justify-content: flex-end; }
+
+.account-secret { margin: 12px 0 6px; padding: 14px 16px; border-radius: var(--r-md); background: var(--fill); }
+.account-secret__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.account-secret__head strong { font-size: 14px; font-weight: 550; }
+.account-secret__head .account-muted { margin: 0; font-size: 12px; }
+.account-secret__line { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.account-secret__line .account-icon-btn { flex: none; }
+.account-secret__value { min-width: 0; flex: 1; height: 34px; padding: 6px 10px; border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); font-family: var(--terminus-font-code, monospace) !important; font-size: 12.5px !important; line-height: 1.4; user-select: text; }
+.account-secret__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.account-secret__foot .account-muted { margin: 0; font-size: 12px; }
 
 .public-links { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline); }
 .public-links__head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
@@ -246,8 +289,7 @@
   .account-row--wrap > .account-row__text { flex-basis: 55%; }
   .account-row--wrap > .account-row__actions { margin-left: auto; }
   .account-token-form { flex-wrap: wrap; }
-  .account-token-form__name { flex-basis: calc(100% - 110px); }
-  .account-token-form > .btn { margin-left: auto; }
+  .account-token__revoke { opacity: 1; }
   .share:has(.public-links) { max-height: calc(100dvh - 64px); margin-top: 0; }
   .public-reader__head { padding-inline: 20px; }
   .public-reader__layout--with-nav { display: block; }

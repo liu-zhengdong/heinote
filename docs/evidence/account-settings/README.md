@@ -7,6 +7,7 @@
 - `mobile-navigation-light@2x.png`：390×844 分类页。
 - `mobile-account-long-name-light@2x.png`：手机长显示名编辑。
 - `mobile-token-*.png`：手机权限选择和令牌结果。令牌原文已遮罩。
+- `token-*.png`：C 版令牌页——空态、创建表单、密排列表、行内撤销确认、深色列表。
 - `short-window-token-select-dark@2x.png`：1280×400 的权限列表。
 - `reflow-200-percent-equivalent-dark@2x.png`：720×450 的布局重排检查。
 - `chromium-page-zoom-200-percent.png`：独立 Chromium 浏览器的真实 200% 页面缩放。

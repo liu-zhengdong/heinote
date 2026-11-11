@@ -151,6 +151,8 @@ async function photo(page: Page, testInfo: TestInfo, name: string) {
   await testInfo.attach(name, { path, contentType: "image/png" });
 }
 async function createToken(page: Page, name: string, access: "read" | "write" = "read") {
+  const openForm = !await settings(page).locator('input[name="tokenName"]').count();
+  if (openForm) await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill(name);
   await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
   await page.getByRole("option", { name: access === "write" ? "读写" : "只读", exact: true }).click();
@@ -264,6 +266,7 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await openSettings(page);
   await settings(page).getByLabel("显示名", { exact: true }).fill("尚未保存的名字");
   await category(page, "Agent 令牌").click();
+  await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill("尚未创建的 Agent");
   await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
   await page.getByRole("option", { name: "读写", exact: true }).click();
@@ -290,6 +293,7 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await openSettings(page);
   await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(account.displayName);
   await category(page, "Agent 令牌").click();
+  await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await expect(settings(page).locator('input[name="tokenName"]')).toHaveValue("");
   expect(await tokens(page, app)).toEqual([]);
 });
@@ -498,7 +502,7 @@ test.describe("one-time Agent secrets", () => {
     expect(metadata.every((item) => !Object.hasOwn(item, "token"))).toBe(true);
     const authorization = { Authorization: `Bearer ${secret}` };
     expect((await page.request.get(`${app.url}/api/v1/pages`, { headers: authorization })).status()).toBe(200);
-    await settings(page).getByRole("button", { name: "复制", exact: true }).click();
+    await settings(page).getByRole("button", { name: "复制令牌", exact: true }).click();
     await expect(settings(page).getByRole("status")).toContainText("已复制令牌");
     expect(await page.evaluate(async (value) => await navigator.clipboard.readText() === value, secret)).toBe(true);
     expect(await page.evaluate((value) => [localStorage, sessionStorage].every((storage) => Object.values(storage).every((item) => !String(item).includes(value))), secret)).toBe(true);
@@ -553,6 +557,7 @@ test.describe("one-time Agent secrets", () => {
       await route.abort("connectionreset");
     });
     const name = "响应丢失的 Agent";
+    await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
     await settings(page).locator('input[name="tokenName"]').fill(name);
     await settings(page).getByRole("button", { name: "创建", exact: true }).click();
     await expect.poll(() => metadataReads).toBeGreaterThan(0);
@@ -590,6 +595,7 @@ test("AC-09: vertical tab keys and Select Escape preserve the parent and restore
   await page.keyboard.press("ArrowUp");
   await expect(category(page, "账号管理")).toBeFocused();
   await category(page, "Agent 令牌").click();
+  await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   const field = settings(page).getByRole("combobox", { name: "权限", exact: true });
   await field.click();
   await expect(page.getByRole("listbox", { name: "权限", exact: true })).toBeVisible();
@@ -652,6 +658,7 @@ test("AC-11: mobile opens navigation first and returns without losing long-name 
   expect((await sessionUser(page, app)).displayName).toBe(longName);
   await settings(page).getByRole("button", { name: "返回设置", exact: true }).click();
   await category(page, "Agent 令牌").click();
+  await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill("很长的 Agent 名称".repeat(8));
   await noOverflow(page);
   await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
@@ -700,6 +707,7 @@ test("AC-11: capture 2x light/dark desktop, short-window, and 200 percent layout
   await noOverflow(page);
   await expect(settings(page).getByRole("button", { name: "关闭设置", exact: true })).toBeInViewport();
   await expect(settings(page).getByRole("button", { name: "退出登录", exact: true })).toBeInViewport();
+  await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
   await expect(page.getByRole("listbox", { name: "权限", exact: true })).toBeInViewport({ ratio: 1 });
   await photo(page, testInfo, "short-window-token-select-dark");
