@@ -12,7 +12,7 @@ import type { ShowInPlace } from "./composite";
 import type { EditorTransaction } from "./editor-commands";
 import type { FormatState } from "./FormatToolbar";
 import type { MentionTrigger, TypingResume } from "./inline-markdown";
-import type { Rendered } from "./layout";
+import type { Rendered } from "../../core/block-layout";
 import type { MentionItem } from "./mentions";
 import type { BlockTextRange, PendingTextSelection } from "./selection";
 import type { Command } from "./SlashMenu";

@@ -69,12 +69,17 @@
 .settings-hero__actions .settings-saved, .settings-avatar__meta .settings-saved { margin: 0; }
 .settings-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 24px; padding: 20px 0; }
 .settings-row + .settings-row { border-top: 1px solid var(--hairline); }
-.settings-row__text { min-width: 0; }
+.settings-row__icon { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border-radius: 6px; background: var(--blue-tint); color: var(--blue); }
+.settings-row__text { min-width: 0; flex: 1; }
 .settings-row__text label { font-size: 14px; font-weight: 500; }
 .settings-row__text p { margin: 5px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; }
+.settings-row__action { flex: none; color: var(--blue); font-size: 14px; }
+.settings-row__action.btn { min-height: 0; padding: 0; }
+.settings-row__action:hover:not(:disabled) { color: var(--blue-press); }
+.settings-row__hint { flex: none; color: var(--ink-3); font-size: 12.5px; }
 .settings-row > [role="combobox"] { width: 160px; flex: none; }
 .account-settings .btn { min-height: 32px; }
-.account-settings .account-token-form { flex-wrap: wrap; padding-top: 20px; }
+.account-settings .account-token-form { flex-wrap: wrap; }
 .account-settings .account-token-form > .account-field:nth-child(2) { width: 106px; flex: none; }
 .account-settings .account-row { padding: 16px 0; }
 .account-settings .account-row__text small { font-size: 12.5px; }
@@ -122,6 +127,8 @@
   .account-settings .account-token-form__name { flex-basis: 100%; }
   .account-settings .account-token-form > .account-field:nth-child(2) { flex: 1; }
   .account-settings .account-token-form > .btn { min-width: 76px; }
+  .account-token__time { display: none; }
+  .account-token__revoke { opacity: 1; }
   .account-settings .account-row { flex-wrap: wrap; }
   .account-settings .account-row > .account-select { min-height: 44px; }
   .settings-confirm { padding: 22px; }

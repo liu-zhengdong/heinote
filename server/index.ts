@@ -17,6 +17,7 @@ import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
+import { writeExport } from "./export.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -302,6 +303,17 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/files/:scope", (req, res) => { const { scope, path } = fileInput(req); sendFile(res, scope, path); });
   const tokenDto = (row: Row) => ({ id: row.id, name: row.name, access: row.access, createdAt: row.created_at, lastUsedAt: row.last_used_at });
+  app.get("/api/account/export", async (req, res) => {
+    const who = actor(req);
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", `attachment; filename="notes-export-${new Date().toISOString().slice(0, 10)}.zip"`);
+    try {
+      await writeExport(res, store, who);
+      res.end();
+    } catch (error) {
+      res.destroy(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
   app.get("/api/tokens", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM tokens WHERE user_id=? ORDER BY created_at", who.user.id).map(tokenDto)); });
   app.post("/api/tokens", (req, res) => {
     const who = actor(req); const input = parse(z.object({ name: z.string().trim().min(1).max(100), access: z.enum(["read", "write"]) }), req.body);

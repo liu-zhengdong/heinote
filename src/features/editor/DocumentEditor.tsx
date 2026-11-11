@@ -105,7 +105,7 @@ import { embedFromUrl, normalizeEmbed } from "../../core/embeds";
 import { readEmbedDetails } from "./embed-details";
 import { FormatToolbar, type FormatState } from "./FormatToolbar";
 import { TitleField } from "./TitleField";
-import { layout, type Item, type Rendered } from "./layout";
+import { layout, type Item, type Rendered } from "../../core/block-layout";
 import { PageFrame } from "./PageFrame";
 import { KnowledgeBaseHome } from "../knowledge/KnowledgeBaseHome";
 import { PageMenu, PageNameEditor } from "./PageMenu";

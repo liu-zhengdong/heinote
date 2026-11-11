@@ -40,14 +40,9 @@ export function mentionDescriber(
 }
 
 /** How mentions read once they leave Notes — copied as HTML or Markdown:
- *  a page as its name, a date written out. */
-export function readableDescriber(titleOf: (pageId: string) => string): DescribeMention {
-  return (mention) => ({
-    label: mention.kind === "page" ? titleOf(mention.page_id) || "Untitled"
-      : mention.kind === "image" ? mention.file.name
-        : dateLabel(mention.date),
-  });
-}
+ *  a page as its name, a date written out. (core/export-markdown.ts; the
+ *  export writes them the same way.) */
+export { readableDescriber } from "../../core/export-markdown";
 
 export type MentionItem =
   | { key: string; kind: "page"; page: NotePage; name: string; context: string }

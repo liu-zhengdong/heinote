@@ -1,13 +1,9 @@
 import { BLOCK_ORDER_STEP, createBlock } from "../../core/block-tree";
-import { normalizeEmbed } from "../../core/embeds";
-import { type DescribeMention, inlinePlainText, inlineReadable } from "../../core/inline-content";
-import { isMarkdownTableStart, markdownTableLines, tableFromCells, tableGrid, tableToMarkdown } from "../../core/simple-table";
-import type { Block, BlockKind, BlockTree, InlineContent, InlineMarks, SimpleTable } from "../../core/types";
+import { isMarkdownTableStart, markdownTableLines, tableFromCells } from "../../core/simple-table";
+import type { Block, BlockKind, BlockTree, InlineContent, SimpleTable } from "../../core/types";
 import { blockShortcut } from "./block-registry";
 import { codeLanguage } from "./code-highlight";
 import { markdownInlineToContent } from "./inline-markdown";
-import { layout } from "./layout";
-import { readableDescriber } from "./mentions";
 
 interface MarkdownDraft {
   kind: BlockKind;
@@ -16,39 +12,6 @@ interface MarkdownDraft {
   language?: string;
   table?: SimpleTable;
   depth: number;
-}
-
-function wrapMarkdown(value: string, marks?: InlineMarks): string {
-  if (!marks) return value;
-  let result = value;
-  if (marks.code) result = `\`${result}\``;
-  if (marks.bold) result = `**${result}**`;
-  if (marks.italic) result = `*${result}*`;
-  if (marks.strike) result = `~~${result}~~`;
-  if (marks.link) result = `[${result}](${marks.link})`;
-  return result;
-}
-
-/** A mention's run is one invisible character: in Markdown it is written out
- *  as `describe` reads it, one with the words beside it that share its marks. */
-export function inlineContentToMarkdown(content: InlineContent, describe: DescribeMention): string {
-  // The bytes stay in Notes; outside it a picture is Markdown's, by its name.
-  const parts: string[] = [];
-  let words: InlineContent = [];
-  const flush = () => {
-    if (words.length) parts.push(inlineReadable(words, describe).map((run) => wrapMarkdown(run.text, run.marks)).join(""));
-    words = [];
-  };
-  for (const run of content) {
-    if (run.mention?.kind !== "image") {
-      words.push(run);
-      continue;
-    }
-    flush();
-    parts.push(`![${run.mention.file.name}](${encodeURI(run.mention.file.name)})`);
-  }
-  flush();
-  return parts.join("");
 }
 
 /** What a line typed so far turns into when it is closed — by a space, or,
@@ -166,47 +129,7 @@ export function markdownToBlockTree(value: string, idFactory: () => string): Blo
   return { by_id: byId };
 }
 
-/** One line as Markdown; `number`, a numbered line's place in its list. */
-function markdownLine(block: Block, number: number, describe: DescribeMention): string {
-  const text = inlineContentToMarkdown(block.content, describe);
-  switch (block.kind) {
-    case "heading1": return `# ${text}`;
-    case "heading2": return `## ${text}`;
-    case "heading3": return `### ${text}`;
-    case "todo": return `- [${block.checked ? "x" : " "}] ${text}`;
-    case "bullet": return `- ${text}`;
-    case "numbered": return `${number}. ${text}`;
-    // Every line of a quote is quoted.
-    case "quote": return text.split("\n").map((line) => `> ${line}`).join("\n");
-    case "divider": return "---";
-    case "table": return tableToMarkdown(tableGrid(block.table), (content) => inlineContentToMarkdown(content, describe));
-    case "code": return `\`\`\`${block.language ?? ""}\n${inlinePlainText(block.content)}\n\`\`\``;
-    // The bytes stay in Notes; outside it a file is its name.
-    case "file": return `[${block.file?.name || "file"}](${encodeURI(block.file?.name ?? "")})${text ? ` ${text}` : ""}`;
-    // Outside Notes a card is its link.
-    case "embed": return normalizeEmbed(block.embed)?.url ?? "";
-    default: return text;
-  }
-}
-
-/** What a page block — or a mention — reads as outside Notes: the page's
- *  name; a date mention, the date written out. */
-export function readableTree(tree: BlockTree, titleOf: (pageId: string) => string): BlockTree {
-  const describe = readableDescriber(titleOf);
-  const byId: Record<string, Block> = {};
-  for (const block of Object.values(tree.by_id)) {
-    byId[block.id] = { ...block, content: inlineReadable(block.content, describe) };
-  }
-  return { by_id: byId };
-}
-
-/** The tree as Markdown, as it reads outside Notes (`readableTree`): a page
- *  by its name, its rows too, and a date written out — line by line as the
- *  editor draws them (`layout`), a block's paragraphs at the level it sits
- *  and a list numbered as it shows. */
-export function blockTreeToMarkdown(source: BlockTree, titleOf: (pageId: string) => string): string {
-  const describe = readableDescriber(titleOf);
-  return layout(readableTree(source, titleOf)).rows
-    .map(({ block, depth, index }) => `${"  ".repeat(depth)}${markdownLine(block, index, describe)}`)
-    .join("\n");
-}
+/** A tree's Markdown and HTML-clipped forms live in core/export-markdown.ts
+ *  (the export writes them on the server); kept here for the window's
+ *  imports. */
+export { blockTreeToMarkdown, inlineContentToMarkdown, readableTree } from "../../core/export-markdown";

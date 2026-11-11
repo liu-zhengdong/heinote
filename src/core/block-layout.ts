@@ -1,5 +1,5 @@
-import { orderedBlocks } from "../../core/block-tree";
-import type { Block, BlockTree } from "../../core/types";
+import { orderedBlocks } from "./block-tree";
+import type { Block, BlockTree } from "./types";
 
 export interface Rendered {
   /** A paragraph. (A block folded away is not drawn here at all: it is a
