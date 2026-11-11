@@ -57,6 +57,7 @@ export const APP_SHIM = `(() => {
       for (const [id, waiter] of pending) { pending.delete(id); waiter.reject(Object.assign(new Error("小应用已重新启动。"), { code: "restarted" })); }
       window.notes.databases = (msg.databases || []).map(bind);
       window.notes.preview = msg.preview === true;
+      window.notes.public = msg.public === true;
       window.dispatchEvent(new Event("notes:ready"));
       return;
     }
@@ -69,6 +70,9 @@ export const APP_SHIM = `(() => {
   window.notes = {
     databases: [],
     preview: false,
+    /* Set by the public reader's init: no databases follow, and calls
+     *  made against the empty list stay errors — the app must degrade. */
+    public: false,
     ready: () => new Promise((resolve) => init ? resolve(init) : window.addEventListener("notes:ready", () => resolve(init), { once: true })),
   };
 })();`;
@@ -91,7 +95,7 @@ export interface BoundDb extends AppBinding {
  *  defaulting to the first one when the app binds exactly one. `requestId`
  *  makes a write idempotent; reads never need it. */
 export type AppMsg =
-  | { t: "init"; instance: string; databases: BoundDb[]; preview?: boolean }
+  | { t: "init"; instance: string; databases: BoundDb[]; preview?: boolean; public?: boolean }
   | { t: "call"; instance: string; id: string; requestId?: string; op: string; args: Record<string, unknown> }
   | { t: "result"; instance: string; id: string; ok: true; data: unknown }
   | { t: "result"; instance: string; id: string; ok: false; code: string; message: string };

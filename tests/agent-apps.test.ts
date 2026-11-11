@@ -230,11 +230,14 @@ test("DELETE removes a row through the Agent boundary", async (t) => {
   assert.ok(!query.rows.some((row: Json) => row.id === added.id));
 });
 
-test("a published share strips app source entirely", async (t) => {
+test("a published share carries the enabled source but not the draft or bindings", async (t) => {
   const { agent, owner } = await fixture(t);
   const parent = await agent.createDocument({ title: "Shared" });
+  const db = await agent.createDatabase({ parentId: parent.id });
   const app = await agent.createApp({ parentId: parent.id });
-  const drafted = await agent.patchApp(app.id, app.revision, { draft: HTML });
+  const drafted = await agent.patchApp(app.id, app.revision, {
+    draft: HTML, databases: [{ id: db.id, read: true, write: true }],
+  });
   await agent.enable(app.id, drafted.revision);
   const share = ok(await owner.request("/api/shares", { method: "POST", body: { pageId: parent.id } }), 201);
   const shareToken = String(share.url).replace("/s/", "");
@@ -242,7 +245,9 @@ test("a published share strips app source entirely", async (t) => {
   const appEntry = published.pages.find((page: Json) => page.id === app.id);
   assert.ok(appEntry, "the app page is still listed by name");
   assert.equal(appEntry.kind, "app");
-  assert.equal(appEntry.app, undefined, "source and bindings never leave over the public reader");
+  assert.equal(appEntry.app?.enabled, HTML, "the enabled source runs for readers");
+  assert.equal(appEntry.app?.draft, undefined, "the draft stays private");
+  assert.equal(appEntry.app?.databases, undefined, "bindings never leave over the public reader");
 });
 
 test("read token can read an app but cannot patch it", async (t) => {

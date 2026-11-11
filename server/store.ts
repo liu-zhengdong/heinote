@@ -358,7 +358,7 @@ export class Store {
       if (library) this.validatePlane(undefined, scope);
     });
   }
-  published(token: string): { title: string; pages: Array<Omit<NotePage, "app">>; scope: string } {
+  published(token: string): { title: string; pages: Array<Omit<NotePage, "app"> & { app?: { enabled?: string } }>; scope: string } {
     const share = this.one("SELECT * FROM shares WHERE token=?", token);
     if (!share || this.knowledgeBases.get(String(share.scope))) fail(404, "分享链接已失效。", "not_found");
     const owner = this.userById(String(share.user_id));
@@ -367,16 +367,17 @@ export class Store {
     try { actual = this.page({ user: owner }, String(share.page_id)); } catch { fail(404, "分享链接已失效。"); }
     if (actual.scope !== share.scope || actual.page.archived) fail(404, "分享链接已失效。");
     const all = this.state({ user: owner }).pages;
-    const pages: Array<Omit<NotePage, "app">> = [];
+    const pages: Array<Omit<NotePage, "app"> & { app?: { enabled?: string } }> = [];
     const queue = [actual.page]; const seen = new Set<string>();
     while (queue.length) {
       const page = queue.shift()!;
       if (seen.has(page.id) || page.archived) continue;
       seen.add(page.id);
-      /* An app's source never leaves over the public reader: the page keeps
-       *  its name and kind, so the share can show it, but `app` is stripped
-       *  before the record goes out. */
-      const { app: _app, ...publicPage } = page as NotePage;
+      /* A shared app publishes its enabled source — running it is what a
+       *  share is for — but the draft and the database bindings stay:
+       *  the reader runs without a bridge, so no database is touched. */
+      const { app: pageApp, ...rest } = page as NotePage;
+      const publicPage = { ...rest, ...(pageApp?.enabled ? { app: { enabled: pageApp.enabled } } : {}) };
       pages.push(publicPage);
       for (const child of Object.values(all)) if (child.parent_id === page.id && this.page({ user: owner }, child.id).scope === actual.scope) queue.push(child);
     }

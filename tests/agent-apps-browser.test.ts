@@ -144,6 +144,17 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   });
   expect(storage).toMatch(/localStorage:(blocked|undefined)/);
 
+  // A public share carries the enabled source: a guest runs it anonymous
+  //  — same sandbox, no bridge, databases empty.
+  const share = await page.request.post(`${server.url}/api/shares`, { data: { pageId: app.body.id } });
+  expect(share.status()).toBe(201);
+  const shareUrl = (await share.json()).url as string;
+  await page.goto(new URL(shareUrl, server.url).toString());
+  const guestFrame = page.frameLocator("iframe.app-surface__frame");
+  await expect(guestFrame.locator("#rows")).toContainText("databases:0");
+  await expect(guestFrame.locator("#load")).toBeVisible();
+  await page.screenshot({ path: join(evidence, "app-shared.png"), fullPage: false });
+
   expect(errors).toEqual([]);
 });
 

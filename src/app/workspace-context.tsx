@@ -1123,3 +1123,9 @@ export function useWorkspace(): WorkspaceContextValue {
   if (!context) throw new Error("useWorkspace must be used inside WorkspaceProvider");
   return context;
 }
+
+/* The public reader renders outside any workspace — hooks that only need
+ *  preferences fall back to null there. */
+export function useWorkspaceOptional(): WorkspaceContextValue | null {
+  return useContext(WorkspaceContext);
+}

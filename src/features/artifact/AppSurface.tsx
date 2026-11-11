@@ -3,8 +3,9 @@ import { AppWindow, ChevronsDownUp, ChevronsUpDown, Database } from "lucide-reac
 import type { NotePage } from "../../core/types";
 import { appDocument } from "../../core/artifact";
 import { AppBridge } from "./bridge";
+import type { AppMsg } from "../../core/artifact";
 import { usePages } from "../../app/workspace-store";
-import { useWorkspace } from "../../app/workspace-context";
+import { useWorkspaceOptional } from "../../app/workspace-context";
 import "./artifact.css";
 
 /** The host bar under a running app, and the row drawn when it is not.
@@ -24,6 +25,10 @@ interface Props {
   previewSource?: string | null;
   /** Fill the stage instead of a fixed height — the standalone page. */
   grow?: boolean;
+  /** A public-reader run: same sandbox, but no bridge — the app's
+   *  `window.notes.databases` stays empty and its data calls fail with
+   *  `not_ready`. The member paths keep the bridge. */
+  anonymous?: boolean;
 }
 
 const DB_SCOPE_NOTE = "数据源与应用在同一权限范围内运行。";
@@ -32,25 +37,26 @@ const DB_SCOPE_NOTE = "数据源与应用在同一权限范围内运行。";
  *  same rule ui-context applies to the root attribute. The iframe document
  *  rebuilds on every change, so the app inside re-themes with the shell. */
 function useResolvedTheme(): "light" | "dark" {
-  const { preferences } = useWorkspace();
+  const workspace = useWorkspaceOptional();
+  const choice = workspace?.preferences.theme ?? "system";
   const pick = (): "light" | "dark" =>
-    preferences.theme === "light" || preferences.theme === "dark"
-      ? preferences.theme
+    choice === "light" || choice === "dark"
+      ? choice
       : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   const [theme, setTheme] = useState<"light" | "dark">(pick);
   useEffect(() => {
     setTheme(pick());
-    if (preferences.theme !== "system") return;
+    if (choice !== "system") return;
     const query = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => setTheme(query.matches ? "dark" : "light");
     query.addEventListener("change", apply);
     return () => query.removeEventListener("change", apply);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preferences.theme]);
+  }, [choice]);
   return theme;
 }
 
-export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false }: Props) {
+export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false, anonymous = false }: Props) {
   const pages = usePages();
   const enabled = page.app?.enabled ?? "";
   const source = previewSource ?? enabled;
@@ -81,8 +87,14 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
     setRunning(false);
   };
 
-  const onLoad = (frame: HTMLIFrameElement | null) => {
-    if (!frame) return;
+  /* A public run still needs the shim's init so `notes.ready()` resolves —
+   *  posted on the frame's load, when its window exists. */
+  const onFrameLoad = (frame: HTMLIFrameElement) => {
+    frame.contentWindow?.postMessage({ t: "init", instance: `public-${runKey}`, databases: [], public: true } satisfies AppMsg, "*");
+  };
+
+  const bindFrame = (frame: HTMLIFrameElement | null) => {
+    if (!frame || anonymous) return;
     /* StrictMode mounts the frame twice: the old bridge must go before its
      *  late init can overwrite the shim's instance token. */
     if (bridgeRef.current) {
@@ -106,11 +118,12 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
       {running && source ? (
         <iframe
           key={runKey}
-          ref={onLoad}
+          ref={bindFrame}
           className="app-surface__frame"
           sandbox="allow-scripts"
           srcDoc={doc}
           title={page.title || "小应用"}
+          {...(anonymous ? { onLoad: (event) => onFrameLoad(event.currentTarget) } : {})}
         />
       ) : (
         <div className="app-surface__empty">

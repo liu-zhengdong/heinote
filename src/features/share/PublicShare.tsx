@@ -4,6 +4,7 @@ import { orderedBlocks, pageFirstLine } from "../../core/block-tree";
 import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
 import { api, ApiError, errorMessage } from "../account/api";
+import { AppSurface } from "../artifact/AppSurface";
 
 interface PublicDocument { title: string; pages: NotePage[] }
 interface ReaderContext { token: string; pages: Map<string, NotePage> }
@@ -201,7 +202,9 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
             {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><PublicPageIcon page={active} token={token} size={72} /></div> : null}
             <h1>{active.title_content?.length ? <Inline content={active.title_content} context={context} /> : titleOf(active)}</h1>
             {active.kind === "app" ? (
-              <p className="account-muted">小应用仅在登录后可运行。</p>
+              active.app?.enabled
+                ? <AppSurface page={active} anonymous />
+                : <p className="account-muted">小应用尚未启用。</p>
             ) : (
               <BlockChildren tree={active.block_tree} context={context} />
             )}
