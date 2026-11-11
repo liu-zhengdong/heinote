@@ -7091,6 +7091,359 @@ button.db__th:hover,
   padding-top: 4px;
 }
 
+/* A view's filters — Notion's filter panel: a line per condition, the
+   lead word Where or And before its property, its operator and its value,
+   × to take it away. One group sits among them with a border and its own
+   And/Or; everything reads as one AND. */
+.filter-panel {
+  display: flex;
+  width: min(560px, calc(100vw - 16px));
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.filter-panel__title {
+  padding: 2px 9px 5px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.filter-panel__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+.cond {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.cond__lead {
+  width: 40px;
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.filter-panel__field { min-width: 0; flex: 0 1 auto; }
+
+.filter-panel__field--property { flex: 1 1 0; }
+
+.filter-panel__field--op { width: 118px; flex: none; }
+
+.filter-panel__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.filter-panel__input {
+  width: 120px;
+  height: 28px;
+  flex: none;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.filter-panel__input:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cond__remove {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cond__remove:hover {
+  color: var(--danger);
+}
+
+/* The group is the filter's one box: its logic at its head, its conditions
+   inside, indented where it stands among the plain ones. */
+.group-box {
+  padding: 4px 6px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  margin: 2px 0 2px 40px;
+}
+
+.group-box__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.filter-panel__field--logic { flex: none; }
+
+.filter-panel__add-in {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  margin: 2px 0 0 42px;
+  color: var(--ink-3);
+  font-size: 12px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.filter-panel__add-in:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.filter-panel .menu {
+  padding-top: 4px;
+}
+
+/* The columns a view draws: a line per property, its mark and name and the
+   eye that takes it out; the name stays — a table's spine — tagged Title. */
+.cols-panel {
+  display: flex;
+  width: 270px;
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.cols-panel__search {
+  height: 28px;
+  flex: none;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  margin: 2px 7px 5px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.cols-panel__search:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cols-panel__rows {
+  display: flex;
+  max-height: 300px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 5px;
+  overflow-y: auto;
+}
+
+.cols-panel__row {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+}
+
+.cols-panel__row:hover {
+  background: var(--fill-hover);
+}
+
+.cols-panel__mark {
+  display: grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.cols-panel__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cols-panel__eye {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cols-panel__row.is-hidden .cols-panel__name { color: var(--ink-3); }
+
+.cols-panel__row.is-hidden .cols-panel__eye { color: var(--ink-4); }
+
+.cols-panel__tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+
+.cols-panel__section {
+  padding: 7px 6px 3px;
+  color: var(--ink-4);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cols-panel__none {
+  padding: 8px 6px;
+  color: var(--ink-4);
+  font-size: 12.5px;
+}
+
+.cols-panel .menu {
+  padding-top: 4px;
+}
+
+/* A group is a header over its rows: the chevron turns as it folds, the
+   value's pill or name, how many rows are in it, and its New — quiet until
+   the pointer is near. Folded rows are gone from the grid entirely. */
+.grp-row td {
+  height: 34px;
+  vertical-align: middle;
+}
+
+.grp-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.grp-h__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+}
+
+.grp-h__chev {
+  flex: none;
+  color: var(--ink-3);
+  transform: rotate(90deg);
+  transition: transform var(--t-fast) var(--e-out);
+}
+
+.grp-h__chev.is-closed {
+  transform: rotate(0deg);
+}
+
+.grp-h__label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grp-h__none { color: var(--ink-3); }
+
+.grp-h__count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.grp-h__add {
+  display: inline-flex;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out),
+    opacity var(--t-fast) var(--e-out);
+}
+
+.grp-h__add:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.grp-h:hover .grp-h__add,
+.grp-h__add:focus-visible { opacity: 1; }
+
+/* A column counting under a group's rows puts its subtotal in the header
+   row, as quiet as the group's count. */
+.grp-sum {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__table tr.is-folded { display: none; }
+
+.db-list__group {
+  padding: 0 8px;
+}
+
+/* The footer's cells stick to the table's bottom as the rows scroll past:
+   each column's calculation, its answer in a steady face. */
+.db__table tfoot td {
+  position: sticky;
+  height: 32px;
+  bottom: 0;
+  border-bottom: 0;
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hairline-strong);
+  color: var(--ink-2);
+  font-size: 12px;
+  z-index: 1;
+}
+
+.db__calc {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.db__calc-fn {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.db__calc-val {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__calc-val.is-empty,
+.db__calc--none { color: var(--ink-4); }
+
 /* One option's settings, in the panel's place: the way back, its name,
    default, delete and colour — one scroller, the panel's own. */
 .option-menu__back {

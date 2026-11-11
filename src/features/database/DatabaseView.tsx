@@ -9,10 +9,12 @@ import {
   ChevronRight,
   Columns3,
   Copy,
+  Eye,
   EyeOff,
   FileText,
   Check,
   Filter,
+  Layers,
   LayoutGrid,
   LayoutList,
   List,
@@ -30,6 +32,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  Fragment,
   useDeferredValue,
   useEffect,
   useLayoutEffect,
@@ -44,6 +47,7 @@ import {
 import { Avatar } from "../../components/Avatar";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
+import { Select } from "../../components/Select";
 import { Tooltip } from "../../components/Tooltip";
 import { imeComposing } from "../../core/keyboard";
 import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
@@ -59,6 +63,7 @@ import type {
   InlineContent,
   NotePage,
   PropertyType,
+  ViewFilter,
   ViewSort,
 } from "../../core/types";
 import { useWorkspace, type PagePatch } from "../../app/workspace-context";
@@ -67,7 +72,11 @@ import {
   activeView,
   addSelectOption,
   addStatusOption,
+  boardGroupableProperties,
   boardProperty,
+  calcKinds,
+  CALC_LABELS,
+  calcValue,
   calendarProperty,
   cardPreview,
   cardProperties,
@@ -83,7 +92,11 @@ import {
   dateRange,
   duplicateProperty,
   duplicateView,
+  filterable as columnFilterable,
+  filterConditions,
+  filterCount,
   groupableProperties,
+  groupProperty,
   insertProperty,
   localeWeekStart,
   monthGrid,
@@ -111,20 +124,29 @@ import {
   sortByColumn,
   TITLE_COLUMN,
   titleName,
+  toMultiValue,
   toggleCardProperty,
+  viewFilters,
+  viewGroups,
   viewKindLabel,
   viewRows,
   viewSorts,
+  visibleProperties,
+  withCalc,
   withColumnWidth,
   withColumnWrap,
+  withFilters,
   withSorts,
   withView,
   type RowWrite,
+  type ViewGroup,
 } from "./database-model";
 import { formatDay, formatMoment, OptionTag, PropertyEditor, PropertyIcon, PropertyLink, TitleIcon, TypeIcon } from "./properties";
 import { PropertyMenu } from "./PropertyMenu";
 import type { SelectEditing, StatusEditing } from "./StatusOptions";
 import { SortPanel, type SortColumn } from "./SortPanel";
+import { FilterPanel, type FilterColumn } from "./FilterPanel";
+import { ColumnsPanel } from "./ColumnsPanel";
 import * as columnIcons from "./property-icons";
 import { provideIcons } from "./property-icon-store";
 import { CardImage, ImageStrip, useHomedImages } from "./ImageProperty";
@@ -480,6 +502,50 @@ function ColumnResize({
    edge. Minimal, the table is its columns and no wider, as a Markdown table
    is; otherwise it fills the database's width at least, and "Add property"
    takes whatever is left over. */
+/** A footer's one cell: the calculation the column runs, and its answer —
+ *  a dash while there is nothing to count. */
+function CalcCell({
+  column,
+  property,
+  view,
+  rows,
+  readOnly,
+  onCalc,
+}: {
+  column: string;
+  property?: DatabaseProperty;
+  view: View;
+  rows: readonly NotePage[];
+  readOnly: boolean;
+  onCalc(column: string, kind: string | null): void;
+}) {
+  const kinds = calcKinds(column, property);
+  const kind = view.calcs?.[column] ?? "";
+  const options = [
+    { value: "", label: "None" },
+    ...kinds.map((item) => ({ value: item, label: CALC_LABELS[item] ?? item })),
+    // A stored name this type no longer offers stays named, not silent.
+    ...(kind && !kinds.includes(kind) ? [{ value: kind, label: CALC_LABELS[kind] ?? kind }] : []),
+  ];
+  if (!kinds.length) return <span className="db__calc db__calc--none">—</span>;
+  const answer = kind ? calcValue(rows, column, property, kind) : null;
+  return (
+    <span className="db__calc">
+      <Select
+        size="compact"
+        variant="ghost"
+        className="db__calc-fn"
+        aria-label={`Calculation for ${property ? propertyName(property) : "the name column"}`}
+        disabled={readOnly || !kinds.length}
+        value={kind}
+        onValueChange={(next) => onCalc(column, next || null)}
+        options={options}
+      />
+      {kind ? <span className={`db__calc-val ${answer === null ? "is-empty" : ""}`}>{answer ?? "—"}</span> : null}
+    </span>
+  );
+}
+
 function TableLayout({
   rows,
   properties,
@@ -502,8 +568,11 @@ function TableLayout({
   menuColumn,
   onColumnMenu,
   onResize,
+  groups,
+  groupedBy,
+  onCalc,
 }: LayoutProps & RowRenaming & {
-  onAddInline(): void;
+  onAddInline(values?: Record<string, string>): void;
   onSetProperty(row: NotePage, propertyId: string, value: string): void;
   onAddProperty(anchor: AnchorRect): void;
   minimal: boolean;
@@ -517,6 +586,11 @@ function TableLayout({
   onColumnMenu(column: string, anchor: AnchorRect): void;
   /** A column dragged to a new width, when the drag ends. */
   onResize(column: string, width: number): void;
+  /** The row groups and the property they group by — none, one open group. */
+  groups: readonly ViewGroup[];
+  groupedBy: DatabaseProperty | undefined;
+  /** A column's footer calculation chosen — null clears it. */
+  onCalc(column: string, kind: string | null): void;
 }) {
   /* A column being dragged is drawn at its new width at once and written to
      the view when the drag ends: one step of undo, and nothing sent to
@@ -579,55 +653,119 @@ function TableLayout({
     setResizing({ column, width });
   };
 
+  /* Groups fold away where the header is toggled — a pointer's choice for
+     the moment, never written to the view: they open again as they were. */
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const foldedGroups = groupedBy ? folded : new Set<string>();
+  const fold = (key: string) => setFolded((held) => {
+    const next = new Set(held);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+
   /* The rows, kept while only a width changes: a drag redraws the columns,
-     never every cell. */
+     never every cell. Grouped, each group opens with its header — chevron,
+     value and count — and its rows fold under it; a column counting in the
+     footer puts its own subtotal under each group. */
   const body = useMemo(() => {
     const keptToOneLine = new Set(oneLine.split("\n"));
+    const rowTr = (row: NotePage, foldedIn: string) => (
+      <tr key={`${foldedIn}${row.id}`} className={`${foldedIn ? "is-folded" : ""} ${peekId === row.id ? "is-peeked" : ""}`} data-page-id={row.id}>
+        {/* The name is a link to the page, as Notion's is; the cell
+            around it is where the name is typed — all of it, below a
+            short name in a row that another cell's words make tall too. */}
+        <td
+          className={`db__name ${readOnly ? "" : "is-renamable"}`}
+          onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
+        >
+          <div className={`db__row-name ${namesWrap ? "is-wrapped" : ""}`}>
+            <RowName
+              row={row}
+              mark={minimal ? null : bare.has(row.id) ? <span className="db__row-icon" aria-hidden="true" /> : <RowPageMark row={row} className="db__row-icon" size={14} onOpen={onOpen} />}
+              titleClass="db__row-title"
+              label={titleLabel}
+              readOnly={readOnly}
+              renaming={row.id === renamingId}
+              caret={renameCaret}
+              onOpen={onOpen}
+              onStopRename={onStopRename}
+              onRename={onRename}
+            />
+            {row.id === renamingId ? null : <RowActions row={row} onOpen={onOpen} />}
+          </div>
+        </td>
+        {properties.map((property) => (
+          <td key={property.id}>
+            <PropertyEditor
+              property={property}
+              value={row.properties?.[property.id] ?? ""}
+              row={row}
+              readOnly={readOnly}
+              wrap={!keptToOneLine.has(property.id)}
+              onChange={(next) => onSetProperty(row, property.id, next)}
+            />
+          </td>
+        ))}
+        {minimal ? null : <td />}
+      </tr>
+    );
+    const groupHead = (group: ViewGroup) => {
+      const closed = foldedGroups.has(group.key);
+      const label = group.key === ""
+        ? <span className="grp-h__none">No {groupedBy ? propertyName(groupedBy) : "value"}</span>
+        : !groupedBy ? group.value
+        : groupedBy.type === "select" || groupedBy.type === "status" || groupedBy.type === "multi_select"
+          ? <OptionTag property={groupedBy} value={group.value} />
+          : groupedBy.type === "checkbox"
+            ? (group.value === "true" ? "Checked" : "Unchecked")
+            : groupedBy.type === "person"
+              ? <><Avatar name={group.value} size={16} />{group.value}</>
+              : groupedBy.type === "date" ? formatDay(group.value) : group.value;
+      return (
+        <tr className="grp-row">
+          <td className="db__name">
+            <div className="grp-h">
+              <button
+                type="button"
+                className="grp-h__toggle"
+                aria-expanded={!closed}
+                aria-label={`${closed ? "Expand" : "Collapse"} group ${group.value || "No value"}`}
+                onClick={() => fold(group.key)}
+              >
+                <ChevronRight className={`grp-h__chev ${closed ? "is-closed" : ""}`} size={14} />
+                <span className="grp-h__label">{label}</span>
+                <span className="grp-h__count">{group.rows.length}</span>
+              </button>
+              {/* A new row under a header takes the group's own value; the
+                  no-value group seeds nothing — its New is the table's. */}
+              {readOnly || group.seed === null || !groupedBy ? null : (
+                <button type="button" className="grp-h__add" aria-label={`New row in ${group.value}`} onClick={() => onAddInline({ [groupedBy.id]: group.seed ?? "" })}>
+                  <Plus size={13} />New
+                </button>
+              )}
+            </div>
+          </td>
+          {properties.map((property) => {
+            const kind = view.calcs?.[property.id];
+            const value = kind ? calcValue(group.rows, property.id, property, kind) : null;
+            return <td key={property.id} className={value !== null ? "grp-sum" : undefined}>{value !== null ? <span className="grp-sum__val">{value}</span> : null}</td>;
+          })}
+          {minimal ? null : <td />}
+        </tr>
+      );
+    };
     return (
       <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className={peekId === row.id ? "is-peeked" : ""} data-page-id={row.id}>
-            {/* The name is a link to the page, as Notion's is; the cell
-                around it is where the name is typed — all of it, below a
-                short name in a row that another cell's words make tall too. */}
-            <td
-              className={`db__name ${readOnly ? "" : "is-renamable"}`}
-              onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
-            >
-              <div className={`db__row-name ${namesWrap ? "is-wrapped" : ""}`}>
-                <RowName
-                  row={row}
-                  mark={minimal ? null : bare.has(row.id) ? <span className="db__row-icon" aria-hidden="true" /> : <RowPageMark row={row} className="db__row-icon" size={14} onOpen={onOpen} />}
-                  titleClass="db__row-title"
-                  label={titleLabel}
-                  readOnly={readOnly}
-                  renaming={row.id === renamingId}
-                  caret={renameCaret}
-                  onOpen={onOpen}
-                  onStopRename={onStopRename}
-                  onRename={onRename}
-                />
-                {row.id === renamingId ? null : <RowActions row={row} onOpen={onOpen} />}
-              </div>
-            </td>
-            {properties.map((property) => (
-              <td key={property.id}>
-                <PropertyEditor
-                  property={property}
-                  value={row.properties?.[property.id] ?? ""}
-                  row={row}
-                  readOnly={readOnly}
-                  wrap={!keptToOneLine.has(property.id)}
-                  onChange={(next) => onSetProperty(row, property.id, next)}
-                />
-              </td>
-            ))}
-            {minimal ? null : <td />}
-          </tr>
-        ))}
+        {groups.length > 1 || groupedBy ? groups.map((group) => (
+          <Fragment key={`${groupedBy?.id ?? ""}~${group.key}`}>
+            {groupHead(group)}
+            {group.rows.map((row) => rowTr(row, foldedGroups.has(group.key) ? "1" : ""))}
+          </Fragment>
+        )) : rows.map((row) => rowTr(row, ""))}
       </tbody>
     );
-  }, [bare, minimal, namesWrap, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, rows, titleLabel]);
+  }, [bare, foldedGroups, groupedBy, groups, minimal, namesWrap, onAddInline, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, rows, titleLabel, view.calcs]);
 
   return (
     <div className="db__table-wrap scroller">
@@ -673,9 +811,22 @@ function TableLayout({
           </tr>
         </thead>
         {body}
+        {view.calcs && Object.keys(view.calcs).length ? (
+          <tfoot>
+            <tr>
+              {/* The footer counts what the rows show — filter and search
+                  applied — under the column it belongs to. */}
+              <td className="db__name"><CalcCell column={TITLE_COLUMN} view={view} rows={rows} readOnly={readOnly} onCalc={onCalc} /></td>
+              {properties.map((property) => (
+                <td key={property.id}><CalcCell column={property.id} property={property} view={view} rows={rows} readOnly={readOnly} onCalc={onCalc} /></td>
+              ))}
+              {minimal ? null : <td />}
+            </tr>
+          </tfoot>
+        ) : null}
       </table>
       {readOnly ? null : (
-        <button type="button" className="db__add-row" onClick={onAddInline}>
+        <button type="button" className="db__add-row" onClick={() => onAddInline()}>
           <Plus size={15} />New
         </button>
       )}
@@ -890,36 +1041,88 @@ function ListLayout({
   onRename,
   readOnly,
   titleLabel,
+  groups,
+  groupedBy,
 }: LayoutProps & RowRenaming & {
-  onAddInline(): void;
+  onAddInline(values?: Record<string, string>): void;
   titleLabel: string;
+  /** The row groups and the property they group by — none, one open group. */
+  groups: readonly ViewGroup[];
+  groupedBy: DatabaseProperty | undefined;
 }) {
+  // As the table's groups fold, a list's do — for the moment only.
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const fold = (key: string) => setFolded((held) => {
+    const next = new Set(held);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  const listRow = (row: NotePage) => (
+    <div key={row.id} className={`db-list__row ${peekId === row.id ? "is-peeked" : ""}`} data-page-id={row.id}>
+      <span
+        className={`db-list__name ${readOnly ? "" : "is-renamable"}`}
+        onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
+      >
+        <RowName
+          row={row}
+          mark={bare.has(row.id) ? <span className="db-list__icon" aria-hidden="true" /> : <RowPageMark row={row} className="db-list__icon" size={15} onOpen={onOpen} />}
+          titleClass="db-list__title"
+          label={titleLabel}
+          readOnly={readOnly}
+          renaming={row.id === renamingId}
+          caret={renameCaret}
+          onOpen={onOpen}
+          onStopRename={onStopRename}
+          onRename={onRename}
+        />
+      </span>
+      <RowChips row={row} properties={properties} limit={2} />
+      {row.id === renamingId ? null : <RowActions row={row} onOpen={onOpen} />}
+    </div>
+  );
+  const groupLabel = (group: ViewGroup) => group.key === ""
+    ? <span className="grp-h__none">No {groupedBy ? propertyName(groupedBy) : "value"}</span>
+    : !groupedBy ? group.value
+    : groupedBy.type === "select" || groupedBy.type === "status" || groupedBy.type === "multi_select"
+      ? <OptionTag property={groupedBy} value={group.value} />
+      : groupedBy.type === "checkbox"
+        ? (group.value === "true" ? "Checked" : "Unchecked")
+        : groupedBy.type === "person"
+          ? <><Avatar name={group.value} size={16} />{group.value}</>
+          : groupedBy.type === "date" ? formatDay(group.value) : group.value;
+  const groupHead = (group: ViewGroup) => {
+    const closed = folded.has(group.key);
+    return (
+      <div className="db-list__group grp-h">
+        <button
+          type="button"
+          className="grp-h__toggle"
+          aria-expanded={!closed}
+          aria-label={`${closed ? "Expand" : "Collapse"} group ${group.value || "No value"}`}
+          onClick={() => fold(group.key)}
+        >
+          <ChevronRight className={`grp-h__chev ${closed ? "is-closed" : ""}`} size={14} />
+          <span className="grp-h__label">{groupLabel(group)}</span>
+          <span className="grp-h__count">{group.rows.length}</span>
+        </button>
+        {readOnly || group.seed === null || !groupedBy ? null : (
+          <button type="button" className="grp-h__add" aria-label={`New row in ${group.value}`} onClick={() => onAddInline({ [groupedBy.id]: group.seed ?? "" })}>
+            <Plus size={13} />New
+          </button>
+        )}
+      </div>
+    );
+  };
   return (
     <div className="db-list">
-      {rows.map((row) => (
-        <div key={row.id} className={`db-list__row ${peekId === row.id ? "is-peeked" : ""}`} data-page-id={row.id}>
-          <span
-            className={`db-list__name ${readOnly ? "" : "is-renamable"}`}
-            onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
-          >
-            <RowName
-              row={row}
-              mark={bare.has(row.id) ? <span className="db-list__icon" aria-hidden="true" /> : <RowPageMark row={row} className="db-list__icon" size={15} onOpen={onOpen} />}
-              titleClass="db-list__title"
-              label={titleLabel}
-              readOnly={readOnly}
-              renaming={row.id === renamingId}
-              caret={renameCaret}
-              onOpen={onOpen}
-              onStopRename={onStopRename}
-              onRename={onRename}
-            />
-          </span>
-          <RowChips row={row} properties={properties} limit={2} />
-          {row.id === renamingId ? null : <RowActions row={row} onOpen={onOpen} />}
-        </div>
-      ))}
-      <button type="button" className="db__add-row" onClick={onAddInline}>
+      {groupedBy ? groups.map((group) => (
+        <Fragment key={`${groupedBy.id}~${group.key}`}>
+          {groupHead(group)}
+          {folded.has(group.key) ? null : group.rows.map(listRow)}
+        </Fragment>
+      )) : rows.map(listRow)}
+      <button type="button" className="db__add-row" onClick={() => onAddInline()}>
         <Plus size={15} />New
       </button>
     </div>
@@ -1167,7 +1370,7 @@ function GallerySettings({
 /* ── The database ──────────────────────────────────────────────────────── */
 
 type MenuState =
-  | { kind: "filter" | "sort" | "property" | "add-view" | "views"; anchor: AnchorRect }
+  | { kind: "filter" | "sort" | "group" | "columns" | "property" | "add-view" | "views"; anchor: AnchorRect }
   | { kind: "view"; anchor: AnchorRect; viewId: string }
   /* A row's menu, opened where it was right-clicked in any view. */
   | { kind: "row"; anchor: AnchorRect; rowId: string }
@@ -1256,6 +1459,13 @@ export function DatabaseView({
     return viewRows(allRows, view, properties, deferredQuery);
   }, [allRows, config, deferredQuery, properties, view]);
 
+  // What the view hides: the columns table, list and gallery never draw.
+  const shown = useMemo(() => (view ? visibleProperties(view, properties) : properties), [view, properties]);
+  /* The groups a table or list draws — one unnamed group when it groups by
+     nothing, so the layouts draw plainly either way. */
+  const groupedBy = view ? groupProperty(view, properties) : undefined;
+  const groups = useMemo(() => (view ? viewGroups(rows, view, properties) : []), [rows, view, properties]);
+
   const viewId = view?.id;
   useEffect(() => {
     // Scroll the strip by hand rather than `scrollIntoView`, which would also
@@ -1298,8 +1508,13 @@ export function DatabaseView({
 
   if (!database || !config || !view) return null;
 
-  const filterable = properties.filter((property) => property.type === "status" || property.type === "select");
-  const filterProperty = view.filter ? properties.find((property) => property.id === view.filter?.property_id) : undefined;
+  /* The properties a condition can name — everything but pictures — and the
+     count the filter chip wears. */
+  const filterable = properties.filter(columnFilterable);
+  const filterColumns: FilterColumn[] = filterable.map((property) => ({ id: property.id, label: propertyName(property), icon: <PropertyIcon property={property} /> }));
+  const filters = filterCount(view);
+  const hiddenColumns = Array.isArray(view.hidden) ? view.hidden.length : 0;
+  const groupable = groupableProperties(properties);
   const titleLabel = titleName(config);
   /* The columns a view can be sorted by — the row names first, as in its
      table — and the keys it is sorted by now, first key first. */
@@ -1322,7 +1537,7 @@ export function DatabaseView({
      until the table is approached, so at rest the page reads as words and a
      table. It stays up while anything in it is in use — a menu, a search — or
      while a filter hides rows, which nothing else on screen would say. */
-  const quiet = minimal && variant === "inline" && !menu && !searchOpen && !query && !view.filter;
+  const quiet = minimal && variant === "inline" && !menu && !searchOpen && !query && !filters;
 
   const saveConfig = (next: DatabaseConfig) => updatePage(databaseId, { database: next });
   const saveView = (next: View) => saveConfig(withView(config, next));
@@ -1351,7 +1566,17 @@ export function DatabaseView({
     const id = createPage(databaseId, "document", { select: false });
     if (!id) return;
     const seeded: Record<string, string> = { ...values };
-    if (view.filter && filterProperty && !(filterProperty.id in seeded)) seeded[filterProperty.id] = view.filter.value;
+    /* One plain `is` condition — or a multi-select's `contains`, or a
+       checkbox's — hands its value to the row, so it does not vanish from
+       the filtered view the moment it exists. */
+    const conditions = filterConditions(view);
+    const seed = conditions.length === 1 ? conditions[0] : undefined;
+    const seedProperty = seed ? properties.find((property) => property.id === seed.property_id) : undefined;
+    if (seed && seedProperty && seed.value !== undefined && !(seed.property_id in seeded)) {
+      if ((seedProperty.type === "select" || seedProperty.type === "status") && seed.op === "is") seeded[seed.property_id] = seed.value;
+      else if (seedProperty.type === "multi_select" && seed.op === "contains") seeded[seed.property_id] = toMultiValue([seed.value]);
+      else if (seedProperty.type === "checkbox" && seed.op === "is") seeded[seed.property_id] = seed.value;
+    }
     if (view.kind === "calendar") {
       const date = calendarProperty(view, properties);
       if (date && !(date.id in seeded)) seeded[date.id] = isoDate(new Date());
@@ -1394,6 +1619,10 @@ export function DatabaseView({
     // The last key taken away, the panel has nothing left to show.
     if (!next.length) setMenu(null);
   };
+
+  const saveFilters = (items: ViewFilter[]) => saveView(withFilters(view, items));
+  const saveHidden = (ids: string[]) => saveView({ ...view, hidden: ids.length ? ids : undefined });
+  const saveGroupBy = (id: string | null) => saveView({ ...view, group_by: id ?? undefined });
 
   /* A status's options, edited from its column's menu. Rows hold an option's
      name, so a rename or a delete writes the rows holding it too — in the
@@ -1557,8 +1786,9 @@ export function DatabaseView({
       </div>
     </>
   ) : null;
-  // The tools stay in sight while one of them is in use.
-  const toolsHeld = Boolean(view.filter) || sorts.length > 0 || searchOpen || Boolean(query) || menu !== null;
+  // The tools stay in sight while one of them is in use — a filter hiding
+  // rows, groups or columns taken away included.
+  const toolsHeld = filters > 0 || sorts.length > 0 || Boolean(groupedBy) || hiddenColumns > 0 || searchOpen || Boolean(query) || menu !== null;
 
   let layout;
   if (view.kind === "board" && board) {
@@ -1575,7 +1805,10 @@ export function DatabaseView({
       <ListLayout
         {...layoutProps}
         {...rowRenaming}
-        onAddInline={() => addRow({}, "cell")}
+        properties={shown}
+        groups={groups}
+        groupedBy={groupedBy}
+        onAddInline={(values) => addRow(values ?? {}, "cell")}
         titleLabel={titleLabel}
       />
     );
@@ -1584,7 +1817,7 @@ export function DatabaseView({
       <GalleryLayout
         {...layoutProps}
         {...cardEditing}
-        properties={cardProperties(view, properties)}
+        properties={cardProperties(view, properties).filter((property) => !view.hidden?.includes(property.id))}
         preview={cardPreview(view, properties)}
       />
     );
@@ -1595,9 +1828,13 @@ export function DatabaseView({
       <TableLayout
         {...layoutProps}
         {...rowRenaming}
-        onAddInline={() => addRow({}, "cell")}
+        properties={shown}
+        groups={groups}
+        groupedBy={groupedBy}
+        onAddInline={(values) => addRow(values ?? {}, "cell")}
         onSetProperty={setProperty}
         onAddProperty={(anchor) => setMenu({ kind: "property", anchor })}
+        onCalc={(column, kind) => saveView(withCalc(view, column, kind))}
         minimal={minimal}
         view={view}
         titleLabel={titleLabel}
@@ -1625,15 +1862,15 @@ export function DatabaseView({
         {title ? <div className="db__title">{title}</div> : <div className="db__tabs">{tabs}</div>}
         <div className="db__tools">
           {filterable.length && !readOnly ? (
-            <Tooltip label={view.filter ? `${filterProperty ? propertyName(filterProperty) : ""}: ${view.filter.value}` : "Filter"}>
+            <Tooltip label={filters ? `${filters} filter${filters > 1 ? "s" : ""}` : "Filter"}>
               <button
                 type="button"
-                className={`db__tool ${view.filter ? "is-on" : ""}`}
-                aria-label={view.filter ? `Filtered by ${filterProperty ? propertyName(filterProperty) : ""}: ${view.filter.value}` : "Filter"}
+                className={`db__tool ${filters ? "is-on" : ""}`}
+                aria-label={filters ? `Filtered by ${filters} condition${filters > 1 ? "s" : ""}` : "Filter"}
                 onClick={(event) => setMenu({ kind: "filter", anchor: rectOf(event.currentTarget) })}
               >
                 <Filter size={15} />
-                {view.filter ? <span className="db__tool-label">{view.filter.value}</span> : null}
+                {filters ? <span className="db__tool-label">{filters}</span> : null}
               </button>
             </Tooltip>
           ) : null}
@@ -1649,6 +1886,34 @@ export function DatabaseView({
                     Notion's sort chip. */}
                 {!sorts.length ? <ArrowDownAZ size={15} /> : sorts[0].direction === "desc" ? <ArrowDown size={15} /> : <ArrowUp size={15} />}
                 {sorts.length ? <span className="db__tool-label">{sortLabel}</span> : null}
+              </button>
+            </Tooltip>
+          )}
+          {/* A table's and a list's rows can stand under the property's
+              values; the chip names the property they group by. */}
+          {readOnly || !groupable.length || (view.kind !== "table" && view.kind !== "list") ? null : (
+            <Tooltip label={groupedBy ? `Grouped by ${propertyName(groupedBy)}` : "Group"}>
+              <button
+                type="button"
+                className={`db__tool ${groupedBy ? "is-on" : ""}`}
+                aria-label={groupedBy ? `Grouped by ${propertyName(groupedBy)}` : "Group"}
+                onClick={(event) => setMenu({ kind: "group", anchor: rectOf(event.currentTarget) })}
+              >
+                <Layers size={15} />
+                {groupedBy ? <span className="db__tool-label">{propertyName(groupedBy)}</span> : null}
+              </button>
+            </Tooltip>
+          )}
+          {readOnly || !properties.length || (view.kind !== "table" && view.kind !== "list" && view.kind !== "gallery") ? null : (
+            <Tooltip label={hiddenColumns ? `${hiddenColumns} column${hiddenColumns > 1 ? "s" : ""} hidden` : "Columns"}>
+              <button
+                type="button"
+                className={`db__tool ${hiddenColumns ? "is-on" : ""}`}
+                aria-label={hiddenColumns ? `${hiddenColumns} columns hidden` : "Columns"}
+                onClick={(event) => setMenu({ kind: "columns", anchor: rectOf(event.currentTarget) })}
+              >
+                <Eye size={15} />
+                {hiddenColumns ? <span className="db__tool-label">{hiddenColumns} hidden</span> : null}
               </button>
             </Tooltip>
           )}
@@ -1790,10 +2055,10 @@ export function DatabaseView({
                   onSelect={() => changeLayout(menuView, kind)}
                 />
               ))}
-              {menuView.kind === "board" && groupableProperties(properties).length > 1 ? (
+              {menuView.kind === "board" && boardGroupableProperties(properties).length > 1 ? (
                 <>
                   <div className="menu__section-title">Group by</div>
-                  {groupableProperties(properties).map((property) => (
+                  {boardGroupableProperties(properties).map((property) => (
                     <MenuItem
                       key={property.id}
                       icon={<PropertyIcon property={property} />}
@@ -1961,28 +2226,56 @@ export function DatabaseView({
         label="Filter"
         onDismiss={() => setMenu(null)}
       >
-        <MenuList label="Filter" autoFocus>
-          {filterable.map((property) => (
-            <div key={property.id} className="menu__group">
-              <div className="menu__section-title">{propertyName(property)}</div>
-              {propertyOptions(property).map((option) => (
-                <MenuItem
-                  key={option}
-                  label={option}
-                  selected={view.filter?.property_id === property.id && view.filter.value === option}
-                  onSelect={() => { saveView({ ...view, filter: { property_id: property.id, value: option } }); setMenu(null); }}
-                />
-              ))}
-            </div>
+        <FilterPanel
+          items={viewFilters(view)}
+          columns={filterColumns}
+          properties={filterable}
+          onChange={saveFilters}
+        />
+      </Popover>
+
+      <Popover
+        open={menu?.kind === "group"}
+        anchor={menu?.kind === "group" ? menu.anchor : null}
+        placement="bottom-end"
+        label="Group"
+        onDismiss={() => setMenu(null)}
+      >
+        <MenuList label="Group by" autoFocus>
+          <div className="menu__section-title">Group by</div>
+          {groupable.map((property) => (
+            <MenuItem
+              key={property.id}
+              icon={<PropertyIcon property={property} size={16} />}
+              label={propertyName(property)}
+              selected={groupedBy?.id === property.id}
+              onSelect={() => { saveGroupBy(property.id); setMenu(null); }}
+            />
           ))}
           <MenuDivider />
           <MenuItem
             icon={<X size={16} />}
-            label="Clear filter"
-            disabled={!view.filter}
-            onSelect={() => { saveView({ ...view, filter: undefined }); setMenu(null); }}
+            label="No grouping"
+            disabled={!groupedBy}
+            onSelect={() => { saveGroupBy(null); setMenu(null); }}
           />
         </MenuList>
+      </Popover>
+
+      <Popover
+        open={menu?.kind === "columns"}
+        anchor={menu?.kind === "columns" ? menu.anchor : null}
+        placement="bottom-end"
+        label="Columns"
+        onDismiss={() => setMenu(null)}
+      >
+        <ColumnsPanel
+          hidden={view.hidden ?? []}
+          titleLabel={titleLabel}
+          titleIcon={config.title_icon}
+          properties={properties}
+          onChange={saveHidden}
+        />
       </Popover>
 
       <Popover
