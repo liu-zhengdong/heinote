@@ -19,6 +19,8 @@ import { PageActions } from "../topbar/PageActions";
 import { DatabaseSheet } from "./DatabasePage";
 import { PropertyEditor, PropertyIcon } from "./properties";
 import { propertyName, rowValues } from "./database-model";
+import { relationPeerMutations } from "./relation";
+import { pagePatchMutations } from "../../app/page-mutations";
 import { usePage, useWorkspaceState } from "../../app/workspace-store";
 import { spaceOfPage } from "../../core/page-tree";
 import { useHomedImages } from "./ImageProperty";
@@ -88,10 +90,23 @@ export function usePeekLayout(shell: HTMLElement | null, paneLeft: number) {
 /** A database row's properties, set in the page between its title and its
  *  body — Notion's arrangement, so the row reads as one page. */
 function PageProperties({ page }: { page: NotePage }) {
-  const { updatePage: writePage, canEdit } = useWorkspace();
+  const { updatePage: writePage, canEdit, commitWrites, document, platform } = useWorkspace();
   const updatePage = (pageId: string, patch: PagePatch) => { if (canEdit(pageId)) writePage(pageId, patch); };
   const database = usePage(page.parent_id)?.database;
   const properties = database?.properties ?? [];
+  const author = platform?.bootstrap.user.displayName ?? "";
+  /** A relation cell writes its mirror's cells with it, in the same commit. */
+  const setValue = (property: (typeof properties)[number], next: string) => {
+    const pages = document?.state.pages ?? {};
+    if (property.type === "relation" && canEdit(page.id)) {
+      const peer = relationPeerMutations(pages, author, property, page.id, page.properties?.[property.id] ?? "", next);
+      const mutations = pagePatchMutations(pages, author, page.id, rowValues(page, { [property.id]: next }));
+      if (peer && (peer.target.id === page.parent_id || canEdit(peer.target.id))) mutations.push(...peer.mutations);
+      commitWrites(mutations);
+      return;
+    }
+    updatePage(page.id, rowValues(page, { [property.id]: next }));
+  };
   const space = useWorkspaceState((state) => spaceOfPage(state.pages, page.id));
   useHomedImages([page], properties, space);
   if (!properties.length) return null;
@@ -107,7 +122,7 @@ function PageProperties({ page }: { page: NotePage }) {
               value={values[property.id] ?? ""}
               row={page}
               readOnly={!canEdit(page.id)}
-              onChange={(next) => updatePage(page.id, rowValues(page, { [property.id]: next }))}
+              onChange={(next) => setValue(property, next)}
             />
           </span>
         </label>

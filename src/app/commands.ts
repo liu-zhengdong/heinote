@@ -38,18 +38,34 @@ import { embedFromUrl, normalizeEmbed } from "../core/embeds";
 import { inlineFromText, isKeptLink, MENTION_CHAR, normalizeInlineContent, normalizeMention } from "../core/inline-content";
 import { descendantPageIds, inTrash } from "../core/page-tree";
 import { versionList } from "../core/versions";
-import type { Block, DatabaseConfig, DatabaseView, InlineContent, NotePage, StoredFile } from "../core/types";
+import type { Block, DatabaseConfig, DatabaseView, FilterCondition, InlineContent, NotePage, StoredFile, ViewFilter } from "../core/types";
 import {
+  boardGroupableProperties,
+  calcKinds,
   changePropertyType,
   changeViewKind,
   copiedColumn,
   createView,
   databaseRows,
+  dateRange,
+  defaultFilterOp,
   duplicateProperty,
   duplicateView,
+  FILTER_OPS,
+  filterable,
+  filterNeedsValue,
+  groupableProperties,
   insertProperty,
+  isDay,
+  isMetaType,
   MAX_ROW_IMAGES,
   newDatabaseConfig,
+  OPTION_COLOR_SET,
+  propertyOptions,
+  PROPERTY_LABELS,
+  relationIds,
+  relationMirrorProperty,
+  relationPeerWrites,
   removeProperty,
   removeView,
   renameProperty,
@@ -57,6 +73,7 @@ import {
   sortable,
   statusOptions,
   TITLE_COLUMN,
+  toMultiValue,
   viewRows,
   withSorts,
   withView,
@@ -83,6 +100,7 @@ import { backlinksTo } from "../features/editor/mentions";
 import { quickFind } from "../features/quickfind/QuickFind";
 import type { WorkspaceDocument, WorkspaceMutation } from "../platform/workspace-document";
 import type { PagePatch, WorkspaceContextValue } from "./workspace-context";
+import { pagePatchMutations } from "./page-mutations";
 
 /** A refusal in the command's own words: the SDK answers its `code`, which
  *  agents branch on, and its message. */
@@ -197,6 +215,20 @@ function showInPlaceFor(host: CommandHost): ShowInPlace {
 function composed(host: CommandHost, page: NotePage, showInPlace = showInPlaceFor(host)): Composite {
   const pages = pagesOf(host);
   return composeTree(pages, pages[page.id] ?? page, showInPlace);
+}
+
+/** The mutations updatePage would make for `patch` on `pageId` — for
+ *  several pages written in one commit, as a relation's two sides are. */
+const pageMutations = (host: CommandHost, pageId: string, patch: PagePatch): WorkspaceMutation[] =>
+  pagePatchMutations(pagesOf(host), host.author, pageId, patch);
+
+/** The database a relation property links rows to. */
+function relationTargetPage(host: CommandHost, property: { relation_database?: string }): NotePage {
+  const target = property.relation_database ? pagesOf(host)[property.relation_database] : undefined;
+  if (!target) refuse("not_found", "The relation's target database is gone or out of reach.");
+  if (target.kind !== "database" || !target.database) refuse("bad_request", "A relation's target is a database page.");
+  if (inTrash(pagesOf(host), target.id)) refuse("in_trash", "The relation's target database is in the trash.");
+  return target;
 }
 
 /** What the editor did to a page's tree, written to the pages holding each
@@ -323,12 +355,28 @@ function viewIn(config: DatabaseConfig, id: string | undefined): DatabaseView {
   return view;
 }
 
-/** Select options as a list of distinct names. */
+/** Select and multi-select options as a list of distinct names. */
 function withOptions(config: DatabaseConfig, propertyId: string, options: string[] | undefined): DatabaseConfig {
   if (options === undefined) return config;
   const property = config.properties.find((candidate) => candidate.id === propertyId);
-  if (property?.type !== "select") refuse("bad_request", "Only a Select property takes options here; a Status's options are edited in Notes.");
+  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes options here; a Status's options are edited in Notes.");
   return { ...config, properties: config.properties.map((candidate) => candidate.id === propertyId ? { ...candidate, options: [...new Set(options)] } : candidate) };
+}
+
+/** Option colours by option name — each "default" or one of the nine, an
+ *  unknown colour read as "default", a colour for no option refused:
+ *  colouring nothing would say the name was typed wrong. */
+function withOptionColors(config: DatabaseConfig, propertyId: string, colors: Record<string, unknown> | undefined): DatabaseConfig {
+  if (colors === undefined) return config;
+  const property = config.properties.find((candidate) => candidate.id === propertyId);
+  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes option colours.");
+  const known = OPTION_COLOR_SET;
+  const next: Record<string, string> = {};
+  for (const [name, color] of Object.entries(colors)) {
+    if (!(property.options ?? []).includes(name)) refuse("bad_request", `No option ${JSON.stringify(name)} to colour: the options are ${JSON.stringify(property.options ?? [])}.`);
+    next[name] = typeof color === "string" && known.has(color) ? color : "default";
+  }
+  return { ...config, properties: config.properties.map((candidate) => candidate.id === propertyId ? { ...candidate, option_colors: next } : candidate) };
 }
 
 /** A row's values as agents read them. */
@@ -400,7 +448,10 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const pages = pagesOf(h);
       const { page, config } = databasePage(h, input.page_id, false);
       const view = viewIn(config, input.view_id);
-      const rows = viewRows(databaseRows(pages, page.id), view, config.properties, input.search ?? "");
+      // filters passed here ride over the view's own — saved or not.
+      const actual: DatabaseView = input.filters === undefined ? view : { ...view, filter: undefined, filters: input.filters };
+      // A relation sorts by the first linked page's title.
+      const rows = viewRows(databaseRows(pages, page.id), actual, config.properties, input.search ?? "", (pageId) => pages[pageId]?.title);
       const at = input.after === undefined ? -1 : rows.findIndex((row) => row.id === input.after);
       if (input.after !== undefined && at < 0) refuse("not_found", "That cursor is no longer a row of this view: list again from the start.");
       const shown = rows.slice(at + 1, at + 1 + input.limit);
@@ -433,15 +484,16 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const parent = input.parent_id === undefined ? null : writablePage(h, input.parent_id);
       const { kind } = input;
       if (input.view !== undefined && kind !== "database") refuse("bad_request", "view is a database's first view: give kind database.");
-      if (input.expanded !== undefined && parent?.kind !== "document") refuse("bad_request", "expanded shows a page in place in the page that holds it: give parent_id, a document.");
+      if ((input.expanded !== undefined || input.locked !== undefined) && parent?.kind !== "document") refuse("bad_request", "expanded and locked are a page's link's in the page that holds it: give parent_id, a document.");
       if (input.text && kind === "app") refuse("bad_request", "An app has no body: set its source with the app commands, not text.");
+      const firstViewId = kind === "database" ? createId("view") : "";
       return change(h, () => {
         const id = h.workspace.createPage(parent?.id ?? null, kind, {
           select: false,
           block: parent?.kind === "document",
           title: input.title,
           ...(kind === "database"
-            ? { database: newDatabaseConfig(input.view ?? "table", createId("view"), () => createId("property")) }
+            ? { database: newDatabaseConfig(input.view ?? "table", firstViewId, () => createId("property")) }
             : {}),
         });
         if (!id) refuse("not_ready", "Notes is still opening in this window: try again in a moment.");
@@ -451,9 +503,16 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
           const first = orderedBlocks(made.block_tree)[0];
           if (first) h.workspace.applyBlockMutations(id, [{ action: "put", block: { ...first, content: inlineFromText(input.text) } }]);
         }
-        if (input.expanded && parent) {
+        if ((input.expanded || input.locked) && parent) {
           const row = linesFor(pagesOf(h)[parent.id]?.block_tree, id)[0];
-          if (row) h.workspace.applyBlockMutations(parent.id, [{ action: "put", block: withLineLink(row, (link) => ({ ...link, expanded: true })) }]);
+          if (row) h.workspace.applyBlockMutations(parent.id, [{ action: "put", block: withLineLink(row, (link) => ({
+            ...link,
+            ...(input.expanded ? { expanded: true } : {}),
+            ...(input.locked ? { locked: true } : {}),
+            /* An expanded, locked database link is the linked view a person
+               makes: it pins the view it was made with. */
+            ...(input.expanded && input.locked && kind === "database" ? { view: firstViewId } : {}),
+          })) }]);
         }
         return { page: summary(pagesOf(h), pagesOf(h)[id]) };
       });
@@ -589,15 +648,25 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const page = documentPage(h, input.page_id);
       const current = composed(h, page);
       const original = blockIn(current.tree, input.block_id);
-      const fields = Object.keys(input).filter((key) => !["page_id", "block_id", "expanded", "locked"].includes(key));
-      const shows = input.expanded !== undefined || input.locked !== undefined;
+      const fields = Object.keys(input).filter((key) => !["page_id", "block_id", "expanded", "locked", "view"].includes(key));
+      const shows = input.expanded !== undefined || input.locked !== undefined || input.view !== undefined;
       if (!fields.length && !shows) refuse("bad_request", "Say what to change.");
       // A page shown in place, or folded on its line: shown, folded or read
       // only here is its link's, in the page that holds it — as the block's
-      // mark and menu do it (DocumentEditor `setShown`, `setLocked`).
+      // mark and menu do it (DocumentEditor `setShown`, `setLocked`). A view
+      // pins one of a database's views on the link — a linked view — and
+      // goes with the fold.
       const rowId = current.rows.get(original.id) ?? (lineLink(original) ? original.id : undefined);
       const holder = current.owner.get(original.id) ?? page.id;
       if (shows && !rowId) refuse("bad_request", "expanded and locked are a page's link's: block_id is a line holding nothing but a link to a page, or the block shown in place.");
+      if (input.view) {
+        const row = pagesOf(h)[holder]?.block_tree.by_id[rowId ?? ""];
+        const linked = row ? lineLink(row) : null;
+        const target = linked?.page_id ? pagesOf(h)[linked.page_id] : undefined;
+        if (target?.kind !== "database" || !target.database?.views.some((view) => view.id === input.view)) {
+          refuse("bad_request", "view pins a database view's id on the linked database.");
+        }
+      }
       // The paragraph whole, as the editor puts one: a field taken away (a
       // card's address, once it is words again) is gone from it.
       const edited = fields.length ? shaped(h, input, original) : null;
@@ -612,9 +681,15 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
             if (input.expanded === false) {
               delete shown.expanded;
               delete shown.locked;
+              delete shown.view;
             }
             if (input.locked === true) shown.locked = true;
             if (input.locked === false) delete shown.locked;
+            if (input.view) {
+              shown.view = input.view;
+              shown.expanded = true;
+            }
+            if (input.view === "") delete shown.view;
             return shown;
           });
           h.workspace.applyBlockMutations(holder, [{ action: "put", block: next }]);
@@ -726,13 +801,44 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
         });
       }
       if (input.type === undefined) refuse("bad_request", oneOf);
+      const relationFields = input.relation_database !== undefined || input.relation_limit !== undefined || input.relation_two_way !== undefined || input.relation_backlink_name !== undefined;
+      if (relationFields && input.type !== "relation") refuse("bad_request", "relation_* fields are a relation property's.");
       const index = Math.min(input.index ?? config.properties.length, config.properties.length);
       const added = insertProperty(config, createId("property"), input.type, index);
       let next = added.config;
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      if (input.type === "relation") {
+        if (!input.relation_database) refuse("bad_request", "A relation needs relation_database: the database its values link to.");
+        const target = relationTargetPage(h, { relation_database: input.relation_database });
+        const property = next.properties.find((item) => item.id === added.property.id)!;
+        property.relation_database = target.id;
+        if (input.relation_limit) property.relation_limit = input.relation_limit;
+        if (input.relation_two_way) property.relation_two_way = true;
+        if (input.relation_backlink_name !== undefined) property.relation_backlink_name = input.relation_backlink_name;
+        if (property.relation_two_way) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `A two-way relation writes a mirror property on ${describe(target)}, where this person can only view.`);
+          const mirror = relationMirrorProperty(property, page.id, pageName(page), createId("property"), (target.id === page.id ? next : target.database!).properties.map((item) => item.name));
+          if (target.id === page.id) next = { ...next, properties: [...next.properties, mirror] };
+          else {
+            peerTarget = target;
+            peerConfig = { ...target.database!, properties: [...target.database!.properties, mirror] };
+          }
+        }
+      }
       if (input.name !== undefined) next = renameProperty(next, added.property.id, input.name);
       next = withOptions(next, added.property.id, input.options);
+      next = withOptionColors(next, added.property.id, input.option_colors);
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: next });
+        // The property and its mirror land together, so they never part ways.
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: added.property.id };
       });
     },
@@ -741,13 +847,78 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const h = await opened();
       const { page, config } = databasePage(h, input.page_id);
       const key = propertyIn(config, input.property_id, { title: true });
-      if (key === TITLE_COLUMN && (input.type !== undefined || input.options !== undefined)) refuse("bad_request", "The row-name column can only be renamed.");
-      if (input.name === undefined && input.type === undefined && input.options === undefined) refuse("bad_request", "Say what to change: name, type or options.");
+      if (key === TITLE_COLUMN && (input.type !== undefined || input.options !== undefined || input.option_colors !== undefined)) refuse("bad_request", "The row-name column can only be renamed.");
+      const relationFields = input.relation_limit !== undefined || input.relation_two_way !== undefined || input.relation_backlink_name !== undefined;
+      if (input.name === undefined && input.type === undefined && input.options === undefined && input.option_colors === undefined && !relationFields) refuse("bad_request", "Say what to change: name, type, options, option_colors or a relation field.");
+      const previous = key === TITLE_COLUMN ? undefined : config.properties.find((item) => item.id === key);
+      // A mirror's pairing is its origin's: only its name changes here — the
+      // forward property on the other database holds the rest.
+      if (previous?.relation_origin && (input.type !== undefined || relationFields)) refuse("bad_request", "That is a relation's mirror: its direction lives on the forward property, on the database it points back to.");
+      if (relationFields) {
+        const type = input.type ?? previous?.type;
+        if (type !== "relation") refuse("bad_request", "relation_* fields are a relation property's.");
+      }
+      if (input.type === "relation" && previous?.type !== "relation") refuse("bad_request", "A property becomes a relation only when created: create_property with relation_database.");
+      if (input.type !== undefined && previous?.type === "relation" && input.type !== "relation" && previous.relation_origin) refuse("bad_request", "That is a relation's mirror: it goes when the relation does.");
       let next = input.type !== undefined ? changePropertyType(config, key, input.type, databaseRows(pagesOf(h), page.id)) : config;
       if (input.name !== undefined) next = renameProperty(next, key, input.name);
       next = withOptions(next, key, input.options);
+      next = withOptionColors(next, key, input.option_colors);
+      // A forward relation's fields — its limit, its mirror, the mirror's
+      // name — live on the property after any type change rebuilt it.
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      const forward = next.properties.find((item) => item.id === key);
+      if (forward?.type === "relation" && !forward.relation_origin && relationFields) {
+        // The field set is rebuilt, never edited in place — a config's
+        // properties are shared objects.
+        const updated: DatabaseConfig["properties"][number] = { ...forward };
+        if (input.relation_limit !== undefined) {
+          if (input.relation_limit === "unlimited") delete updated.relation_limit;
+          else updated.relation_limit = input.relation_limit;
+        }
+        if (input.relation_two_way !== undefined) updated.relation_two_way = input.relation_two_way || undefined;
+        if (input.relation_backlink_name !== undefined) updated.relation_backlink_name = input.relation_backlink_name || undefined;
+        next = { ...next, properties: next.properties.map((item) => (item.id === key ? updated : item)) };
+        const target = relationTargetPage(h, updated);
+        const mirror = target.database!.properties.find((item) => item.type === "relation" && item.relation_origin === updated.id);
+        if (updated.relation_two_way && !mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `A two-way relation writes a mirror property on ${describe(target)}, where this person can only view.`);
+          const made = relationMirrorProperty(updated, page.id, pageName(page), createId("property"), (target.id === page.id ? next : target.database!).properties.map((item) => item.name));
+          if (target.id === page.id) next = { ...next, properties: [...next.properties, made] };
+          else { peerTarget = target; peerConfig = { ...target.database!, properties: [...target.database!.properties, made] }; }
+        } else if (mirror && !updated.relation_two_way) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror on ${describe(target)} goes with the relation's direction, where this person can only view.`);
+          if (target.id === page.id) next = removeProperty(next, mirror.id);
+          else { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        } else if (mirror && input.relation_backlink_name !== undefined) {
+          const mirrorName = updated.relation_backlink_name?.trim() || pageName(page) || "Relation";
+          if (mirror.name !== mirrorName) {
+            if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror's name lives on ${describe(target)}, where this person can only view.`);
+            const renamed = (source: DatabaseConfig) => ({ ...source, properties: source.properties.map((item) => (item.id === mirror.id ? { ...item, name: mirrorName } : item)) });
+            if (target.id === page.id) next = renamed(next);
+            else { peerTarget = target; peerConfig = renamed(target.database!); }
+          }
+        }
+      } else if (previous?.type === "relation" && forward?.type !== "relation" && !previous.relation_origin) {
+        // A relation's type going takes the mirror on its target with it.
+        const target = previous.relation_database ? pagesOf(h)[previous.relation_database] : undefined;
+        const mirror = target?.database?.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (target && mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror on ${describe(target)} goes with the relation, where this person can only view.`);
+          if (target.id === page.id) next = removeProperty(next, mirror.id);
+          else { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        }
+      }
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: next });
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: key };
       });
     },
@@ -756,8 +927,34 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const h = await opened();
       const { page, config } = databasePage(h, input.page_id);
       const key = propertyIn(config, input.property_id);
+      const property = config.properties.find((item) => item.id === key);
+      // A forward relation deleted takes its mirror on the target database
+      // with it — the two are written together, or neither.
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      if (property?.type === "relation" && !property.relation_origin) {
+        const target = property.relation_database ? pagesOf(h)[property.relation_database] : undefined;
+        const mirror = target?.database?.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (target && mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The relation's mirror lives on ${describe(target)}, where this person can only view.`);
+          if (target.id !== page.id) { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        }
+      }
+      let next = removeProperty(config, key);
+      if (property?.type === "relation" && !property.relation_origin && !peerTarget) {
+        // A self-relation's mirror is this same database's property.
+        const mirror = next.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (mirror) next = removeProperty(next, mirror.id);
+      }
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: removeProperty(config, key) });
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: key };
       });
     },
@@ -788,17 +985,81 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.value === undefined) refuse("bad_request", oneOf);
       const { value } = input;
       if (property?.type === "image") refuse("bad_request", "An Image property takes images: file paragraph ids.");
+      /* The meta columns read the row's own record — nothing writes them. */
+      if (property && isMetaType(property.type)) refuse("bad_request", `${PROPERTY_LABELS[property.type]} is read-only: it reads the row's own record.`);
       if (property?.type === "status" && value && !statusOptions(property).some((option) => option.name === value)) {
         refuse("bad_request", `A status is one of ${JSON.stringify(statusOptions(property).map((option) => option.name))}.`);
       }
       if (property?.type === "select" && value && !property.options?.includes(value)) {
         refuse("bad_request", `A Select value is one of its options (${JSON.stringify(property.options ?? [])}): add it with update_property first.`);
       }
-      if (property?.type === "date" && value && !isDay(value)) refuse("bad_request", "A date is a real day, YYYY-MM-DD.");
+      let stored = value;
+      /* A multi-select's value is a JSON list of its options' names — a
+         comma-separated list says the same for a name without a comma; an
+         option it does not have is refused, as a select's is. */
+      if (property?.type === "multi_select" && value) {
+        let names: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((name) => typeof name === "string")) names = parsed;
+        } catch { /* not JSON: a comma-separated list */ }
+        names ??= value.split(",").map((name) => name.trim()).filter(Boolean);
+        names = [...new Set(names)];
+        if (!names.length || names.some((name) => !(property.options ?? []).includes(name))) {
+          refuse("bad_request", `A Multi-select value lists its options (${JSON.stringify(property.options ?? [])}): add missing ones with update_property first.`);
+        }
+        stored = toMultiValue(names);
+      }
+      if (property?.type === "number" && value && !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(value.trim())) {
+        refuse("bad_request", "A Number value is a real number, or empty.");
+      }
+      if (property?.type === "checkbox" && value && !["true", "false"].includes(value)) {
+        refuse("bad_request", "A Checkbox value is true, false or empty.");
+      }
+      /* Checked is "true"; the rest — "" and "false" alike — is not. */
+      if (property?.type === "checkbox" && value === "false") stored = "";
+      if (property?.type === "date" && value) {
+        const range = dateRange(value);
+        if (!range || !isDay(range.start) || (range.end !== "" && !isDay(range.end))) refuse("bad_request", "A date is a real day, YYYY-MM-DD, or a range, YYYY-MM-DD/YYYY-MM-DD.");
+        // A range is kept in order; no other reading is offered.
+        if (range.end && range.end < range.start) stored = `${range.end}/${range.start}`;
+      }
+      /* A relation's value is a JSON list of page ids, or the ids
+         comma-separated — each a row of its target database, at most one
+         when it is limited. */
+      let peerWrites: WorkspaceMutation[] = [];
+      if (property?.type === "relation" && value) {
+        let ids: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((id) => typeof id === "string")) ids = parsed;
+        } catch { /* not JSON: a comma-separated list */ }
+        ids ??= value.split(",").map((id) => id.trim()).filter(Boolean);
+        ids = [...new Set(ids)];
+        const target = relationTargetPage(h, property);
+        const rows = databaseRows(pagesOf(h), target.id);
+        for (const id of ids) {
+          if (!rows.some((candidate) => candidate.id === id)) refuse("bad_request", `${id} is not a row of ${describe(target)}.`);
+        }
+        if (property.relation_limit === "1" && ids.length > 1) refuse("bad_request", "This relation links at most one page.");
+        stored = toMultiValue(ids);
+        // Both sides write in one commit, as Notion's paired cells do; when
+        // the mirror lives where this person cannot write, neither does.
+        const otherConfig = target.id === database.id ? config : target.database!;
+        const peer = relationPeerWrites(property, otherConfig, rows, row.id, relationIds(row.properties?.[key] ?? ""), ids);
+        if (peer?.writes.length) {
+          if (target.id !== database.id && !h.workspace.canEdit(target.id)) refuse("read_only", `This relation's mirror lives on ${describe(target)}, where this person can only view.`);
+          for (const write of peer.writes) {
+            const peerRow = rows.find((candidate) => candidate.id === write.rowId)!;
+            peerWrites.push(...pageMutations(h, write.rowId, rowValues(peerRow, { [peer.peerId]: write.value })));
+          }
+        }
+      }
       return change(h, () => {
         if (key === TITLE_COLUMN) h.workspace.updatePage(row.id, { title: value });
-        else h.workspace.updatePage(row.id, rowValues(row, { [key]: value }));
-        return { page_id: row.id, property_id: key, value };
+        else if (peerWrites.length) h.workspace.commitWrites([...pageMutations(h, row.id, rowValues(row, { [key]: stored })), ...peerWrites]);
+        else h.workspace.updatePage(row.id, rowValues(row, { [key]: stored }));
+        return { page_id: row.id, property_id: key, value: stored };
       });
     },
 
@@ -842,13 +1103,53 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
         return property;
       };
       if (input.name !== undefined) view.name = input.name;
+      if (input.filter_property_id !== undefined && input.filters !== undefined) refuse("bad_request", "Give filter_property_id or filters, not both.");
       if (input.filter_property_id !== undefined) {
-        if (!input.filter_property_id) delete view.filter;
-        else {
+        if (!input.filter_property_id) {
+          // Empty clears the whole filter — the new items and the old field.
+          delete view.filter;
+          delete view.filters;
+        } else {
           typed(input.filter_property_id, ["select", "status"]);
           if (input.filter_value === undefined) refuse("bad_request", "A filter needs filter_value.");
           view.filter = { property_id: input.filter_property_id, value: input.filter_value };
+          // The old single field is the one written: the newer list goes,
+          // or it would keep hiding the field that replaced it.
+          delete view.filters;
         }
+      }
+      if (input.filters !== undefined) {
+        const condition = (item: FilterCondition) => {
+          const property = typed(item.property_id);
+          if (!filterable(property)) refuse("bad_request", `Rows never filter by ${property.type}.`);
+          const op = item.op ?? defaultFilterOp(property.type);
+          if (!FILTER_OPS[property.type].includes(op)) refuse("bad_request", `${property.type} has no ${op} filter.`);
+          const next: FilterCondition = { property_id: item.property_id, op };
+          if (filterNeedsValue(op)) {
+            if (item.value === undefined) refuse("bad_request", `A ${op} filter needs a value.`);
+            next.value = item.value;
+          }
+          if ((property.type === "select" || property.type === "status" || property.type === "multi_select") && next.value !== undefined && !propertyOptions(property).includes(next.value)) {
+            refuse("bad_request", "The filter's value is not one of the property's options.");
+          }
+          if (property.type === "checkbox" && next.value !== undefined && next.value !== "true" && next.value !== "false") {
+            refuse("bad_request", "A checkbox filter's value is true or false.");
+          }
+          return next;
+        };
+        const items: ViewFilter[] = input.filters.map((item) => {
+          if ("conditions" in item) {
+            const conditions = item.conditions.map(condition);
+            if (!conditions.length) refuse("bad_request", "A filter group needs a condition.");
+            return { logic: item.logic, conditions };
+          }
+          return condition(item);
+        });
+        if (items.filter((item) => "conditions" in item).length > 1) refuse("bad_request", "A view's filter holds one group at most.");
+        if (items.length) view.filters = items;
+        else delete view.filters;
+        // A view saved with filters no longer holds the old single field.
+        delete view.filter;
       }
       const sortKey = (key: string) => {
         if (key !== TITLE_COLUMN && !sortable(typed(key))) refuse("bad_request", "Rows never sort by pictures.");
@@ -866,7 +1167,11 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.group_by !== undefined) {
         if (!input.group_by) delete view.group_by;
         else {
-          typed(input.group_by, ["status", "select"]);
+          const property = typed(input.group_by);
+          const allowed = view.kind === "board" ? boardGroupableProperties([property]) : groupableProperties([property]);
+          if (!allowed.length) refuse("bad_request", view.kind === "board"
+            ? "A board groups by a Status, or a Select with options."
+            : "A board stays Status or Select; a table or list groups by Status, Select, Multi-select, Person, Checkbox or Date.");
           view.group_by = input.group_by;
         }
       }
@@ -885,6 +1190,19 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.card_properties !== undefined) {
         input.card_properties.forEach((key) => typed(key));
         view.card_properties = input.card_properties;
+      }
+      if (input.hidden !== undefined) {
+        input.hidden.forEach((key) => typed(key));
+        if (input.hidden.length) view.hidden = input.hidden;
+        else delete view.hidden;
+      }
+      if (input.calcs !== undefined) {
+        for (const [key, fn] of Object.entries(input.calcs)) {
+          const property = key === TITLE_COLUMN ? undefined : typed(key);
+          if (!calcKinds(key, property).includes(fn)) refuse("bad_request", `${key === TITLE_COLUMN ? "The row-name column" : `Column ${key}`} has no ${fn} calculation.`);
+        }
+        if (Object.keys(input.calcs).length) view.calcs = input.calcs;
+        else delete view.calcs;
       }
       const next = withView(changed.config, view);
       return change(h, () => {
@@ -958,9 +1276,4 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
   };
 }
 
-/** Whether `value` is a real calendar day, YYYY-MM-DD. */
-function isDay(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const day = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === value;
-}
+

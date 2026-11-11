@@ -1,14 +1,15 @@
-import { ArrowDown, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ChevronRight, Copy, Repeat, SlidersHorizontal, TextWrap, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ChevronRight, Copy, Repeat, SlidersHorizontal, TextWrap, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
+import { Select } from "../../components/Select";
 import { imeComposing } from "../../core/keyboard";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DatabaseProperty, PropertyType } from "../../core/types";
 import { PROPERTY_LABELS, PROPERTY_TYPES, sortable, TITLE_COLUMN } from "./database-model";
 import { PropertyIcon, TitleIcon, TypeIcon } from "./properties";
 import { PropertyIconPicker } from "./PropertyIconPicker";
-import { StatusOptionsMenu, type StatusEditing } from "./StatusOptions";
+import { OptionsEditorMenu, StatusOptionsMenu, type SelectEditing, type StatusEditing } from "./StatusOptions";
 
 const GROUP = "property-menu";
 
@@ -22,6 +23,23 @@ const GROUP = "property-menu";
  *  `property` is null for the row-name column: it can be named, given a
  *  mark and sorted and have a column put to its right, but its type is the
  *  rows' names — it cannot change, be copied, or go. */
+/** What a relation column's menu shows and writes: the database it links
+ *  to (fixed at creation, so read-only here), its limit, its mirror on the
+ *  target — its switch and its name. */
+export interface RelationEditing {
+  /** The target database's name — the forward relation's; a mirror's is
+   *  the database it points back to. */
+  targetName: string;
+  /** A mirror (relation_origin set): nothing of its own to edit. */
+  mirror: boolean;
+  limit: "unlimited" | "1";
+  twoWay: boolean;
+  backlinkName: string;
+  onLimit(limit: "unlimited" | "1"): void;
+  onTwoWay(twoWay: boolean): void;
+  onBacklinkName(name: string): void;
+}
+
 export function PropertyMenu({
   anchor,
   databaseId,
@@ -32,6 +50,8 @@ export function PropertyMenu({
   sort,
   wrap,
   statusEditing,
+  selectEditing,
+  relation,
   onRename,
   onIcon,
   onChangeType,
@@ -58,6 +78,10 @@ export function PropertyMenu({
   wrap?: boolean;
   /** A Status's options, edited; absent for every other column. */
   statusEditing?: StatusEditing;
+  /** A Select's or Multi-select's options, edited; absent otherwise. */
+  selectEditing?: SelectEditing;
+  /** A relation's fields, edited; absent for every other column. */
+  relation?: RelationEditing;
   onRename(name: string): void;
   /** A mark for the column, or null for its type's own. */
   onIcon(icon: string | null): void;
@@ -75,9 +99,11 @@ export function PropertyMenu({
   const glyphRef = useRef<HTMLButtonElement | null>(null);
   const typeRef = useRef<HTMLButtonElement | null>(null);
   const statusRef = useRef<HTMLButtonElement | null>(null);
+  const optionsRef = useRef<HTMLButtonElement | null>(null);
+  const relationRef = useRef<HTMLButtonElement | null>(null);
   // One thing opens beside the menu at a time: the mark's picker, the
-  // status's options, or the types.
-  const [side, setSide] = useState<"icon" | "status" | "type" | null>(null);
+  // optioned types' options, or the types.
+  const [side, setSide] = useState<"icon" | "status" | "options" | "type" | "relation" | null>(null);
   const column = property?.id ?? TITLE_COLUMN;
   const typeOpen = side === "type";
 
@@ -153,7 +179,52 @@ export function PropertyMenu({
                 <span className="menu__hint"><ChevronRight size={14} /></span>
               </button>
             ) : null}
-            {property ? (
+            {(property?.type === "select" || property?.type === "multi_select") && selectEditing ? (
+              <button
+                type="button"
+                ref={optionsRef}
+                data-menu-item
+                role="menuitem"
+                aria-haspopup="menu"
+                aria-expanded={side === "options"}
+                className={`menu__item ${side === "options" ? "is-active" : ""}`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => setSide((open) => (open === "options" ? null : "options"))}
+              >
+                <span className="menu__icon"><SlidersHorizontal size={16} /></span>
+                <span className="menu__copy"><span className="menu__label">Edit property</span></span>
+                <span className="menu__hint"><ChevronRight size={14} /></span>
+              </button>
+            ) : null}
+            {relation ? (
+              /* A mirror's pairing lives on the forward property — it has
+                 nothing of its own to edit. The forward relation's target
+                 is fixed once made, so the menu shows it rather than offers
+                 it. */
+              relation.mirror ? (
+                <div className="menu__item is-static">
+                  <span className="menu__icon"><ArrowLeftRight size={16} /></span>
+                  <span className="menu__copy"><span className="menu__label">From {relation.targetName}</span></span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  ref={relationRef}
+                  data-menu-item
+                  role="menuitem"
+                  aria-haspopup="menu"
+                  aria-expanded={side === "relation"}
+                  className={`menu__item ${side === "relation" ? "is-active" : ""}`}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => setSide((open) => (open === "relation" ? null : "relation"))}
+                >
+                  <span className="menu__icon"><SlidersHorizontal size={16} /></span>
+                  <span className="menu__copy"><span className="menu__label">Edit property</span></span>
+                  <span className="menu__hint"><ChevronRight size={14} /></span>
+                </button>
+              )
+            ) : null}
+            {property && !relation?.mirror ? (
               <>
                 <button
                   type="button"
@@ -232,6 +303,75 @@ export function PropertyMenu({
         />
       ) : null}
 
+      {side === "options" && (property?.type === "select" || property?.type === "multi_select") && selectEditing && optionsRef.current ? (
+        <OptionsEditorMenu
+          anchor={rectOf(optionsRef.current)}
+          group={GROUP}
+          property={property}
+          editing={selectEditing}
+          onClose={() => setSide(null)}
+        />
+      ) : null}
+
+      {side === "relation" && relation && !relation.mirror && relationRef.current ? (
+        <Popover
+          open
+          anchor={rectOf(relationRef.current)}
+          placement="right-start"
+          label="Edit property"
+          group={GROUP}
+          onDismiss={() => setSide(null)}
+        >
+          <div className="rel-panel">
+            <div className="rel-panel__row">
+              <span className="rel-panel__label">Linked to</span>
+              <span className="rel-panel__value">{relation.targetName}</span>
+            </div>
+            <div className="rel-panel__row">
+              <span className="rel-panel__label">Limit</span>
+              <Select
+                size="compact"
+                aria-label="Relation limit"
+                value={relation.limit}
+                onValueChange={(limit) => relation.onLimit(limit as "unlimited" | "1")}
+                options={[
+                  { value: "unlimited", label: "No limit" },
+                  { value: "1", label: "1 page" },
+                ]}
+              />
+            </div>
+            <label className="rel-panel__row rel-panel__toggle">
+              <input
+                type="checkbox"
+                checked={relation.twoWay}
+                onChange={(event) => relation.onTwoWay(event.target.checked)}
+              />
+              <span className="rel-panel__label">Show on {relation.targetName}</span>
+            </label>
+            {relation.twoWay ? (
+              <div className="rel-panel__row">
+                <span className="rel-panel__label">Backlink name</span>
+                <input
+                  className="rel-panel__input"
+                  defaultValue={relation.backlinkName}
+                  placeholder={relation.targetName}
+                  aria-label="Backlink property name"
+                  spellCheck={false}
+                  onBlur={(event) => relation.onBacklinkName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (imeComposing(event)) return;
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      relation.onBacklinkName(event.currentTarget.value);
+                    }
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        </Popover>
+      ) : null}
+
       {property ? (
         <Popover
           open={typeOpen}
@@ -243,7 +383,9 @@ export function PropertyMenu({
         >
           <MenuList label="Change type" autoFocus>
             <div className="menu__section-title">Type</div>
-            {PROPERTY_TYPES.map((type) => (
+            {/* A relation is only ever made — never changed into — so the
+                list does not offer it: a type cannot pick a database. */}
+            {PROPERTY_TYPES.filter((type) => type !== "relation").map((type) => (
               <MenuItem
                 key={type}
                 icon={<TypeIcon type={type} />}

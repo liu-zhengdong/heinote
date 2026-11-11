@@ -6237,6 +6237,230 @@ button.db__th:hover,
 
 .db__cell-select { width: 100%; min-width: 0; }
 
+/* The single-line values: number, url, email and phone type in one input
+   on the row's line. A number stands right-aligned in tabular figures, the
+   way Notion's does, so a column of them lines up. */
+.db__line {
+  display: block;
+  min-width: 0;
+}
+
+.db__cell--line {
+  height: var(--db-row, 33px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__cell--number {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A set address reads as the link it is — the same ink at 70% over a 40%
+   underline the words' own links wear — and, where the cell cannot be
+   typed, is the link, so it can be followed. */
+.db__link,
+.db__cell--link {
+  color: inherit;
+  opacity: 0.7;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-decoration-thickness: max(1px, 0.05em);
+  text-underline-offset: 0.2em;
+}
+
+.db__link {
+  display: inline-block;
+  height: var(--db-row, 33px);
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: pointer;
+  line-height: var(--db-row, 33px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__line > .db__link {
+  height: auto;
+  max-width: 160px;
+  padding: 0;
+  line-height: inherit;
+}
+
+/* A checkbox is its box — the to-do block's, so the app has one kind of
+   tick — on the row's line. */
+.db__check {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  padding-left: 8px;
+}
+
+/* The meta columns read the row's own record; they are drawn as words, not
+   inputs — nothing writes them. */
+.db__meta {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--ink-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__meta[data-meta="id"] .db__meta-value {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.db__meta-value:empty::after {
+  color: var(--ink-4);
+  content: "Empty";
+}
+
+/* A multi-select is its options as pills, the ones it holds — as many as
+   fit, the list a click away. */
+.db__multi {
+  display: block;
+  min-width: 0;
+}
+
+.db__multi-cell {
+  display: flex;
+  width: 100%;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: default;
+}
+
+.db__multi-pills {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__multi-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.db__multi-remove {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+}
+
+.db__multi-remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__multi-empty {
+  color: var(--ink-4);
+}
+
+/* The multi-select's own menu: a filter at the top, the offered options —
+   picked ones marked — under it, and the quiet note that options are born
+   in the column's menu. */
+.db-multi-menu {
+  width: 220px;
+  padding: 6px;
+}
+
+.db-multi-menu__search {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+.db-multi-menu__list {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.db-multi-menu__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-2);
+  font-size: 13px;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.db-multi-menu__option:hover,
+.db-multi-menu__option.is-active {
+  background: var(--fill-hover);
+}
+
+.db-multi-menu__option > svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-multi-menu__empty,
+.db-multi-menu__none {
+  padding: 5px 8px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.db-multi-menu__hint {
+  display: flex;
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-4);
+  font-size: 11px;
+  gap: 12px;
+}
+
+.db-multi-menu__hint svg {
+  vertical-align: -1px;
+}
+
+/* A range is the two days with an arrow between; the end field joins once
+   a start is set, the way Notion's "End date" does. */
+.db__date:not(.is-empty) {
+  display: flex;
+  align-items: center;
+}
+
+.db__date > .db__cell {
+  flex: 1;
+  min-width: 0;
+}
+
+.db__date-arrow {
+  padding: 0 2px;
+  color: var(--ink-4);
+}
+
 .db__person {
   display: flex;
   height: var(--db-row, 33px);
@@ -6474,6 +6698,58 @@ button.db__th:hover,
   padding: 6px 2px;
   color: var(--ink-3);
   font-size: calc(var(--read) * 0.92);
+}
+
+/* The one view a linked view draws, named where the tabs would stand: a
+   label, not a tab — it does not switch and does not show the active mark. */
+.view-tab--pinned {
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.view-tab--pinned:hover {
+  background: none;
+}
+
+.view-tab--pinned::after {
+  display: none;
+}
+
+/* A linked view's caption: what it is — a link, to this database, of this
+   view — and the way out of it to the database itself. */
+.block-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap svg {
+  flex: none;
+  color: var(--ink-4);
+}
+
+.block-cap__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-cap__open {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap__open:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
 }
 
 /* A filter value or a sort name can be long; the button keeps its size. */
@@ -6769,6 +7045,37 @@ button.db__th:hover,
   font-size: 12px;
 }
 
+/* A select's or multi-select's options: the status menu's flat sibling —
+   the same pills and settings, no groups and no grips, each row whole. */
+.options-menu__option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+
+.options-menu__option:hover {
+  background: var(--fill-hover);
+}
+
+.options-menu__option .status-menu__chevron {
+  margin-left: auto;
+}
+
+.options-menu__none {
+  padding: 8px 9px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.options-menu .status-menu__new {
+  padding-left: 4px;
+}
+
 /* A view's sorts — Notion's sort panel: a line per key, first key first,
    its column (on a grey face, with its mark) and its direction as the
    platform's own pickers under a quiet face, × to take it away; Add sort
@@ -6835,6 +7142,359 @@ button.db__th:hover,
 .sort-panel .menu {
   padding-top: 4px;
 }
+
+/* A view's filters — Notion's filter panel: a line per condition, the
+   lead word Where or And before its property, its operator and its value,
+   × to take it away. One group sits among them with a border and its own
+   And/Or; everything reads as one AND. */
+.filter-panel {
+  display: flex;
+  width: min(560px, calc(100vw - 16px));
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.filter-panel__title {
+  padding: 2px 9px 5px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.filter-panel__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+.cond {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.cond__lead {
+  width: 40px;
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.filter-panel__field { min-width: 0; flex: 0 1 auto; }
+
+.filter-panel__field--property { flex: 1 1 0; }
+
+.filter-panel__field--op { width: 118px; flex: none; }
+
+.filter-panel__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.filter-panel__input {
+  width: 120px;
+  height: 28px;
+  flex: none;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.filter-panel__input:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cond__remove {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cond__remove:hover {
+  color: var(--danger);
+}
+
+/* The group is the filter's one box: its logic at its head, its conditions
+   inside, indented where it stands among the plain ones. */
+.group-box {
+  padding: 4px 6px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  margin: 2px 0 2px 40px;
+}
+
+.group-box__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.filter-panel__field--logic { flex: none; }
+
+.filter-panel__add-in {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  margin: 2px 0 0 42px;
+  color: var(--ink-3);
+  font-size: 12px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.filter-panel__add-in:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.filter-panel .menu {
+  padding-top: 4px;
+}
+
+/* The columns a view draws: a line per property, its mark and name and the
+   eye that takes it out; the name stays — a table's spine — tagged Title. */
+.cols-panel {
+  display: flex;
+  width: 270px;
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.cols-panel__search {
+  height: 28px;
+  flex: none;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  margin: 2px 7px 5px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.cols-panel__search:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cols-panel__rows {
+  display: flex;
+  max-height: 300px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 5px;
+  overflow-y: auto;
+}
+
+.cols-panel__row {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+}
+
+.cols-panel__row:hover {
+  background: var(--fill-hover);
+}
+
+.cols-panel__mark {
+  display: grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.cols-panel__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cols-panel__eye {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cols-panel__row.is-hidden .cols-panel__name { color: var(--ink-3); }
+
+.cols-panel__row.is-hidden .cols-panel__eye { color: var(--ink-4); }
+
+.cols-panel__tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+
+.cols-panel__section {
+  padding: 7px 6px 3px;
+  color: var(--ink-4);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cols-panel__none {
+  padding: 8px 6px;
+  color: var(--ink-4);
+  font-size: 12.5px;
+}
+
+.cols-panel .menu {
+  padding-top: 4px;
+}
+
+/* A group is a header over its rows: the chevron turns as it folds, the
+   value's pill or name, how many rows are in it, and its New — quiet until
+   the pointer is near. Folded rows are gone from the grid entirely. */
+.grp-row td {
+  height: 34px;
+  vertical-align: middle;
+}
+
+.grp-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.grp-h__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+}
+
+.grp-h__chev {
+  flex: none;
+  color: var(--ink-3);
+  transform: rotate(90deg);
+  transition: transform var(--t-fast) var(--e-out);
+}
+
+.grp-h__chev.is-closed {
+  transform: rotate(0deg);
+}
+
+.grp-h__label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grp-h__none { color: var(--ink-3); }
+
+.grp-h__count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.grp-h__add {
+  display: inline-flex;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out),
+    opacity var(--t-fast) var(--e-out);
+}
+
+.grp-h__add:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.grp-h:hover .grp-h__add,
+.grp-h__add:focus-visible { opacity: 1; }
+
+/* A column counting under a group's rows puts its subtotal in the header
+   row, as quiet as the group's count. */
+.grp-sum {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__table tr.is-folded { display: none; }
+
+.db-list__group {
+  padding: 0 8px;
+}
+
+/* The footer's cells stick to the table's bottom as the rows scroll past:
+   each column's calculation, its answer in a steady face. */
+.db__table tfoot td {
+  position: sticky;
+  height: 32px;
+  bottom: 0;
+  border-bottom: 0;
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hairline-strong);
+  color: var(--ink-2);
+  font-size: 12px;
+  z-index: 1;
+}
+
+.db__calc {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.db__calc-fn {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.db__calc-val {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__calc-val.is-empty,
+.db__calc--none { color: var(--ink-4); }
 
 /* One option's settings, in the panel's place: the way back, its name,
    default, delete and colour — one scroller, the panel's own. */
@@ -6954,6 +7614,168 @@ button.db__th:hover,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A multi-select's pills go bare on a card — each is already its own tag;
+   a box around them would say nothing more. A checkbox chip holds the
+   column's name beside its box. */
+.db-chip--multi {
+  height: auto;
+  padding: 0;
+  background: none;
+}
+
+.db-chip--check .checkbox {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── Relations ────────────────────────────────────────────────────────── */
+
+/* A linked page, in a cell or on a card: its glyph and title, clickable to
+   the page. A page that is gone or out of reach keeps its place as a dashed
+   ghost — it may come back, and the link may still be meant. */
+.db-rel {
+  display: inline-flex;
+  height: 20px;
+  max-width: 160px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.db-rel svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-rel:hover {
+  background: var(--fill-hover);
+}
+
+.db-rel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-rel--ghost {
+  border: 1px dashed var(--hairline-strong);
+  background: none;
+  color: var(--ink-4);
+  cursor: default;
+}
+
+.db-rel--ghost:hover {
+  background: none;
+}
+
+.db-rel__list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.db-rel-cell {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+}
+
+/* The × a chip carries when it can be dropped — the cell's, styled as the
+   multi-select pill's remove is. */
+.db-rel__remove {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  color: var(--ink-4);
+}
+
+.db-rel__remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The picker's New page row, at the foot of its list. */
+.db-multi-menu__new {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: left;
+}
+
+.db-multi-menu__new:hover,
+.db-multi-menu__new.is-active {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The relation column's panel: the fixed target, its limit, its mirror's
+   switch and the mirror's name. */
+.rel-panel {
+  display: flex;
+  min-width: 240px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.rel-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rel-panel__label {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rel-panel__value {
+  color: var(--ink-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rel-panel__toggle {
+  cursor: pointer;
+}
+
+.rel-panel__input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+/* A menu row that states rather than offers — a mirror's origin. */
+.menu__item.is-static {
+  color: var(--ink-4);
+  cursor: default;
 }
 
 /* ── Pictures in properties ───────────────────────────────────────────── */

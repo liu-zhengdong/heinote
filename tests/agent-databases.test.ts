@@ -542,7 +542,7 @@ test("UC-14: invalid definitions, references and typed values are atomic and pre
   for (const databaseInput of [
     { properties: [{ id: "name", name: "Reserved", type: "text" }] },
     { properties: [{ id: UC, name: "A", type: "text" }, { id: UC, name: "B", type: "text" }] },
-    { properties: [{ id: UC, name: "Bad type", type: "number" }] },
+    { properties: [{ id: UC, name: "Bad type", type: "formula" }] },
     { properties: [], views: [{ id: TABLE, name: "Bad", kind: "timeline" }] },
     { properties: [], views: [{ id: TABLE, name: "A", kind: "table" }, { id: TABLE, name: "B", kind: "list" }] },
     { properties: [], unsupported: true },
@@ -815,4 +815,463 @@ test("UC-14: image cells bind existing same-scope files and reject forged or mis
   const unauthorized = await outsider.request(`/databases/${strangerDb.id}/rows`, { method: "POST", body: { requestId: randomUUID(), baseRevision: strangerDb.revision, title: "Foreign image", propertyFiles: { [IMAGE]: [file] } } });
   assert.ok([400, 403, 404].includes(unauthorized.status), JSON.stringify(unauthorized.body));
   assert.equal((await outsider.query(strangerDb.id)).total, 0);
+});
+
+// UC-22 batch 1: new property types, option colors, multi-select, date
+// ranges, read-only meta columns and per-type value validation.
+test("UC-22: adds each new property type, colors options and validates per-type row values", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    title_name: "项目",
+    properties: [
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"], option_colors: { "急": "red" } },
+      { id: "property_site", name: "站点", type: "url" },
+      { id: "property_mail", name: "邮箱", type: "email" },
+      { id: "property_tel", name: "电话", type: "phone" },
+      { id: "property_span", name: "排期", type: "date" },
+      { id: "property_created", name: "创建时间", type: "created_time" },
+      { id: "property_edited", name: "编辑时间", type: "last_edited_time" },
+      { id: "property_maker", name: "创建者", type: "created_by" },
+      { id: "property_editor", name: "编辑者", type: "last_edited_by" },
+      { id: "property_id", name: "编号", type: "id" },
+    ],
+  } });
+  assert.equal(property(db, "property_tags").type, "multi_select");
+  assert.deepEqual(property(db, "property_tags").option_colors, { "急": "red" });
+
+  // Each remaining type is also addable after creation.
+  db = await a.addProperty(db, { id: "property_note", name: "备注", type: "text" });
+  assert.equal(property(db, "property_note").type, "text");
+
+  // Colors are set and read back; an unknown option name is refused.
+  db = await a.patchProperty(db, "property_tags", { option_colors: { "急": "orange", "发版": "green" } });
+  assert.deepEqual(property(db, "property_tags").option_colors, { "急": "orange", "发版": "green" });
+  const stale = await a.get(db.id);
+  invalid(await a.request(`/databases/${db.id}/properties/property_tags`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: stale.revision, property: { option_colors: { "不存在": "blue" } } } }));
+  assert.deepEqual(property(await a.get(db.id), "property_tags").option_colors, { "急": "orange", "发版": "green" });
+  invalid(await a.request(`/databases/${db.id}/properties`, { method: "POST", body: { requestId: randomUUID(), baseRevision: stale.revision, property: { id: "property_bad", name: "错色", type: "multi_select", options: ["A"], option_colors: { "B": "blue" } } } }));
+
+  // A row exercising every new type; stored formats are the canonical ones.
+  const row1 = await a.addRow(db, {
+    title: "发布项目",
+    properties: {
+      property_amount: "12.5", property_done: "true",
+      property_tags: JSON.stringify(["急", "发版"]),
+      property_site: "https://notes.example", property_mail: "a@b.cc", property_tel: "+86 138",
+      property_span: "2026-11-20/2026-11-28",
+    },
+  });
+  assert.equal(row1.page.properties?.property_amount, "12.5");
+  assert.equal(row1.page.properties?.property_done, "true");
+  assert.equal(row1.page.properties?.property_tags, JSON.stringify(["急", "发版"]));
+  assert.equal(row1.values.property_tags, JSON.stringify(["急", "发版"]));
+  assert.equal(row1.page.properties?.property_span, "2026-11-20/2026-11-28");
+
+  // Meta columns resolve from the row record: set, and the same set.
+  assert.ok(row1.values.property_created);
+  assert.ok(row1.values.property_edited);
+  assert.ok(row1.values.property_maker);
+  assert.ok(row1.values.property_editor);
+  assert.equal(row1.values.property_id, row1.id);
+  assert.equal(row1.page.properties?.property_created ?? undefined, undefined);
+
+  // Comma-separated input normalizes to the JSON array; dedupe applies.
+  db = await a.get(db.id);
+  const row2 = await a.updateRow(db, row1, { properties: { property_tags: "发版,急,急" } });
+  assert.equal(row2.page.properties?.property_tags, JSON.stringify(["发版", "急"]));
+
+  // Per-type rejections: bad number, bad checkbox, unknown multi-select
+  // option, bogus date, meta write — nothing lands.
+  const attempts = [
+    { property_amount: "abc" }, { property_amount: "12.5.3" },
+    { property_done: "yes" }, { property_done: "1" },
+    { property_tags: "不存在的选项" }, { property_tags: JSON.stringify(["急", "不存在的选项"]) },
+    { property_span: "2026-02-30" }, { property_span: "2026-11-20/2026-13-40" }, { property_span: "2026-11-20/12-01" },
+    { property_created: "2026-11-20" }, { property_id: "forged" }, { property_maker: "someone" },
+  ];
+  const before = await a.query(db.id);
+  for (const properties of attempts) {
+    const changed = await a.request(`/databases/${db.id}/rows/${row1.id}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: row2.revision, databaseRevision: db.revision, properties } });
+    assert.ok([400, 403, 404].includes(changed.status), `Expected rejection: ${JSON.stringify(properties)} got ${JSON.stringify(changed.body)}`);
+  }
+  assert.deepEqual(await a.query(db.id), before);
+
+  // false normalizes to empty (unchecked); a reversed range is kept in order.
+  const row3 = await a.updateRow(db, row2, { properties: { property_done: "false", property_span: "2026-11-28/2026-11-20" } });
+  assert.equal(row3.page.properties?.property_done, "");
+  assert.equal(row3.page.properties?.property_span, "2026-11-20/2026-11-28");
+  const cleared = await a.updateRow(db, row3, { properties: { property_tags: "", property_amount: "" } });
+  assert.equal(cleared.values.property_tags, "");
+  assert.equal(cleared.values.property_amount, "");
+});
+
+// UC-22 batch 1: sorting follows each new type's own order.
+test("UC-22: sorts numbers numerically, ranges by start day and unchecked before checked", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    properties: [
+      // Text first, so a word can live where a number will: typed before the
+      // column had a type, it stays — and sorts after every number.
+      { id: "property_amount", name: "金额", type: "text" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_span", name: "排期", type: "date" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const high = await a.addRow(db, { title: "High", properties: { property_amount: "30", property_done: "true", property_span: "2026-11-25/2026-11-28" } });
+  db = await a.get(db.id);
+  const low = await a.addRow(db, { title: "Low", properties: { property_amount: "4", property_span: "2026-11-01/2026-11-03" } });
+  db = await a.get(db.id);
+  const text = await a.addRow(db, { title: "Text", properties: { property_amount: "soon", property_done: "true" } });
+  db = await a.get(db.id);
+  const empty = await a.addRow(db, { title: "Empty" });
+  db = await a.patchProperty(db, "property_amount", { type: "number" });
+  assert.equal(property(db, "property_amount").type, "number");
+  // Numbers: 4 < 30, the non-numeric "soon" trails, empty stays last.
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_amount", direction: "asc" }] })), [low.id, high.id, text.id, empty.id]);
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_amount", direction: "desc" }] })), [high.id, low.id, text.id, empty.id]);
+  // Ranges sit on their start day; unchecked sorts before checked.
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_span", direction: "asc" }] })), [low.id, high.id, text.id, empty.id]);
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_done", direction: "asc" }] })), [low.id, empty.id, high.id, text.id]);
+});
+
+// UC-22 batch 2: multi-condition filters AND together; the one group keeps
+// its own or. Saved on a view they replace the old single `filter`.
+test("UC-22: filters combine conditions and groups, save to the view and clear", async (t) => {
+  const { agent: a } = await fixture(t);
+  const stage = [
+    { id: "option_design", name: "设计", color: "blue", group: "todo" },
+    { id: "option_dev", name: "开发", color: "orange", group: "progress" },
+    { id: "option_ship", name: "发布", color: "green", group: "complete" },
+  ];
+  let db = await a.create({ database: {
+    properties: [
+      { id: "property_stage", name: "阶段", type: "status", status_options: stage },
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_day", name: "排期", type: "date" },
+      { id: "property_who", name: "负责人", type: "person" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const small = await a.addRow(db, { title: "Small", properties: {
+    property_stage: "设计", property_amount: "4", property_tags: JSON.stringify(["急"]),
+    property_day: "2026-11-01/2026-11-03", property_who: "刘政东",
+  } });
+  db = await a.get(db.id);
+  const big = await a.addRow(db, { title: "Big", properties: {
+    property_stage: "开发", property_amount: "30", property_done: "true",
+    property_tags: JSON.stringify(["急", "发版"]), property_day: "2026-11-25/2026-11-28",
+  } });
+  db = await a.get(db.id);
+  const plain = await a.addRow(db, { title: "Plain" });
+  db = await a.get(db.id);
+
+  // Conditions on separate types AND: number gt AND stage is.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [
+    { property_id: "property_amount", op: "gt", value: "10" },
+    { property_id: "property_stage", op: "is", value: "开发" },
+  ] })), [big.id]);
+  // Checkbox holds only is; unchecked is value "false".
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_done", op: "is", value: "true" }] })), [big.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_done", op: "is", value: "false" }] })), [small.id, plain.id]);
+  // Multi-select contains any one option; not_contains keeps unset rows.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_tags", op: "contains", value: "发版" }] })), [big.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_tags", op: "not_contains", value: "急" }] })), [plain.id]);
+  // Dates compare by day, a range on its start day.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_day", op: "on_or_before", value: "2026-11-10" }] })), [small.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_day", op: "after", value: "2026-11-10" }] })), [big.id]);
+  // Words: person matches contains; the empties ask for no value.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_who", op: "contains", value: "刘" }] })), [small.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "is_empty" }] })), [plain.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "is_not_empty" }] })), [small.id, big.id]);
+  // An absent operator keeps the empty row, as Notion's does: unchecked and
+  // unset count as "not that"; a non-numeric cell still fails every number
+  // comparison, even neq.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "neq", value: "4" }] })), [big.id, plain.id]);
+  // The group or-s inside; everything else still ANDs around it — the
+  // default-staged unchecked row belongs to both sides of it.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [
+    { logic: "or", conditions: [
+      { property_id: "property_stage", op: "is", value: "设计" },
+      { property_id: "property_amount", op: "gt", value: "10" },
+    ] },
+    { property_id: "property_done", op: "is", value: "false" },
+  ] })), [small.id, plain.id]);
+  // A saved filter is what a plain query uses; the old field is gone.
+  db = await a.patchView(db, TABLE, { filters: [{ property_id: "property_stage", op: "is", value: "开发" }] });
+  assert.deepEqual(view(db, TABLE).filters, [{ property_id: "property_stage", op: "is", value: "开发" }]);
+  assert.equal(view(db, TABLE).filter ?? null, null);
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE })), [big.id]);
+  // A query's own filters outvote the saved ones; an empty list means none.
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE, filters: [{ property_id: "property_amount", op: "is_empty" }] })), [plain.id]);
+  assert.equal((await a.query(db.id, { viewId: TABLE, filters: [] })).total, 3);
+  // The legacy field still writes and reads as one is — and clears both.
+  db = await a.patchView(db, TABLE, { filter: { property_id: "property_stage", value: "设计" } });
+  assert.equal(view(db, TABLE).filter.value, "设计");
+  assert.equal(view(db, TABLE).filters ?? null, null);
+  // The unchecked row fell to the stage's default — "设计" — so it matches.
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE })), [small.id, plain.id]);
+  db = await a.patchView(db, TABLE, { filter: null });
+  assert.equal(view(db, TABLE).filter ?? null, null);
+  assert.equal((await a.query(db.id, { viewId: TABLE })).total, 3);
+});
+
+test("UC-22: rejects malformed filter conditions and nested groups", async (t) => {
+  const { agent: a } = await fixture(t);
+  const db = await a.create({ database: {
+    properties: [
+      { id: "property_stage", name: "阶段", type: "status" },
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_pic", name: "图", type: "image" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const attempts = [
+    // An operator the type does not take.
+    [{ property_id: "property_amount", op: "contains", value: "4" }],
+    [{ property_id: "property_tags", op: "is", value: "急" }],
+    [{ property_id: "property_done", op: "is_not", value: "true" }],
+    // A value-hungry operator with nothing to compare to.
+    [{ property_id: "property_amount", op: "gt" }],
+    // The value is not one of the options, or not the checkbox's true/false.
+    [{ property_id: "property_tags", op: "contains", value: "不存在的" }],
+    [{ property_id: "property_done", op: "is", value: "yes" }],
+    // A property that is not there, or holds no words — and the name column.
+    [{ property_id: "property_missing", op: "is", value: "x" }],
+    [{ property_id: "property_pic", op: "contains", value: "x" }],
+    [{ property_id: "name", op: "contains", value: "x" }],
+    // A group inside a group; two groups.
+    [{ logic: "and", conditions: [{ logic: "and", conditions: [{ property_id: "property_amount", op: "gt", value: "0" }] }] }],
+    [
+      { logic: "and", conditions: [{ property_id: "property_amount", op: "gt", value: "0" }] },
+      { logic: "or", conditions: [{ property_id: "property_amount", op: "lt", value: "9" }] },
+    ],
+  ];
+  for (const filters of attempts) {
+    invalid(await a.request(`/databases/${db.id}/query`, { method: "POST", body: { filters } }));
+    invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: { filters } } }));
+  }
+});
+
+test("UC-22: views keep hidden columns, footer calcs and extended group_by", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    properties: [
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_day", name: "排期", type: "date" },
+      { id: "property_who", name: "负责人", type: "person" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  db = await a.patchView(db, TABLE, { hidden: ["property_amount", "property_who"], calcs: { name: "count", property_amount: "sum", property_done: "percent_checked" }, group_by: "property_who" });
+  assert.deepEqual(view(db, TABLE).hidden, ["property_amount", "property_who"]);
+  assert.deepEqual(view(db, TABLE).calcs, { name: "count", property_amount: "sum", property_done: "percent_checked" });
+  assert.equal(view(db, TABLE).group_by, "property_who");
+  // Empty collections and an empty group_by take the fields away.
+  db = await a.patchView(db, TABLE, { hidden: [], calcs: {}, group_by: "" });
+  assert.equal(view(db, TABLE).hidden ?? null, null);
+  assert.equal(view(db, TABLE).calcs ?? null, null);
+  assert.equal(view(db, TABLE).group_by ?? null, null);
+  // Table and list group by the new types; not by the name column, nothing,
+  // or an image — and a board still only takes status or select.
+  for (const by of ["property_done", "property_tags", "property_day"]) {
+    db = await a.patchView(db, TABLE, { group_by: by });
+    assert.equal(view(db, TABLE).group_by, by);
+  }
+  for (const body of [{ group_by: "name" }, { group_by: "property_missing" }, { calcs: { name: "sum" } }, { calcs: { property_amount: "contains" } }, { calcs: { property_missing: "count" } }, { hidden: ["name"] }, { hidden: ["property_missing"] }]) {
+    invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: body } }));
+  }
+  db = await a.addProperty(db, { id: "property_pic", name: "图", type: "image" });
+  invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: { group_by: "property_pic" } } }));
+  invalid(await a.request(`/databases/${db.id}/views`, { method: "POST", body: { requestId: randomUUID(), baseRevision: db.revision, view: { id: "view_board", name: "板", kind: "board", group_by: "property_done" } } }));
+});
+
+// UC-22 batch 2: renaming a status option rewrites the conditions naming it;
+// removing the option drops them — a group shrinks to what remains.
+test("UC-22: status option edits rewrite filter conditions, removals drop them", async (t) => {
+  const { agent: a } = await fixture(t);
+  const options = [
+    { id: "option_a", name: "Alpha", color: "default", group: "todo" },
+    { id: "option_b", name: "Beta", color: "blue", group: "progress" },
+  ];
+  let db = await a.create({ database: {
+    properties: [
+      { id: STATUS, name: "Status", type: "status", status_options: options },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急"] },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table", filters: [
+      { property_id: STATUS, op: "is", value: "Beta" },
+      { logic: "or", conditions: [
+        { property_id: STATUS, op: "is", value: "Beta" },
+        { property_id: "property_tags", op: "contains", value: "急" },
+      ] },
+    ] }],
+  } });
+  // Rename by stable id: both the plain condition's and the group's value.
+  db = await a.patchProperty(db, STATUS, { status_options: options.map((option) => ({ ...option, name: option.id === "option_b" ? "Gamma" : option.name })) });
+  const filters = view(db, TABLE).filters;
+  assert.equal(filters[0].value, "Gamma");
+  assert.equal(filters[1].conditions[0].value, "Gamma");
+  assert.equal(filters[1].conditions[1].value, "急");
+  // Remove the option: its conditions go; the group keeps what remains.
+  db = await a.patchProperty(db, STATUS, { status_options: options.filter((option) => option.id === "option_a") });
+  assert.deepEqual(view(db, TABLE).filters, [{ logic: "or", conditions: [{ property_id: "property_tags", op: "contains", value: "急" }] }]);
+});
+
+// UC-22 batch 3 (AC-03): a two-way relation keeps both sides' values in
+// step — every write lands the mirror's links in the same request, and the
+// mirror answers to its backlink name.
+test("UC-22: a two-way relation syncs both sides, renames and drops its mirror", async (t) => {
+  const { agent: a } = await fixture(t);
+  let projects = await a.create({ title: "Projects", database: {
+    properties: [{ id: UC, name: "代号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  let tasks = await a.create({ title: "Tasks", database: {
+    properties: [{ id: UC, name: "编号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  // Add the forward property two-way: the mirror appears on the target,
+  // named by relation_backlink_name, pointing back with relation_origin.
+  tasks = await a.addProperty(tasks, {
+    id: "property_rel", name: "项目", type: "relation",
+    relation_database: projects.id, relation_two_way: true, relation_backlink_name: "任务",
+  });
+  const mirror = config(await a.get(projects.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel");
+  assert.ok(mirror);
+  assert.equal(mirror.type, "relation");
+  assert.equal(mirror.name, "任务");
+  assert.equal(mirror.relation_database, tasks.id);
+  assert.equal(mirror.relation_two_way, undefined);
+  // POST /databases cannot start two-way: the mirror has no page to land on.
+  invalid(await a.request("/databases", { method: "POST", body: { requestId: randomUUID(), database: {
+    properties: [{ id: "property_rel", name: "R", type: "relation", relation_database: tasks.id, relation_two_way: true }],
+  } } }));
+  // Link from the forward side: the target row's mirror cell is written in
+  // the same request. The mirror write moved the target's revision.
+  projects = await a.get(projects.id);
+  const alpha = await a.addRow(projects, { title: "Alpha", properties: { [UC]: "P-1" } });
+  const beta = await a.addRow(await a.get(projects.id), { title: "Beta", properties: { [UC]: "P-2" } });
+  let task = await a.addRow(tasks, { title: "第一任务", properties: { property_rel: JSON.stringify([alpha.id, beta.id]) } });
+  assert.equal(task.values.property_rel, JSON.stringify([alpha.id, beta.id]));
+  const alphaPage = dto(ok(await a.request(`/pages/${alpha.id}`)));
+  assert.equal(alphaPage.page.properties[mirror.id], JSON.stringify([task.id]));
+  // The mirror sees the link from the other side — read through query so
+  // the row's effective values are checked, not only its record.
+  const seen = await a.query(projects.id, { filters: [{ property_id: mirror.id, op: "contains", value: task.id }] });
+  assert.deepEqual(ids(seen).sort(), [alpha.id, beta.id].sort());
+  // Drop one link: the mirror cell shrinks with it.
+  tasks = await a.get(tasks.id);
+  task = await a.updateRow(tasks, await a.query(tasks.id, { query: "第一任务" }).then((result) => result.rows[0]), {
+    properties: { property_rel: JSON.stringify([beta.id]) },
+  });
+  assert.equal(task.values.property_rel, JSON.stringify([beta.id]));
+  const peerAlpha = await a.query(projects.id, { filters: [{ property_id: mirror.id, op: "contains", value: task.id }] });
+  assert.deepEqual(ids(peerAlpha), [beta.id]);
+  // The mirror answers back the same way: set it, and the forward cell follows.
+  projects = await a.get(projects.id);
+  const alphaCurrent = (await a.query(projects.id, { query: "Alpha" })).rows[0];
+  const taskCurrent = (await a.query(tasks.id, { query: "第一任务" })).rows[0];
+  const gamma = await a.addRow(projects, { title: "Gamma" });
+  const updated = await a.updateRow(await a.get(tasks.id), taskCurrent, { properties: { property_rel: JSON.stringify([beta.id, gamma.id]) } });
+  assert.equal(updated.values.property_rel, JSON.stringify([beta.id, gamma.id]));
+  // Rename the mirror from the forward property; then turn two-way off:
+  // the mirror goes, values stay.
+  tasks = await a.get(tasks.id);
+  tasks = await a.patchProperty(tasks, "property_rel", { relation_two_way: true, relation_backlink_name: "相关任务" });
+  assert.equal(config(await a.get(projects.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel").name, "相关任务");
+  tasks = await a.patchProperty(await a.get(tasks.id), "property_rel", { relation_two_way: false });
+  assert.equal(config(await a.get(projects.id)).properties.some((entry: Json) => entry.relation_origin === "property_rel"), false);
+  // Relation skeleton is immutable: target and origin cannot change.
+  invalid(await a.request(`/databases/${tasks.id}/properties/property_rel`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: (await a.get(tasks.id)).revision,
+      property: { relation_database: tasks.id } },
+  }));
+  // Self-relation is legal: a row links rows of its own database.
+  let self = await a.addProperty(await a.get(tasks.id), {
+    id: "property_self", name: "前置", type: "relation", relation_database: tasks.id, relation_limit: "1",
+  });
+  const first = (await a.query(tasks.id, { query: "第一任务" })).rows[0];
+  const second = await a.addRow(await a.get(tasks.id), { title: "第二任务", properties: { property_self: JSON.stringify([first.id]) } });
+  assert.equal(second.values.property_self, JSON.stringify([first.id]));
+  // The limit is enforced; a page outside the database is refused.
+  invalid(await a.request(`/databases/${tasks.id}/rows/${second.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: second.revision,
+      databaseRevision: (await a.get(tasks.id)).revision, properties: { property_self: JSON.stringify([first.id, second.id]) } },
+  }));
+  invalid(await a.request(`/databases/${tasks.id}/rows/${second.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: second.revision,
+      databaseRevision: (await a.get(tasks.id)).revision, properties: { property_self: JSON.stringify([projects.id]) } },
+  }));
+  // A mirror property cannot change its type: make a fresh two-way pair
+  // (one-way at create, then two-way on) and patch the mirror it made.
+  let linked = await a.create({ title: "Linked", database: {
+    properties: [{ id: "property_rel2", name: "回链", type: "relation", relation_database: tasks.id }],
+  } });
+  linked = await a.patchProperty(linked, "property_rel2", { relation_two_way: true });
+  const mirror2 = config(await a.get(tasks.id)).properties.find((entry: Json) => entry.relation_origin === "property_rel2");
+  assert.ok(mirror2);
+  invalid(await a.request(`/databases/${tasks.id}/properties/${mirror2.id}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: (await a.get(tasks.id)).revision,
+      property: { type: "text" } },
+  }));
+});
+
+// UC-22 batch 3 (AC-04): a relation pointing at a database the caller
+// cannot write still writes its own side — the read-only side just does
+// not move, over HTTP the missing write right fails the whole request.
+test("UC-22: relation filters, sort and calcs follow the page-id encoding", async (t) => {
+  const { agent: a } = await fixture(t);
+  let targets = await a.create({ title: "目标库", database: {
+    properties: [{ id: UC, name: "代号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  // A relation whose target does not resolve is rejected at create.
+  assert.equal((await a.request("/databases", { method: "POST", body: { requestId: randomUUID(), database: {
+    properties: [{ id: "property_rel", name: "关联", type: "relation", relation_database: "placeholder" }],
+  } } })).status, 404);
+  let db = await a.create({ title: "任务库", database: {
+    properties: [{ id: UC, name: "编号", type: "text" }],
+    views: [{ id: TABLE, name: "全部", kind: "table" }],
+  } });
+  db = await a.addProperty(db, { id: "property_rel", name: "关联", type: "relation", relation_database: targets.id });
+  const one = await a.addRow(targets, { title: "Bravo" });
+  const two = await a.addRow(await a.get(targets.id), { title: "Alpha" });
+  await a.addRow(db, { title: "no-link" });
+  const linkedTwo = await a.addRow(await a.get(db.id), { title: "two-link", properties: { property_rel: JSON.stringify([two.id, one.id]) } });
+  // A bare id normalizes to the one-element array.
+  const linkedOne = await a.addRow(await a.get(db.id), { title: "one-link", properties: { property_rel: one.id } });
+  assert.equal(linkedOne.values.property_rel, JSON.stringify([one.id]));
+  // contains / is_empty / is_not_empty, by page id.
+  const contains = await a.query(db.id, { filters: [{ property_id: "property_rel", op: "contains", value: one.id }] });
+  assert.deepEqual(ids(contains).sort(), [linkedTwo.id, linkedOne.id].sort());
+  const empty = await a.query(db.id, { filters: [{ property_id: "property_rel", op: "is_empty" }] });
+  assert.deepEqual(empty.rows.map((entry: Json) => entry.page.title), ["no-link"]);
+  // Sort by the first linked page's title: Alpha's linker before Bravo's.
+  const sorted = await a.query(db.id, { sorts: [{ property_id: "property_rel", direction: "asc" }] });
+  assert.deepEqual(sorted.rows.map((entry: Json) => entry.page.title), ["two-link", "one-link", "no-link"]);
+  // group_by refuses a relation.
+  invalid(await a.request(`/databases/${db.id}/views`, {
+    method: "POST", body: { requestId: randomUUID(), baseRevision: db.revision,
+      view: { id: "view_grouped", name: "分组", kind: "table", group_by: "property_rel" } },
+  }));
+  // Calcs count links: count totals the linked ids, count_unique the
+  // distinct ones — checked through the view the table renders.
+  db = await a.patchView(await a.get(db.id), TABLE, { calcs: { property_rel: "count" } });
+  const counted = await a.query(db.id, {});
+  assert.equal(counted.rows.length, 3);
+  db = await a.patchView(db, TABLE, { calcs: { property_rel: "count_unique" } });
+  assert.equal(view(db, TABLE).calcs.property_rel, "count_unique");
+  invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, {
+    method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision,
+      view: { calcs: { property_rel: "sum" } } },
+  }));
 });

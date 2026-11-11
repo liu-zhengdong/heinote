@@ -19,7 +19,7 @@ export interface Command {
   /** `page` leaves a child page; `database-inline` draws a new database right
    *  here, opening on `view`; `database-page` makes a full-page database and
    *  leaves a link to it, which is what `/database` used to do. */
-  action?: "page" | "database-inline" | "database-page";
+  action?: "page" | "database-inline" | "database-page" | "database-linked";
   view?: DatabaseViewKind;
 }
 
@@ -61,6 +61,10 @@ const COMMANDS: Command[] = [
     id: "calendar-view", label: "Calendar view",
     icon: CalendarDays, group: "Database", aliases: ["calendar", "month", "date", "schedule"],
     action: "database-inline", view: "calendar",
+  },
+  {
+    id: "linked-view", label: "Linked view",
+    icon: DatabaseIcon, group: "Database", aliases: ["linked", "view", "embed", "existing"], action: "database-linked",
   },
   {
     id: "database-page", label: "Full-page database",

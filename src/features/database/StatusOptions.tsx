@@ -5,7 +5,7 @@ import { Popover } from "../../components/Popover";
 import { imeComposing } from "../../core/keyboard";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DatabaseProperty, OptionColor, StatusGroup, StatusOption } from "../../core/types";
-import { defaultStatus, OPTION_COLORS, STATUS_GROUPS, statusNameTaken, statusOptions } from "./database-model";
+import { defaultStatus, OPTION_COLORS, optionNameTaken, STATUS_GROUPS, statusNameTaken, statusOptions } from "./database-model";
 import { OptionTag } from "./properties";
 import { capitalized } from "../../core/title";
 
@@ -19,6 +19,17 @@ export interface StatusEditing {
   move(optionId: string, group: StatusGroup, index: number): void;
   makeDefault(optionId: string): void;
   remove(optionId: string): void;
+}
+
+/** What editing a select's or multi-select's options does to the database,
+ *  by name — a select's options have no ids of their own. `add` and
+ *  `rename` answer false when the name is refused (blank, or another
+ *  option's). */
+export interface SelectEditing {
+  add(name: string): boolean;
+  rename(option: string, name: string): boolean;
+  recolor(option: string, color: OptionColor): void;
+  remove(option: string): void;
 }
 
 const DRAG_TYPE = "text/x-notes-status";
@@ -308,16 +319,207 @@ function OptionSettings({
           }}
         />
         <MenuDivider />
-        <div className="menu__section-title">Colors</div>
-        {OPTION_COLORS.map((color) => (
-          <MenuItem
-            key={color}
-            icon={<span className="option-swatch" data-tone={color} />}
-            label={capitalized(color)}
-            selected={option.color === color}
-            onSelect={() => editing.recolor(option.id, color)}
-          />
-        ))}
+        <OptionColors current={option.color} onPick={(color) => editing.recolor(option.id, color)} />
+      </MenuList>
+    </div>
+  );
+}
+
+/** The ten tones an option can wear, drawn as the swatches a Status's own
+ *  settings uses — the same colours, the same click, wherever options are
+ *  coloured. */
+function OptionColors({ current, onPick }: { current: OptionColor; onPick(color: OptionColor): void }) {
+  return (
+    <>
+      <div className="menu__section-title">Colors</div>
+      {OPTION_COLORS.map((color) => (
+        <MenuItem
+          key={color}
+          icon={<span className="option-swatch" data-tone={color} />}
+          label={capitalized(color)}
+          selected={current === color}
+          onSelect={() => onPick(color)}
+        />
+      ))}
+    </>
+  );
+}
+
+/** A select's or multi-select's options — Notion's "Edit property" for the
+ *  optioned types without groups: a flat list, each row its pill and a
+ *  chevron into settings (name, delete, colour), and a field at the foot
+ *  that adds what is typed. There is no drag — the list is the order it is
+ *  kept in, and its order is how the column sorts. */
+export function OptionsEditorMenu({
+  anchor,
+  group: popGroup,
+  property,
+  editing,
+  onClose,
+}: {
+  anchor: AnchorRect;
+  group: string;
+  property: DatabaseProperty;
+  editing: SelectEditing;
+  onClose(): void;
+}) {
+  const options = property.options ?? [];
+  const [openName, setOpenName] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const flush = useRef<(() => void) | null>(null);
+  const opened = openName && options.includes(openName) ? openName : null;
+  const draftTaken = Boolean(draft.trim()) && optionNameTaken(property, draft);
+
+  const addDraft = () => {
+    if (!draft.trim()) return;
+    if (editing.add(draft)) setDraft("");
+  };
+
+  return (
+    <Popover
+      open
+      anchor={anchor}
+      placement="right-start"
+      label="Edit property"
+      group={popGroup}
+      onDismiss={() => {
+        flush.current?.();
+        onClose();
+      }}
+    >
+      {opened ? (
+        <SelectOptionSettings
+          key={opened}
+          flush={flush}
+          property={property}
+          option={opened}
+          editing={editing}
+          onRename={setOpenName}
+          onBack={() => setOpenName(null)}
+        />
+      ) : (
+        <div className="status-menu options-menu">
+          {options.map((name) => (
+            <button
+              key={name}
+              type="button"
+              className="status-menu__open options-menu__option"
+              aria-label={name}
+              onClick={() => setOpenName(name)}
+            >
+              <OptionTag property={property} value={name} />
+              <ChevronRight size={14} className="status-menu__chevron" />
+            </button>
+          ))}
+          {options.length === 0 ? <div className="options-menu__none">No options yet</div> : null}
+          <div className="status-menu__new">
+            <input
+              value={draft}
+              placeholder="Add an option…"
+              aria-label="New option"
+              aria-invalid={draftTaken || undefined}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (imeComposing(event) || event.key !== "Enter") return;
+                event.preventDefault();
+                addDraft();
+              }}
+            />
+            {draftTaken ? <span className="status-menu__hint">An option has this name.</span> : null}
+          </div>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+/** One select option's settings, in the panel's place — the pattern of a
+ *  status option's, without Set as default or groups: back to the list, the
+ *  name typed in place, Delete (any option can go; the value just leaves
+ *  the rows that held it), and its colour. */
+function SelectOptionSettings({
+  flush,
+  property,
+  option,
+  editing,
+  onRename,
+  onBack,
+}: {
+  flush: MutableRefObject<(() => void) | null>;
+  property: DatabaseProperty;
+  option: string;
+  editing: SelectEditing;
+  /* The panel is keyed by the option's name, so a rename has to move the
+   *  open name along — otherwise the panel falls back to the list. */
+  onRename(next: string): void;
+  onBack(): void;
+}) {
+  const [name, setName] = useState(option);
+  const sent = useRef(option);
+  const taken = Boolean(name.trim()) && optionNameTaken(property, name, sent.current);
+
+  const commit = () => {
+    const next = name.trim();
+    if (next === sent.current) return;
+    if (next && editing.rename(sent.current, next)) {
+      sent.current = next;
+      onRename(next);
+    } else setName(sent.current);
+  };
+  useEffect(() => {
+    flush.current = commit;
+    return () => { flush.current = null; };
+  });
+
+  const current = sent.current;
+  const tone = property.option_colors?.[current];
+  return (
+    <div className="status-menu option-menu">
+      <button
+        type="button"
+        className="option-menu__back"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => {
+          commit();
+          onBack();
+        }}
+      >
+        <ChevronLeft size={16} />
+        <span>Options</span>
+      </button>
+      <input
+        className="option-menu__name"
+        autoFocus
+        value={name}
+        aria-label="Option name"
+        aria-invalid={taken || undefined}
+        spellCheck={false}
+        onFocus={(event) => event.currentTarget.select()}
+        onChange={(event) => setName(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (imeComposing(event) || event.key !== "Enter") return;
+          event.preventDefault();
+          commit();
+          onBack();
+        }}
+      />
+      {taken ? <div className="option-menu__hint">An option has this name.</div> : null}
+      <MenuList label="Option">
+        <MenuItem
+          icon={<Trash2 size={16} />}
+          label="Delete"
+          tone="danger"
+          onSelect={() => {
+            editing.remove(sent.current);
+            onBack();
+          }}
+        />
+        <MenuDivider />
+        <OptionColors
+          current={typeof tone === "string" ? (tone as OptionColor) : "default"}
+          onPick={(color) => editing.recolor(sent.current, color)}
+        />
       </MenuList>
     </div>
   );

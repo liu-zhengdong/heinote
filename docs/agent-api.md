@@ -151,7 +151,11 @@ Authorization: Bearer notes_...
 
 省略 `database` 时，创建空属性与一个 Table 视图。省略 `views` 时，同样建立 Table。显式提供的视图列表不能是空数组。返回 `201` 和页面对象。`page.kind` 为 `database`，`page.database` 包含实际配置。
 
-属性类型为 `text`、`select`、`status`、`date`、`person` 和 `image`。视图类型为 `table`、`board`、`list`、`gallery` 和 `calendar`。属性和视图使用调用方指定的稳定 `id`。属性 ID `name` 保留给标题列。单库最多 100 个属性和 100 个视图。单个选项属性最多 100 个选项。
+属性类型为 `text`、`number`、`select`、`multi_select`、`status`、`date`、`person`、`image`、`checkbox`、`url`、`email`、`phone`、`relation`、`created_time`、`last_edited_time`、`created_by`、`last_edited_by` 和 `id`。视图类型为 `table`、`board`、`list`、`gallery` 和 `calendar`。属性和视图使用调用方指定的稳定 `id`。属性 ID `name` 保留给标题列。单库最多 100 个属性和 100 个视图。单个选项属性最多 100 个选项。
+
+`relation` 属性使用 `relation_database` 指定目标数据库的页面 ID，必填且创建后不可修改。`relation_limit` 为 `unlimited`（默认）或 `1`；`relation_two_way` 为 `true` 时，服务器在目标库上建立镜像属性：其 `relation_database` 指回来源库，`relation_origin` 为正向属性 ID。镜像属性不携带方向字段。`relation_backlink_name` 命名镜像属性，省略时使用来源库标题。自关联（`relation_database` 等于本库 ID）允许。`relation_two_way` 不能在新库建立时提供——库尚无页面可落镜像——先建库再添加属性。`relation_backlink_name` 仅在 `relation_two_way` 为 `true` 时提供。修改 `relation_two_way` 会同步建立或移除镜像；修改 `relation_backlink_name` 会重命名已有镜像。删除关联属性时移除其镜像。镜像写入要求目标库可写，写入在同一事务提交。
+
+`created_time`、`last_edited_time`、`created_by`、`last_edited_by` 和 `id` 是只读元数据列。它们读取条目自身记录的创建、更新、归属和标识字段，不写入 `properties`。对它们写入 `properties` 返回 `400`。
 
 Board 缺少可分组属性时，系统按界面规则补充 Status。Calendar 缺少日期属性时，系统补充 Date。返回值包含生成的属性 ID。
 
@@ -169,11 +173,15 @@ Board 缺少可分组属性时，系统按界面规则补充 Status。Calendar �
 {"requestId":"uc-rename-001","baseRevision":"数据库 revision","property":{"name":"处理状态"}}
 ```
 
-PATCH 不接受 `property.id`。修改类型使用 `property.type`，并复用界面规则。转为 Select 时，已有文字值加入选项。转为 Status 时，已有文字值加入状态选项。类型变更保留原属性 ID 和条目值。
+PATCH 不接受 `property.id`。修改类型使用 `property.type`，并复用界面规则。转为 Select 或 Multi-select 时，已有文字值加入选项。转为 Status 时，已有文字值加入状态选项。类型变更保留原属性 ID 和条目值。
+
+Select 和 Multi-select 使用 `options` 选项名列表。两者共用 `option_colors` 保存选项颜色：对象以选项名为键，值为 `default` 或九种内容颜色之一（`gray`、`brown`、`orange`、`yellow`、`green`、`blue`、`purple`、`pink`、`red`）。键必须引用已存在的选项，否则返回 `400`。`option_colors` 整体替换；省略时保留。
 
 Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`group` 和 `color`。`group` 为 `todo`、`progress` 或 `complete`。系统按此组顺序保存，同组保留输入顺序。`color` 为 `default` 或现有内容颜色。`default_status` 使用状态选项的 ID；传 `null` 清除自定义默认值。状态列表至少保留一项。名称不能重复。
 
-修改选项名称时保留其 ID。系统在同一事务更新相应条目与视图筛选。删除状态选项后，原值清空并使用默认状态；对应视图取消该筛选。修改 Select 选项不会删除条目中已有的原始文字值。
+修改选项名称时保留其 ID。系统在同一事务更新相应条目与视图筛选。删除状态选项后，原值清空并使用默认状态；对应视图取消该筛选。修改 Select 选项不会删除条目中已有的原始文字值。重命名或删除 Select 选项通过 `options` 整体替换完成，不会重写条目值；条目中的原名称仍保留。
+
+PATCH 镜像属性（携带 `relation_origin`）不允许修改类型或方向字段。`relation_database` 在创建后保持不变。
 
 新增视图的请求体使用 `view`：
 
@@ -187,7 +195,13 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 {"requestId":"uc-filter-001","baseRevision":"数据库 revision","view":{"filter":{"property_id":"status","value":"In progress"},"sorts":[{"property_id":"priority","direction":"asc"}]}}
 ```
 
-视图配置沿用现有 `filter`、`sorts`、`group_by`、`date_by`、`minimal`、`card_preview`、`card_properties`、`widths` 和 `wrap` 字段。PATCH 不接受 `view.id`。`filter: null` 清除筛选。`sorts: []` 清除排序。
+视图配置沿用现有 `filter`、`sorts`、`group_by`、`date_by`、`minimal`、`card_preview`、`card_properties`、`widths` 和 `wrap` 字段，并支持 `filters`、`hidden` 和 `calcs`。PATCH 不接受 `view.id`。`filter: null` 清除全部筛选（含 `filters`）。`sorts: []` 清除排序。`hidden: []` 显示全部列，`calcs: {}` 清除汇总，`group_by: ""` 清除分组。
+
+`filters` 是条件列表，条目之间按 AND 组合。每项是一个条件 `{"property_id","op","value"}`，或一个条件组 `{"logic":"and"|"or","conditions":[…]}`。最多一个组，组内不能再含组。`op` 省略时使用该属性类型的默认运算符；`is_empty` 与 `is_not_empty` 不需要 `value`。写入 `filters` 会清除旧的单值 `filter` 字段；读取时非空 `filters` 优先，仅含 `filter` 的视图按一条 `is` 条件理解。写入 `filter` 同样清除 `filters`。`filters: []` 清除筛选。
+
+可用运算符按类型区分：文字类（text、url、email、phone、person、created_by、last_edited_by、id）为 `contains`、`not_contains`、`is`、`is_not`、`is_empty`、`is_not_empty`；number 为 `eq`、`neq`、`gt`、`gte`、`lt`、`lte` 加两个空值运算符；date 与两个时间元数据列为 `before`、`after`、`on_or_before`、`on_or_after`、`is` 加两个空值运算符；checkbox 只有 `is`（值为 `true` 或 `false`）；select 与 status 为 `is`、`is_not` 加两个空值运算符；multi_select 为 `contains`、`not_contains` 加两个空值运算符。image 不可筛选。选项类属性的 `value` 必须是已存在的选项名。
+
+`hidden` 是不绘制的属性 ID 列表，作用于 table 列与 list、gallery 的条目摘要。标题列不能隐藏。`calcs` 以列 ID（属性 ID 或 `name`）为键，值为汇总函数：`count`、`count_unique`、`count_empty`、`count_not_empty`；number 另有 `sum`、`avg`、`min`、`max`；checkbox 另有 `checked`、`unchecked`、`percent_checked`；date 与时间列另有 `earliest`、`latest`。汇总对筛选后的条目集合计算。`group_by` 在 table 与 list 上接受 Status、Select、Multi-select、Person、Checkbox 与 Date 属性，条目按值分行并显示分组头；board 仍只接受 Status 或有选项的 Select。
 
 配置更新要求数据库 `baseRevision`。新增返回 `201`，修改返回 `200`。两者均返回当前数据库页面对象。旧修订返回 `409`。数据库标题使用现有页面 PATCH 修改。
 
@@ -220,22 +234,30 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 
 值规则：
 
-- Text 和 Person 使用文字。Person 是显示名，不关联账号 ID。
+- Text、Url、Email、Phone 和 Person 使用文字。Person 是显示名，不关联账号 ID。
+- Number 使用数字，或空字符串。支持正负号、小数和科学计数法；非数字返回 `400`。
 - Select 使用已定义的选项名称，或空字符串。
+- Multi-select 使用选项名列表。值保存为 JSON 数组字符串，例如 `["P1","P2"]`；逗号分隔的名称列表同样接受（名称不含逗号时）。每个名称必须是已定义选项，否则返回 `400`。空字符串清空。
 - Status 使用状态选项名称。未设置或清空时，界面使用默认状态。
-- Date 使用真实的 `YYYY-MM-DD` 日期，或空字符串。
+- Relation 使用页面 ID 的 JSON 数组字符串，例如 `["page_a","page_b"]`；单个 ID 也接受并规范化为数组。每个 ID 必须是目标数据库的一条现有条目，否则返回 `400`。`relation_limit` 为 `1` 时最多一条。`null` 或空字符串清空。写入关联时，镜像一侧的对应条目在同一事务中加入或移除反向链接：双向关联保持两侧一致。镜像写入要求目标库可写，不可写时整个请求失败（403），两侧不部分提交。
+- Date 使用真实的 `YYYY-MM-DD` 日期，或区间 `YYYY-MM-DD/YYYY-MM-DD`，或空字符串。结束日期早于开始日期时系统按顺序保存。
+- Checkbox 使用 `true`，或空字符串；`false` 归一化为空字符串。
 - Image 使用 `propertyFiles`，不写入字符串 `properties`。每格最多 50 张图片。
+- 元数据列（`created_time` 等）只读，写入返回 `400`。
 
 `propertyFiles` 按图片属性 ID 保存已有 `StoredFile` 引用数组。文件必须已经存在于条目所属空间，且类型、大小和归属信息匹配。引用不上传附件字节。空数组清空该图片单元格。
 
-条目响应保留原有 `page.properties` 与 `page.property_files`。额外的 `values` 按属性 ID 返回非图片属性的界面有效值，包括默认状态。
+条目响应保留原有 `page.properties` 与 `page.property_files`。额外的 `values` 按属性 ID 返回非图片属性的界面有效值，包括默认状态和元数据列的记录值。
 
 ### 查询条目
 
 ```json
 {
   "viewId":"table",
-  "filter":{"property_id":"status","value":"Not started"},
+  "filters":[{"logic":"or","conditions":[
+    {"property_id":"status","op":"is","value":"Not started"},
+    {"property_id":"amount","op":"gt","value":"10"}
+  ]}],
   "sorts":[{"property_id":"priority","direction":"asc"}],
   "query":"笔记",
   "offset":0,
@@ -243,9 +265,11 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 }
 ```
 
-查询是只读操作。只读令牌可以调用。省略 `viewId` 时使用第一个视图。提供 `filter`、`sorts` 时，仅覆盖本次查询的对应配置，不保存视图。`filter: null` 表示本次不筛选。`query` 搜索条目标题。
+查询是只读操作。只读令牌可以调用。省略 `viewId` 时使用第一个视图。提供 `filters`、`filter`、`sorts` 时，仅覆盖本次查询的对应配置，不保存视图。`filters` 优先于 `filter`；`filters: []` 或 `filter: null` 表示本次不筛选。`query` 搜索条目标题。
 
-筛选与界面一致，只支持一个 Select 或 Status 等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾。同值保留条目原顺序。
+`filters` 的结构与视图字段一致：条件列表按 AND 组合，可含一个 `and`/`or` 条件组。运算符按属性类型区分，同视图 `filters` 一节。`filter` 保留旧语义，是 Select 或 Status 的一个等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。Number 按数值排序，非数字值位于末尾。Date 按日期或区间开始日排序。Checkbox 未勾选在前、已勾选在后。Multi-select 按第一个选项名排序。Relation 按第一个链接页面的标题排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾（Checkbox 的空值即未勾选，不视为空值）。同值保留条目原顺序。
+
+Relation 的筛选运算符为 `contains`、`not_contains`、`is_empty`、`is_not_empty`；`value` 为页面 ID。汇总仅支持 `count` 和 `count_unique`。`group_by` 不接受 Relation。
 
 ```json
 {"databaseId":"数据库 ID","revision":"数据库 revision","rows":[],"total":0,"hasMore":false,"nextOffset":null}
@@ -307,6 +331,8 @@ Content-Type: application/json
 数值索引和长度使用 UTF-16。emoji 可能占两个单位，原子提及占一个单位。范围不能切开代理对。`format_text.marks` 支持 `bold`、`italic`、`underline`、`strike`、`code`、`link` 和 `color`。布尔格式用 `true` 设置，用 `null` 清除。
 
 每次最多提交 100 项操作。修改失败时整批回滚。成功返回页面对象和最新 `collaboration`。Agent 应保留返回值，供后续操作使用。
+
+Linked view 以页面链接 mention 的字段表达：`expanded: true` 就地展开，`locked: true` 在块内只读，`view` 固定一个数据库视图 ID。字段随块树记录保存；HTTP `operations` 不提供 mention 字段的写路径，创建 linked view 使用窗口命令 `create_page`（`expanded` + `locked`，数据库链接自动固定首个视图）或 `update_block`（`view` 指定视图，`""` 清除，含 `view` 的请求隐含 `expanded: true`）。
 
 `requestId` 必须在该账号中唯一。网络重试使用相同 ID 和完全相同的输入。服务器返回原结果，不重复插入。相同 ID 配合不同输入返回 409。重试仍会检查当前权限。原结果可能早于当前页面，继续编辑前应重新读取。
 
