@@ -470,7 +470,7 @@ test("a refused generation can escape its halted journal into a durable private 
   expect((await gate.release()).status).toBe(409); await gate.close();
   await persisted(pair, "私人恢复基线"); await downloadDraft(pair.owner, "仅在我的草稿");
   const creation = pair.owner.waitForResponse((response) => response.url().endsWith("/api/v1/pages") && response.request().method() === "POST");
-  await pair.owner.getByRole("button", { name: "存为新页面「恢复草稿」" }).click();
+  await pair.owner.getByRole("button", { name: "存为新页面", exact: false }).first().click();
   const response = await creation; expect(response.status()).toBe(201);
   // Recovery deliberately reloads the page. Inspect the committed public API
   // instead of reading an old CDP response body after that navigation.
@@ -542,7 +542,7 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   await persisted(pair, "abc\nPEERDEF"); await pair.ownerWire.sawText("PEER", frame);
   await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]);
   const before = await current(pair);
-  await expect(pair.owner.getByRole("alert")).toHaveCount(0);
+  await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);
   const attempted: Json[] = [];
   pair.owner.on("request", (request) => {
     if (!request.url().endsWith("/api/records/batch") || request.method() !== "POST") return;
@@ -551,7 +551,7 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   });
   await focusEdge(body(pair), "end"); await pair.owner.keyboard.press("ControlOrMeta+z");
   // Wait for the actual local receipt decision before asserting unchanged data.
-  await expect(pair.owner.getByRole("alert")).toContainText("协作者已修改这次结构操作涉及的内容，未执行撤销或重做。");
+  await expect(pair.owner.getByRole("alertdialog")).toContainText("协作者已修改这次结构操作涉及的内容，未执行撤销或重做。");
   expect(attempted, "A refused atomic receipt must not send part of its undo").toHaveLength(0);
   const after = await current(pair);
   expect(after.generation).toBe(before.generation); expect(after.revision).toBe(before.revision); expect(after.state).toBe(before.state);

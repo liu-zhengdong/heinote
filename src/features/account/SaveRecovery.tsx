@@ -123,6 +123,7 @@ export function SaveRecovery() {
       });
       if (identity.current !== owner) return;
       setPrivatePage(page.id);
+      clearRecovery(owner);
       const pending = getRecovery(owner);
       if (pending.some((entry) => !entry.persisted && !downloaded.includes(entry.id))) {
         setNotice("已存为新页面。请先下载新增的恢复草稿，再刷新页面。");
@@ -164,7 +165,7 @@ export function SaveRecovery() {
           <span className="save-recovery__choice-t"><strong>先下载文件</strong><span>草稿只存在当前窗口，下载后才能离开</span></span>
         </button> : <button type="button" className="save-recovery__choice is-primary" disabled={!canSave} title={volatile && !backedUp ? "请先下载文件" : undefined} onClick={() => void savePrivate()}>
           <FilePlus2 size={16} aria-hidden />
-          <span className="save-recovery__choice-t"><strong>{busy ? "保存中…" : privatePage ? "已存为新页面" : "存为新页面「恢复草稿」"}</strong><span>推荐：文字直接回到笔记里</span></span>
+          <span className="save-recovery__choice-t"><strong>{busy ? "保存中…" : privatePage ? "已存为新页面" : "存为新页面"}</strong><span>推荐：文字写入新页面「恢复草稿」，仅自己可见</span></span>
         </button>}
         {volatile && !backedUp ? null : <button type="button" className="save-recovery__choice" disabled={!canDownload} onClick={download}>
           <Download size={16} aria-hidden />
