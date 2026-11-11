@@ -285,7 +285,7 @@ function checkRevision(store: Store, scope: string, pageId: string, expected: st
   if (store.revision(scope, pageId) !== expected) fail(409, "内容已被修改。请重新读取。", "conflict");
 }
 function pagePatch(store: Store, who: Actor, scope: string, pageId: string, patch: Row): Write {
-  return { scope: externalScope(scope), collection: "pages", id: pageId, action: "patch", base: store.record(scope, "pages", pageId)!, patch: { ...patch, updated_at: stamp(), updated_by: who.user.id } };
+  return { scope: externalScope(scope), collection: "pages", id: pageId, action: "patch", base: store.record(scope, "pages", pageId)!, patch: { ...patch, updated_at: stamp(), updated_by: who.user.displayName } };
 }
 function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[] = []): void {
   for (const pageId of new Set(checkpoints)) store.checkpoint(who, pageId, "Agent 数据库修改前");
@@ -293,7 +293,7 @@ function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[]
   store.collaboration.flush();
 }
 function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string, extra: Row): string {
-  const page = newPage(id(), kind, parentId, { now: stamp(), author: who.user.id }, id());
+  const page = newPage(id(), kind, parentId, { now: stamp(), author: who.user.displayName }, id());
   const { title: _title, parent_id: _parent, block_tree, ...fields } = page;
   const block = Object.values(block_tree.by_id)[0];
   const { parent_id: _blockParent, ...blockFields } = block;
