@@ -63,6 +63,9 @@ import {
   OPTION_COLOR_SET,
   propertyOptions,
   PROPERTY_LABELS,
+  relationIds,
+  relationMirrorProperty,
+  relationPeerWrites,
   removeProperty,
   removeView,
   renameProperty,
@@ -211,6 +214,34 @@ function showInPlaceFor(host: CommandHost): ShowInPlace {
 function composed(host: CommandHost, page: NotePage, showInPlace = showInPlaceFor(host)): Composite {
   const pages = pagesOf(host);
   return composeTree(pages, pages[page.id] ?? page, showInPlace);
+}
+
+/** The mutations updatePage would make for `patch` on `pageId` — for
+ *  several pages written in one commit, as a relation's two sides are. */
+function pageMutations(host: CommandHost, pageId: string, patch: PagePatch): WorkspaceMutation[] {
+  const page = pagesOf(host)[pageId];
+  if (!page) return [];
+  const mutations: WorkspaceMutation[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    if (JSON.stringify(page[key as keyof NotePage]) === JSON.stringify(value)) continue;
+    mutations.push(value === undefined
+      ? { type: "delete", path: ["pages", pageId, key] }
+      : { type: "set", path: ["pages", pageId, key], value });
+  }
+  if (mutations.length) {
+    mutations.push({ type: "set", path: ["pages", pageId, "updated_at"], value: new Date().toISOString() });
+    mutations.push({ type: "set", path: ["pages", pageId, "updated_by"], value: host.author });
+  }
+  return mutations;
+}
+
+/** The database a relation property links rows to. */
+function relationTargetPage(host: CommandHost, property: { relation_database?: string }): NotePage {
+  const target = property.relation_database ? pagesOf(host)[property.relation_database] : undefined;
+  if (!target) refuse("not_found", "The relation's target database is gone or out of reach.");
+  if (target.kind !== "database" || !target.database) refuse("bad_request", "A relation's target is a database page.");
+  if (inTrash(pagesOf(host), target.id)) refuse("in_trash", "The relation's target database is in the trash.");
+  return target;
 }
 
 /** What the editor did to a page's tree, written to the pages holding each
@@ -465,14 +496,15 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const parent = input.parent_id === undefined ? null : writablePage(h, input.parent_id);
       const { kind } = input;
       if (input.view !== undefined && kind !== "database") refuse("bad_request", "view is a database's first view: give kind database.");
-      if (input.expanded !== undefined && parent?.kind !== "document") refuse("bad_request", "expanded shows a page in place in the page that holds it: give parent_id, a document.");
+      if ((input.expanded !== undefined || input.locked !== undefined) && parent?.kind !== "document") refuse("bad_request", "expanded and locked are a page's link's in the page that holds it: give parent_id, a document.");
+      const firstViewId = kind === "database" ? createId("view") : "";
       return change(h, () => {
         const id = h.workspace.createPage(parent?.id ?? null, kind, {
           select: false,
           block: parent?.kind === "document",
           title: input.title,
           ...(kind === "database"
-            ? { database: newDatabaseConfig(input.view ?? "table", createId("view"), () => createId("property")) }
+            ? { database: newDatabaseConfig(input.view ?? "table", firstViewId, () => createId("property")) }
             : {}),
         });
         if (!id) refuse("not_ready", "Notes is still opening in this window: try again in a moment.");
@@ -482,9 +514,16 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
           const first = orderedBlocks(made.block_tree)[0];
           if (first) h.workspace.applyBlockMutations(id, [{ action: "put", block: { ...first, content: inlineFromText(input.text) } }]);
         }
-        if (input.expanded && parent) {
+        if ((input.expanded || input.locked) && parent) {
           const row = linesFor(pagesOf(h)[parent.id]?.block_tree, id)[0];
-          if (row) h.workspace.applyBlockMutations(parent.id, [{ action: "put", block: withLineLink(row, (link) => ({ ...link, expanded: true })) }]);
+          if (row) h.workspace.applyBlockMutations(parent.id, [{ action: "put", block: withLineLink(row, (link) => ({
+            ...link,
+            ...(input.expanded ? { expanded: true } : {}),
+            ...(input.locked ? { locked: true } : {}),
+            /* An expanded, locked database link is the linked view a person
+               makes: it pins the view it was made with. */
+            ...(input.expanded && input.locked && kind === "database" ? { view: firstViewId } : {}),
+          })) }]);
         }
         return { page: summary(pagesOf(h), pagesOf(h)[id]) };
       });
@@ -620,15 +659,25 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const page = documentPage(h, input.page_id);
       const current = composed(h, page);
       const original = blockIn(current.tree, input.block_id);
-      const fields = Object.keys(input).filter((key) => !["page_id", "block_id", "expanded", "locked"].includes(key));
-      const shows = input.expanded !== undefined || input.locked !== undefined;
+      const fields = Object.keys(input).filter((key) => !["page_id", "block_id", "expanded", "locked", "view"].includes(key));
+      const shows = input.expanded !== undefined || input.locked !== undefined || input.view !== undefined;
       if (!fields.length && !shows) refuse("bad_request", "Say what to change.");
       // A page shown in place, or folded on its line: shown, folded or read
       // only here is its link's, in the page that holds it — as the block's
-      // mark and menu do it (DocumentEditor `setShown`, `setLocked`).
+      // mark and menu do it (DocumentEditor `setShown`, `setLocked`). A view
+      // pins one of a database's views on the link — a linked view — and
+      // goes with the fold.
       const rowId = current.rows.get(original.id) ?? (lineLink(original) ? original.id : undefined);
       const holder = current.owner.get(original.id) ?? page.id;
       if (shows && !rowId) refuse("bad_request", "expanded and locked are a page's link's: block_id is a line holding nothing but a link to a page, or the block shown in place.");
+      if (input.view) {
+        const row = pagesOf(h)[holder]?.block_tree.by_id[rowId ?? ""];
+        const linked = row ? lineLink(row) : null;
+        const target = linked?.page_id ? pagesOf(h)[linked.page_id] : undefined;
+        if (target?.kind !== "database" || !target.database?.views.some((view) => view.id === input.view)) {
+          refuse("bad_request", "view pins a database view's id on the linked database.");
+        }
+      }
       // The paragraph whole, as the editor puts one: a field taken away (a
       // card's address, once it is words again) is gone from it.
       const edited = fields.length ? shaped(h, input, original) : null;
@@ -643,9 +692,15 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
             if (input.expanded === false) {
               delete shown.expanded;
               delete shown.locked;
+              delete shown.view;
             }
             if (input.locked === true) shown.locked = true;
             if (input.locked === false) delete shown.locked;
+            if (input.view) {
+              shown.view = input.view;
+              shown.expanded = true;
+            }
+            if (input.view === "") delete shown.view;
             return shown;
           });
           h.workspace.applyBlockMutations(holder, [{ action: "put", block: next }]);
@@ -757,14 +812,44 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
         });
       }
       if (input.type === undefined) refuse("bad_request", oneOf);
+      const relationFields = input.relation_database !== undefined || input.relation_limit !== undefined || input.relation_two_way !== undefined || input.relation_backlink_name !== undefined;
+      if (relationFields && input.type !== "relation") refuse("bad_request", "relation_* fields are a relation property's.");
       const index = Math.min(input.index ?? config.properties.length, config.properties.length);
       const added = insertProperty(config, createId("property"), input.type, index);
       let next = added.config;
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      if (input.type === "relation") {
+        if (!input.relation_database) refuse("bad_request", "A relation needs relation_database: the database its values link to.");
+        const target = relationTargetPage(h, { relation_database: input.relation_database });
+        const property = next.properties.find((item) => item.id === added.property.id)!;
+        property.relation_database = target.id;
+        if (input.relation_limit) property.relation_limit = input.relation_limit;
+        if (input.relation_two_way) property.relation_two_way = true;
+        if (input.relation_backlink_name !== undefined) property.relation_backlink_name = input.relation_backlink_name;
+        if (property.relation_two_way) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `A two-way relation writes a mirror property on ${describe(target)}, where this person can only view.`);
+          const mirror = relationMirrorProperty(property, page.id, pageName(page), createId("property"), (target.id === page.id ? next : target.database!).properties.map((item) => item.name));
+          if (target.id === page.id) next = { ...next, properties: [...next.properties, mirror] };
+          else {
+            peerTarget = target;
+            peerConfig = { ...target.database!, properties: [...target.database!.properties, mirror] };
+          }
+        }
+      }
       if (input.name !== undefined) next = renameProperty(next, added.property.id, input.name);
       next = withOptions(next, added.property.id, input.options);
       next = withOptionColors(next, added.property.id, input.option_colors);
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: next });
+        // The property and its mirror land together, so they never part ways.
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: added.property.id };
       });
     },
@@ -774,13 +859,77 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const { page, config } = databasePage(h, input.page_id);
       const key = propertyIn(config, input.property_id, { title: true });
       if (key === TITLE_COLUMN && (input.type !== undefined || input.options !== undefined || input.option_colors !== undefined)) refuse("bad_request", "The row-name column can only be renamed.");
-      if (input.name === undefined && input.type === undefined && input.options === undefined && input.option_colors === undefined) refuse("bad_request", "Say what to change: name, type, options or option_colors.");
+      const relationFields = input.relation_limit !== undefined || input.relation_two_way !== undefined || input.relation_backlink_name !== undefined;
+      if (input.name === undefined && input.type === undefined && input.options === undefined && input.option_colors === undefined && !relationFields) refuse("bad_request", "Say what to change: name, type, options, option_colors or a relation field.");
+      const previous = key === TITLE_COLUMN ? undefined : config.properties.find((item) => item.id === key);
+      // A mirror's pairing is its origin's: only its name changes here — the
+      // forward property on the other database holds the rest.
+      if (previous?.relation_origin && (input.type !== undefined || relationFields)) refuse("bad_request", "That is a relation's mirror: its direction lives on the forward property, on the database it points back to.");
+      if (relationFields) {
+        const type = input.type ?? previous?.type;
+        if (type !== "relation") refuse("bad_request", "relation_* fields are a relation property's.");
+      }
+      if (input.type === "relation" && previous?.type !== "relation") refuse("bad_request", "A property becomes a relation only when created: create_property with relation_database.");
+      if (input.type !== undefined && previous?.type === "relation" && input.type !== "relation" && previous.relation_origin) refuse("bad_request", "That is a relation's mirror: it goes when the relation does.");
       let next = input.type !== undefined ? changePropertyType(config, key, input.type, databaseRows(pagesOf(h), page.id)) : config;
       if (input.name !== undefined) next = renameProperty(next, key, input.name);
       next = withOptions(next, key, input.options);
       next = withOptionColors(next, key, input.option_colors);
+      // A forward relation's fields — its limit, its mirror, the mirror's
+      // name — live on the property after any type change rebuilt it.
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      const forward = next.properties.find((item) => item.id === key);
+      if (forward?.type === "relation" && !forward.relation_origin && relationFields) {
+        // The field set is rebuilt, never edited in place — a config's
+        // properties are shared objects.
+        const updated: DatabaseConfig["properties"][number] = { ...forward };
+        if (input.relation_limit !== undefined) {
+          if (input.relation_limit === "unlimited") delete updated.relation_limit;
+          else updated.relation_limit = input.relation_limit;
+        }
+        if (input.relation_two_way !== undefined) updated.relation_two_way = input.relation_two_way || undefined;
+        if (input.relation_backlink_name !== undefined) updated.relation_backlink_name = input.relation_backlink_name || undefined;
+        next = { ...next, properties: next.properties.map((item) => (item.id === key ? updated : item)) };
+        const target = relationTargetPage(h, updated);
+        const mirror = target.database!.properties.find((item) => item.type === "relation" && item.relation_origin === updated.id);
+        if (updated.relation_two_way && !mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `A two-way relation writes a mirror property on ${describe(target)}, where this person can only view.`);
+          const made = relationMirrorProperty(updated, page.id, pageName(page), createId("property"), (target.id === page.id ? next : target.database!).properties.map((item) => item.name));
+          if (target.id === page.id) next = { ...next, properties: [...next.properties, made] };
+          else { peerTarget = target; peerConfig = { ...target.database!, properties: [...target.database!.properties, made] }; }
+        } else if (mirror && !updated.relation_two_way) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror on ${describe(target)} goes with the relation's direction, where this person can only view.`);
+          if (target.id === page.id) next = removeProperty(next, mirror.id);
+          else { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        } else if (mirror && input.relation_backlink_name !== undefined) {
+          const mirrorName = updated.relation_backlink_name?.trim() || pageName(page) || "Relation";
+          if (mirror.name !== mirrorName) {
+            if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror's name lives on ${describe(target)}, where this person can only view.`);
+            const renamed = (source: DatabaseConfig) => ({ ...source, properties: source.properties.map((item) => (item.id === mirror.id ? { ...item, name: mirrorName } : item)) });
+            if (target.id === page.id) next = renamed(next);
+            else { peerTarget = target; peerConfig = renamed(target.database!); }
+          }
+        }
+      } else if (previous?.type === "relation" && forward?.type !== "relation" && !previous.relation_origin) {
+        // A relation's type going takes the mirror on its target with it.
+        const target = previous.relation_database ? pagesOf(h)[previous.relation_database] : undefined;
+        const mirror = target?.database?.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (target && mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The mirror on ${describe(target)} goes with the relation, where this person can only view.`);
+          if (target.id === page.id) next = removeProperty(next, mirror.id);
+          else { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        }
+      }
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: next });
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: key };
       });
     },
@@ -789,8 +938,34 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const h = await opened();
       const { page, config } = databasePage(h, input.page_id);
       const key = propertyIn(config, input.property_id);
+      const property = config.properties.find((item) => item.id === key);
+      // A forward relation deleted takes its mirror on the target database
+      // with it — the two are written together, or neither.
+      let peerTarget: NotePage | null = null;
+      let peerConfig: DatabaseConfig | null = null;
+      if (property?.type === "relation" && !property.relation_origin) {
+        const target = property.relation_database ? pagesOf(h)[property.relation_database] : undefined;
+        const mirror = target?.database?.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (target && mirror) {
+          if (target.id !== page.id && !h.workspace.canEdit(target.id)) refuse("read_only", `The relation's mirror lives on ${describe(target)}, where this person can only view.`);
+          if (target.id !== page.id) { peerTarget = target; peerConfig = removeProperty(target.database!, mirror.id); }
+        }
+      }
+      let next = removeProperty(config, key);
+      if (property?.type === "relation" && !property.relation_origin && !peerTarget) {
+        // A self-relation's mirror is this same database's property.
+        const mirror = next.properties.find((item) => item.type === "relation" && item.relation_origin === key);
+        if (mirror) next = removeProperty(next, mirror.id);
+      }
       return change(h, () => {
-        h.workspace.updatePage(page.id, { database: removeProperty(config, key) });
+        if (peerTarget && peerConfig) {
+          h.workspace.commitWrites([
+            ...pageMutations(h, page.id, { database: next }),
+            ...pageMutations(h, peerTarget.id, { database: peerConfig }),
+          ]);
+        } else {
+          h.workspace.updatePage(page.id, { database: next });
+        }
         return { database_id: page.id, property_id: key };
       });
     },
@@ -860,8 +1035,40 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
         // A range is kept in order; no other reading is offered.
         if (range.end && range.end < range.start) stored = `${range.end}/${range.start}`;
       }
+      /* A relation's value is a JSON list of page ids, or the ids
+         comma-separated — each a row of its target database, at most one
+         when it is limited. */
+      let peerWrites: WorkspaceMutation[] = [];
+      if (property?.type === "relation" && value) {
+        let ids: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((id) => typeof id === "string")) ids = parsed;
+        } catch { /* not JSON: a comma-separated list */ }
+        ids ??= value.split(",").map((id) => id.trim()).filter(Boolean);
+        ids = [...new Set(ids)];
+        const target = relationTargetPage(h, property);
+        const rows = databaseRows(pagesOf(h), target.id);
+        for (const id of ids) {
+          if (!rows.some((candidate) => candidate.id === id)) refuse("bad_request", `${id} is not a row of ${describe(target)}.`);
+        }
+        if (property.relation_limit === "1" && ids.length > 1) refuse("bad_request", "This relation links at most one page.");
+        stored = toMultiValue(ids);
+        // Both sides write in one commit, as Notion's paired cells do; when
+        // the mirror lives where this person cannot write, neither does.
+        const otherConfig = target.id === database.id ? config : target.database!;
+        const peer = relationPeerWrites(property, otherConfig, rows, row.id, relationIds(row.properties?.[key] ?? ""), ids);
+        if (peer?.writes.length) {
+          if (target.id !== database.id && !h.workspace.canEdit(target.id)) refuse("read_only", `This relation's mirror lives on ${describe(target)}, where this person can only view.`);
+          for (const write of peer.writes) {
+            const peerRow = rows.find((candidate) => candidate.id === write.rowId)!;
+            peerWrites.push(...pageMutations(h, write.rowId, rowValues(peerRow, { [peer.peerId]: write.value })));
+          }
+        }
+      }
       return change(h, () => {
         if (key === TITLE_COLUMN) h.workspace.updatePage(row.id, { title: value });
+        else if (peerWrites.length) h.workspace.commitWrites([...pageMutations(h, row.id, rowValues(row, { [key]: stored })), ...peerWrites]);
         else h.workspace.updatePage(row.id, rowValues(row, { [key]: stored }));
         return { page_id: row.id, property_id: key, value: stored };
       });

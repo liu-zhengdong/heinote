@@ -421,6 +421,7 @@ export default schema({
         kind: t.choice("document", "database").default("document").describe("A page of words, or a database."),
         view: t.choice(...VIEW_KINDS).optional().describe("A database's first view."),
         expanded: t.bool().optional().describe("Its link in its parent page shows it in place, as a block."),
+        locked: t.bool().optional().describe("Its link in its parent page keeps it read only there; with expanded, on a database, the link pins its first view — a linked view."),
       },
     },
     updatePage: {
@@ -498,7 +499,7 @@ export default schema({
         ...paragraph,
         expanded: t.bool().optional().describe("A sub-page's: shown in place (true) or folded into its row (false)."),
         locked: t.bool().optional().describe("A sub-page shown in place: read only there."),
-        view: t.id().optional().describe("A database link's: the database view it pins, as a linked view (or empty, its own again)."),
+        view: t.string(256).optional().describe("A database link's: the database view it pins, as a linked view (\"\" pins none again)."),
       },
     },
     deleteBlocks: {
@@ -554,6 +555,13 @@ export default schema({
         option_colors,
         index: t.int(0).optional().describe("Where it goes among the properties; last unless said."),
         copy_of: t.id().optional().describe("A property to copy."),
+        /* A relation's: the database it links rows to, a limit of one page,
+           and a two-way's mirror named on the target (its own title when
+           unnamed). */
+        relation_database: t.id().optional().describe("A relation's target: the database page its values link to."),
+        relation_limit: t.choice("unlimited", "1").optional().describe("A relation's limit: \"1\" links at most one page."),
+        relation_two_way: t.bool().optional().describe("A relation's: the target database shows the links back under a mirror property."),
+        relation_backlink_name: t.string(200).optional().describe("A two-way relation's mirror property name; the database's own title when left out."),
       },
     },
     updateProperty: {
@@ -567,6 +575,9 @@ export default schema({
         type: t.choice(...PROPERTY_TYPES).optional().describe("Its new type."),
         options,
         option_colors,
+        relation_limit: t.choice("unlimited", "1").optional().describe("A relation's limit: \"1\" links at most one page."),
+        relation_two_way: t.bool().optional().describe("A relation's: turn the mirror on the target database on or off."),
+        relation_backlink_name: t.string(200).optional().describe("A two-way relation's mirror property name."),
       },
     },
     deleteProperty: {
