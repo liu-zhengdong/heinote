@@ -28,7 +28,7 @@ const test = base.extend<{ app: App }>({
 function switcher(page: Page) { return page.getByRole("button", { name: "切换空间", exact: true }); }
 function spaceMenu(page: Page) { return page.getByRole("menu", { name: "切换空间", exact: true }).last(); }
 function settings(page: Page) { return page.getByRole("dialog", { name: "账号设置", exact: true }); }
-function files(page: Page) { return page.getByRole("tree", { name: "Notes", exact: true }); }
+function files(page: Page) { return page.getByRole("tree", { name: "Files", exact: true }); }
 function sidebar(page: Page) {
   return page.getByRole("complementary", { name: "Pages", exact: true }).or(page.getByRole("dialog", { name: "Pages", exact: true }));
 }
@@ -97,7 +97,8 @@ async function createPage(page: Page, app: App, scope: string, name: string, tex
   const document = page.locator(`article[data-page-id="${pageId}"]`);
   const newTitle = document.getByRole("textbox", { name: "Page title", exact: true });
   await expect(document).toBeVisible(); await expect(newTitle).toBeVisible();
-  await newTitle.focus(); await newTitle.fill(name); await expect(newTitle).toHaveText(name);
+  await newTitle.fill(name); await expect(newTitle).toHaveText(name);
+  await newTitle.press("Enter"); await expect(body(page)).toBeFocused();
   await body(page).fill(text);
   await expect.poll(async () => JSON.stringify(await records(page, app, scope))).toContain(name);
   await expect.poll(() => savedBody(page, app, scope, pageId)).toContain(text);
@@ -150,7 +151,12 @@ test("UC-13 browser: create from the username menu and keep the four Notes views
   for (const section of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(settings(page).getByRole("tab", { name: section, exact: true })).toBeVisible();
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await expect(title(page)).toHaveText("团队主题");
-  await screenshot(page, info, "knowledge-base-desktop"); expect(errors).toEqual([]);
+  await screenshot(page, info, "knowledge-base-desktop");
+  await switcher(page).click();
+  await expect(page.locator(".space-switcher-popover.is-shown")).toBeVisible();
+  await screenshot(page, info, "knowledge-base-desktop-space-menu");
+  await page.keyboard.press("Escape");
+  expect(errors).toEqual([]);
 });
 
 test("UC-13 browser: invite in reused member dialog, accept in settings, and refresh editor/viewer/removal permissions", async ({ page: owner, browser, app }) => {
@@ -321,7 +327,9 @@ test("UC-13 browser: space identity uses the real uploaded avatar and mobile set
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await switcher(page).click(); await screenshot(page, info, "knowledge-base-mobile-space-menu");
+  await switcher(page).click();
+  await expect(page.locator(".space-switcher-popover.is-shown")).toBeVisible();
+  await screenshot(page, info, "knowledge-base-mobile-space-menu");
   await page.keyboard.press("Escape"); await page.keyboard.press("Escape");
   await expect(switcher(page)).toBeHidden();
   await expect(page.getByRole("button", { name: "All pages", exact: true })).toBeFocused();
@@ -407,17 +415,91 @@ test("UC-13 browser: library settings rename, archive with confirmation, and res
   await dialog.getByRole("button", { name: /^保存/ }).click();
   await expect.poll(async () => (await summary(page, app, kb.spaceId)).name).toBe("更新后的知识库");
   expect((await summary(page, app, kb.spaceId)).knowledgeBase.description).toBe("设置中保存的团队简介");
-  await page.keyboard.press("Escape");
+  await expect(dialog.getByRole("status")).toHaveText("已保存知识库设置。");
+  await expect(dialog.getByRole("button", { name: "关闭知识库设置", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape"); await expect(dialog).toBeHidden();
   await entry.click(); await dialog.getByRole("button", { name: "归档知识库", exact: true }).click();
   await page.getByRole("button", { name: /^确认归档/ }).click();
   await expect.poll(async () => (await summary(page, app, kb.spaceId)).knowledgeBase.archived).toBe(true);
-  await page.keyboard.press("Escape");
+  await expect(dialog.getByRole("status")).toHaveText("知识库已归档。");
+  await expect(dialog.getByRole("button", { name: "关闭知识库设置", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape"); await expect(dialog).toBeHidden();
   await expect(page.locator('.block__editable[contenteditable="true"]')).toHaveCount(0);
   await expect(page.getByText("归档前已保存正文", { exact: true }).first()).toBeVisible();
   await entry.click(); await dialog.getByRole("button", { name: "恢复知识库", exact: true }).click();
   await expect.poll(async () => (await summary(page, app, kb.spaceId)).knowledgeBase.archived).toBe(false);
-  await page.keyboard.press("Escape");
+  await expect(dialog.getByRole("status")).toHaveText("知识库已恢复。");
+  await expect(dialog.getByRole("button", { name: "关闭知识库设置", exact: true })).toBeEnabled();
+  await page.keyboard.press("Escape"); await expect(dialog).toBeHidden();
   await expect(body(page)).toBeVisible(); await body(page).fill("从知识库设置恢复后实际保存");
   await expect.poll(() => savedBody(page, app, kb.spaceId, created.id)).toContain("从知识库设置恢复后实际保存");
   await page.reload(); await expect(body(page)).toHaveText("从知识库设置恢复后实际保存");
+});
+
+test("UC-13 browser: search finds table-cell-only text and voluntary leave restores the personal recent page", async ({ page: member, browser, app }) => {
+  const ownerContext = await browser.newContext(); const owner = await ownerContext.newPage();
+  try {
+    await register(owner, app, "cell_owner"); await register(member, app, "cell_member");
+    const personal = await createPage(member, app, "personal", "退出后继续个人最近页", "个人空间的已保存正文");
+    const kb = await seedLibrary(owner, app, "表格检索与退出知识库");
+    const token = await api(owner, app, "/api/tokens", "POST", { name: "表格验收 fixture", access: "write" }, 201);
+    const response = await owner.request.post(`${app.url}/api/v1/pages`, {
+      headers: { Origin: app.url, Authorization: `Bearer ${token.token}` },
+      data: { scope: kb.spaceId, title: "团队表格资料", text: "" },
+    });
+    expect(response.status()).toBe(201); const document = await response.json();
+    const snapshot = await api(owner, app, `/api/collaboration/${kb.spaceId}/${document.id}`);
+    const block = snapshot.records.blocks.find((row: Json) => row.value.kind === "text"); expect(block).toBeTruthy();
+    const uniqueCell = `cell_only_${randomUUID().replaceAll("-", "")}`;
+    const table = {
+      columns: [{ id: "subject" }, { id: "details" }],
+      rows: { row_one: { order: 1024, cells: { subject: [{ text: "检索资料" }], details: [{ text: uniqueCell }] } } },
+      header_row: false, header_column: false,
+    };
+    // Change the existing paragraph through the public atomic record boundary.
+    await api(owner, app, "/api/records/batch", "POST", {
+      requestId: randomUUID(), textUpdates: [],
+      expectedPages: [{ scope: kb.spaceId, pageId: document.id, generation: snapshot.generation, revision: snapshot.revision }],
+      writes: [{ scope: kb.spaceId, collection: "blocks", id: block.id, action: "patch", base: block.value, patch: { kind: "table", content: [], table } }],
+    });
+    const seededBlocks = await records(owner, app, kb.spaceId, "blocks");
+    const seededTable = seededBlocks.find((row) => row.id === block.id)!.value.table;
+    expect(JSON.stringify(await records(owner, app, kb.spaceId))).not.toContain(uniqueCell);
+    expect(JSON.stringify(seededBlocks.filter((row) => row.value.kind !== "table"))).not.toContain(uniqueCell);
+    expect(JSON.stringify(seededBlocks.find((row) => row.id === block.id)!.value.content)).not.toContain(uniqueCell);
+    expect(seededTable.rows.row_one.cells.details).toEqual([{ text: uniqueCell }]);
+    await seedMembership(owner, member, app, kb, "cell_member", "editor");
+    await switchSpace(member, kb.name);
+    await member.getByRole("navigation", { name: "知识库目录", exact: true }).getByRole("button", { name: "团队表格资料", exact: true }).click();
+    const memberCell = member.getByRole("grid", { name: "Table", exact: true }).getByRole("textbox", { name: "Row 1, column 2", exact: true });
+    await expect(memberCell).toHaveText(uniqueCell);
+    await files(member).getByRole("button", { name: kb.name, exact: true }).click();
+    await expect(member.locator(`article[data-page-id="${kb.knowledgeBase.homePageId}"]`)).toBeVisible();
+    const dialog = await search(member, uniqueCell);
+    await expect(dialog.getByRole("combobox", { name: "搜索范围", exact: true })).toHaveValue("current");
+    const hit = dialog.getByRole("listbox", { name: "Results", exact: true }).getByRole("option")
+      .filter({ has: member.locator(".menu__label").filter({ hasText: /^团队表格资料$/ }) });
+    await expect(hit).toHaveCount(1); await expect(hit).toContainText(uniqueCell);
+    await hit.click(); await expect(dialog).toBeHidden();
+    await expect(title(member)).toHaveText("团队表格资料"); await expect(memberCell).toHaveText(uniqueCell);
+    await member.getByRole("button", { name: "成员", exact: true }).click();
+    const members = member.getByRole("dialog", { name: `成员 ${kb.name}`, exact: true });
+    await members.getByRole("button", { name: "退出知识库", exact: true }).click();
+    await expect(members).toContainText(`退出后，你将失去「${kb.name}」的全部访问权限。`);
+    const leaving = member.waitForResponse((reply) => reply.url() === `${app.url}/api/spaces/${kb.spaceId}/leave` && reply.request().method() === "POST");
+    await members.getByRole("button", { name: "确认退出", exact: true }).click();
+    expect((await leaving).status()).toBe(200); await expect(members).toBeHidden();
+    await expect(title(member)).toHaveText("退出后继续个人最近页");
+    await expect(body(member)).toHaveText("个人空间的已保存正文");
+    await expect.poll(() => new URL(member.url()).searchParams.get("page")).toBe(personal.id);
+    await switcher(member).click(); await expect(spaceMenu(member)).not.toContainText(kb.name); await member.keyboard.press("Escape");
+    expect((await summaries(member, app)).some((space) => space.spaceId === kb.spaceId)).toBe(false);
+    for (const path of [`/api/records/${kb.spaceId}/pages`, `/api/records/${kb.spaceId}/blocks`, `/api/collaboration/${kb.spaceId}/${document.id}`]) {
+      expect([403, 404]).toContain((await member.request.get(`${app.url}${path}`)).status());
+    }
+    expect((await records(owner, app, kb.spaceId, "blocks")).find((row) => row.id === block.id)!.value.table).toEqual(seededTable);
+    await switchSpace(owner, kb.name);
+    await owner.getByRole("navigation", { name: "知识库目录", exact: true }).getByRole("button", { name: "团队表格资料", exact: true }).click();
+    await expect(owner.getByRole("grid", { name: "Table", exact: true }).getByRole("textbox", { name: "Row 1, column 2", exact: true })).toHaveText(uniqueCell);
+  } finally { await ownerContext.close(); }
 });

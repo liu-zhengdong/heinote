@@ -32,8 +32,19 @@ async function register(page: Page, handle: string) {
   await page.locator('input[name="displayName"]').fill(handle);
   await page.locator('input[name="password"]').fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
-  await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText(handle);
+  const identity = page.getByRole("button", { name: "切换空间", exact: true });
+  const allPages = page.getByRole("button", { name: "All pages", exact: true });
+  await expect.poll(async () => await identity.isVisible() || await allPages.isVisible()).toBe(true);
+  const openedDrawer = !await identity.isVisible();
+  if (openedDrawer) await allPages.click();
+  await expect(identity).toBeVisible();
+  await expect(identity.locator(".space-switcher__user")).toHaveText(handle);
+  if (openedDrawer) {
+    const drawer = page.getByRole("dialog", { name: "Pages", exact: true });
+    await expect.poll(() => drawer.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(allPages).toHaveAttribute("aria-expanded", "false");
+  }
 }
 
 interface PageRow {
@@ -277,7 +288,7 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await expect(allPages).toHaveAttribute("aria-expanded", "false");
   await allPages.click();
   await expect(allPages).toHaveAttribute("aria-expanded", "true");
-  await expect(sidebar).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
   await expectToolbarLayout(filesToolbar(page));
   await createButton(page).click();
   const menu = newMenu(page);
@@ -340,7 +351,7 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   const input = search.getByRole("textbox", { name: "Search pages", exact: true });
   await expect(input).toBeFocused();
   await input.fill("Alpha reference");
-  await expect(search.getByRole("option")).toHaveText(["Alpha reference"]);
+  await expect(search.getByRole("listbox", { name: "Results", exact: true }).getByRole("option")).toHaveText(["Alpha reference"]);
   await input.press("Enter");
   await expect(search).toBeHidden();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Alpha reference");

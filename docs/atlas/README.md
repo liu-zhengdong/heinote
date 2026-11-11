@@ -6,6 +6,7 @@ Atlas 面向需要了解 Notes 的读者。这里按主题说明当前能力、�
 | --- | --- |
 | 如何部署，账号、分享和历史有哪些能力 | [独立部署与基础能力](standalone.md) |
 | 多人如何编辑，如何撤销和恢复，如何审核 Agent 提案 | [实时共编](realtime-collaboration.md) |
+| 如何组织团队知识库，多库内容和权限如何隔离 | [团队知识库](team-knowledge.md) |
 | 登录与注册如何操作，表单遵循哪些约定 | [登录与注册界面](auth-interface.md) |
 | 品牌图标如何使用，正式素材在哪里 | [Notes 品牌图标](brand.md) |
 
