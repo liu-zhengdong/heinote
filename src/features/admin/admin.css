@@ -28,7 +28,7 @@
 .admin__main { flex: 1; min-height: 0; display: flex; }
 
 /* ————— overview ————— */
-.ac-overview { flex: 1; overflow: auto; padding: 24px 28px; max-width: 1000px; }
+.ac-overview { flex: 1; overflow: auto; padding: 24px 28px; max-width: 1000px; margin-inline: auto; width: 100%; }
 .ac-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
 .ac-tile {
   border: 1px solid var(--hairline, rgba(55,53,47,.09)); border-radius: 10px;
@@ -79,7 +79,7 @@
 .ac-dot { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--danger, #eb5757); vertical-align: 1px; }
 
 .ac-ins { overflow: auto; min-width: 0; }
-.ac-ins__inner { max-width: 640px; padding: 24px 28px 40px; }
+.ac-ins__inner { max-width: 640px; margin-inline: auto; padding: 24px 28px 40px; }
 .ac-ins__back { display: none; margin-bottom: 14px; }
 .ac-head { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
 .ac-head h2 { margin: 0; font-size: 18px; }
@@ -116,7 +116,7 @@
 .ac-edit__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
 
 /* ————— quota settings ————— */
-.ac-quotas { flex: 1; overflow: auto; padding: 24px 28px; max-width: 760px; }
+.ac-quotas { flex: 1; overflow: auto; padding: 24px 28px; max-width: 760px; margin-inline: auto; width: 100%; }
 .ac-quotas h3 { margin: 0 0 6px; font-size: 15px; }
 .ac-qlist { list-style: none; margin: 16px 0 0; padding: 0; }
 .ac-qrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; padding: 16px 0; border-top: 1px solid var(--hairline, rgba(55,53,47,.09)); }
