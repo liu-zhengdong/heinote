@@ -29,7 +29,9 @@ export function AppPage({ page }: Props) {
   const [pickId, setPickId] = useState("");
   const [pickWrite, setPickWrite] = useState(false);
 
-  const shown = dirty ? draft : (app.draft ?? "");
+  /* Enabled code fills the editor when no draft is open, so a member edits
+   *  the running source rather than an empty box. */
+  const shown = dirty ? draft : (app.draft ?? app.enabled ?? "");
   const bindings = app.databases ?? [];
   const appScope = spaceOfPage(pages, page.id);
   const databases = useMemo(

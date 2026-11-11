@@ -57,10 +57,17 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
 
   const onLoad = (frame: HTMLIFrameElement | null) => {
     if (!frame) return;
+    /* StrictMode mounts the frame twice: the old bridge must go before its
+     *  late init can overwrite the shim's instance token. */
+    if (bridgeRef.current) {
+      bridgeRef.current.detach();
+      bridgeRef.current = null;
+    }
     const bridge = new AppBridge(page.id, titleOf, preview);
     bridge.attach(frame);
     bridgeRef.current = bridge;
     bridge.start().catch((reason: unknown) => {
+      if (bridgeRef.current !== bridge) return;
       setError(reason instanceof Error ? reason.message : "启动失败。");
     });
   };

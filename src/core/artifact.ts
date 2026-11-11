@@ -52,6 +52,9 @@ export const APP_SHIM = `(() => {
     if (!msg || typeof msg !== "object") return;
     if (msg.t === "init") {
       instance = msg.instance; init = msg;
+      /* A new run replaces this instance; calls sent under the old one get
+       *  no answer, so end them instead of leaving them pending. */
+      for (const [id, waiter] of pending) { pending.delete(id); waiter.reject(Object.assign(new Error("小应用已重新启动。"), { code: "restarted" })); }
       window.notes.databases = (msg.databases || []).map(bind);
       window.notes.preview = msg.preview === true;
       window.dispatchEvent(new Event("notes:ready"));

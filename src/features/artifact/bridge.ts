@@ -45,7 +45,7 @@ const str = (value: unknown): string | undefined => (typeof value === "string" &
 
 export class AppBridge {
   private instance = "";
-  private frame: HTMLIFrameElement | null = null;
+  frame: HTMLIFrameElement | null = null;
   private readonly listener = (event: MessageEvent) => void this.onMessage(event);
 
   constructor(
