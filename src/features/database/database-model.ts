@@ -17,11 +17,22 @@ import { capitalized } from "../../core/title";
 
 export const PROPERTY_LABELS: Record<PropertyType, string> = {
   text: "Text",
+  number: "Number",
   status: "Status",
   person: "Person",
   select: "Select",
+  multi_select: "Multi-select",
   date: "Date",
   image: "Image",
+  checkbox: "Checkbox",
+  url: "URL",
+  email: "Email",
+  phone: "Phone",
+  created_time: "Created time",
+  last_edited_time: "Last edited time",
+  created_by: "Created by",
+  last_edited_by: "Last edited by",
+  id: "ID",
 };
 
 /** Every type a property can take, in the order Notion lists them — the
@@ -58,7 +69,8 @@ function availableName(taken: string[], base: string): string {
 }
 
 /** A new property of `type`. A status starts on Notion's three statuses,
- *  which is what it reads as while it has no options of its own. */
+ *  which is what it reads as while it has no options of its own; a select
+ *  and a multi-select start with none. */
 export function createDatabaseProperty(
   id: string,
   type: PropertyType,
@@ -69,7 +81,7 @@ export function createDatabaseProperty(
     id,
     name,
     type,
-    ...(type === "select" ? { options: [] } : {}),
+    ...(type === "select" || type === "multi_select" ? { options: [] } : {}),
   };
 }
 
@@ -98,7 +110,7 @@ export const DEFAULT_STATUS_OPTIONS: readonly StatusOption[] = [
  *  line in every menu that lists them. */
 export const MAX_STATUS_OPTIONS = 100;
 
-const OPTION_COLOR_SET: ReadonlySet<string> = new Set(OPTION_COLORS);
+export const OPTION_COLOR_SET: ReadonlySet<string> = new Set(OPTION_COLORS);
 const GROUP_RANK: ReadonlyMap<string, number> = new Map(STATUS_GROUPS.map((entry, index) => [entry.group, index]));
 
 function inGroupOrder(options: readonly StatusOption[]): StatusOption[] {
@@ -274,6 +286,133 @@ export function removeStatusOption(
   };
 }
 
+/* ── Select and multi-select options ──────────────────────────────────────
+   Both keep their options in `options` (a status's are `status_options`),
+   each optionally coloured in `option_colors` by name — a select stores the
+   name itself as a row's value, a multi-select a JSON list of them. */
+
+function optionsProperty(config: DatabaseConfig, propertyId: string): DatabaseProperty | undefined {
+  return config.properties.find((property) => property.id === propertyId
+    && (property.type === "select" || property.type === "multi_select"));
+}
+
+/** Whether `name` is already an option's, other than `except`'s. Names are
+ *  compared as people read them: "done" is "Done". */
+export function optionNameTaken(property: Pick<DatabaseProperty, "options">, name: string, except?: string): boolean {
+  const wanted = name.trim().toLocaleLowerCase();
+  return (property.options ?? []).some((option) => option !== except && option.trim().toLocaleLowerCase() === wanted);
+}
+
+/** A new option at the end of the list. Null when the name is blank or
+ *  already an option's. */
+export function addSelectOption(
+  config: DatabaseConfig,
+  propertyId: string,
+  name: string,
+): { config: DatabaseConfig; option: string } | null {
+  const property = optionsProperty(config, propertyId);
+  const clean = name.trim();
+  if (!property || !clean || optionNameTaken(property, clean)) return null;
+  return {
+    config: withProperties(config, config.properties.map((item) => (item.id === propertyId ? { ...item, options: [...(item.options ?? []), clean] } : item))),
+    option: clean,
+  };
+}
+
+/** An option's pill colour, unset reading as the default grey. */
+export function recolorSelectOption(config: DatabaseConfig, propertyId: string, option: string, color: OptionColor): DatabaseConfig {
+  const property = optionsProperty(config, propertyId);
+  if (!property || !OPTION_COLOR_SET.has(color)) return config;
+  const colors = { ...(property.option_colors ?? {}) };
+  if (color === "default") delete colors[option];
+  else colors[option] = color;
+  return withProperties(config, config.properties.map((item) => (item.id === propertyId ? { ...item, option_colors: colors } : item)));
+}
+
+/** Every name a row holds in this property — a select's one, or a
+ *  multi-select's list — with the option renamed from `from` to `to`
+ *  (null drops it). Only values that held `from` come back. */
+function renamedRows(rows: readonly NotePage[], propertyId: string, multi: boolean, from: string, to: string | null): RowWrite[] {
+  const writes: RowWrite[] = [];
+  for (const row of rows) {
+    const value = row.properties?.[propertyId];
+    if (typeof value !== "string" || !value) continue;
+    if (!multi) {
+      if (value === from) writes.push({ rowId: row.id, value: to ?? "" });
+      continue;
+    }
+    const held = multiValues(value);
+    if (!held.includes(from)) continue;
+    writes.push({ rowId: row.id, value: toMultiValue(held.map((name) => (name === from ? to : name)).filter((name): name is string => Boolean(name))) });
+  }
+  return writes;
+}
+
+/** Renames an option everywhere it appears: the list, its colour's key, a
+ *  view filtered on it, and every row holding it (in a multi-select, inside
+ *  its list) — as a status's rename does. Null when the name is blank or
+ *  another option's. */
+export function renameSelectOption(
+  config: DatabaseConfig,
+  propertyId: string,
+  from: string,
+  name: string,
+  rows: readonly NotePage[],
+): { config: DatabaseConfig; writes: RowWrite[] } | null {
+  const property = optionsProperty(config, propertyId);
+  const clean = name.trim();
+  if (!property || !(property.options ?? []).includes(from) || !clean || optionNameTaken(property, clean, from)) return null;
+  if (clean === from) return { config, writes: [] };
+  const colors = { ...(property.option_colors ?? {}) };
+  if (Object.hasOwn(colors, from)) {
+    colors[clean] = colors[from];
+    delete colors[from];
+  }
+  const renamed: DatabaseProperty = {
+    ...property,
+    options: (property.options ?? []).map((option) => (option === from ? clean : option)),
+    option_colors: colors,
+  };
+  const next = withProperties(config, config.properties.map((item) => (item.id === propertyId ? renamed : item)));
+  return {
+    config: {
+      ...next,
+      views: next.views.map((view) => (view.filter?.property_id === propertyId && view.filter.value === from
+        ? { ...view, filter: { property_id: propertyId, value: clean } }
+        : view)),
+    },
+    writes: renamedRows(rows, propertyId, property.type === "multi_select", from, clean),
+  };
+}
+
+/** Deletes an option, clearing it from the rows holding it (a multi-select
+ *  keeps its other options) and stopping a view filtered on it — nothing
+ *  hides rows over a value no row can hold. */
+export function removeSelectOption(
+  config: DatabaseConfig,
+  propertyId: string,
+  name: string,
+  rows: readonly NotePage[],
+): { config: DatabaseConfig; writes: RowWrite[] } | null {
+  const property = optionsProperty(config, propertyId);
+  if (!property || !(property.options ?? []).includes(name)) return null;
+  const colors = { ...(property.option_colors ?? {}) };
+  delete colors[name];
+  const next = withProperties(config, config.properties.map((item) => (item.id === propertyId ? { ...item, options: (item.options ?? []).filter((option) => option !== name), option_colors: colors } : item)));
+  return {
+    config: {
+      ...next,
+      views: next.views.map((view) => {
+        if (view.filter?.property_id !== propertyId || view.filter.value !== name) return view;
+        const unfiltered = { ...view };
+        delete unfiltered.filter;
+        return unfiltered;
+      }),
+    },
+    writes: renamedRows(rows, propertyId, property.type === "multi_select", name, null),
+  };
+}
+
 /* ── Column widths ─────────────────────────────────────────────────────── */
 
 /** How narrow and how wide a column can be dragged, and how wide a property
@@ -422,6 +561,8 @@ function isTypeDefault(name: string, type: PropertyType): boolean {
  *  - becoming a status, every value its rows hold (and every option a
  *    select offered) that is not yet one of its statuses joins To-do, so no
  *    row quietly reads as the default instead of what it says;
+ *  - becoming a meta column (Created time and its kin), each row's own
+ *    record shows; the values it held stay stored, for when it turns back;
  *  - its mark and a status's own options stay with it, whatever it becomes,
  *    so a Status turned into Text and back is the Status it was;
  *  - named only after its old type ("Text", "Date 2"), it takes the new
@@ -445,21 +586,27 @@ export function changePropertyType(
   if (current.icon !== undefined) next.icon = current.icon;
   if (current.status_options !== undefined) next.status_options = current.status_options;
   if (current.default_status !== undefined) next.default_status = current.default_status;
+  /* The values a column becoming an optioned type brings: a select's each
+     *  name as held; a multi-select's lists opened out, so "Backend, Login"
+     *  becomes options Backend and Login, not one called "Backend, Login". */
   const held = rows.flatMap((row) => {
     const value = row.properties?.[propertyId];
-    return typeof value === "string" && value.trim() ? [value.trim()] : [];
+    if (typeof value !== "string" || !value.trim()) return [];
+    const names = current.type === "multi_select" ? multiValues(value) : [value];
+    return names.map((name) => name.trim()).filter(Boolean);
   });
-  if (type === "select") {
+  if (type === "select" || type === "multi_select") {
     const options = [...(current.type === "status" ? statusOptions(current).map((option) => option.name) : current.options ?? [])];
     for (const value of held) {
       if (!options.includes(value)) options.push(value);
     }
     next.options = options;
+    if (current.option_colors !== undefined) next.option_colors = current.option_colors;
   }
   if (type === "status") {
     const options = [...statusOptions(current)];
     const ids = new Set(options.map((option) => option.id));
-    for (const value of [...(current.type === "select" ? current.options ?? [] : []), ...held]) {
+    for (const value of [...(current.type === "select" || current.type === "multi_select" ? current.options ?? [] : []), ...held]) {
       if (options.length >= MAX_STATUS_OPTIONS) break;
       if (typeof value !== "string" || !value.trim() || options.some((option) => option.name === value)) continue;
       let id = `status-${options.length}`;
@@ -600,8 +747,78 @@ export function toggleCardProperty(view: DatabaseView, properties: DatabasePrope
 
 /* ── Reading a row ─────────────────────────────────────────────────────── */
 
-/** The options a status or select property offers, in their own order. A
- *  status's go To-do, In progress, Complete; a select has whatever was added. */
+/** A day written `YYYY-MM-DD` — a Date value, or the day half of a range. */
+export const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A day that is real, not just shaped like one: 2026-02-30 is not. */
+export function isDay(value: string): boolean {
+  if (!ISO_DAY.test(value)) return false;
+  const day = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === value;
+}
+
+/** A Date value's start and end. `YYYY-MM-DD` is a single day (`end` empty);
+ *  `YYYY-MM-DD/YYYY-MM-DD` is a range, as Notion's — held as one string so a
+ *  value stays a string everywhere. Null when it is neither. */
+export function dateRange(value: string): { start: string; end: string } | null {
+  if (ISO_DAY.test(value)) return { start: value, end: "" };
+  const split = value.indexOf("/");
+  if (split < 0) return null;
+  const start = value.slice(0, split);
+  const end = value.slice(split + 1);
+  return ISO_DAY.test(start) && ISO_DAY.test(end) ? { start, end } : null;
+}
+
+/** The names a multi-select's value holds. It is stored as a JSON list so a
+ *  name with a comma survives; a stored name that is not JSON — written
+ *  before multi-selects, or by hand — reads as one value, which is how a
+ *  Select's value still means something when the column turns multi. */
+export function multiValues(value: string): string[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.filter((name): name is string => typeof name === "string" && Boolean(name));
+  } catch {
+    // Not JSON: one stored name.
+  }
+  return [value];
+}
+
+export function toMultiValue(names: readonly string[]): string {
+  return names.length ? JSON.stringify(names) : "";
+}
+
+/* A meta column is read from the row's own record — when it was made and
+ *  last touched, by whom, and its id — never from `properties`: there is no
+ *  value to write, which is why writing one is refused. (Notion draws the
+ *  same columns, equally read-only.) */
+export const META_PROPERTY_FIELDS = {
+  created_time: "created_at",
+  last_edited_time: "updated_at",
+  created_by: "created_by",
+  last_edited_by: "updated_by",
+  id: "id",
+} as const;
+
+export type MetaPropertyType = keyof typeof META_PROPERTY_FIELDS;
+
+export function isMetaType(type: string): type is MetaPropertyType {
+  return Object.hasOwn(META_PROPERTY_FIELDS, type);
+}
+
+export function isMetaProperty(property: Pick<DatabaseProperty, "type">): boolean {
+  return isMetaType(property.type);
+}
+
+/** The row record's value behind a meta property; "" for any other type. */
+function metaValue(row: NotePage, type: MetaPropertyType): string {
+  const raw: unknown = row[META_PROPERTY_FIELDS[type]];
+  return typeof raw === "string" ? raw : "";
+}
+
+/** The options a status, select or multi-select property offers, in their
+ *  own order. A status's go To-do, In progress, Complete; a select's and a
+ *  multi-select's are whatever was added. */
 export function propertyOptions(property: DatabaseProperty): string[] {
   return property.type === "status" ? statusOptions(property).map((option) => option.name) : property.options ?? [];
 }
@@ -609,8 +826,10 @@ export function propertyOptions(property: DatabaseProperty): string[] {
 /** What a row shows for a property. A status always shows one of its
  *  options — unset (or holding a name no option has), its default — because
  *  a board has to put the card SOMEWHERE, and the default is what an
- *  untouched task is. Every other property reads as exactly what is stored. */
+ *  untouched task is. A meta property reads the row's record. Every other
+ *  property reads as exactly what is stored. */
 export function propertyValue(row: NotePage, property: DatabaseProperty): string {
+  if (isMetaType(property.type)) return metaValue(row, property.type);
   const raw = row.properties?.[property.id];
   const value = typeof raw === "string" ? raw : "";
   return property.type === "status" ? statusOf(property, value).name : value;
@@ -712,6 +931,10 @@ export function rowValues(row: Pick<NotePage, "properties">, values: Record<stri
  *  original: the same value, or the same pictures, under the copy's id —
  *  as Notion's copy carries its column's values. */
 export function copiedColumn(rows: readonly NotePage[], sourceId: string, copy: DatabaseProperty): Array<{ id: string; patch: Partial<Pick<NotePage, "properties" | "property_files">> }> {
+  /* A meta column holds nothing to copy — every row already reads its own
+   *  record; copying its source's values would freeze each row's moment
+   *  into a made-up field. */
+  if (isMetaProperty(copy)) return [];
   return rows.flatMap((row): Array<{ id: string; patch: Partial<Pick<NotePage, "properties" | "property_files">> }> => {
     if (copy.type === "image") {
       const files = row.property_files?.[sourceId];
@@ -784,6 +1007,12 @@ export function sortByColumn(
 
 /* ── Rows as a view sees them ──────────────────────────────────────────── */
 
+/* Each type sorts by what it means, not by the string that holds it: a
+ *  Number as a number, a Date by its start day, a Checkbox by checked —
+ *  unchecked first, so ascending reads the open items first, as Notion's
+ *  does — a Multi-select by its first option, the rest by their words.
+ *  (Number formats, multi-value rules and grouped types arrive later; this
+ *  keeps the order honest in the meantime.) */
 function compareValues(property: DatabaseProperty | undefined, left: string, right: string): number {
   if (property && (property.type === "status" || property.type === "select")) {
     // Options sort in the order they are offered, not alphabetically: a status
@@ -794,6 +1023,21 @@ function compareValues(property: DatabaseProperty | undefined, left: string, rig
       return index < 0 ? options.length : index;
     };
     return rank(left) - rank(right);
+  }
+  if (property?.type === "number") {
+    // The caller sinks what is not a number; numbers compare numerically.
+    return Number(left) - Number(right);
+  }
+  if (property?.type === "checkbox") {
+    return (left === "true" ? 1 : 0) - (right === "true" ? 1 : 0);
+  }
+  if (property?.type === "multi_select") {
+    left = multiValues(left)[0] ?? "";
+    right = multiValues(right)[0] ?? "";
+  } else if (property?.type === "date") {
+    // A range sorts from the day it starts.
+    left = dateRange(left)?.start ?? left;
+    right = dateRange(right)?.start ?? right;
   }
   return left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
 }
@@ -874,8 +1118,15 @@ export function viewRows(
         const b = read(right);
         // Empty values sink in BOTH directions. An unset date heading an
         // ascending sort is noise, and heading a descending one is worse.
-        if (!a && b) return 1;
-        if (a && !b) return -1;
+        // A checkbox's "" is not empty, it is unchecked — which sorts FIRST.
+        // A number's non-numeric stragglers sink with the empties.
+        const empties = property?.type === "checkbox" ? () => false
+          : property?.type === "number" ? (value: string) => !value.trim() || Number.isNaN(Number(value))
+          : (value: string) => !value;
+        if (empties(a) || empties(b)) {
+          if (empties(a) !== empties(b)) return empties(a) ? 1 : -1;
+          if (empties(a)) continue;
+        }
         const order = sign * compareValues(property, a, b);
         if (order) return order;
       }

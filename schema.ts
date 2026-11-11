@@ -42,8 +42,15 @@ export const CONTENT_COLORS = [...COLOR_NAMES, ...COLOR_NAMES.map((name) => `${n
 /** The gradients a page's cover may be (features/editor/page-decoration.ts). */
 export const COVER_IDS = ["slate", "dawn", "moss", "tide", "orchid", "clay", "ink", "paper"] as const;
 
-/** What a database's property holds, and the layouts of its views. */
-export const PROPERTY_TYPES = ["text", "select", "status", "date", "person", "image"] as const;
+/** What a database's property holds, and the layouts of its views. The
+ *  order is Notion's: words and numbers first, the tags and the moment,
+ *  then the pictures; the meta columns — a row's own record read as a
+ *  property, never written — close the list. */
+export const PROPERTY_TYPES = [
+  "text", "number", "select", "multi_select", "status", "date", "person", "image",
+  "checkbox", "url", "email", "phone",
+  "created_time", "last_edited_time", "created_by", "last_edited_by", "id",
+] as const;
 export const VIEW_KINDS = ["table", "board", "list", "gallery", "calendar"] as const;
 
 /** The member's colour schemes: the system's, or one held. */
@@ -75,7 +82,7 @@ const paragraphs = t.list(t.id(), 100).describe("The paragraphs.");
 const COLORS = ["", ...CONTENT_COLORS];
 /** What an agent may make a paragraph: every kind but a table. */
 const PARAGRAPH_KINDS = BLOCK_KINDS.filter((kind) => kind !== "table");
-const options = t.list(t.name(), 100).optional().describe("A Select's options.");
+const options = t.list(t.name(), 100).optional().describe("A Select's or Multi-select's options.");
 
 /** A run of words with its marks, or a mention. */
 const run = t.object({
@@ -114,6 +121,7 @@ const paragraph = {
    own checks: a card, and the maps a database and a table keep. */
 
 const object = () => t.json({ type: "object" });
+const option_colors = object().optional().describe("Each option's pill colour, by its name: default, or one of the nine content colours (gray…red).");
 
 /** Bytes a picture or a file paragraph shows, stored beside the pages: in
  *  the member's own storage for a private page, in the space for a shared
@@ -160,6 +168,9 @@ const property = t.object({
   name: t.string(),
   type: t.choice(...PROPERTY_TYPES),
   options: t.list(t.string()).optional(),
+  /** A select's or multi-select's option colours, by the option's name —
+   *  each Notion's grey or one of its nine. */
+  option_colors: object().optional(),
   /** The mark drawn beside the column's name, a key of `PROPERTY_ICONS`;
    *  unset, or unknown to a build, the type's. */
   icon: t.string().optional(),
@@ -489,12 +500,13 @@ export default schema({
     createProperty: {
       runs: "window",
       effect: "write",
-      description: "Add a property — a column — to a database, as Add property does: type text, select, status, date, person or image; a name; a Select's options; index places it (0 first). copy_of copies a property instead, its values with it, as Duplicate does.",
+      description: "Add a property — a column — to a database, as Add property does: type text, number, select, multi_select, status, date, person, image, checkbox, url, email, phone, or a read-only meta column (created_time, last_edited_time, created_by, last_edited_by, id, which read the row's own record); a name; a Select's or Multi-select's options and their colours; index places it (0 first). copy_of copies a property instead, its values with it, as Duplicate does.",
       input: {
         page_id: databaseId,
         type: t.choice(...PROPERTY_TYPES).optional().describe("What it holds."),
         name: t.string(200).optional().describe("Its name."),
         options,
+        option_colors,
         index: t.int(0).optional().describe("Where it goes among the properties; last unless said."),
         copy_of: t.id().optional().describe("A property to copy."),
       },
@@ -502,13 +514,14 @@ export default schema({
     updateProperty: {
       runs: "window",
       effect: "write",
-      description: "Rename a database property, change its type (values are kept where the new type can hold them, as Change type does), or set a Select's options. The row-name column (property_id name) is only renamed.",
+      description: "Rename a database property, change its type (values are kept where the new type can hold them, as Change type does), or set a Select's or Multi-select's options and their colours. The row-name column (property_id name) is only renamed.",
       input: {
         page_id: databaseId,
         property_id: t.id().describe("The property, or name for the row-name column."),
         name: t.string(200).optional().describe("Its new name."),
         type: t.choice(...PROPERTY_TYPES).optional().describe("Its new type."),
         options,
+        option_colors,
       },
     },
     deleteProperty: {
@@ -520,7 +533,7 @@ export default schema({
     setRowProperty: {
       runs: "window",
       effect: "write",
-      description: "Set a database row's value: value for text, select (one of its options), status (one of its options), date (YYYY-MM-DD) or person, empty to clear; images (picture paragraph ids, their bytes reused) for an Image property. property_id name renames the row.",
+      description: "Set a database row's value: value for text; number (a real number); url, email or phone (the address); select (one of its options); multi_select (a JSON array of its option names, or the names comma-separated); status (one of its options); date (YYYY-MM-DD, or a range YYYY-MM-DD/YYYY-MM-DD); checkbox (true, false or empty); or person — empty to clear. The meta columns (created_time, last_edited_time, created_by, last_edited_by, id) are read-only. images (picture paragraph ids, their bytes reused) for an Image property. property_id name renames the row.",
       input: {
         page_id: t.id().describe("The row: a page of the database."),
         property_id: t.id().describe("The property, or name for the row's name."),
