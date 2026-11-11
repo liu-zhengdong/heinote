@@ -25,7 +25,7 @@ export const id = () => randomUUID();
 export const secret = () => randomBytes(32).toString("base64url");
 export const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export type User = Person & { siteRole: "admin" | "user"; createdAt: string | null };
-export type Actor = { user: User; tokenAccess?: "read" | "write"; displayName?: string };
+export type Actor = { user: User; tokenId?: string; tokenAccess?: "read" | "write"; displayName?: string; avatar?: string };
 export const asAuthor = (actor: Actor) => actor.displayName ?? actor.user.displayName;
 export type Row = Record<string, unknown>;
 export type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: Row; patch?: Row; base?: Row | null };
@@ -71,10 +71,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS invitations(id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id), user_id TEXT NOT NULL REFERENCES users(id), inviter_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL, status TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS invitations_user ON invitations(user_id,status);
       CREATE TABLE IF NOT EXISTS records(scope TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(scope,collection,id));
-      CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, access TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+      CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, display_name TEXT, avatar TEXT, access TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
+      CREATE TABLE IF NOT EXISTS token_events(id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES tokens(id), action TEXT NOT NULL, page_id TEXT NOT NULL, page_title TEXT NOT NULL, version_id TEXT, created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS token_events_token ON token_events(token_id,created_at);
       CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL, page_id TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
       PRAGMA user_version=1;`);
+    for (const column of ["display_name TEXT", "avatar TEXT"]) {
+      if (!this.db.prepare("SELECT 1 FROM pragma_table_info('tokens') WHERE name=?").get(column.split(" ")[0]))
+        this.db.prepare(`ALTER TABLE tokens ADD COLUMN ${column}`).run();
+    }
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
     this.files = new FileStore(this.db, dataDir);
     this.avatars = new AvatarStore(this.db, this.files);
@@ -328,7 +334,7 @@ export class Store {
     this.scope(actor, scope.startsWith("user:") ? "personal" : scope, true);
     const latest = Object.values(this.state(actor).versions[pageId] ?? {}).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
     if (!restored && latest && isCurrent(latest, page)) return latest;
-    const version: PageVersion = { id: id(), page_id: pageId, author_id: actor.user.id, author_name: actor.user.displayName, summary, created_at: now(), snapshot: structuredClone(page), ...(restored ? { restored: true } : {}) };
+    const version: PageVersion = { id: id(), page_id: pageId, author_id: actor.user.id, author_name: asAuthor(actor), author_avatar_url: actor.avatar ?? null, summary, created_at: now(), snapshot: structuredClone(page), ...(restored ? { restored: true } : {}) };
     if (Buffer.byteLength(JSON.stringify(version)) > HISTORY_BUDGET_BYTES) fail(413, "此页面超过版本保存大小限制。", "too_large");
     for (const part of historyParts(version)) this.put(scope, "versions", part.id, part.value as unknown as Row);
     this.pruneHistory(scope); return version;

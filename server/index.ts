@@ -6,7 +6,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
 import { z } from "zod";
-import { Store, fail, hash, id, secret, HttpError, writeSchema, type Actor, type Row, type User } from "./store.ts";
+import { Store, fail, hash, id, secret, HttpError, writeSchema, asAuthor, type Actor, type Row, type User } from "./store.ts";
 import { newPage } from "../src/core/block-tree.ts";
 import { restoredPage } from "../src/core/versions.ts";
 import type { NotePage, StoredFile } from "../src/core/types.ts";
@@ -20,6 +20,7 @@ import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
+import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvatarRef, tokenAvatarScope, tokenAvatarUrl, tokenDto } from "./token-identity.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
 import { importJob, startImport } from "./import.ts";
@@ -86,7 +87,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const user = store.userById(String(row.user_id));
       if (!user) fail(401, "账号不存在。");
       store.db.prepare("UPDATE tokens SET last_used_at=? WHERE id=?").run(currentTime(), String(row.id));
-      return { user, tokenAccess: row.access as "read" | "write" };
+      const tokenId = String(row.id);
+      const avatar = String(row.avatar ?? "initial");
+      return { user, tokenId, tokenAccess: row.access as "read" | "write",
+        displayName: row.display_name == null ? String(row.name) : String(row.display_name),
+        avatar: tokenAvatarUrl(tokenId, avatar) ?? avatar };
     }
     const user = sessionUser(req);
     if (!user) fail(401, "请先登录。", "unauthorized");
@@ -435,7 +440,6 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.json({ ok: true });
   });
   app.get("/api/files/:scope", (req, res) => { const { scope, path } = fileInput(req); sendFile(res, scope, path); });
-  const tokenDto = (row: Row) => ({ id: row.id, name: row.name, access: row.access, createdAt: row.created_at, lastUsedAt: row.last_used_at });
   app.get("/api/account/export", async (req, res) => {
     const who = actor(req);
     res.setHeader("Content-Type", "application/zip");
@@ -462,14 +466,72 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const { userId: _user, created: _created, ...dto } = job;
     res.json(dto);
   });
+  app.get("/api/tokens/presets", (_req, res) => res.json(AVATAR_PRESETS.map((preset) => ({ id: preset }))));
   app.get("/api/tokens", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM tokens WHERE user_id=? ORDER BY created_at", who.user.id).map(tokenDto)); });
   app.post("/api/tokens", (req, res) => {
-    const who = actor(req); const input = parse(z.object({ name: z.string().trim().min(1).max(100), access: z.enum(["read", "write"]) }), req.body);
+    const who = actor(req);
+    const input = parse(z.object({
+      name: z.string().trim().min(1).max(100),
+      access: z.enum(["read", "write"]),
+      displayName: z.string().trim().min(1).max(100).optional(),
+      avatar: z.string().max(100).optional(),
+      avatarPreset: z.string().max(40).optional(),
+    }).strict(), req.body);
+    const avatar = tokenAvatarRef(input);
     const tokenId = id(); const token = `notes_${secret()}`; const createdAt = currentTime();
-    store.db.prepare("INSERT INTO tokens VALUES(?,?,?,?,?,?,NULL)").run(tokenId, hash(token), who.user.id, input.name, input.access, createdAt);
-    res.status(201).json({ id: tokenId, token, ...input, createdAt, lastUsedAt: null });
+    store.db.prepare("INSERT INTO tokens VALUES(?,?,?,?,?,?,?,?,NULL)").run(tokenId, hash(token), who.user.id, input.name, input.displayName ?? null, avatar, input.access, createdAt);
+    res.status(201).json({ ...tokenDto(store.one("SELECT * FROM tokens WHERE id=?", tokenId)!), token });
   });
-  app.delete("/api/tokens/:id", (req, res) => { const who = actor(req); store.db.prepare("DELETE FROM tokens WHERE id=? AND user_id=?").run(text(req.params.id), who.user.id); res.json({ ok: true }); });
+  const ownedToken = (who: Actor, tokenId: string): Row => {
+    const row = store.one("SELECT * FROM tokens WHERE id=? AND user_id=?", tokenId, who.user.id);
+    if (!row) fail(404, "令牌不存在。", "not_found");
+    return row;
+  };
+  app.get("/api/tokens/:id/activity", (req, res) => {
+    const who = actor(req); const tokenId = text(req.params.id); ownedToken(who, tokenId);
+    res.json(store.all("SELECT * FROM token_events WHERE token_id=? ORDER BY created_at DESC LIMIT 100", tokenId).map(eventDto));
+  });
+  app.patch("/api/tokens/:id", (req, res) => {
+    const who = actor(req); const tokenId = text(req.params.id); ownedToken(who, tokenId);
+    const input = parse(z.object({
+      displayName: z.string().trim().min(1).max(100).optional(),
+      avatar: z.string().max(100).optional(),
+    }).strict(), req.body);
+    if (input.avatar !== undefined) parseTokenAvatar(input.avatar);
+    const fields: string[] = []; const params: string[] = [];
+    if (input.displayName !== undefined) { fields.push("display_name=?"); params.push(input.displayName); }
+    if (input.avatar !== undefined) { fields.push("avatar=?"); params.push(input.avatar); }
+    if (!fields.length) fail(400, "没有要修改的字段。", "bad_request");
+    store.db.prepare(`UPDATE tokens SET ${fields.join(",")} WHERE id=?`).run(...params, tokenId);
+    res.json(tokenDto(ownedToken(who, tokenId)));
+  });
+  app.put("/api/tokens/:id/avatar", (req, _res, next) => { actor(req); next(); }, express.raw({ type: () => true, limit: MAX_AVATAR_BYTES }), async (req, res) => {
+    const who = actor(req); const tokenId = text(req.params.id); ownedToken(who, tokenId);
+    if (!Buffer.isBuffer(req.body)) fail(400, "需要照片内容。", "bad_request");
+    const bytes = await prepareAvatar(req.body, req.get("content-type") ?? "");
+    const path = `${hash(bytes)}.webp`;
+    store.transaction(() => {
+      if (!store.files.write(tokenAvatarScope(tokenId), path, "image/webp", bytes)) fail(409, "头像版本冲突，请重试。");
+      store.db.prepare("UPDATE tokens SET avatar=? WHERE id=?").run(`upload:${path}`, tokenId);
+    });
+    res.json(tokenDto(ownedToken(who, tokenId)));
+  });
+  app.get("/api/tokens/:id/avatar/:path", (req, res) => {
+    actor(req); const tokenId = text(req.params.id);
+    const row = store.one("SELECT avatar FROM tokens WHERE id=?", tokenId);
+    if (!row) fail(404, "头像不存在。", "not_found");
+    const avatar = parseTokenAvatar(String(row.avatar));
+    if (avatar.kind !== "upload" || avatar.path !== text(req.params.path)) fail(404, "头像不存在。", "not_found");
+    sendFile(res, tokenAvatarScope(tokenId), avatar.path);
+  });
+  app.delete("/api/tokens/:id", (req, res) => {
+    const who = actor(req); const tokenId = text(req.params.id); ownedToken(who, tokenId);
+    store.transaction(() => {
+      store.db.prepare("DELETE FROM token_events WHERE token_id=?").run(tokenId);
+      store.db.prepare("DELETE FROM tokens WHERE id=?").run(tokenId);
+    });
+    res.json({ ok: true });
+  });
   const shareDto = (row: Row) => ({ id: row.id, url: `/s/${row.token}`, pageId: row.page_id, createdAt: row.created_at });
   app.get("/api/shares", (req, res) => {
     const who = actor(req);
@@ -526,6 +588,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text }];
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
       store.savePage(scope, page);
+      recordTokenEvent(store.db, who.tokenId, { action: "create", pageId: page.id, pageTitle: page.title });
       return page.id;
     });
     res.status(201).json(store.pageDto(who, pageId));
@@ -556,7 +619,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         }
       }
       store.checkpoint(who, pageId, "Agent 修改前");
-      const next = { ...page, updated_at: currentTime(), updated_by: who.user.id };
+      const next = { ...page, updated_at: currentTime(), updated_by: asAuthor(who) };
       if (input.title !== undefined) { next.title = input.title; delete next.title_content; }
       if (input.text !== undefined) {
         const blockId = id(); next.block_tree = { by_id: { [blockId]: { id: blockId, kind: "text", parent_id: null, order: 1024, content: [{ text: input.text }] } } };
@@ -570,6 +633,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         if (input.app.draft === "") delete next.app.draft;
       }
       store.savePage(scope, next);
+      recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId, pageTitle: next.title });
     }); res.json(store.pageDto(who, pageId));
   });
   app.post("/api/v1/pages/:id/enable", (req, res) => {
@@ -583,14 +647,24 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         const draft = page.app?.draft;
         if (!draft || !draft.trim()) fail(400, "没有可启用的草稿。", "bad_request");
         store.checkpoint(who, page.id, "启用应用源码前");
-        const next = { ...page, updated_at: currentTime(), updated_by: who.user.id, app: { ...(page.app ?? {}), enabled: draft } };
+        const next = { ...page, updated_at: currentTime(), updated_by: asAuthor(who), app: { ...(page.app ?? {}), enabled: draft } };
         delete next.app!.draft;
         store.savePage(scope, next);
+        recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: page.id, pageTitle: next.title });
         return { status: 200, body: store.pageDto(who, page.id), scope, pageIds: [page.id] };
       });
   });
   app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).versions[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
-  app.post("/api/v1/pages/:id/checkpoint", (req, res) => { const who = actor(req); const version = store.transaction(() => store.checkpoint(who, text(req.params.id), text(req.body?.summary).slice(0, 200) || "手动保存")); res.json(version); });
+  app.post("/api/v1/pages/:id/checkpoint", (req, res) => {
+    const who = actor(req); const pageId = text(req.params.id);
+    const version = store.transaction(() => {
+      const made = store.checkpoint(who, pageId, text(req.body?.summary).slice(0, 200) || "手动保存");
+      const title = store.state(who).pages[pageId]?.title ?? "";
+      recordTokenEvent(store.db, who.tokenId, { action: "checkpoint", pageId, pageTitle: title, versionId: made?.id });
+      return made;
+    });
+    res.json(version);
+  });
   app.post("/api/v1/pages/:id/restore", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); const { versionId, baseRevision } = parse(z.object({ versionId: z.string(), baseRevision: z.string().optional() }), req.body);
     store.transaction(() => {
@@ -598,9 +672,10 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       if (baseRevision && store.revision(scope, pageId) !== baseRevision) fail(409, "页面已有新修改。请重新检查后恢复。", "conflict");
       const version = store.state(who).versions[pageId]?.[versionId]; if (!version) fail(404, "版本不存在。");
       store.checkpoint(who, pageId, "恢复前", true);
-      const restored: NotePage = restoredPage(version.snapshot, page); restored.updated_at = currentTime(); restored.updated_by = who.user.id;
+      const restored: NotePage = restoredPage(version.snapshot, page); restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
       store.savePage(scope, restored);
       store.collaboration.reset(scope, pageId);
+      recordTokenEvent(store.db, who.tokenId, { action: "restore", pageId, pageTitle: restored.title, versionId: version.id });
     }); res.json(store.pageDto(who, pageId));
   });
 

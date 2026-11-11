@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 令牌 · 身份与最近操作 · 三方向</title>
+<link rel="stylesheet" href="assets/proto.css">
+<link rel="stylesheet" href="assets/directions.css">
+<style>
+  .cmp { padding: 52px 24px 8px; }
+  .cmp__inner { max-width: 960px; margin: 0 auto; }
+  .cmp__title { margin: 0; color: var(--ink); font-size: 19px; font-weight: 650; letter-spacing: -.01em; }
+  .cmp__sub { margin: 6px 0 0; color: var(--ink-2); font-size: 13.5px; line-height: 1.6; }
+  .cmp__rec { margin: 8px 0 0; padding: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; }
+  .cmp__rec strong { color: var(--ink); font-weight: 600; }
+  .dir { border-top: 1px solid var(--hairline); margin-top: 34px; }
+  .dir__head { max-width: 960px; margin: 0 auto; padding: 22px 24px 0; display: flex; align-items: baseline; gap: 10px; }
+  .dir__name { color: var(--ink); font-size: 14px; font-weight: 600; }
+  .dir__desc { color: var(--ink-3); font-size: 12.5px; }
+  .dir .stage { min-height: 0; padding-top: 18px; padding-bottom: 56px; }
+  .dir__more { max-width: 960px; margin: -34px auto 0; padding: 0 24px; color: var(--ink-3); font-size: 12px; }
+  .dir__more a { color: var(--blue); text-decoration: none; }
+</style>
+</head>
+<body>
+<header class="cmp">
+  <div class="cmp__inner">
+    <h1 class="cmp__title">Agent 令牌：身份与最近操作</h1>
+    <p class="cmp__sub">同一内容、同一数据、同一深浅主题。三个方向对「用户怎么认出是哪个 Agent 在操作」给出不同答案。创建表单（预设头像 + 名称 + 权限）在三个方向中相同。预设使用官方品牌标。界面内可操作：展开、选中、抽屉、创建、撤销、主题切换。</p>
+    <p class="cmp__rec"><strong>推荐方向 B</strong>：Agent 是对象而不是凭据字段，与账号页「身份主体」判断一致；编辑身份、查看操作、撤销在同一检查器完成。A 是保守退路，C 适合令牌数量多、日常巡检的场景。</p>
+  </div>
+</header>
+
+<section class="dir" id="dir-a">
+  <div class="dir__head"><span class="dir__name">方向 A · 令牌行就地展开</span><span class="dir__desc">沿用现有列表，点行展开最近写操作与撤销。改动最小。</span></div>
+  <div class="stage" id="stage-a"></div>
+  <p class="dir__more"><a href="a-disclosure.html">单款实际尺寸查看 →</a></p>
+</section>
+
+<section class="dir" id="dir-b">
+  <div class="dir__head"><span class="dir__name">方向 B · 主从检查器</span><span class="dir__desc">左列 Agent 列表，右栏身份主体：大头像、原地编辑、权限、凭据与操作列表。</span></div>
+  <div class="stage" id="stage-b"></div>
+  <p class="dir__more"><a href="b-inspector.html">单款实际尺寸查看 →</a></p>
+</section>
+
+<section class="dir" id="dir-c">
+  <div class="dir__head"><span class="dir__name">方向 C · 成员名册 + 抽屉</span><span class="dir__desc">行内直接给出「最近操作」摘要，细节与撤销收进右侧抽屉。辨认最快，密度最高。</span></div>
+  <div class="stage" id="stage-c"></div>
+  <p class="dir__more"><a href="c-roster.html">单款实际尺寸查看 →</a></p>
+</section>
+
+<script src="assets/proto.js"></script>
+<script src="assets/mounts.js"></script>
+<script>
+mountA(document.getElementById("stage-a"));
+mountB(document.getElementById("stage-b"));
+mountC(document.getElementById("stage-c"));
+protoBar();
+</script>
+</body>
+</html>

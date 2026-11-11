@@ -222,7 +222,7 @@ export function AccountSettings({ onClose, notice }: { onClose(): void; notice: 
                   </section>
                 </> : key === "preferences" ? <PreferenceSettings onBusyChange={setBusy} />
                   : key === "invitations" ? <div data-setting="invitations" tabIndex={-1}><Invitations active={active} onBusyChange={setBusy} /></div>
-                  : key === "tokens" ? <div data-setting="tokens" tabIndex={-1}><AgentTokens active={active} onBusyChange={setBusy} secret={secret} onSecretChange={setSecret} /></div>
+                  : key === "tokens" ? <div data-setting="tokens" tabIndex={-1}><AgentTokens active={active} onBusyChange={setBusy} secret={secret} onSecretChange={setSecret} onOpenPage={(id) => { selectPage(id); perform({ type: "close" }); }} /></div>
                   : key === "data" ? <div data-setting="data" tabIndex={-1}><DataExport onBusyChange={setBusy} onOpenPage={(id) => { selectPage(id); perform({ type: "close" }); }} /></div>
                   : <div data-setting="users" tabIndex={-1} className="account-admin-link">
                     <p className="account-muted">在独立页面中查看站点概览、管理用户与团队知识库、调整存储限额。</p>

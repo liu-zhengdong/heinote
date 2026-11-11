@@ -6,7 +6,8 @@ import { textPreviews, type Operation, type TextPreview } from "./proposal-previ
 import { useWorkspace } from "../../app/workspace-context";
 import { usePage } from "../../app/workspace-store";
 import { Modal } from "../../components/Modal";
-import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
+import { personName } from "../../components/ProfileAvatar";
+import { AuthorAvatar } from "../../components/AgentMark";
 import { Tooltip } from "../../components/Tooltip";
 import { inlinePlainText } from "../../core/inline-content";
 import type { NotePage, Person } from "../../core/types";
@@ -160,7 +161,7 @@ export function AgentProposals({ pageId, compact = false }: { pageId: string; co
           const stale = item.status === "pending" && Boolean(basis) && !matches;
           const previews = item.status === "pending" && matches ? textPreviews(page, item.operations) : null;
           return <article className={`proposal proposal--${item.status}`} key={item.id} aria-label={`提案，${personName(item.author)}`}>
-            <header className="proposal__head"><ProfileAvatar name={personName(item.author)} src={item.author.avatarUrl} size={26} /><div className="proposal__author"><strong>{personName(item.author)}</strong><span className="proposal__scope">{previews ? `修改 ${previews.length} 段文字` : `${item.operations.length} 项操作`}</span></div><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("zh-CN")}>{new Date(item.createdAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>{item.status !== "pending" ? <span className={`proposal__status proposal__status--${item.status}`}>{statusLabels[item.status]}</span> : null}</header>
+            <header className="proposal__head"><AuthorAvatar name={personName(item.author)} src={item.author.avatarUrl} size={26} /><div className="proposal__author"><strong>{personName(item.author)}</strong><span className="proposal__scope">{previews ? `修改 ${previews.length} 段文字` : `${item.operations.length} 项操作`}</span></div><time dateTime={item.createdAt} title={new Date(item.createdAt).toLocaleString("zh-CN")}>{new Date(item.createdAt).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>{item.status !== "pending" ? <span className={`proposal__status proposal__status--${item.status}`}>{statusLabels[item.status]}</span> : null}</header>
             {stale ? <p className="proposal-stale">正文已变化，请重新生成提案。</p> : null}
             {previews ? <div className="proposal__preview">{previews.map((preview) => <TextDifference key={preview.blockId} {...preview} />)}</div> : <details className="proposal__changes" open={item.status === "pending"}><summary>{item.status === "pending" ? "查看操作明细" : "查看原提案"}<ChevronDown size={13} aria-hidden="true" /></summary><ol>{item.operations.map((operation, index) => <OperationPreview operation={operation} page={null} key={index} />)}</ol></details>}
             {errors[item.id] ? <p className="proposal-error" role="alert">{errors[item.id].message}</p> : null}

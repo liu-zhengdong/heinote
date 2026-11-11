@@ -154,16 +154,16 @@ async function createToken(page: Page, name: string, access: "read" | "write" = 
   const openForm = !await settings(page).locator('input[name="tokenName"]').count();
   if (openForm) await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill(name);
-  await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
-  await page.getByRole("option", { name: access === "write" ? "读写" : "只读", exact: true }).click();
+  await settings(page).getByRole("radio", { name: access === "write" ? "读写" : "只读", exact: true }).click();
   await settings(page).getByRole("button", { name: "创建", exact: true }).click();
   await expect(settings(page).getByLabel("令牌", { exact: true })).toBeVisible();
   return settings(page).getByLabel("令牌", { exact: true }).inputValue();
 }
 async function revokeToken(page: Page, name: string) {
+  await settings(page).getByRole("button", { name: `令牌「${name}」`, exact: true }).click();
   await settings(page).getByRole("button", { name: `撤销令牌「${name}」`, exact: true }).click();
   await settings(page).getByRole("button", { name: `确认撤销令牌「${name}」`, exact: true }).click();
-  await expect(settings(page).getByRole("button", { name: `撤销令牌「${name}」`, exact: true })).toHaveCount(0);
+  await expect(settings(page).getByRole("button", { name: `令牌「${name}」`, exact: true })).toHaveCount(0);
 }
 function isThemeWrite(route: Route) {
   if (route.request().method() !== "POST") return false;
@@ -268,12 +268,11 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await category(page, "Agent 令牌").click();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill("尚未创建的 Agent");
-  await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
-  await page.getByRole("option", { name: "读写", exact: true }).click();
+  await settings(page).getByRole("radio", { name: "读写", exact: true }).click();
   await category(page, "偏好").click();
   await category(page, "Agent 令牌").click();
   await expect(settings(page).locator('input[name="tokenName"]')).toHaveValue("尚未创建的 Agent");
-  await expect(settings(page).getByRole("combobox", { name: "权限", exact: true })).toHaveText("读写");
+  await expect(settings(page).getByRole("radio", { name: "读写", exact: true })).toBeChecked();
   await category(page, "我的账号").click();
   await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("尚未保存的名字");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
@@ -527,7 +526,7 @@ test.describe("one-time Agent secrets", () => {
     await openSettings(page);
     await category(page, "Agent 令牌").click();
     await expect(settings(page).getByLabel("令牌", { exact: true })).toHaveCount(0);
-    await expect(settings(page).getByRole("button", { name: `撤销令牌「${name}」`, exact: true })).toBeVisible();
+    await expect(settings(page).getByRole("button", { name: `令牌「${name}」`, exact: true })).toBeVisible();
     await page.reload();
     await openSettings(page);
     await category(page, "Agent 令牌").click();
@@ -566,7 +565,7 @@ test.describe("one-time Agent secrets", () => {
     expect(creates).toBe(1);
     const metadata = await tokens(page, app);
     expect(metadata.map((item) => item.name)).toEqual([name]);
-    await expect(settings(page).getByRole("button", { name: `撤销令牌「${name}」`, exact: true })).toBeVisible();
+    await expect(settings(page).getByRole("button", { name: `令牌「${name}」`, exact: true })).toBeVisible();
     await category(page, "偏好").click();
     await category(page, "Agent 令牌").click();
     expect(creates).toBe(1);
@@ -596,15 +595,8 @@ test("AC-09: vertical tab keys and Select Escape preserve the parent and restore
   await expect(category(page, "账号管理")).toBeFocused();
   await category(page, "Agent 令牌").click();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
-  const field = settings(page).getByRole("combobox", { name: "权限", exact: true });
-  await field.click();
-  await expect(page.getByRole("listbox", { name: "权限", exact: true })).toBeVisible();
-  await page.keyboard.press("End");
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("listbox", { name: "权限", exact: true })).toBeHidden();
-  await expect(settings(page)).toBeVisible();
-  await expect(field).toHaveText("只读");
-  await expect(field).toBeFocused();
+  const field = settings(page).getByRole("radio", { name: "只读", exact: true });
+  await field.focus();
   await page.keyboard.press("Escape");
   await expect(settings(page)).toBeHidden();
   await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
@@ -661,11 +653,8 @@ test("AC-11: mobile opens navigation first and returns without losing long-name 
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill("很长的 Agent 名称".repeat(8));
   await noOverflow(page);
-  await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
-  const list = page.getByRole("listbox", { name: "权限", exact: true });
-  await expect(list).toBeInViewport({ ratio: 1 });
-  await photo(page, testInfo, "mobile-token-select-light");
-  await page.keyboard.press("Escape");
+  await expect(settings(page).getByRole("radiogroup", { name: "权限", exact: true })).toBeInViewport({ ratio: 1 });
+  await photo(page, testInfo, "mobile-token-form-light");
   await expect(settings(page)).toBeVisible();
   await settings(page).getByRole("button", { name: "创建", exact: true }).click();
   await expect(settings(page).getByLabel("令牌", { exact: true })).toBeInViewport();
@@ -708,10 +697,8 @@ test("AC-11: capture 2x light/dark desktop, short-window, and 200 percent layout
   await expect(settings(page).getByRole("button", { name: "关闭设置", exact: true })).toBeInViewport();
   await expect(settings(page).getByRole("button", { name: "退出登录", exact: true })).toBeInViewport();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
-  await settings(page).getByRole("combobox", { name: "权限", exact: true }).click();
-  await expect(page.getByRole("listbox", { name: "权限", exact: true })).toBeInViewport({ ratio: 1 });
-  await photo(page, testInfo, "short-window-token-select-dark");
-  await page.keyboard.press("Escape");
+  await expect(settings(page).getByRole("radiogroup", { name: "权限", exact: true })).toBeInViewport({ ratio: 1 });
+  await photo(page, testInfo, "short-window-token-form-dark");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   // Browser zoom halves the CSS viewport. Exercise the same 200% reflow boundary.
   await page.setViewportSize({ width: 720, height: 450 });

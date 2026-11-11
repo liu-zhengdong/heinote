@@ -236,6 +236,8 @@ export interface PageVersion {
   page_id: string;
   author_id: string;
   author_name: string;
+  /** Agent 写入时记录的身份头像：`preset:<id>` 或同域上传 URL。 */
+  author_avatar_url?: string | null;
   summary: string;
   created_at: string;
   snapshot: NotePage;

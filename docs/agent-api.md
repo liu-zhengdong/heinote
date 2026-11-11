@@ -2,6 +2,8 @@
 
 Agent 使用 Bearer 令牌访问同源 HTTP 服务。令牌由用户在账号面板创建。Agent 路径以 `/api/v1` 开头。浏览器审核路径在提案一节另列。
 
+令牌携带一个 Agent 身份：显示名与头像。写操作以此身份署名版本、提案与变更记录。用户在设置中按令牌查看最近写操作；撤销令牌清除操作记录但保留已产生的署名。
+
 ## 认证
 
 ```http
@@ -409,3 +411,18 @@ Content-Type: application/json
 | 429 | 登录或注册尝试过多 |
 
 内容写入在 SQLite 事务提交后返回成功。结构化 `operations` 与数据库写接口提供请求 ID 去重。普通文档的 `POST /pages` 仍没有客户端幂等键。若其创建响应丢失，Agent 应先查询页面，避免重复创建。
+
+## 令牌身份与会话管理
+
+以下路径使用浏览器会话，不签发 Bearer 令牌。它们管理 Agent 身份本身，所以不向 Agent 开放。
+
+- `GET /api/tokens`：列出账号令牌。`id`、`name`、`displayName`、`avatar`、`access`、`createdAt`、`lastUsedAt`。`avatar` 取 `preset:<id>`、`upload:<文件>` 或 `initial`。
+- `GET /api/tokens/presets`：列出头像预设 `id` 与 `name`。客户端自带预设图；`preset:<id>` 头像不经过网络加载。
+- `POST /api/tokens`：创建令牌。`name`、`access`，可选 `displayName`、`avatar`。只在本响应返回一次 `token` 原文。
+- `PATCH /api/tokens/:id`：改 `displayName`、`avatar`。只影响此后的署名，不回写历史快照。
+- `PUT /api/tokens/:id/avatar`：上传头像图片，服务端裁为 webp。存储范围随令牌，撤销时删除。
+- `GET /api/tokens/:id/avatar/:path`：读上传头像。
+- `GET /api/tokens/:id/activity`：该令牌最近 100 条写操作。`action`、`pageId`、`pageTitle`、`versionId`、`createdAt`，按时间倒序。只读操作不记录。
+- `DELETE /api/tokens/:id`：撤销。令牌立即 401，事件与头像删除。
+
+会话接口的 `actor` 仍要求账号角色与空间权限。令牌的 `access: read` 只追加只读约束，不扩展权限。

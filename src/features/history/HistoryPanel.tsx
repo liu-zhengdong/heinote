@@ -7,7 +7,8 @@ import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { isCurrent, versionList } from "../../core/versions";
-import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
+import { personName } from "../../components/ProfileAvatar";
+import { AuthorAvatar } from "../../components/AgentMark";
 
 const PANEL_EXIT_MS = 320;
 
@@ -121,7 +122,8 @@ export function HistoryPanel({
               <h3>{group}</h3>
               {items.map((version) => {
                 const author = member(version.author_id);
-                const name = author ? personName(author) : version.author_name;
+                const name = version.author_name || (author ? personName(author) : "未知");
+                const avatar = version.author_avatar_url || author?.avatarUrl;
                 return (
                   <button
                     type="button"
@@ -134,7 +136,7 @@ export function HistoryPanel({
                     <span className="history-item__line">
                       <span className="history-item__time">{time(version.created_at)}</span>
                       <span className="history-item__author">
-                        <ProfileAvatar src={author?.avatarUrl} name={name} size={16} />
+                        <AuthorAvatar src={avatar} name={name} size={16} />
                         <span>{name}</span>
                       </span>
                     </span>

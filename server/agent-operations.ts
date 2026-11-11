@@ -7,6 +7,7 @@ import { fieldOf, readFields, readText } from "../src/collaboration/text.ts";
 import { isKeptLink } from "../src/core/inline-content.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
 import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { recordTokenEvent } from "./token-identity.ts";
 
 const identifier = z.string().min(1).max(256);
 const position = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
@@ -186,6 +187,8 @@ function execute(store: Store, who: Actor, pageId: string, scopeName: string, in
   const plan = planOperations(store, who, scopeName, pageId, current.generation, current.revision, input.operations, input.baseRevision !== undefined || needsRevision(input.operations));
   if (suggest) return { baseRevision: current.revision, generation: current.generation };
   store.apply(who, plan.writes, undefined, plan.textUpdates, plan.expectedPages);
+  const title = store.state(who).pages[pageId]?.title ?? "";
+  recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId, pageTitle: title });
   store.collaboration.flush();
   const snapshot = store.collaboration.snapshot(who, scopeName, pageId);
   return { ...store.pageDto(who, pageId), collaboration: { scope: snapshot.scope, pageId, generation: snapshot.generation, revision: snapshot.revision } };
@@ -227,7 +230,10 @@ export function attachAgentOperations(app: Express, store: Store, actor: (req: R
         const basis = execute(store, who, pageId, scopeName, input, true) as { baseRevision: string; generation: string };
         const proposalId = id(); const createdAt = new Date().toISOString();
         const { siteRole: _siteRole, ...author } = who.user;
-        store.db.prepare("INSERT INTO collaboration_proposals VALUES(?,?,?,?,?,?,?,?,?,?)").run(proposalId, scope, pageId, basis.generation, basis.baseRevision, JSON.stringify(input.operations), who.user.id, JSON.stringify(author), "pending", createdAt);
+        const snapshot = { ...author, ...(who.displayName ? { displayName: who.displayName } : {}), ...(who.avatar ? { avatarUrl: who.avatar } : {}) };
+        store.db.prepare("INSERT INTO collaboration_proposals VALUES(?,?,?,?,?,?,?,?,?,?)").run(proposalId, scope, pageId, basis.generation, basis.baseRevision, JSON.stringify(input.operations), who.user.id, JSON.stringify(snapshot), "pending", createdAt);
+        const pageTitle = store.state(who).pages[pageId]?.title ?? "";
+        recordTokenEvent(store.db, who.tokenId, { action: "propose", pageId, pageTitle, versionId: proposalId });
         reply = { status: 201, body: proposalDto(store.one("SELECT * FROM collaboration_proposals WHERE id=?", proposalId)!) };
       } else reply = { status: 200, body: execute(store, who, pageId, scopeName, input, false) };
       store.db.prepare("INSERT INTO requests(user_id,request_id,digest,result) VALUES(?,?,?,?)").run(who.user.id, requestId, digest, JSON.stringify(reply));

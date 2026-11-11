@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向 E · 编辑模式 — Artifact v3</title>
+<link rel="stylesheet" href="assets/proto.css">
+</head>
+<body>
+
+<div class="theme" data-theme="light">
+  <div class="theme__label">LIGHT · 应用页（使用 / 编辑 两态）</div>
+  <div class="title-row">
+    <h1 class="proto-title">专注打卡</h1>
+    <div class="mode-tabs">
+      <button class="on">使用</button>
+      <button>编辑</button>
+    </div>
+  </div>
+  <p class="proto-note">标题旁的「使用 / 编辑」切换。默认使用态：只有运行面，干净。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--white mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">7</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+      <div class="list">
+        <div class="list-title">最近打卡</div>
+        <div class="row"><span><span class="idx">1</span><span class="title">专注 23:45</span></span><span>11/10 23:45</span></div>
+      </div>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <p class="proto-note" style="margin-top:26px">切到「编辑」后（运行面仍在，管理区出现）：</p>
+  <div class="title-row">
+    <h1 class="proto-title">专注打卡</h1>
+    <div class="mode-tabs">
+      <button>使用</button>
+      <button class="on">编辑</button>
+    </div>
+  </div>
+  <p class="proto-note">编辑态显示源码与数据源区块。</p>
+  <div class="app-editor">
+    <div class="app-editor__head">
+      源码
+      <span class="app-editor__spacer"></span>
+      <button class="app-editor__btn">预览</button>
+      <button class="app-editor__btn">保存草稿</button>
+      <button class="app-editor__btn app-editor__btn--primary">启用</button>
+    </div>
+    <div class="app-editor__source" style="min-height:70px">&lt;!doctype html&gt;
+&lt;html&gt; …</div>
+  </div>
+  <div class="app-editor">
+    <div class="app-editor__head">数据源<span class="app-editor__spacer"></span><button class="app-editor__btn">绑定</button></div>
+    <div class="app-binding">打卡记录<span class="app-binding__caps">读写</span></div>
+  </div>
+</div>
+
+<div class="theme" data-theme="dark">
+  <div class="theme__label">DARK · 使用态</div>
+  <div class="title-row">
+    <h1 class="proto-title">专注打卡</h1>
+    <div class="mode-tabs">
+      <button class="on">使用</button>
+      <button>编辑</button>
+    </div>
+  </div>
+  <p class="proto-note">使用态是最干净的形态；编辑入口不消失，只是降级。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--dark mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">7</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

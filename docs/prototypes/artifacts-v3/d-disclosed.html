@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向 D · 折叠管理区 — Artifact v3</title>
+<link rel="stylesheet" href="assets/proto.css">
+</head>
+<body>
+
+<div class="theme" data-theme="light">
+  <div class="theme__label">LIGHT · 应用页（默认只见运行面）</div>
+  <h1 class="proto-title">专注打卡</h1>
+  <p class="proto-note">源码与数据源收成一行折叠条，点开才展开。改动量最小。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--white mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">7</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+      <div class="list">
+        <div class="list-title">最近打卡</div>
+        <div class="row"><span><span class="idx">1</span><span class="title">专注 23:45</span></span><span>11/10 23:45</span></div>
+        <div class="row"><span><span class="idx">2</span><span class="title">专注 23:45</span></span><span>11/10 23:45</span></div>
+      </div>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <div class="admin-row">
+    源码与数据源
+    <span class="admin-row__meta">4 KB · 1 个数据源</span>
+    <span class="admin-row__chev">▾</span>
+  </div>
+
+  <p class="proto-note" style="margin-top:26px">展开后（同一行向下打开）：</p>
+  <div class="admin-row admin-row--open">
+    源码与数据源
+    <span class="admin-row__meta">4 KB · 1 个数据源</span>
+    <span class="admin-row__chev">▴</span>
+  </div>
+  <div class="admin-panel">
+    <div class="app-editor">
+      <div class="app-editor__head">
+        源码
+        <span class="app-editor__spacer"></span>
+        <button class="app-editor__btn">预览</button>
+        <button class="app-editor__btn">保存草稿</button>
+        <button class="app-editor__btn app-editor__btn--primary">启用</button>
+      </div>
+      <div class="app-editor__source" style="min-height:70px">&lt;!doctype html&gt;
+&lt;html&gt; …</div>
+    </div>
+    <div class="app-editor">
+      <div class="app-editor__head">数据源<span class="app-editor__spacer"></span><button class="app-editor__btn">绑定</button></div>
+      <div class="app-binding">打卡记录<span class="app-binding__caps">读写</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="theme" data-theme="dark">
+  <div class="theme__label">DARK · 应用页（管理区收起）</div>
+  <h1 class="proto-title">专注打卡</h1>
+  <p class="proto-note">暗色下折叠条与运行块用同一组填充层级。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--dark mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">7</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <div class="admin-row">
+    源码与数据源
+    <span class="admin-row__meta">4 KB · 1 个数据源</span>
+    <span class="admin-row__chev">▾</span>
+  </div>
+</div>
+
+</body>
+</html>

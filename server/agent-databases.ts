@@ -14,6 +14,7 @@ import {
   statusOptions, TITLE_COLUMN, toMultiValue, viewRows,
 } from "../src/features/database/database-model.ts";
 import { asAuthor, fail, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { recordTokenEvent } from "./token-identity.ts";
 import { activePage, externalScope, mutation as mutationShared, type Reply } from "./mutation.ts";
 
 const safeKey = z.string().min(1).max(256).refine((value) => !["__proto__", "prototype", "constructor"].includes(value), "标识无效。");
@@ -410,6 +411,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
       config.views.forEach((view) => checkView(view, config));
       const pageId = createPage(store, who, scope, "database", input.parentId ?? null, input.title, "", { database: config, ...(!input.parentId && !scope.startsWith("user:") ? { share_space_id: scope } : {}) });
+      recordTokenEvent(store.db, who.tokenId, { action: "database", pageId, pageTitle: input.title });
       return { status: 201, body: store.pageDto(who, pageId), scope, pageIds: [pageId] };
     });
   });
@@ -436,6 +438,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
       writes.unshift(pagePatch(store, who, db.scope, db.page.id, { database: config }));
       commit(store, who, writes, [db.page.id]);
+      recordTokenEvent(store.db, who.tokenId, { action: "database", pageId: db.page.id, pageTitle: db.page.title });
       return reply(who, db, 201, writes.map((write) => write.id));
     });
   });
@@ -503,6 +506,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       }
       const writes = [pagePatch(store, who, db.scope, db.page.id, { database: config }), ...peerWrites, ...rowWrites];
       commit(store, who, writes, [db.page.id, ...rowWrites.map((write) => write.id)]);
+      recordTokenEvent(store.db, who.tokenId, { action: "database", pageId: db.page.id, pageTitle: db.page.title });
       return reply(who, db, 200, writes.map((write) => write.id));
     });
   });
@@ -519,6 +523,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
       checkView(view, config);
       commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: config })], [db.page.id]);
+      recordTokenEvent(store.db, who.tokenId, { action: "database", pageId: db.page.id, pageTitle: db.page.title });
       return reply(who, db, 201);
     });
   });
@@ -551,6 +556,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const config = { ...changed.config, views: changed.config.views.map((item) => item.id === key ? view : item) };
       if (config.properties.length > 100) bad("数据库最多包含 100 个属性。");
       commit(store, who, [pagePatch(store, who, db.scope, db.page.id, { database: config })], [db.page.id]);
+      recordTokenEvent(store.db, who.tokenId, { action: "database", pageId: db.page.id, pageTitle: db.page.title });
       return reply(who, db);
     });
   });
@@ -566,6 +572,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
       const peers = kept ? relationPeers(store, who, db, pageId, undefined, kept) : [];
       if (peers.length) commit(store, who, peers);
+      recordTokenEvent(store.db, who.tokenId, { action: "create", pageId, pageTitle: input.title ?? "" });
       return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId, ...peers.map((write) => write.id)] };
     });
   });
@@ -583,6 +590,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const normalized = patch.properties as Record<string, string | null> | undefined;
       const peers = normalized ? relationPeers(store, who, db, rowId, store.state(who).pages[rowId]?.properties, normalized) : [];
       commit(store, who, [pagePatch(store, who, db.scope, rowId, patch), ...peers], [rowId]);
+      recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: rowId, pageTitle: store.state(who).pages[rowId]?.title ?? "" });
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId, ...peers.map((write) => write.id)] };
     });
   });
@@ -603,6 +611,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       store.apply(who, [pagePatch(store, who, db.scope, rowId, { archived: true, archived_at: stamp() })], undefined, [],
         [{ scope: snapshot.scope, pageId: rowId, generation: snapshot.generation, revision: snapshot.revision }]);
       store.collaboration.flush();
+      recordTokenEvent(store.db, who.tokenId, { action: "delete", pageId: rowId, pageTitle: store.state(who).pages[rowId]?.title ?? "" });
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
     });
   });

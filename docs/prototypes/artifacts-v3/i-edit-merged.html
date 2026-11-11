@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向 I · 单块合并编辑区 — Artifact v3</title>
+<link rel="stylesheet" href="assets/proto.css">
+<style>
+  .ed-merged { border-radius: 10px; background: var(--fill); margin-top: 14px; }
+  .ed-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; color: var(--ink-3); }
+  .ed-head .sp { flex: 1; }
+  .ed-ds { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+  .ed-ds .caps { color: var(--ink-4); }
+  .ed-mid { padding: 0 12px 12px; }
+  .ed-mid .app-editor__source { border: 0; background: var(--paper); min-height: 130px; }
+  .ed-foot { display: flex; align-items: center; gap: 8px; padding: 0 12px 10px; font-size: 11.5px; color: var(--ink-4); }
+</style>
+</head>
+<body>
+
+<div class="theme" data-theme="light">
+  <div class="theme__label">LIGHT · 编辑态 = 单块合并（数据源并进头部）</div>
+  <div class="title-row">
+    <h1 class="proto-title">专注打卡</h1>
+    <div class="mode-tabs"><button>使用</button><button class="on">编辑</button></div>
+  </div>
+  <p class="proto-note">数据源降为头部一行条目，与源码同一面板。管理区只剩一块，但两种对象同层共置。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--white mini">
+      <h2>专注打卡</h2>
+      <div class="count">7</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <div class="ed-merged">
+    <div class="ed-head">
+      <span class="ed-ds">数据源 · <span class="name">打卡记录</span> <span class="caps">读写</span></span>
+      <button class="app-editor__btn">绑定</button>
+      <span class="sp"></span>
+      <button class="app-editor__btn">预览</button>
+      <button class="app-editor__btn">保存草稿</button>
+      <button class="app-editor__btn app-editor__btn--primary">启用</button>
+    </div>
+    <div class="ed-mid">
+      <div class="app-editor__source">&lt;!doctype html&gt;
+&lt;html&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+…</div>
+    </div>
+    <div class="ed-foot">4 KB / 2048 KB · 预览只读，启用后成员看到启用版。</div>
+  </div>
+</div>
+
+<div class="theme" data-theme="dark">
+  <div class="theme__label">DARK · 单块合并</div>
+  <div class="title-row">
+    <h1 class="proto-title">专注打卡</h1>
+    <div class="mode-tabs"><button>使用</button><button class="on">编辑</button></div>
+  </div>
+  <p class="proto-note">头部一行同时承载数据源与源码操作。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--dark mini">
+      <h2>专注打卡</h2>
+      <div class="count">7</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <div class="ed-merged">
+    <div class="ed-head">
+      <span class="ed-ds">数据源 · 打卡记录 <span class="caps">读写</span></span>
+      <button class="app-editor__btn">绑定</button>
+      <span class="sp"></span>
+      <button class="app-editor__btn">预览</button>
+      <button class="app-editor__btn">保存草稿</button>
+      <button class="app-editor__btn app-editor__btn--primary">启用</button>
+    </div>
+    <div class="ed-mid">
+      <div class="app-editor__source" style="min-height:80px">&lt;!doctype html&gt;
+&lt;html&gt; …</div>
+    </div>
+    <div class="ed-foot">4 KB / 2048 KB</div>
+  </div>
+</div>
+
+</body>
+</html>
