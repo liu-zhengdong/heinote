@@ -1,4 +1,4 @@
-import { ALargeSmall, AtSign, Calendar, Check, Clock, Fingerprint, Hash, History, ImageIcon, Link as LinkIcon, ListFilter, Phone, SquareCheckBig, Tags, Text as TextIcon, UserCheck, UserPlus, UserRound } from "lucide-react";
+import { ALargeSmall, ArrowLeftRight, AtSign, Calendar, Check, Clock, Fingerprint, Hash, History, ImageIcon, Link as LinkIcon, ListFilter, Phone, SquareCheckBig, Tags, Text as TextIcon, UserCheck, UserPlus, UserRound } from "lucide-react";
 import { Avatar } from "../../components/Avatar";
 import { Select } from "../../components/Select";
 import { imeComposing } from "../../core/keyboard";
@@ -6,6 +6,7 @@ import type { DatabaseProperty, NotePage, OptionColor } from "../../core/types";
 import { dateRange, ISO_DAY, isMetaType, OPTION_COLORS as OPTION_COLOR_NAMES, propertyName, propertyOptions, propertyValue, STATUS_GROUPS, statusOf, statusOptions } from "./database-model";
 import { ImageProperty } from "./ImageProperty";
 import { MultiSelect } from "./MultiSelect";
+import { RelationPicker } from "./RelationPicker";
 import { useColumnIcon } from "./property-icon-store";
 
 export { ISO_DAY };
@@ -55,6 +56,7 @@ export function TypeIcon({ type, size = 14 }: { type: DatabaseProperty["type"]; 
   if (type === "created_by") return <UserPlus size={size} />;
   if (type === "last_edited_by") return <UserCheck size={size} />;
   if (type === "id") return <Fingerprint size={size} />;
+  if (type === "relation") return <ArrowLeftRight size={size} />;
   return <TextIcon size={size} />;
 }
 
@@ -263,6 +265,16 @@ export function PropertyEditor({
   if (property.type === "multi_select") {
     return (
       <MultiSelect
+        property={property}
+        value={value}
+        readOnly={readOnly}
+        onChange={onChange}
+      />
+    );
+  }
+  if (property.type === "relation") {
+    return (
+      <RelationPicker
         property={property}
         value={value}
         readOnly={readOnly}

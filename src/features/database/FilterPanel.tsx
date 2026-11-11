@@ -1,10 +1,12 @@
-import { Plus, Trash2, X } from "lucide-react";
+import { FileText, Plus, Trash2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { MenuItem, MenuList } from "../../components/Menu";
 import { Select } from "../../components/Select";
+import { pageName } from "../../core/block-tree";
+import { useWorkspaceState } from "../../app/workspace-store";
 import type { DatabaseProperty, FilterCondition, FilterGroup, ViewFilter } from "../../core/types";
 import {
-  defaultFilterOp, FILTER_OPS, FILTER_OP_LABELS, filterNeedsValue, propertyOptions,
+  databaseRows, defaultFilterOp, FILTER_OPS, FILTER_OP_LABELS, filterNeedsValue, propertyOptions,
 } from "./database-model";
 import { OptionTag } from "./properties";
 
@@ -58,9 +60,32 @@ function ConditionValue({
   property: DatabaseProperty | undefined;
   onChange(value: string): void;
 }) {
+  const pages = useWorkspaceState((state) => state.pages);
   if (!property) return <input className="filter-panel__input" value="" aria-label="Filter value" disabled />;
   const op = condition.op ?? defaultFilterOp(property.type);
   if (!filterNeedsValue(op)) return null;
+  // A relation's condition names a page of its target database, by id.
+  if (property.type === "relation") {
+    const target = property.relation_database ? pages[property.relation_database] : undefined;
+    const rows = target ? databaseRows(pages, target.id) : [];
+    return (
+      <Select
+        className="filter-panel__field"
+        size="compact"
+        aria-label="Filter value"
+        value={condition.value ?? ""}
+        onValueChange={onChange}
+        options={[
+          { value: "", label: "Pick a page" },
+          ...rows.map((row) => ({
+            value: row.id,
+            label: pageName(row) || "Untitled",
+            content: <span className="db-rel"><FileText size={11} aria-hidden="true" />{pageName(row) || "Untitled"}</span>,
+          })),
+        ]}
+      />
+    );
+  }
   if (property.type === "select" || property.type === "status" || property.type === "multi_select") {
     return (
       <Select

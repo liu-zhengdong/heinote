@@ -18,6 +18,7 @@ import {
   LayoutGrid,
   LayoutList,
   List,
+  Lock,
   MoreHorizontal,
   Maximize2,
   Minimize2,
@@ -51,10 +52,11 @@ import { Select } from "../../components/Select";
 import { Tooltip } from "../../components/Tooltip";
 import { imeComposing } from "../../core/keyboard";
 import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
-import { orderedBlocks } from "../../core/block-tree";
+import { orderedBlocks, pageName } from "../../core/block-tree";
 import { createId } from "../../core/ids";
 import { inlinePlainText, isoDate } from "../../core/inline-content";
 import { pageTitleContent, titleFields } from "../../core/title";
+import type { WorkspaceMutation } from "../../platform/workspace-document";
 import type {
   DatabaseConfig,
   DatabaseProperty,
@@ -113,6 +115,8 @@ import {
   removeSelectOption,
   removeStatusOption,
   removeView,
+  relationIds,
+  relationMirrorProperty,
   renameProperty,
   renameSelectOption,
   renameStatusOption,
@@ -142,7 +146,7 @@ import {
   type ViewGroup,
 } from "./database-model";
 import { formatDay, formatMoment, OptionTag, PropertyEditor, PropertyIcon, PropertyLink, TitleIcon, TypeIcon } from "./properties";
-import { PropertyMenu } from "./PropertyMenu";
+import { PropertyMenu, type RelationEditing } from "./PropertyMenu";
 import type { SelectEditing, StatusEditing } from "./StatusOptions";
 import { SortPanel, type SortColumn } from "./SortPanel";
 import { FilterPanel, type FilterColumn } from "./FilterPanel";
@@ -154,7 +158,9 @@ import { databaseConvertible, databaseToBlocks } from "./convert";
 import { ordersBetween } from "../editor/editor-commands";
 import { linkedWordsAt, NameWords, TitleField } from "../editor/TitleField";
 import { followHref } from "../editor/RichField";
-import { isBareRow, spaceOfPage } from "../../core/page-tree";
+import { inTrash, isBareRow, spaceOfPage } from "../../core/page-tree";
+import { relationPeerMutations } from "./relation";
+import { pagePatchMutations } from "../../app/page-mutations";
 import { pageCover } from "../editor/page-decoration";
 import { CoverImage, useHomedCovers } from "../editor/CoverImage";
 import { useHomedIcons, PageIconMark } from "../editor/PageIcon";
@@ -187,6 +193,7 @@ function RowChips({
   exclude?: string;
   limit: number;
 }) {
+  const pages = useWorkspaceState((state) => state.pages);
   const chips = properties
     .filter((property) => property.id !== exclude)
     .map((property) => ({ property, value: propertyValue(row, property) }))
@@ -213,6 +220,25 @@ function RowChips({
             <span key={property.id} className={`db-chip db-chip--check ${value === "true" ? "is-checked" : ""}`} aria-label={value === "true" ? "Checked" : "Unchecked"}>
               <span className={`checkbox ${value === "true" ? "is-checked" : ""}`}>{value === "true" ? <Check size={11} strokeWidth={3} /> : null}</span>
               {propertyName(property)}
+            </span>
+          );
+        }
+        // A relation chip names its pages, up to three; a page that cannot
+        // be shown draws as the cell's ghost.
+        if (property.type === "relation") {
+          return (
+            <span key={property.id} className="db-chip db-chip--relation">
+              {relationIds(value).slice(0, 3).map((id) => {
+                const linked = pages[id];
+                const gone = !linked || inTrash(pages, id);
+                return (
+                  <span key={id} className={`db-rel ${gone ? "db-rel--ghost" : ""}`}>
+                    {gone ? <Lock size={10} aria-hidden="true" /> : <FileText size={10} aria-hidden="true" />}
+                    <span className="db-rel__name">{gone ? "No access" : pageName(linked) || "Untitled"}</span>
+                  </span>
+                );
+              })}
+              {relationIds(value).length > 3 ? <span className="db-rel__name">+{relationIds(value).length - 3}</span> : null}
             </span>
           );
         }
@@ -1371,6 +1397,8 @@ function GallerySettings({
 
 type MenuState =
   | { kind: "filter" | "sort" | "group" | "columns" | "property" | "add-view" | "views"; anchor: AnchorRect }
+  /* The database a new relation column links to, picked before it is made. */
+  | { kind: "relation-target"; anchor: AnchorRect; index: number }
   | { kind: "view"; anchor: AnchorRect; viewId: string }
   /* A row's menu, opened where it was right-clicked in any view. */
   | { kind: "row"; anchor: AnchorRect; rowId: string }
@@ -1456,8 +1484,9 @@ export function DatabaseView({
 
   const rows = useMemo(() => {
     if (!config || !view) return [];
-    return viewRows(allRows, view, properties, deferredQuery);
-  }, [allRows, config, deferredQuery, properties, view]);
+    // A relation's sort key is the first linked page's title.
+    return viewRows(allRows, view, properties, deferredQuery, (pageId) => document?.state.pages[pageId]?.title);
+  }, [allRows, config, deferredQuery, document, properties, view]);
 
   // What the view hides: the columns table, list and gallery never draw.
   const shown = useMemo(() => (view ? visibleProperties(view, properties) : properties), [view, properties]);
@@ -1554,7 +1583,38 @@ export function DatabaseView({
     saveConfig(changeViewKind(target, kind, config, newPropertyId).config);
   };
 
-  const setProperty = (row: NotePage, propertyId: string, value: string) => updatePage(row.id, rowValues(row, { [propertyId]: value }));
+  /* A relation cell's write is two-sided: its own row's value, and the
+     mirror cells its picks gain or lose on the target database — one commit
+     for both, so an undo takes the pair back together. The mirror side is
+     written only where this person may write it. */
+  const author = platform?.bootstrap.user.displayName ?? "";
+  const relationPeersOf = (property: DatabaseProperty, rowId: string, previous: string, next: string) => {
+    const pages = document?.state.pages ?? {};
+    const peer = relationPeerMutations(pages, author, property, rowId, previous, next);
+    return peer && (peer.target.id === databaseId || canEdit(peer.target.id)) ? peer.mutations : [];
+  };
+  const setProperty = (row: NotePage, propertyId: string, value: string) => {
+    const property = properties.find((item) => item.id === propertyId);
+    if (property?.type !== "relation") {
+      updatePage(row.id, rowValues(row, { [propertyId]: value }));
+      return;
+    }
+    const pages = document?.state.pages ?? {};
+    const mutations = pagePatchMutations(pages, author, row.id, rowValues(row, { [propertyId]: value }));
+    mutations.push(...relationPeersOf(property, row.id, row.properties?.[propertyId] ?? "", value));
+    commitWrites(mutations);
+  };
+  /** A new row's seeded values, with the same two-sided write for a
+   *  relation the filter seeded it with. */
+  const setSeeded = (created: NotePage, seeded: Record<string, string>) => {
+    const pages = document?.state.pages ?? {};
+    const mutations = pagePatchMutations(pages, author, created.id, rowValues(created, seeded));
+    for (const [propertyId, value] of Object.entries(seeded)) {
+      const property = properties.find((item) => item.id === propertyId);
+      if (property?.type === "relation") mutations.push(...relationPeersOf(property, created.id, "", value));
+    }
+    commitWrites(mutations);
+  };
 
   /* A new row is born matching the view it was made in: inside a filter it
      takes the filtered value, so it does not vanish the moment it exists; in a
@@ -1574,7 +1634,7 @@ export function DatabaseView({
     const seedProperty = seed ? properties.find((property) => property.id === seed.property_id) : undefined;
     if (seed && seedProperty && seed.value !== undefined && !(seed.property_id in seeded)) {
       if ((seedProperty.type === "select" || seedProperty.type === "status") && seed.op === "is") seeded[seed.property_id] = seed.value;
-      else if (seedProperty.type === "multi_select" && seed.op === "contains") seeded[seed.property_id] = toMultiValue([seed.value]);
+      else if ((seedProperty.type === "multi_select" || seedProperty.type === "relation") && seed.op === "contains") seeded[seed.property_id] = toMultiValue([seed.value]);
       else if (seedProperty.type === "checkbox" && seed.op === "is") seeded[seed.property_id] = seed.value;
     }
     if (view.kind === "calendar") {
@@ -1583,7 +1643,7 @@ export function DatabaseView({
     }
     const created = document?.state.pages[id];
     if (created && Object.keys(seeded).length) {
-      updatePage(created.id, rowValues(created, seeded));
+      setSeeded(created, seeded);
     }
     if (open === "cell" || open === "card") setRenaming({ id, caret: "end" });
     else openPeek(id);
@@ -1591,12 +1651,32 @@ export function DatabaseView({
 
   /* A column made — at the end, from "Add property", or beside another,
      from its menu — opens its own menu next, its name selected. */
-  const addColumn = (type: PropertyType, index: number) => {
+  const addColumn = (type: PropertyType, index: number, anchor?: AnchorRect) => {
     if (readOnly) return;
+    // A relation is made only with the database it links to — its target is
+    // fixed for the column's life, so it is picked first.
+    if (type === "relation" && anchor) {
+      setMenu({ kind: "relation-target", anchor, index });
+      return;
+    }
     const made = insertProperty(config, newPropertyId(), type, index);
     saveConfig(made.config);
     setMenu({ kind: "column", column: made.property.id, anchor: null });
   };
+
+  const addRelationColumn = (targetId: string, index: number) => {
+    if (readOnly) return;
+    const made = insertProperty(config, newPropertyId(), "relation", index);
+    made.property.relation_database = targetId;
+    saveConfig(made.config);
+    setMenu({ kind: "column", column: made.property.id, anchor: null });
+  };
+
+  /* The databases a relation may link to: every one this person can reach —
+     itself included, a self-relation being as valid as Notion's. */
+  const databaseChoices = useWorkspaceState((state) => Object.values(state.pages)
+    .filter((page): page is NotePage => Boolean(page) && page.kind === "database" && !page.archived && !inTrash(state.pages, page.id))
+    .sort((a, b) => pageName(a).localeCompare(pageName(b))), sameItems);
 
   const insertColumn = (column: string, side: "left" | "right") => {
     const at = column === TITLE_COLUMN ? 0 : properties.findIndex((property) => property.id === column);
@@ -1634,6 +1714,97 @@ export function DatabaseView({
       if (row) setProperty(row, propertyId, write.value);
     }
   };
+  /* A relation's fields, written the way they pair: its limit and its
+     mirror's name live on the column itself; the mirror the column owes its
+     target is made, dropped or renamed in the same commit, so the two
+     databases never disagree about the pairing. */
+  const relationMirror = (property: DatabaseProperty) => {
+    const target = property.relation_database ? document?.state.pages[property.relation_database] : undefined;
+    const mirror = target?.database?.properties.find((item) => item.type === "relation" && item.relation_origin === property.id);
+    return { target, mirror };
+  };
+  const relationEditing = (property: DatabaseProperty): RelationEditing => {
+    const { target, mirror } = relationMirror(property);
+    const pages = document?.state.pages ?? {};
+    /* The column's own config and, when the mirror lives on another
+       database, that database's too — one commit for both. A self-relation's
+       mirror is its own config's, already inside `next`. */
+    const pairSave = (next: DatabaseConfig, edit?: (source: DatabaseConfig) => DatabaseConfig) => {
+      if (edit && target?.database && target.id !== databaseId && canEdit(target.id)) {
+        commitWrites([
+          ...pagePatchMutations(pages, author, databaseId, { database: next }),
+          ...pagePatchMutations(pages, author, target.id, { database: edit(target.database) }),
+        ]);
+      } else {
+        saveConfig(next);
+      }
+    };
+    return {
+      targetName: target ? pageName(target) || "Untitled" : "?",
+      mirror: Boolean(property.relation_origin),
+      limit: property.relation_limit === "1" ? "1" : "unlimited",
+      twoWay: Boolean(property.relation_two_way),
+      backlinkName: property.relation_backlink_name ?? "",
+      onLimit: (limit) => {
+        const updated = { ...property };
+        if (limit === "unlimited") delete updated.relation_limit;
+        else updated.relation_limit = "1";
+        saveConfig({ ...config, properties: config.properties.map((item) => (item.id === property.id ? updated : item)) });
+      },
+      onTwoWay: (twoWay) => {
+        if (!target?.database) return;
+        const updated = { ...property, relation_two_way: twoWay || undefined };
+        let next: DatabaseConfig = { ...config, properties: config.properties.map((item) => (item.id === property.id ? updated : item)) };
+        if (twoWay && !mirror) {
+          const named = target.id === databaseId ? next : target.database;
+          const made = relationMirrorProperty(updated, databaseId, pageName(database!), newPropertyId(), named.properties.map((item) => item.name));
+          if (target.id === databaseId) next = { ...next, properties: [...next.properties, made] };
+          pairSave(next, (source) => ({ ...source, properties: [...source.properties, made] }));
+        } else if (!twoWay && mirror) {
+          if (target.id === databaseId) next = removeProperty(next, mirror.id);
+          pairSave(next, (source) => removeProperty(source, mirror.id));
+        } else {
+          pairSave(next);
+        }
+      },
+      onBacklinkName: (name) => {
+        const updated = { ...property, relation_backlink_name: name.trim() || undefined };
+        const next: DatabaseConfig = { ...config, properties: config.properties.map((item) => (item.id === property.id ? updated : item)) };
+        if (!mirror || !target?.database) {
+          saveConfig(next);
+          return;
+        }
+        const mirrorName = name.trim() || pageName(database!) || "Relation";
+        if (target.id === databaseId) {
+          saveConfig({ ...next, properties: next.properties.map((item) => (item.id === mirror.id ? { ...item, name: mirrorName } : item)) });
+        } else {
+          pairSave(next, (source) => ({ ...source, properties: source.properties.map((item) => (item.id === mirror.id ? { ...item, name: mirrorName } : item)) }));
+        }
+      },
+    };
+  };
+  /** The mirror a column's deletion or type change takes with it: dropped
+   *  from `next` itself on a self-relation, or as the mutations `peer` owes
+   *  the other database — the caller commits both together. Skipped where
+   *  the mirror lives past this person's write. */
+  const dropMirror = (property: DatabaseProperty, next: DatabaseConfig): { next: DatabaseConfig; peer: WorkspaceMutation[] } => {
+    const { target, mirror } = relationMirror(property);
+    if (!mirror || !target?.database) return { next, peer: [] };
+    if (target.id === databaseId) return { next: removeProperty(next, mirror.id), peer: [] };
+    if (!canEdit(target.id)) return { next, peer: [] };
+    const pages = document?.state.pages ?? {};
+    return { next, peer: pagePatchMutations(pages, author, target.id, { database: removeProperty(target.database, mirror.id) }) };
+  };
+  /** A config write that may owe a second database's: both in one commit. */
+  const saveConfigWithPeer = (next: DatabaseConfig, peer: WorkspaceMutation[]) => {
+    if (!peer.length) {
+      saveConfig(next);
+      return;
+    }
+    const pages = document?.state.pages ?? {};
+    commitWrites([...pagePatchMutations(pages, author, databaseId, { database: next }), ...peer]);
+  };
+
   const statusEditing = (propertyId: string): StatusEditing => ({
     add: (group, name) => {
       const made = readOnly ? null : addStatusOption(config, propertyId, group, name, createId("status"));
@@ -1987,14 +2158,30 @@ export function DatabaseView({
           wrap={menuColumn === TITLE_COLUMN || menuProperty?.type === "text" ? columnWraps(view, menuColumn) : undefined}
           statusEditing={menuProperty?.type === "status" ? statusEditing(menuProperty.id) : undefined}
           selectEditing={menuProperty && (menuProperty.type === "select" || menuProperty.type === "multi_select") ? selectEditing(menuProperty.id) : undefined}
+          relation={menuProperty?.type === "relation" ? relationEditing(menuProperty) : undefined}
           onRename={(name) => saveConfig(renameProperty(config, menuColumn, name))}
           onIcon={(icon) => saveConfig(setPropertyIcon(config, menuColumn, icon))}
-          onChangeType={(type) => saveConfig(changePropertyType(config, menuColumn, type, allRows))}
+          onChangeType={(type) => {
+            const changed = changePropertyType(config, menuColumn, type, allRows);
+            if (menuProperty?.type === "relation" && !menuProperty.relation_origin) {
+              const dropped = dropMirror(menuProperty, changed);
+              saveConfigWithPeer(dropped.next, dropped.peer);
+            } else {
+              saveConfig(changed);
+            }
+          }}
           onSort={(direction) => saveView(sortByColumn(view, properties, menuColumn, direction))}
           onWrap={(wraps) => saveView(withColumnWrap(view, menuColumn, wraps))}
           onInsert={(side) => insertColumn(menuColumn, side)}
           onDuplicate={() => duplicateColumn(menuColumn)}
-          onDelete={() => saveConfig(removeProperty(config, menuColumn))}
+          onDelete={() => {
+            if (menuProperty?.type === "relation" && !menuProperty.relation_origin) {
+              const dropped = dropMirror(menuProperty, removeProperty(config, menuColumn));
+              saveConfigWithPeer(dropped.next, dropped.peer);
+            } else {
+              saveConfig(removeProperty(config, menuColumn));
+            }
+          }}
           onClose={() => setMenu(null)}
         />
       ) : null}
@@ -2317,9 +2504,30 @@ export function DatabaseView({
               key={type}
               icon={<TypeIcon type={type} />}
               label={PROPERTY_LABELS[type]}
-              onSelect={() => addColumn(type, properties.length)}
+              onSelect={() => addColumn(type, properties.length, menu?.kind === "property" ? menu.anchor : undefined)}
             />
           ))}
+        </MenuList>
+      </Popover>
+
+      {/* A relation's target: the database its values link to, picked
+          before the column exists — it never changes afterwards. */}
+      <Popover
+        open={menu?.kind === "relation-target"}
+        anchor={menu?.kind === "relation-target" ? menu.anchor : null}
+        placement="bottom-start"
+        label="Link to database"
+        onDismiss={() => setMenu(null)}
+      >
+        <MenuList label="Databases" autoFocus>
+          {databaseChoices.length ? databaseChoices.map((page) => (
+            <MenuItem
+              key={page.id}
+              icon={<Table2 size={16} />}
+              label={pageName(page) || "Untitled"}
+              onSelect={() => addRelationColumn(page.id, menu?.kind === "relation-target" ? menu.index : properties.length)}
+            />
+          )) : <div className="menu__section-title">No database to link to</div>}
         </MenuList>
       </Popover>
 

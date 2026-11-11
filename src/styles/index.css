@@ -7578,6 +7578,154 @@ button.db__th:hover,
   height: 13px;
 }
 
+/* ── Relations ────────────────────────────────────────────────────────── */
+
+/* A linked page, in a cell or on a card: its glyph and title, clickable to
+   the page. A page that is gone or out of reach keeps its place as a dashed
+   ghost — it may come back, and the link may still be meant. */
+.db-rel {
+  display: inline-flex;
+  height: 20px;
+  max-width: 160px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.db-rel svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-rel:hover {
+  background: var(--fill-hover);
+}
+
+.db-rel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-rel--ghost {
+  border: 1px dashed var(--hairline-strong);
+  background: none;
+  color: var(--ink-4);
+  cursor: default;
+}
+
+.db-rel--ghost:hover {
+  background: none;
+}
+
+.db-rel__list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.db-rel-cell {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+}
+
+/* The × a chip carries when it can be dropped — the cell's, styled as the
+   multi-select pill's remove is. */
+.db-rel__remove {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  color: var(--ink-4);
+}
+
+.db-rel__remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The picker's New page row, at the foot of its list. */
+.db-multi-menu__new {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: left;
+}
+
+.db-multi-menu__new:hover,
+.db-multi-menu__new.is-active {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The relation column's panel: the fixed target, its limit, its mirror's
+   switch and the mirror's name. */
+.rel-panel {
+  display: flex;
+  min-width: 240px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.rel-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rel-panel__label {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rel-panel__value {
+  color: var(--ink-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rel-panel__toggle {
+  cursor: pointer;
+}
+
+.rel-panel__input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+/* A menu row that states rather than offers — a mirror's origin. */
+.menu__item.is-static {
+  color: var(--ink-4);
+  cursor: default;
+}
+
 /* ── Pictures in properties ───────────────────────────────────────────── */
 
 /* An Image property shows its pictures small, each at its own shape (a

@@ -100,6 +100,7 @@ import { backlinksTo } from "../features/editor/mentions";
 import { quickFind } from "../features/quickfind/QuickFind";
 import type { WorkspaceDocument, WorkspaceMutation } from "../platform/workspace-document";
 import type { PagePatch, WorkspaceContextValue } from "./workspace-context";
+import { pagePatchMutations } from "./page-mutations";
 
 /** A refusal in the command's own words: the SDK answers its `code`, which
  *  agents branch on, and its message. */
@@ -218,22 +219,8 @@ function composed(host: CommandHost, page: NotePage, showInPlace = showInPlaceFo
 
 /** The mutations updatePage would make for `patch` on `pageId` — for
  *  several pages written in one commit, as a relation's two sides are. */
-function pageMutations(host: CommandHost, pageId: string, patch: PagePatch): WorkspaceMutation[] {
-  const page = pagesOf(host)[pageId];
-  if (!page) return [];
-  const mutations: WorkspaceMutation[] = [];
-  for (const [key, value] of Object.entries(patch)) {
-    if (JSON.stringify(page[key as keyof NotePage]) === JSON.stringify(value)) continue;
-    mutations.push(value === undefined
-      ? { type: "delete", path: ["pages", pageId, key] }
-      : { type: "set", path: ["pages", pageId, key], value });
-  }
-  if (mutations.length) {
-    mutations.push({ type: "set", path: ["pages", pageId, "updated_at"], value: new Date().toISOString() });
-    mutations.push({ type: "set", path: ["pages", pageId, "updated_by"], value: host.author });
-  }
-  return mutations;
-}
+const pageMutations = (host: CommandHost, pageId: string, patch: PagePatch): WorkspaceMutation[] =>
+  pagePatchMutations(pagesOf(host), host.author, pageId, patch);
 
 /** The database a relation property links rows to. */
 function relationTargetPage(host: CommandHost, property: { relation_database?: string }): NotePage {
