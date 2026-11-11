@@ -7,7 +7,7 @@
   "name": "terminus-notes",
   "version": "1.0.0",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --import tsx server/index.ts --dev",
+    "dev": "tsx watch --env-file-if-exists=.env server/index.ts --dev",
     "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
     "backup": "node --env-file-if-exists=.env scripts/backup.mjs",
     "test:e2e": "playwright test",
