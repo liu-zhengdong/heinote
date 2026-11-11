@@ -29,7 +29,7 @@ const sections = [
   { id: "tokens", label: "Agent 令牌", title: "Agent 令牌", group: "功能", description: "管理 Agent 调用 Notes API 的访问凭据。", icon: KeyRound,
     fields: [{ name: "令牌 token API 权限 名称 接入", target: "tokens" }] },
   { id: "data", label: "数据", title: "数据", group: "功能", description: "把你的笔记打包带走。", icon: Archive,
-    fields: [{ name: "导出 备份 zip Markdown 数据 下载 export backup", target: "export-download" }] },
+    fields: [{ name: "导出 备份 zip Markdown 数据 下载 export backup 导入 Obsidian Notion 迁移 import", target: "export-download" }] },
   { id: "users", label: "账号管理", title: "账号管理", group: "管理员", description: "管理站点账号与角色。", icon: UsersRound,
     fields: [{ name: "管理员 用户 角色 站点", target: "users" }] },
 ] satisfies { id: SectionId; label: string; title: string; group: string; description: string; icon: typeof Inbox | null; fields: { name: string; target: string }[] }[];
@@ -37,7 +37,7 @@ const exitsSettings = (action: Action) => action.type === "close" || action.type
 
 export function AccountSettings({ onClose, notice }: { onClose(): void; notice: GithubResult | null }) {
   const { user, logout, refresh } = useSession();
-  const { document: workspaceDocument } = useWorkspace();
+  const { document: workspaceDocument, selectPage } = useWorkspace();
   const [section, setSection] = useState<SectionId>("profile");
   const [visited, setVisited] = useState<SectionId[]>(["profile"]);
   const [busy, setBusy] = useState(false);
@@ -222,7 +222,7 @@ export function AccountSettings({ onClose, notice }: { onClose(): void; notice: 
                 </> : key === "preferences" ? <PreferenceSettings onBusyChange={setBusy} />
                   : key === "invitations" ? <div data-setting="invitations" tabIndex={-1}><Invitations active={active} onBusyChange={setBusy} /></div>
                   : key === "tokens" ? <div data-setting="tokens" tabIndex={-1}><AgentTokens active={active} onBusyChange={setBusy} secret={secret} onSecretChange={setSecret} /></div>
-                  : key === "data" ? <div data-setting="data" tabIndex={-1}><DataExport onBusyChange={setBusy} /></div>
+                  : key === "data" ? <div data-setting="data" tabIndex={-1}><DataExport onBusyChange={setBusy} onOpenPage={(id) => { selectPage(id); perform({ type: "close" }); }} /></div>
                   : <div data-setting="users" tabIndex={-1}><AdminUsers active={active} onBusyChange={setBusy} /></div>}
               </section>;
             })}

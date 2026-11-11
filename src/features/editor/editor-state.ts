@@ -11,7 +11,7 @@ import type { CopiedBlocks } from "./block-clipboard";
 import type { ShowInPlace } from "./composite";
 import type { EditorTransaction } from "./editor-commands";
 import type { FormatState } from "./FormatToolbar";
-import type { MentionTrigger, TypingResume } from "./inline-markdown";
+import type { MentionTrigger, TypingResume } from "../../core/inline-markdown";
 import type { Rendered } from "../../core/block-layout";
 import type { MentionItem } from "./mentions";
 import type { BlockTextRange, PendingTextSelection } from "./selection";

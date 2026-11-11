@@ -1,7 +1,7 @@
 import { inlineFromText, inlinePlainText, sliceInlineContent } from "../../core/inline-content";
 import { isMarkdownTableStart, markdownTableLines, normalizeCell, tabbedRows } from "../../core/simple-table";
 import type { InlineContent } from "../../core/types";
-import { markdownInlineToContent } from "./inline-markdown";
+import { markdownInlineToContent } from "../../core/inline-markdown";
 import { inlineFromNodes } from "./rich-text";
 
 /* Grids on the clipboard — what a spreadsheet, a web page's table, a

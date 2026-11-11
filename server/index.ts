@@ -18,6 +18,7 @@ import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
+import { importJob, startImport } from "./import.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -313,6 +314,21 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     } catch (error) {
       res.destroy(error instanceof Error ? error : new Error(String(error)));
     }
+  });
+  app.post("/api/account/import/:source", express.raw({ type: () => true, limit: "1gb" }), (req, res) => {
+    const who = actor(req);
+    const source = req.params.source === "notion" ? "notion" : req.params.source === "obsidian" ? "obsidian" : null;
+    if (!source) fail(404, "不支持的导入来源。", "not_found");
+    if (!Buffer.isBuffer(req.body) || !req.body.length) fail(400, "需要 zip 内容。");
+    const job = startImport(store, who, source, req.body);
+    res.status(202).json({ id: job.id, status: job.status });
+  });
+  app.get("/api/account/import/:id", (req, res) => {
+    const who = actor(req);
+    const job = importJob(who.user.id, req.params.id);
+    if (!job) fail(404, "导入任务不存在。", "not_found");
+    const { userId: _user, created: _created, ...dto } = job;
+    res.json(dto);
   });
   app.get("/api/tokens", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM tokens WHERE user_id=? ORDER BY created_at", who.user.id).map(tokenDto)); });
   app.post("/api/tokens", (req, res) => {

@@ -160,8 +160,8 @@ export class Store {
     return { page, scope };
   }
   applyOnce(actor: Actor, requestId: string, writes: Write[], textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = []): Array<Row | null> { return this.apply(actor, writes, requestId, textUpdates, expectedPages); }
-  apply(actor: Actor, requested: Write[], requestId?: string, textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = []): Array<Row | null> {
-    if ((!requested.length && !textUpdates.length) || requested.length > 10000 || textUpdates.length > 1000) fail(400, "写入数量无效。");
+  apply(actor: Actor, requested: Write[], requestId?: string, textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = [], maxWrites = 10000): Array<Row | null> {
+    if ((!requested.length && !textUpdates.length) || requested.length > maxWrites || textUpdates.length > 1000) fail(400, "写入数量无效。");
     return this.transaction(() => {
       const digest = hash(JSON.stringify({ requested, textUpdates, expectedPages }));
       if (requestId) {

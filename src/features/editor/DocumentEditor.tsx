@@ -111,7 +111,7 @@ import { KnowledgeBaseHome } from "../knowledge/KnowledgeBaseHome";
 import { PageMenu, PageNameEditor } from "./PageMenu";
 import { HISTORY_REPLAY_EVENT, SELECT_BLOCK_EVENT } from "./history-cursor";
 import { MoveToMenu } from "./MoveToMenu";
-import type { TypingResume } from "./inline-markdown";
+import type { TypingResume } from "../../core/inline-markdown";
 import { MentionMenu } from "./MentionMenu";
 import { LAND_EVENT, requestLanding, takeLanding } from "./landing";
 import {

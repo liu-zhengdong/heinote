@@ -136,3 +136,43 @@
 @media (prefers-reduced-motion: reduce) {
   .settings-nav__item { transition: none; }
 }
+
+/* 导入：整块行是入口（chevron），点开为三步向导。 */
+.settings-row--nav { width: 100%; border: 0; background: none; text-align: left; cursor: pointer; }
+.settings-row--nav:hover .settings-row__text label { color: var(--blue); }
+.settings-row--nav:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; border-radius: var(--r-sm); }
+.settings-row__chev { flex: none; color: var(--ink-3); }
+.settings-row--nav:hover .settings-row__chev { color: var(--ink); }
+.settings-group__note { margin: 10px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; }
+.ico-brand { background: transparent; }
+.ico-brand svg { width: 22px; height: 22px; }
+.ico-brand--obsidian { color: var(--obsidian, #7c3aed); }
+.ico-brand--notion { color: var(--ink); }
+
+.import-wizard { padding: 20px 0; }
+.import-wizard__head { display: flex; align-items: center; gap: 10px; }
+.import-wizard__head > div { min-width: 0; flex: 1; }
+.import-wizard__head b { font-size: 14px; font-weight: 600; }
+.import-wizard__head p { margin: 2px 0 0; color: var(--ink-3); font-size: 12.5px; }
+.import-wizard__close { margin-left: auto; }
+.import-drop { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 16px; padding: 28px 16px; border: 1.5px dashed var(--hairline-strong, var(--hairline)); border-radius: var(--r-sm); color: var(--ink-2); text-align: center; cursor: pointer; transition: border-color var(--t-fast) var(--e-out), background var(--t-fast) var(--e-out); }
+.import-drop:hover, .import-drop--over { border-color: var(--blue); background: var(--blue-tint); color: var(--ink); }
+.import-drop b { font-size: 14px; }
+.import-drop p { margin: 0; font-size: 12.5px; }
+.import-drop .btn.link { min-height: 0; padding: 0; color: var(--blue); font-size: 12.5px; }
+.import-confirm { margin-top: 16px; }
+.import-confirm__card { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid var(--hairline); border-radius: var(--r-sm); }
+.import-confirm__card > svg { flex: none; margin-top: 2px; color: var(--blue); }
+.import-confirm__card b { font-size: 13.5px; overflow-wrap: anywhere; }
+.import-confirm__card p { margin: 4px 0 0; color: var(--ink-2); font-size: 12.5px; }
+.import-warn { color: var(--amber, #a16207); font-size: 12.5px; }
+.import-confirm__card .import-warn { margin: 6px 0 0; }
+.import-done .import-warn { margin: 6px 0 0; }
+.import-actions { display: flex; gap: 10px; margin-top: 14px; justify-content: flex-end; }
+.import-progress { margin-top: 18px; }
+.import-progress__bar { height: 4px; border-radius: 2px; background: var(--hairline); overflow: hidden; }
+.import-progress__bar span { display: block; height: 100%; border-radius: 2px; background: var(--blue); transition: width 300ms var(--e-out); }
+.import-status { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; color: var(--ink-2); font-size: 13px; }
+.import-status--ok { color: var(--green, #15803d); }
+.spin { animation: import-spin 1s linear infinite; }
+@keyframes import-spin { to { transform: rotate(360deg); } }

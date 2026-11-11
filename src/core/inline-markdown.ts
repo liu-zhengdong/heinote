@@ -1,4 +1,4 @@
-import { linkifyContent } from "../../core/autolink";
+import { linkifyContent } from "./autolink";
 import {
   inlinePlainText,
   isKeptLink,
@@ -8,8 +8,8 @@ import {
   setRangeMarks,
   sliceInlineContent,
   splitInlineContent,
-} from "../../core/inline-content";
-import type { InlineContent, InlineMarks } from "../../core/types";
+} from "./inline-content";
+import type { InlineContent, InlineMarks } from "./types";
 
 interface Rule {
   pattern: RegExp;

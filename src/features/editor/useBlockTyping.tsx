@@ -25,7 +25,7 @@ import {
   updateBlockFields,
   type EditorTransaction,
 } from "./editor-commands";
-import { collapseInlineMarkdown, mentionQueryAt, resumeTyping, slashQueryAt } from "./inline-markdown";
+import { collapseInlineMarkdown, mentionQueryAt, resumeTyping, slashQueryAt } from "../../core/inline-markdown";
 import { mentionItems, pageFromLink, type MentionItem } from "./mentions";
 import { linkifyContent, linkTypedAddress } from "../../core/autolink";
 import { embedFromUrl } from "../../core/embeds";

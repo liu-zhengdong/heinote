@@ -1,112 +1,13 @@
-import { crc32 } from "node:zlib";
-import type { Readable } from "node:stream";
 import type { Actor, Row, Store } from "./store.ts";
 import { pageName } from "../src/core/block-tree.ts";
 import { blockTreeToMarkdown, wikilinkDescriber } from "../src/core/export-markdown.ts";
 import type { NotePage, StoredFile } from "../src/core/types.ts";
+import { ZipStream } from "../src/core/zip.ts";
 
 /* The member's whole workspace as one zip: each page a Markdown file, the
    attachments beside them, and every record raw in records.json (the
    lossless half — history and fields a Markdown cannot hold). The archive
    is self-contained: a picture's link points into its attachments/. */
-
-const ZIP_LIMIT_BYTES = 0xffff_ff00;
-const ZIP_LIMIT_ENTRIES = 0xfffe;
-
-/* ── A streaming zip of stored (uncompressed) entries ─────────────────────
-   Sizes and CRC go after the bytes (data descriptor), so entries stream
-   straight to the response without buffering or a second pass. */
-
-type ZipEntry = { name: Buffer; crc: number; size: number; offset: number };
-
-function dosDate(now: Date): { date: number; time: number } {
-  return {
-    date: ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate(),
-    time: (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1),
-  };
-}
-
-class ZipStream {
-  private readonly entries: ZipEntry[] = [];
-  private written = 0;
-  private readonly stamp = dosDate(new Date());
-
-  constructor(private readonly out: NodeJS.WritableStream) {}
-
-  private write(chunk: Buffer): void {
-    this.written += chunk.length;
-    this.out.write(chunk);
-  }
-
-  async add(name: string, body: Buffer | string | Readable): Promise<void> {
-    const nameBytes = Buffer.from(name, "utf8");
-    const offset = this.written;
-    const head = Buffer.alloc(30);
-    head.writeUInt32LE(0x04034b50, 0);
-    head.writeUInt16LE(20, 4); // version needed
-    head.writeUInt16LE(0x0808, 6); // data descriptor + UTF-8 names
-    head.writeUInt16LE(0, 8); // stored
-    head.writeUInt16LE(this.stamp.time, 10);
-    head.writeUInt16LE(this.stamp.date, 12);
-    head.writeUInt16LE(nameBytes.length, 26);
-    this.write(head);
-    this.write(nameBytes);
-
-    let crc = 0;
-    let size = 0;
-    if (typeof body === "string") body = Buffer.from(body, "utf8");
-    if (Buffer.isBuffer(body)) {
-      crc = crc32(body);
-      size = body.length;
-      this.write(body);
-    } else {
-      for await (const chunk of body) {
-        const piece = chunk as Buffer;
-        crc = crc32(piece, crc);
-        size += piece.length;
-        this.write(piece);
-      }
-    }
-    const tail = Buffer.alloc(16);
-    tail.writeUInt32LE(0x08074b50, 0);
-    tail.writeUInt32LE(crc, 4);
-    tail.writeUInt32LE(size, 8);
-    tail.writeUInt32LE(size, 12);
-    this.write(tail);
-    this.entries.push({ name: nameBytes, crc, size, offset });
-    if (size > ZIP_LIMIT_BYTES || this.entries.length > ZIP_LIMIT_ENTRIES) {
-      throw new Error("导出内容超过 zip 格式上限。");
-    }
-  }
-
-  finish(): void {
-    const centralAt = this.written;
-    for (const entry of this.entries) {
-      const head = Buffer.alloc(46);
-      head.writeUInt32LE(0x02014b50, 0);
-      head.writeUInt16LE(20, 4); // made by
-      head.writeUInt16LE(20, 6); // needed
-      head.writeUInt16LE(0x0808, 8);
-      head.writeUInt16LE(0, 10);
-      head.writeUInt16LE(this.stamp.time, 12);
-      head.writeUInt16LE(this.stamp.date, 14);
-      head.writeUInt32LE(entry.crc, 16);
-      head.writeUInt32LE(entry.size, 20);
-      head.writeUInt32LE(entry.size, 24);
-      head.writeUInt16LE(entry.name.length, 28);
-      head.writeUInt32LE(entry.offset, 42);
-      this.write(head);
-      this.write(entry.name);
-    }
-    const end = Buffer.alloc(22);
-    end.writeUInt32LE(0x06054b50, 0);
-    end.writeUInt16LE(this.entries.length, 8);
-    end.writeUInt16LE(this.entries.length, 10);
-    end.writeUInt32LE(this.written - centralAt, 12);
-    end.writeUInt32LE(centralAt, 16);
-    this.write(end);
-  }
-}
 
 /* ── Names and places inside the archive ───────────────────────────────── */
 
@@ -217,7 +118,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
     scopes: [] as unknown[],
     missing,
   };
-  const zip = new ZipStream(out);
+  const zip = new ZipStream({ write: (chunk) => { out.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)); } });
   await zip.add("README.md", readme(scopeExports));
 
   for (const part of scopeExports) {
