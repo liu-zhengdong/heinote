@@ -46,6 +46,9 @@ async function login(page: Page, handle: string) {
 }
 
 async function openConsole(page: Page) {
+  // `/admin` survives reloads, so the console may already be open — allow the
+  // lazy chunk a moment to mount before deciding.
+  if (await page.locator(".admin").first().waitFor({ timeout: 5000 }).then(() => true).catch(() => false)) return;
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "后台管理", exact: true }).click();
   await page.getByRole("button", { name: "打开后台管理", exact: true }).click();
@@ -96,7 +99,10 @@ test("UC-16 console: overview, users, teams and quota settings render", async ({
   await expect(page.locator(".ac-list .ac-empty")).toContainText("暂无团队知识库");
   await shots("teams-empty");
 
-  // Back to the workspace.
+  // The console has its own URL: a reload stays on it, 返回笔记 returns.
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.reload();
+  await expect(page.locator(".admin")).toHaveCount(1);
   await page.getByRole("button", { name: "返回笔记", exact: true }).click();
   await expect(page.locator(".admin")).toHaveCount(0);
 });

@@ -67,7 +67,8 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sharePageId, setSharePageId] = useState<string | null>(null);
   const [peekPageId, setPeekPageId] = useState<string | null>(null);
-  const [adminOpen, setAdminOpen] = useState(false);
+  // `/admin` is a real URL: deep links and reloads land back on the console.
+  const [adminOpen, setAdminOpen] = useState(() => window.location.pathname === "/admin");
 
   useThemeAttribute(preferences.theme);
 

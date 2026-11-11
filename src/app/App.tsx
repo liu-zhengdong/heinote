@@ -151,6 +151,8 @@ export function App() {
     window.addEventListener("hashchange", openFromHash);
     const stopRoutes = routes.listen((route) => {
       const place = new URL(route, window.location.origin);
+      if (place.pathname !== "/admin") setAdminOpen(false);
+      else setAdminOpen(true);
       wantedPage.current = place.searchParams.get("page") ?? (place.hash.length > 1 ? place.hash : null);
       openWanted();
     });
@@ -323,7 +325,13 @@ export function App() {
       <QuickFind />
       {adminOpen ? (
         <Suspense fallback={null}>
-          <AdminConsole onClose={() => setAdminOpen(false)} />
+          <AdminConsole onClose={() => {
+            // The console opened by pushing /admin, so back returns to the
+            // workspace; landing straight on the URL has nothing to go back to.
+            if (window.location.pathname === "/admin" && window.history.length > 1) window.history.back();
+            else window.history.replaceState(null, "", "/");
+            setAdminOpen(false);
+          }} />
         </Suspense>
       ) : null}
     </div>

@@ -226,7 +226,7 @@ export function AccountSettings({ onClose, notice }: { onClose(): void; notice: 
                   : key === "data" ? <div data-setting="data" tabIndex={-1}><DataExport onBusyChange={setBusy} onOpenPage={(id) => { selectPage(id); perform({ type: "close" }); }} /></div>
                   : <div data-setting="users" tabIndex={-1} className="account-admin-link">
                     <p className="account-muted">在独立页面中查看站点概览、管理用户与团队知识库、调整存储限额。</p>
-                    <button type="button" className="btn btn--primary" onClick={() => { onClose(); setAdminOpen(true); }}>打开后台管理</button>
+                    <button type="button" className="btn btn--primary" onClick={() => { onClose(); window.history.pushState(null, "", "/admin"); setAdminOpen(true); }}>打开后台管理</button>
                   </div>}
               </section>;
             })}
