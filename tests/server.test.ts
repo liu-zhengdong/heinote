@@ -363,7 +363,9 @@ test("public links expose only their page tree and revocation stops anonymous re
   const f = await fixture(t);
   const owner = f.browser();
   const guest = f.browser();
+  const outsider = f.browser();
   const user = await register(owner, "alice");
+  await register(outsider, "bob");
   await put(owner, "personal", "pages", "published", page("published", user.id));
   await put(owner, "personal", "pages", "child", page("child", user.id, { parent_id: "published" }));
   await put(owner, "personal", "pages", "unrelated_private", page("unrelated_private", user.id));
@@ -373,6 +375,12 @@ test("public links expose only their page tree and revocation stops anonymous re
   assert.ok(publicToken);
   const output = status(await guest.request(`/api/public/${publicToken}`), 200);
   assert.deepEqual(output.pages.map((item: Json) => item.id).sort(), ["child", "published"]);
+  // Without pageId the list covers every public link of this user only —
+  // the sidebar's 公开链接 section reads it.
+  const allLinks = status(await owner.request("/api/shares"), 200);
+  assert.deepEqual(allLinks.map((item: Json) => item.pageId), ["published"]);
+  denied(await guest.request("/api/shares"));
+  assert.equal(status(await outsider.request("/api/shares"), 200).length, 0);
   denied(await guest.request("/api/records/personal/pages"));
   denied(await guest.request(`/api/public/${publicToken}`, { method: "POST", body: { title: "overwrite" } }));
   status(await owner.request(`/api/shares/${share.id}`, { method: "DELETE" }), 200);

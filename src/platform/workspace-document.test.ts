@@ -8,6 +8,7 @@ import { WorkspaceDocument } from "./workspace-document";
 const hooks = vi.hoisted(() => ({ account: "workspace-account", publishRecovery: vi.fn() }));
 vi.mock("../collaboration/client", () => ({
   collaborationAccount: () => hooks.account,
+  awaitCollaborativeBasis: async () => {},
   installRecordReader: vi.fn(), installSnapshotConsumer: vi.fn(), installUndoSubmitter: vi.fn(),
   localRecordText: () => null, onScopeChange: () => () => {},
   openCollaborativePage: async () => {}, pageBasis: () => null,

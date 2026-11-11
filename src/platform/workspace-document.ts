@@ -7,7 +7,7 @@ import { Plane } from "./plane";
 import { blockRecordId } from "./record-ids";
 import { restoreSavedWrites, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
-import { withStructureText } from "../collaboration/client";
+import { awaitCollaborativeBasis, withStructureText } from "../collaboration/client";
 import {
   pageOfRef,
   pageRecords,
@@ -410,6 +410,11 @@ export class WorkspaceDocument {
   async sharePageTree(pageId: string, spaceId: string): Promise<void> {
     const page = this.state.pages[pageId];
     if (!page) throw new Error("Page no longer exists");
+    /* The server refuses a structural write that cannot name the page's
+       collaborative basis. On a page just made, the session may still be
+       opening — wait for it so sharing does not die on that race. */
+    const plane = planeOfPage(this.state, pageId);
+    if (plane) await awaitCollaborativeBasis(plane, pageId);
     await this.addSpace(spaceId);
     if (page.share_space_id !== spaceId) this.transact([{ type: "set", path: ["pages", pageId, "share_space_id"], value: spaceId }]);
     await this.flush();

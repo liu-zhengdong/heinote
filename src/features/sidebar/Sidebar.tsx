@@ -7,6 +7,7 @@ import {
   FileText,
   Files,
   Link,
+  FolderInput,
   MoreHorizontal,
   PanelLeft,
   Plus,
@@ -48,10 +49,11 @@ import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
-import { pageAncestry } from "../../core/page-tree";
+import { pageAncestry, spaceOfPage } from "../../core/page-tree";
 import { buildTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
+import { usePublicLinks } from "../share/usePublicLinks";
 import { capitalized } from "../../core/title";
 import { pageGlyph } from "../editor/block-registry";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
@@ -84,8 +86,11 @@ function writeExpanded(ids: ReadonlySet<string>): void {
 }
 
 const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints, trash: Trash2 };
-const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "共享空间", graph: "关系图谱", trash: "回收站" };
-const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "协作文档", graph: "知识拓扑", trash: "回收站" };
+/* One word for every way a page leaves the member's private space:
+   member-shared trees and public read-only links. "空间" stays with
+   knowledge bases — the only real space the member navigates between. */
+const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "已分享", graph: "关系图谱", trash: "回收站" };
+const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "已分享", graph: "知识拓扑", trash: "回收站" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
 
@@ -272,6 +277,7 @@ export function Sidebar() {
     archivePage,
     createPage,
     duplicatePage,
+    ensureShareSpace,
     movePage,
     selectPage,
     setPreference,
@@ -311,7 +317,11 @@ export function Sidebar() {
   const allPages = useWorkspaceState((state) => state.pages, (left, right) => sameListing(left, right, sort));
   const pages = useMemo(() => pagesInSpace(allPages, spaces, activeSpaceId), [allPages, spaces, activeSpaceId]);
   const writable = !activeSpace || Boolean(activeSpace.knowledgeBase && !activeSpace.knowledgeBase.archived && activeSpace.role !== "viewer");
-  const view = preferences.sidebar_view;
+  /* "已分享" lives in the personal space only: inside a knowledge base the
+     tab is meaningless — nothing there may be shared — so fall back to the
+     page list and hide the tab below. */
+  const inLibrary = Boolean(activeSpace?.knowledgeBase);
+  const view: SidebarView = inLibrary && preferences.sidebar_view === "shared" ? "files" : preferences.sidebar_view;
   const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
     () => preferences.favorites.flatMap((id): NotePage[] => (pages[id] && !pages[id].archived ? [pages[id]] : [])),
@@ -333,11 +343,20 @@ export function Sidebar() {
   );
   const sharedWithMe = sharedRoots.filter((page) => !ownedByMe(page));
   const sharedByMe = sharedRoots.filter((page) => ownedByMe(page));
+  /* Public read-only links: pages the member published without inviting
+     anyone. Distinct pages — one page can hold several links. */
+  const publicLinks = usePublicLinks();
+  const linkedPages = useMemo(
+    () => [...new Set(publicLinks.map((link) => link.pageId))]
+      .filter((pageId) => pages[pageId] && !pages[pageId].archived)
+      .map((pageId) => pages[pageId]),
+    [publicLinks, pages],
+  );
   const trashed = useMemo(() => Object.values(pages).filter((page) => page.archived), [pages]);
   const viewCounts: Partial<Record<SidebarView, number>> = {
     files: tree.roots.length + [...tree.children.values()].reduce((count, children) => count + children.length, 0),
     favorites: favorites.length,
-    shared: sharedRoots.length,
+    shared: new Set([...sharedRoots.map((page) => page.id), ...linkedPages.map((page) => page.id)]).size,
     trash: trashed.length,
   };
   /* The link mark says something links to a page from outside where it
@@ -449,13 +468,17 @@ export function Sidebar() {
 
   const copyPageLink = useCopyPageLink();
 
-  /* Sharing is the point of this page, so it is created and handed straight to
-     the Share dialog. */
+  /* "New shared page" means what it says: the page becomes a shared root
+     right away (its own space is created), then the dialog invites the
+     first member. Before this the page stayed private until someone was
+     invited — a "shared" page that no list could see. */
   const createShared = () => {
     if (!writable) return;
     const id = createPage();
     if (!id) return;
-    requestShare(id);
+    void ensureShareSpace(id)
+      .then(() => requestShare(id))
+      .catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法创建共享空间，请重试。", "error"));
     afterNavigate();
   };
 
@@ -672,7 +695,7 @@ export function Sidebar() {
           ) : null}
         </div>
         <div className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation="vertical">
-          {SIDEBAR_VIEWS.map((value) => {
+          {SIDEBAR_VIEWS.filter((value) => !(inLibrary && value === "shared")).map((value) => {
             const Icon = VIEW_ICONS[value];
             return (
               <button
@@ -804,25 +827,31 @@ export function Sidebar() {
             <>
               {sharedWithMe.length ? (
                 <section className="sidebar__group">
-                  <h3 className="sidebar__group-title">Shared with you</h3>
+                  <h3 className="sidebar__group-title">与我共享</h3>
                   {sharedWithMe.map((page) => branch(page, 0, tree))}
                 </section>
               ) : null}
               <section className="sidebar__group">
                 <h3 className="sidebar__group-title">
-                  <span>Shared by you</span>
-                  <Tooltip label="New shared page">
-                    <button type="button" className="icon-btn icon-btn--sm" aria-label="New shared page" disabled={!writable} onClick={createShared}>
+                  <span>我共享的</span>
+                  <Tooltip label="新建共享页面">
+                    <button type="button" className="icon-btn icon-btn--sm" aria-label="新建共享页面" disabled={!writable} onClick={createShared}>
                       <Plus size={15} />
                     </button>
                   </Tooltip>
                 </h3>
                 {sharedByMe.length ? sharedByMe.map((page) => branch(page, 0, tree)) : (
                   <button type="button" className="rail-invite" disabled={!writable} onClick={createShared}>
-                    <UserPlus size={15} />New shared page
+                    <UserPlus size={15} />新建共享页面
                   </button>
                 )}
               </section>
+              {linkedPages.length ? (
+                <section className="sidebar__group">
+                  <h3 className="sidebar__group-title">公开链接</h3>
+                  {linkedPages.map((page) => flatRow(page))}
+                </section>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -835,6 +864,11 @@ export function Sidebar() {
   const menuEditable = menuPage ? canEdit(menuPage.id) : false;
   const menuTrashable = menuPage ? canTrashPage(menuPage.id) : false;
   const menuIsHome = Boolean(menuPage && activeSpace?.knowledgeBase?.homePageId === menuPage.id);
+  const menuSpaceId = menuPage ? spaceOfPage(pages, menuPage.id) : undefined;
+  const menuInLibrary = Boolean(menuSpaceId && spaces[menuSpaceId]?.knowledgeBase);
+  /* Any page inside a shared space — a knowledge base, or someone else's
+     shared tree — offers the private copy out. */
+  const menuInSharedSpace = Boolean(menuSpaceId);
 
   return (
     <>
@@ -983,8 +1017,26 @@ export function Sidebar() {
               label={isFavorite(menuPage.id) ? "Remove from favorites" : "Add to favorites"}
               onSelect={() => { toggleFavorite(menuPage.id); setRowMenu(null); }}
             />
-            <MenuItem icon={<UserPlus size={16} />} label="Share…" onSelect={() => { selectPage(menuPage.id); requestShare(menuPage.id); setRowMenu(null); }} />
+            <MenuItem
+              icon={<UserPlus size={16} />}
+              label={menuInLibrary ? "成员…" : "Share…"}
+              onSelect={() => { selectPage(menuPage.id); requestShare(menuPage.id); setRowMenu(null); }}
+            />
             <MenuItem icon={<Link size={16} />} label="Copy link" onSelect={() => { copyPageLink(menuPage.id); setRowMenu(null); }} />
+            {/* The only way content leaves a shared space: a private copy in
+                the member's own space. There it can be shared freely. */}
+            {menuInSharedSpace ? (
+              <MenuItem
+                icon={<FolderInput size={16} />}
+                label="拷贝到个人空间"
+                onSelect={() => {
+                  const copyId = duplicatePage(menuPage.id, { toPersonal: true });
+                  if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
+                  else toast("无法拷贝此页面", "error");
+                  setRowMenu(null);
+                }}
+              />
+            ) : null}
             {menuEditable ? (
               <>
                 <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={menuIsHome} onSelect={() => { if (!menuIsHome) { duplicatePage(menuPage.id); setRowMenu(null); } }} />

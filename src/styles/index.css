@@ -9318,6 +9318,23 @@ button.db__th:hover,
   font-weight: 400;
 }
 
+/* The page's sharing state, said in one line at the top — private, shared
+   with members, or open through a public link — so the two kinds of sharing
+   below never blur together. */
+.share__status {
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.share__section .share__note {
+  margin-bottom: 8px;
+}
+
 /* A page inside a shared page is shared through it: said once, above the
    people it is shared with. */
 .share__inherited {

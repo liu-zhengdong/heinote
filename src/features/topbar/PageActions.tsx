@@ -3,6 +3,7 @@ import {
   Copy,
   CornerDownRight,
   CornerUpLeft,
+  FolderInput,
   Link,
   MoreHorizontal,
   MoveHorizontal,
@@ -86,7 +87,8 @@ export function PageActions({
 
   const editable = canEdit(page.id);
   const trashable = canTrashPage(page.id);
-  const library = spaces[spaceOf(page.id) ?? ""]?.knowledgeBase;
+  const spaceId = spaceOf(page.id);
+  const library = spaces[spaceId ?? ""]?.knowledgeBase;
   const isLibraryHome = library?.homePageId === page.id;
   const shareLabel = library ? "成员" : "Share";
   // Where to, the picker asks the one move rule.
@@ -237,6 +239,21 @@ export function PageActions({
           ) : null}
           {editable ? (
             <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={isLibraryHome} onSelect={() => { if (!isLibraryHome) { setMoreAnchor(null); duplicatePage(page.id); } }} />
+          ) : null}
+          {/* The only way a knowledge-base page can leave the space: a
+              private copy in the member's own space, free to share. Also
+              shown on pages inside someone else's shared tree. */}
+          {!library && spaceId ? (
+            <MenuItem
+              icon={<FolderInput size={16} />}
+              label="拷贝到个人空间"
+              onSelect={() => {
+                setMoreAnchor(null);
+                const copyId = duplicatePage(page.id, { toPersonal: true });
+                if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
+                else toast("无法拷贝此页面", "error");
+              }}
+            />
           ) : null}
           {movable ? (
             <MenuItem
