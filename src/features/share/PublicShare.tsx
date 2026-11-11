@@ -215,7 +215,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
             <h1>{active.title_content?.length ? <Inline content={active.title_content} context={context} /> : titleOf(active)}</h1>
             {active.kind === "app" ? (
               active.app?.enabled
-                ? <AppSurface page={active} anonymous />
+                ? <AppSurface page={active} shareToken={token} />
                 : <p className="account-muted">小应用尚未启用。</p>
             ) : (
               <BlockChildren tree={active.block_tree} context={context} />

@@ -14,6 +14,7 @@ import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
+import { attachPublicApp } from "./public-app.ts";
 import { activePage, mutation } from "./mutation.ts";
 import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
@@ -597,6 +598,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
 
   attachAgentDatabases(app, store, actor);
   attachAgentOperations(app, store, actor);
+  attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
   let vite: { close(): Promise<void> } | undefined;
   if (options.dev) {

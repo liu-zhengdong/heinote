@@ -25,7 +25,8 @@ export const id = () => randomUUID();
 export const secret = () => randomBytes(32).toString("base64url");
 export const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
 export type User = Person & { siteRole: "admin" | "user"; createdAt: string | null };
-export type Actor = { user: User; tokenAccess?: "read" | "write" };
+export type Actor = { user: User; tokenAccess?: "read" | "write"; displayName?: string };
+export const asAuthor = (actor: Actor) => actor.displayName ?? actor.user.displayName;
 export type Row = Record<string, unknown>;
 export type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: Row; patch?: Row; base?: Row | null };
 export const writeSchema = z.object({ scope: z.string().min(1).max(256), collection: z.enum(["pages", "blocks", "versions", "workspace_settings"]), id: z.string().min(1).max(512), action: z.enum(["put", "patch", "delete"]), value: z.record(z.string(), z.unknown()).optional(), patch: z.record(z.string(), z.unknown()).optional(), base: z.record(z.string(), z.unknown()).nullable().optional() });
@@ -358,7 +359,9 @@ export class Store {
       if (library) this.validatePlane(undefined, scope);
     });
   }
-  published(token: string): { title: string; pages: Array<Omit<NotePage, "app"> & { app?: { enabled?: string } }>; scope: string } {
+  /** The share's page subtree with full page records, and the owner actor
+   *  reads and writes under it — the public app bridge re-runs this walk. */
+  shareTree(token: string): { owner: User; root: NotePage; pages: NotePage[]; scope: string } {
     const share = this.one("SELECT * FROM shares WHERE token=?", token);
     if (!share || this.knowledgeBases.get(String(share.scope))) fail(404, "分享链接已失效。", "not_found");
     const owner = this.userById(String(share.user_id));
@@ -367,20 +370,30 @@ export class Store {
     try { actual = this.page({ user: owner }, String(share.page_id)); } catch { fail(404, "分享链接已失效。"); }
     if (actual.scope !== share.scope || actual.page.archived) fail(404, "分享链接已失效。");
     const all = this.state({ user: owner }).pages;
-    const pages: Array<Omit<NotePage, "app"> & { app?: { enabled?: string } }> = [];
+    const pages: NotePage[] = [];
     const queue = [actual.page]; const seen = new Set<string>();
     while (queue.length) {
       const page = queue.shift()!;
       if (seen.has(page.id) || page.archived) continue;
       seen.add(page.id);
-      /* A shared app publishes its enabled source — running it is what a
-       *  share is for — but the draft and the database bindings stay:
-       *  the reader runs without a bridge, so no database is touched. */
-      const { app: pageApp, ...rest } = page as NotePage;
-      const publicPage = { ...rest, ...(pageApp?.enabled ? { app: { enabled: pageApp.enabled } } : {}) };
-      pages.push(publicPage);
+      pages.push(page);
       for (const child of Object.values(all)) if (child.parent_id === page.id && this.page({ user: owner }, child.id).scope === actual.scope) queue.push(child);
     }
-    return { title: actual.page.title, pages, scope: actual.scope };
+    return { owner, root: actual.page, pages, scope: actual.scope };
+  }
+
+  published(token: string): { title: string; pages: Array<Omit<NotePage, "app"> & { app?: { enabled?: string } }>; scope: string } {
+    const { root, pages, scope } = this.shareTree(token);
+    return {
+      title: root.title,
+      /* A shared app publishes its enabled source — running it is what a
+       *  share is for — but the draft and the binding list stay private;
+       *  data flows through the public bridge, per-binding. */
+      pages: pages.map((page) => {
+        const { app: pageApp, ...rest } = page as NotePage;
+        return { ...rest, ...(pageApp?.enabled ? { app: { enabled: pageApp.enabled } } : {}) };
+      }),
+      scope,
+    };
   }
 }

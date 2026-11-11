@@ -3,7 +3,7 @@ import { AppWindow, ChevronsDownUp, ChevronsUpDown, Database } from "lucide-reac
 import type { NotePage } from "../../core/types";
 import { appDocument } from "../../core/artifact";
 import { AppBridge } from "./bridge";
-import type { AppMsg } from "../../core/artifact";
+import { PublicBridge } from "./public-bridge";
 import { usePages } from "../../app/workspace-store";
 import { useWorkspaceOptional } from "../../app/workspace-context";
 import "./artifact.css";
@@ -25,10 +25,11 @@ interface Props {
   previewSource?: string | null;
   /** Fill the stage instead of a fixed height — the standalone page. */
   grow?: boolean;
-  /** A public-reader run: same sandbox, but no bridge — the app's
-   *  `window.notes.databases` stays empty and its data calls fail with
-   *  `not_ready`. The member paths keep the bridge. */
-  anonymous?: boolean;
+  /** A public-reader run. The app's bound databases are shared with it:
+   *  calls go through `/api/public/:token`, which re-checks the bindings
+   *  server-side — read and write under the owner, stamped 公开分享.
+   *  The member paths keep the member bridge. */
+  shareToken?: string;
 }
 
 const DB_SCOPE_NOTE = "数据源与应用在同一权限范围内运行。";
@@ -56,7 +57,7 @@ function useResolvedTheme(): "light" | "dark" {
   return theme;
 }
 
-export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false, anonymous = false }: Props) {
+export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false, shareToken }: Props) {
   const pages = usePages();
   const enabled = page.app?.enabled ?? "";
   const source = previewSource ?? enabled;
@@ -70,7 +71,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
   const [running, setRunning] = useState(true);
   const [runKey, setRunKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const bridgeRef = useRef<AppBridge | null>(null);
+  const bridgeRef = useRef<AppBridge | PublicBridge | null>(null);
 
   /* A preview (draft) never auto-runs — it is an edit scratch, not the
    *  enabled experience. */
@@ -87,25 +88,33 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
     setRunning(false);
   };
 
-  /* A public run still needs the shim's init so `notes.ready()` resolves —
-   *  posted on the frame's load, when its window exists. */
-  const onFrameLoad = (frame: HTMLIFrameElement) => {
-    frame.contentWindow?.postMessage({ t: "init", instance: `public-${runKey}`, databases: [], public: true } satisfies AppMsg, "*");
-  };
-
   const bindFrame = (frame: HTMLIFrameElement | null) => {
-    if (!frame || anonymous) return;
+    if (!frame) return;
     /* StrictMode mounts the frame twice: the old bridge must go before its
      *  late init can overwrite the shim's instance token. */
     if (bridgeRef.current) {
       bridgeRef.current.detach();
       bridgeRef.current = null;
     }
-    const bridge = new AppBridge(page.id, titleOf, preview);
+    /* A public run bridges the share's bindings; a member run bridges the
+     *  workspace's — different endpoint, same message shape. */
+    const bridge = shareToken ? new PublicBridge(shareToken, page.id) : new AppBridge(page.id, titleOf, preview);
     bridge.attach(frame);
     bridgeRef.current = bridge;
-    bridge.start().catch((reason: unknown) => {
-      if (bridgeRef.current !== bridge) return;
+    /* The public bridge's start posts init; doing it on the frame's load
+     *  keeps the handshake off the ref-set race an empty contentWindow
+     *  loses. The member bridge's fetch is slow enough to land later. */
+    if (!shareToken) {
+      bridge.start().catch((reason: unknown) => {
+        if (bridgeRef.current !== bridge) return;
+        setError(reason instanceof Error ? reason.message : "启动失败。");
+      });
+    }
+  };
+
+  const onFrameLoad = () => {
+    if (!shareToken) return;
+    bridgeRef.current?.start().catch((reason: unknown) => {
       setError(reason instanceof Error ? reason.message : "启动失败。");
     });
   };
@@ -123,7 +132,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
           sandbox="allow-scripts"
           srcDoc={doc}
           title={page.title || "小应用"}
-          {...(anonymous ? { onLoad: (event) => onFrameLoad(event.currentTarget) } : {})}
+          {...(shareToken ? { onLoad: onFrameLoad } : {})}
         />
       ) : (
         <div className="app-surface__empty">

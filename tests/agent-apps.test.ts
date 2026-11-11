@@ -248,6 +248,33 @@ test("a published share carries the enabled source but not the draft or bindings
   assert.equal(appEntry.app?.enabled, HTML, "the enabled source runs for readers");
   assert.equal(appEntry.app?.draft, undefined, "the draft stays private");
   assert.equal(appEntry.app?.databases, undefined, "bindings never leave over the public reader");
+
+  // The bound database rides with the app: a guest reads its schema and
+  //  rows through the share bridge, and writes land stamped 公开分享.
+  const handshake = ok(await owner.request(`/api/public/${shareToken}/apps/${app.id}`));
+  assert.deepEqual(handshake.databases, [{ id: db.id, read: true, write: true, title: db.title }]);
+  const schema = ok(await owner.request(`/api/public/${shareToken}/apps/${app.id}/data`, {
+    method: "POST", body: { op: "schema", args: {} },
+  }));
+  assert.equal(schema.id, db.id);
+  const created = ok(await owner.request(`/api/public/${shareToken}/apps/${app.id}/data`, {
+    method: "POST", body: { op: "rows.create", requestId: randomUUID(), args: { db: db.id, title: "访客打卡", baseRevision: schema.revision } },
+  }), 201);
+  assert.equal(created.page?.created_by, "公开分享");
+  // An unbound database is unreachable, even when the caller knows its id.
+  const stray = await agent.createDatabase();
+  const forbidden = await owner.request(`/api/public/${shareToken}/apps/${app.id}/data`, {
+    method: "POST", body: { op: "schema", args: { db: stray.id } },
+  });
+  denied(forbidden);
+  // An app outside the share tree answers not_found, not the binding.
+  const outside = await agent.createApp();
+  const draftedOutside = await agent.patchApp(outside.id, outside.revision, { draft: HTML });
+  await agent.enable(outside.id, draftedOutside.revision);
+  const hidden = await owner.request(`/api/public/${shareToken}/apps/${outside.id}/data`, {
+    method: "POST", body: { op: "schema", args: {} },
+  });
+  assert.equal(hidden.status, 404);
 });
 
 test("read token can read an app but cannot patch it", async (t) => {

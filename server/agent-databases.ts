@@ -13,7 +13,7 @@ import {
   relationPeerWrites, removeProperty, sortable,
   statusOptions, TITLE_COLUMN, toMultiValue, viewRows,
 } from "../src/features/database/database-model.ts";
-import { fail, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { asAuthor, fail, id, type Actor, type Row, type Store, type Write } from "./store.ts";
 import { activePage, externalScope, mutation as mutationShared, type Reply } from "./mutation.ts";
 
 const safeKey = z.string().min(1).max(256).refine((value) => !["__proto__", "prototype", "constructor"].includes(value), "标识无效。");
@@ -91,17 +91,17 @@ const addPropertySchema = z.object({ ...requestFields, property: propertySchema 
 const updatePropertySchema = z.object({ ...requestFields, property: propertyPatch }).strict();
 const addViewSchema = z.object({ ...requestFields, view: viewSchema }).strict();
 const updateViewSchema = z.object({ ...requestFields, view: viewPatch }).strict();
-const createRowSchema = z.object({ ...requestFields, ...rowFields, text: z.string().max(100000).default("") }).strict();
-const updateRowSchema = z.object({ ...requestFields, databaseRevision: revision, ...rowFields }).strict()
+export const createRowSchema = z.object({ ...requestFields, ...rowFields, text: z.string().max(100000).default("") }).strict();
+export const updateRowSchema = z.object({ ...requestFields, databaseRevision: revision, ...rowFields }).strict()
   .refine((value) => value.title !== undefined || value.properties !== undefined || value.propertyFiles !== undefined, "请提供条目修改。");
-const querySchema = z.object({
+export const querySchema = z.object({
   viewId: safeKey.optional(), filter: filterSchema.nullable().optional(), filters: filtersSchema.optional(),
   sorts: z.array(sortSchema).max(100).optional(),
   query: z.string().max(500).default(""), offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0),
   limit: z.number().int().min(1).max(100).default(100),
 }).strict();
 
-type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[] };
+export type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[] };
 const stamp = () => new Date().toISOString();
 function bad(message: string): never { fail(400, message, "bad_request"); }
 
@@ -128,7 +128,7 @@ function checkProperty(property: DatabaseProperty): void {
     if (!property.relation_origin && property.relation_backlink_name !== undefined && !property.relation_two_way) bad("relation_backlink_name 属于双向关联。");
   } else if (property.relation_database !== undefined || property.relation_origin !== undefined) bad("关联字段仅属于关联属性。");
 }
-function checkFilter(filter: NonNullable<DatabaseView["filter"]>, config: DatabaseConfig): void {
+export function checkFilter(filter: NonNullable<DatabaseView["filter"]>, config: DatabaseConfig): void {
   const property = config.properties.find((item) => item.id === filter.property_id);
   if (!property || !["select", "status"].includes(property.type)) bad("筛选只支持当前数据库的 Select 或 Status 属性。");
   if (filter.value !== "" && !propertyOptions(property).includes(filter.value)) bad("筛选选项不存在。");
@@ -145,7 +145,7 @@ function checkCondition(condition: { property_id: string; op?: string; value?: s
   if (["select", "status", "multi_select"].includes(property.type) && filterNeedsValue(op) && !propertyOptions(property).includes(value)) bad("筛选选项不存在。");
   if (property.type === "checkbox" && !["true", "false"].includes(value)) bad("勾选筛选的值必须是 true 或 false。");
 }
-function checkFilters(filters: NonNullable<DatabaseView["filters"]>, config: DatabaseConfig): void {
+export function checkFilters(filters: NonNullable<DatabaseView["filters"]>, config: DatabaseConfig): void {
   let groups = 0;
   for (const item of filters) {
     if ("conditions" in item) {
@@ -155,7 +155,7 @@ function checkFilters(filters: NonNullable<DatabaseView["filters"]>, config: Dat
     } else checkCondition(item, config);
   }
 }
-function checkSorts(sorts: NonNullable<DatabaseView["sorts"]>, config: DatabaseConfig): void {
+export function checkSorts(sorts: NonNullable<DatabaseView["sorts"]>, config: DatabaseConfig): void {
   distinct(sorts.map((sort) => sort.property_id), "排序列");
   for (const sort of sorts) {
     if (sort.property_id !== TITLE_COLUMN && !config.properties.some((property) => property.id === sort.property_id && sortable(property))) bad("排序列不存在，或是图片属性。");
@@ -189,7 +189,7 @@ function checkView(view: Partial<DatabaseView>, config: DatabaseConfig): void {
     if (!calcKinds(key, property).includes(fn)) bad("该列不支持此汇总函数。");
   }
 }
-function database(store: Store, who: Actor, pageId: string, write = false): Database {
+export function database(store: Store, who: Actor, pageId: string, write = false): Database {
   const found = activePage(store, who, pageId, write);
   if (found.page.kind !== "database") bad("目标页面不是 Database。");
   const config = found.page.database ?? { properties: [], views: [{ id: "table", name: "Table", kind: "table" }] };
@@ -205,7 +205,7 @@ function checkRelationTarget(store: Store, who: Actor, property: DatabasePropert
  *  row's id under the mirror property on rows newly linked, removed from
  *  rows dropped — written in the same commit, so the two sides never drift.
  *  `previous` is the row's stored values (undefined for a new row). */
-function relationPeers(
+export function relationPeers(
   store: Store, who: Actor, db: Database,
   rowId: string, previous: Record<string, string> | undefined,
   normalized: Record<string, string | null>,
@@ -271,19 +271,19 @@ function applyMirrorDelta(config: DatabaseConfig, delta: MirrorDelta): DatabaseC
   if (delta.add) next = { ...next, properties: [...next.properties, delta.add] };
   return next;
 }
-function checkRevision(store: Store, scope: string, pageId: string, expected: string): void {
+export function checkRevision(store: Store, scope: string, pageId: string, expected: string): void {
   if (store.revision(scope, pageId) !== expected) fail(409, "内容已被修改。请重新读取。", "conflict");
 }
-function pagePatch(store: Store, who: Actor, scope: string, pageId: string, patch: Row): Write {
-  return { scope: externalScope(scope), collection: "pages", id: pageId, action: "patch", base: store.record(scope, "pages", pageId)!, patch: { ...patch, updated_at: stamp(), updated_by: who.user.displayName } };
+export function pagePatch(store: Store, who: Actor, scope: string, pageId: string, patch: Row): Write {
+  return { scope: externalScope(scope), collection: "pages", id: pageId, action: "patch", base: store.record(scope, "pages", pageId)!, patch: { ...patch, updated_at: stamp(), updated_by: asAuthor(who) } };
 }
-function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[] = []): void {
+export function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[] = []): void {
   for (const pageId of new Set(checkpoints)) store.checkpoint(who, pageId, "Agent 数据库修改前");
   store.apply(who, writes);
   store.collaboration.flush();
 }
-function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string, extra: Row): string {
-  const page = newPage(id(), kind, parentId, { now: stamp(), author: who.user.displayName }, id());
+export function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string, extra: Row): string {
+  const page = newPage(id(), kind, parentId, { now: stamp(), author: asAuthor(who) }, id());
   const { title: _title, parent_id: _parent, block_tree, ...fields } = page;
   const block = Object.values(block_tree.by_id)[0];
   const { parent_id: _blockParent, ...blockFields } = block;
@@ -293,11 +293,11 @@ function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kin
   ]);
   return page.id;
 }
-function rowDto(store: Store, who: Actor, rowId: string, config: DatabaseConfig) {
+export function rowDto(store: Store, who: Actor, rowId: string, config: DatabaseConfig) {
   const dto = store.pageDto(who, rowId);
   return { ...dto, values: Object.fromEntries(config.properties.filter((property) => property.type !== "image").map((property) => [property.id, propertyValue(dto.page, property)])) };
 }
-function rowPatch(
+export function rowPatch(
   store: Store, who: Actor, db: Database,
   input: Pick<z.infer<typeof createRowSchema>, "title" | "properties" | "propertyFiles">,
 ): Row {
