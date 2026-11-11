@@ -187,6 +187,22 @@ const property = t.object({
 
 const sort = t.object({ property_id: t.string(), direction: t.choice("asc", "desc") });
 
+/** One filter condition: a property, an operator (its type's default when
+ *  left out) and, for the operators that need one, a value. */
+const filterCondition = t.object({
+  property_id: t.string(),
+  op: t.string().optional(),
+  value: t.string().optional(),
+});
+
+/** A view's filter, as Notion's panel builds it: conditions — and at most
+ *  one group of them, joined by its own and/or — all AND-ed together. A
+ *  group never holds a group. */
+const viewFilter = t.union([
+  filterCondition,
+  t.object({ logic: t.choice("and", "or"), conditions: t.list(filterCondition, 100) }),
+]);
+
 /** A saved way of looking at a database. Views belong to the database, so
  *  they are shared with everyone who can see it, as in Notion; which view a
  *  person has open is theirs alone (`database_views`). A column is a
@@ -196,11 +212,22 @@ const view = t.object({
   name: t.string(),
   kind: t.choice(...VIEW_KINDS),
   filter: t.object({ property_id: t.string(), value: t.string() }).optional(),
+  /** What hides rows, item by item. Written, it replaces `filter` — the
+   *  old field — which a view saved this way no longer holds. Read, a
+   *  `filters` is used; a view holding only `filter` reads as one `is`. */
+  filters: t.list(viewFilter, 100).optional(),
   /** The rows' order, as Notion's sorts: by the first key, rows alike on it
    *  by the next, and so on. */
   sorts: t.list(sort).optional(),
-  /** Board: the status or select property whose options are the columns. */
+  /** Board: the status or select property whose options are the columns.
+   *  Table and list: the property whose values head the row groups. */
   group_by: t.string().optional(),
+  /** Table, list and gallery: the properties not drawn. The row-name column
+   *  is never in it — a database without a name is a table without a spine. */
+  hidden: t.list(t.string(), 100).optional(),
+  /** Table: the footer calculation each column runs over the filtered rows,
+   *  by column (property id or the row-name column). */
+  calcs: t.record(t.string()).optional(),
   /** Calendar: the date property that places each row on a day. */
   date_by: t.string().optional(),
   /** Table: drawn as a plain Markdown table. */
@@ -355,6 +382,7 @@ export default schema({
         page_id: databaseId,
         view_id: t.id().optional().describe("One of its views."),
         search: t.string(200).optional().describe("Words a row's name contains."),
+        filters: t.list(viewFilter, 100).optional().describe("Conditions, or one group of them, AND-ed together — instead of the view's own filter."),
         after: t.id().optional().describe("next_cursor of the page before."),
         limit: t.int(1, 100).default(50).describe("At most this many rows."),
       },
@@ -561,16 +589,19 @@ export default schema({
         view_id: t.id().describe("The view."),
         name: t.string(200).optional().describe("Its name."),
         kind: t.choice(...VIEW_KINDS).optional().describe("Its layout."),
-        filter_property_id: t.string(128).optional().describe("The property it filters by; empty for none."),
+        filter_property_id: t.string(128).optional().describe("One property it filters by, kept — a Select or Status and an option; empty clears the whole filter."),
         filter_value: t.string(200).optional().describe("The value kept."),
+        filters: t.list(viewFilter, 100).optional().describe("The full filter: conditions, or one group of them, AND-ed together; an empty list clears it. Written, it replaces filter_property_id's."),
         sort_property_id: t.string(128).optional().describe("One property to sort by; empty for none."),
         sort_direction: t.choice("asc", "desc").default("asc").describe("sort_property_id's direction."),
         sorts: t.list(t.object({ property_id: t.id(), direction: t.choice("asc", "desc").default("asc") }), 20).optional().describe("The sort keys, first key first."),
-        group_by: t.string(128).optional().describe("A Status or Select property; empty for none."),
+        group_by: t.string(128).optional().describe("Table or list: the property whose values head the row groups (Status, Select, Multi-select, Person, Checkbox, Date); a board's column property stays Status or Select. Empty for none."),
         date_by: t.string(128).optional().describe("A Date property; empty for none."),
         minimal: t.bool().optional().describe("A table drawn as Markdown."),
         card_preview: t.string(128).optional().describe("none, cover, content or an Image property."),
         card_properties: t.list(t.id(), 50).optional().describe("The properties its cards show."),
+        hidden: t.list(t.id(), 100).optional().describe("The properties a table, list or gallery does not draw; an empty list shows them all."),
+        calcs: t.record(t.string()).optional().describe("A table's footer calculations, by column (a property id, or name): count, count_unique, count_empty, count_not_empty; number also sum, avg, min, max; checkbox checked, unchecked, percent_checked; date earliest, latest. An empty map clears them."),
       },
     },
     deleteView: {

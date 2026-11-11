@@ -191,11 +191,19 @@ export type DatabaseViewKind = ViewRecord["kind"];
 /** One key of a view's order. */
 export type ViewSort = NonNullable<ViewRecord["sorts"]>[number];
 
-/** One way of looking at a database, its widths and wraps as Notes reads
- *  them (`columnWidth`, `columnWraps`). */
-export type DatabaseView = Omit<ViewRecord, "widths" | "wrap"> & {
+/** A view's filters as it is stored: one condition, or one condition group
+ *  the items AND together inside. */
+export type ViewFilter = NonNullable<ViewRecord["filters"]>[number];
+export type FilterCondition = Extract<ViewFilter, { property_id: string }>;
+export type FilterGroup = Extract<ViewFilter, { conditions: unknown }>;
+
+/** One way of looking at a database, its widths, wraps, hidden columns and
+ *  footer calculations as Notes reads them (`columnWidth`, `columnWraps`,
+ *  `viewCalcs`). */
+export type DatabaseView = Omit<ViewRecord, "widths" | "wrap" | "calcs"> & {
   widths?: Record<string, number>;
   wrap?: Record<string, boolean>;
+  calcs?: Record<string, string>;
 };
 
 /** A database's properties and views. Its rows are the pages it holds —

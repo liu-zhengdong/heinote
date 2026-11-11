@@ -5,12 +5,14 @@ import type {
   DatabaseProperty,
   DatabaseView,
   DatabaseViewKind,
+  FilterCondition,
   NotePage,
   OptionColor,
   PropertyType,
   StatusGroup,
   StatusOption,
   StoredFile,
+  ViewFilter,
   ViewSort,
 } from "../../core/types";
 import { capitalized } from "../../core/title";
@@ -208,9 +210,10 @@ export function renameStatusOption(
   return {
     config: {
       ...next,
-      views: next.views.map((view) => (view.filter?.property_id === propertyId && view.filter.value === option.name
-        ? { ...view, filter: { property_id: propertyId, value: clean } }
-        : view)),
+      views: next.views.map((view) => mapViewFilters(view, (condition) =>
+        condition.property_id === propertyId && condition.value === option.name
+          ? { ...condition, value: clean }
+          : condition)),
     },
     writes: rows.filter((row) => names(option, row.properties?.[propertyId])).map((row) => ({ rowId: row.id, value: clean })),
   };
@@ -275,12 +278,8 @@ export function removeStatusOption(
   return {
     config: {
       ...next,
-      views: next.views.map((view) => {
-        if (view.filter?.property_id !== propertyId || view.filter.value !== option.name) return view;
-        const unfiltered = { ...view };
-        delete unfiltered.filter;
-        return unfiltered;
-      }),
+      views: next.views.map((view) => mapViewFilters(view, (condition) =>
+        condition.property_id === propertyId && condition.value === option.name ? null : condition)),
     },
     writes: rows.filter((row) => names(option, row.properties?.[propertyId])).map((row) => ({ rowId: row.id, value: "" })),
   };
@@ -377,9 +376,10 @@ export function renameSelectOption(
   return {
     config: {
       ...next,
-      views: next.views.map((view) => (view.filter?.property_id === propertyId && view.filter.value === from
-        ? { ...view, filter: { property_id: propertyId, value: clean } }
-        : view)),
+      views: next.views.map((view) => mapViewFilters(view, (condition) =>
+        condition.property_id === propertyId && condition.value === from
+          ? { ...condition, value: clean }
+          : condition)),
     },
     writes: renamedRows(rows, propertyId, property.type === "multi_select", from, clean),
   };
@@ -402,12 +402,8 @@ export function removeSelectOption(
   return {
     config: {
       ...next,
-      views: next.views.map((view) => {
-        if (view.filter?.property_id !== propertyId || view.filter.value !== name) return view;
-        const unfiltered = { ...view };
-        delete unfiltered.filter;
-        return unfiltered;
-      }),
+      views: next.views.map((view) => mapViewFilters(view, (condition) =>
+        condition.property_id === propertyId && condition.value === name ? null : condition)),
     },
     writes: renamedRows(rows, propertyId, property.type === "multi_select", name, null),
   };
@@ -616,15 +612,31 @@ export function changePropertyType(
     }
     if (options.length !== statusOptions(current).length) next.status_options = inGroupOrder(options);
   }
-  const filterable = type === "status" || type === "select";
   return {
     ...config,
     properties: config.properties.map((property) => (property.id === propertyId ? next : property)),
-    views: filterable ? config.views : config.views.map((view) => {
-      if (view.filter?.property_id !== propertyId) return view;
-      const next: DatabaseView = { ...view };
-      delete next.filter;
-      return next;
+    // A condition survives only if the new type can still take its
+    // operator — and its value goes only when the empties don't need one.
+    views: config.views.map((view) => {
+      const mapped = mapViewFilters(view, (condition) => {
+        if (condition.property_id !== propertyId) return condition;
+        const ops = FILTER_OPS[type];
+        if (!ops.length) return null;
+        const op = condition.op && ops.includes(condition.op) ? condition.op : defaultFilterOp(type);
+        const kept: FilterCondition = { property_id: propertyId, op };
+        if (filterNeedsValue(op)) kept.value = condition.value ?? "";
+        return kept;
+      });
+      /* The old single `filter` only ever named a select or a status; on
+         another type it cannot mean anything — it goes, as it always did. A
+         `filters` condition on the property keeps whatever the new type
+         still takes. */
+      if (mapped.filter && type !== "select" && type !== "status") {
+        const moved: DatabaseView = { ...mapped };
+        delete moved.filter;
+        return moved;
+      }
+      return mapped;
     }),
   };
 }
@@ -670,8 +682,8 @@ export function removeProperty(config: DatabaseConfig, propertyId: string): Data
     ...config,
     properties: config.properties.filter((property) => property.id !== propertyId),
     views: config.views.map((view) => {
-      const next: DatabaseView = { ...view };
-      if (next.filter?.property_id === propertyId) delete next.filter;
+      const next: DatabaseView = mapViewFilters(view, (condition) =>
+        condition.property_id === propertyId ? null : condition);
       if (Array.isArray(next.sorts) && next.sorts.some((sort) => sort?.property_id === propertyId)) {
         next.sorts = next.sorts.filter((sort) => sort?.property_id !== propertyId);
       }
@@ -679,6 +691,16 @@ export function removeProperty(config: DatabaseConfig, propertyId: string): Data
       if (next.date_by === propertyId) delete next.date_by;
       if (next.card_preview === propertyId) delete next.card_preview;
       if (next.card_properties) next.card_properties = next.card_properties.filter((id) => id !== propertyId);
+      if (next.hidden) {
+        next.hidden = next.hidden.filter((id) => id !== propertyId);
+        if (!next.hidden.length) delete next.hidden;
+      }
+      if (next.calcs && Object.hasOwn(next.calcs, propertyId)) {
+        const calcs = { ...next.calcs };
+        delete calcs[propertyId];
+        if (Object.keys(calcs).length) next.calcs = calcs;
+        else delete next.calcs;
+      }
       if (columnWidth(next, propertyId) !== undefined) {
         const widths = { ...next.widths };
         delete widths[propertyId];
@@ -840,15 +862,41 @@ export function propertyValue(row: NotePage, property: DatabaseProperty): string
 /** Properties a board can be grouped by: a status always has columns, and a
  *  select has them once it has options. Text and dates would make a column per
  *  distinct value, which is a list with extra steps. */
-export function groupableProperties(properties: DatabaseProperty[]): DatabaseProperty[] {
+export function boardGroupableProperties(properties: DatabaseProperty[]): DatabaseProperty[] {
   return properties.filter(
     (property) => property.type === "status" || (property.type === "select" && (property.options?.length ?? 0) > 0),
   );
 }
 
+/** Properties a table or list can group its rows by: the board's two, plus
+ *  the types whose values come in a small set — a multi-select's options, a
+ *  person's, a checkbox's two states and a date's days. Words would make a
+ *  group per distinct value. */
+export function groupableProperties(properties: DatabaseProperty[]): DatabaseProperty[] {
+  return properties.filter((property) => {
+    switch (property.type) {
+      case "status": return true;
+      case "select":
+      case "multi_select": return (property.options?.length ?? 0) > 0;
+      case "person":
+      case "checkbox":
+      case "date": return true;
+      default: return false;
+    }
+  });
+}
+
 export function boardProperty(view: DatabaseView, properties: DatabaseProperty[]): DatabaseProperty | undefined {
-  const groupable = groupableProperties(properties);
+  const groupable = boardGroupableProperties(properties);
   return groupable.find((property) => property.id === view.group_by) ?? groupable[0];
+}
+
+/** The property a table or list groups by — the view's choice, when the
+ *  database still has it and it still groups. */
+export function groupProperty(view: DatabaseView, properties: DatabaseProperty[]): DatabaseProperty | undefined {
+  if (view.kind !== "table" && view.kind !== "list") return undefined;
+  const property = properties.find((item) => item.id === view.group_by);
+  return property && groupableProperties(properties).includes(property) ? property : undefined;
 }
 
 export function calendarProperty(view: DatabaseView, properties: DatabaseProperty[]): DatabaseProperty | undefined {
@@ -883,7 +931,7 @@ export function createView(
     kind,
   };
   if (kind === "board") {
-    let group = groupableProperties(properties)[0];
+    let group = boardGroupableProperties(properties)[0];
     if (!group) {
       group = createDatabaseProperty(propertyId(), "status", properties);
       properties = [...properties, group];
@@ -1005,6 +1053,235 @@ export function sortByColumn(
   return withSorts(view, viewSorts(view, properties).filter((sort) => sort.property_id !== column));
 }
 
+/* ── Filters ─────────────────────────────────────────────────────────────
+   A view's `filters` are the conditions — and at most one group of them —
+   AND-ed together, as Notion's panel builds them: the group keeps its own
+   and/or inside. `filter`, the single equality a view held before, stays
+   readable as one `is` condition; a write saves `filters` and drops it.
+   The operators are each type's own, named as Notion's are. */
+
+const TEXT_OPS = ["contains", "not_contains", "is", "is_not", "is_empty", "is_not_empty"] as const;
+const NUMBER_OPS = ["eq", "neq", "gt", "gte", "lt", "lte", "is_empty", "is_not_empty"] as const;
+const DATE_OPS = ["before", "after", "on_or_before", "on_or_after", "is", "is_empty", "is_not_empty"] as const;
+const CHECKBOX_OPS = ["is"] as const;
+const OPTION_OPS = ["is", "is_not", "is_empty", "is_not_empty"] as const;
+const MULTI_OPS = ["contains", "not_contains", "is_empty", "is_not_empty"] as const;
+
+/** The operators each property type takes a condition with. An Image holds
+ *  no words to match — its values live in `property_files` — so it is never
+ *  offered. */
+export const FILTER_OPS: Record<PropertyType, readonly string[]> = {
+  text: TEXT_OPS, url: TEXT_OPS, email: TEXT_OPS, phone: TEXT_OPS,
+  person: TEXT_OPS, created_by: TEXT_OPS, last_edited_by: TEXT_OPS, id: TEXT_OPS,
+  number: NUMBER_OPS,
+  date: DATE_OPS, created_time: DATE_OPS, last_edited_time: DATE_OPS,
+  checkbox: CHECKBOX_OPS,
+  select: OPTION_OPS, status: OPTION_OPS,
+  multi_select: MULTI_OPS,
+  image: [],
+};
+
+/** The operator names as the panel lists them. */
+export const FILTER_OP_LABELS: Record<string, string> = {
+  contains: "Contains", not_contains: "Does not contain",
+  is: "Is", is_not: "Is not",
+  is_empty: "Is empty", is_not_empty: "Is not empty",
+  eq: "=", neq: "≠", gt: ">", gte: "≥", lt: "<", lte: "≤",
+  before: "Before", after: "After", on_or_before: "On or before", on_or_after: "On or after",
+};
+
+/** The operators whose condition also takes a value: all but the empties. */
+export function filterNeedsValue(op: string): boolean {
+  return op !== "is_empty" && op !== "is_not_empty";
+}
+
+/** The operator a condition on `type` starts on, as Notion's does. */
+export function defaultFilterOp(type: PropertyType): string {
+  return FILTER_OPS[type][0];
+}
+
+/** Whether a property can take a filter condition at all. */
+export function filterable(property: Pick<DatabaseProperty, "type">): boolean {
+  return FILTER_OPS[property.type].length > 0;
+}
+
+/* A stored `filters` is read no more carefully than a stored `sorts`: items
+   that are not conditions or groups fall out. */
+function filterItems(view: Pick<DatabaseView, "filter" | "filters">): ViewFilter[] {
+  const items: unknown = view.filters;
+  if (Array.isArray(items) && items.length) {
+    return items.filter((item): item is ViewFilter => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return false;
+      const record = item as { property_id?: unknown; logic?: unknown; conditions?: unknown };
+      if (typeof record.property_id === "string") return true;
+      return (record.logic === "and" || record.logic === "or") && Array.isArray(record.conditions);
+    });
+  }
+  // A view saved before filters — one equality — is one `is` condition.
+  if (view.filter && typeof view.filter.property_id === "string") {
+    return [{ property_id: view.filter.property_id, op: "is", value: view.filter.value }];
+  }
+  return [];
+}
+
+/** Every condition a view's filters hold, the group's among them. */
+export function filterConditions(view: Pick<DatabaseView, "filter" | "filters">): FilterCondition[] {
+  return filterItems(view).flatMap((item) =>
+    "conditions" in item && Array.isArray(item.conditions)
+      ? item.conditions.filter((condition): condition is FilterCondition => Boolean(condition) && typeof condition.property_id === "string")
+      : [item as FilterCondition]);
+}
+
+/** How many conditions the filter chip counts. */
+export function filterCount(view: Pick<DatabaseView, "filter" | "filters">): number {
+  return filterConditions(view).length;
+}
+
+/** The view with `map` applied to each of its conditions — the legacy
+ *  `filter` among them. A condition `map` drops goes; a group left empty
+ *  goes with it, and a view left with nothing stops filtering. Views never
+ *  holding either come back untouched. */
+export function mapViewFilters(view: DatabaseView, map: (condition: FilterCondition) => FilterCondition | null): DatabaseView {
+  const next: DatabaseView = { ...view };
+  if (next.filter) {
+    const mapped = map({ property_id: next.filter.property_id, op: "is", value: next.filter.value });
+    if (mapped) next.filter = { property_id: mapped.property_id, value: mapped.value ?? "" };
+    else delete next.filter;
+  }
+  if (Array.isArray(next.filters)) {
+    const items = next.filters.flatMap((item): ViewFilter[] => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      if ("conditions" in item && Array.isArray(item.conditions)) {
+        const conditions = item.conditions.flatMap((condition) => {
+          const kept = condition && typeof condition.property_id === "string" ? map(condition) : null;
+          return kept ? [kept] : [];
+        });
+        return conditions.length ? [{ ...item, conditions }] : [];
+      }
+      const kept = map(item as FilterCondition);
+      return kept ? [kept] : [];
+    });
+    if (items.length) next.filters = items;
+    else delete next.filters;
+  }
+  return next;
+}
+
+/** The day a condition compares a cell by: a Date's own day — its range's
+ *  start — or the date half of a meta column's timestamp. "" when there is
+ *  none, so a value that is no day never compares as one. */
+function dayOf(property: DatabaseProperty, value: string): string {
+  if (property.type === "date") return dateRange(value)?.start ?? "";
+  return value.slice(0, 10);
+}
+
+/** Whether `row` passes one condition. A condition whose property is gone
+ *  — or cannot take its operator — fails closed: it may have outlived its
+ *  meaning, and silently passing it would let rows the filter meant to hide
+ *  through with nothing on screen to say so. */
+function conditionMatches(row: NotePage, condition: FilterCondition, properties: readonly DatabaseProperty[]): boolean {
+  const property = properties.find((item) => item.id === condition.property_id);
+  if (!property) return false;
+  const op = condition.op ?? defaultFilterOp(property.type);
+  if (!FILTER_OPS[property.type].includes(op)) return false;
+  const cell = propertyValue(row, property);
+  const empty = property.type === "multi_select" ? !multiValues(cell).length
+    : property.type === "checkbox" ? false // a box is always checked or not
+    : !cell;
+  if (op === "is_empty") return empty;
+  if (op === "is_not_empty") return !empty;
+  const operand = condition.value ?? "";
+  // An operand-less condition — a row still being built — matches nothing.
+  if (!operand) return false;
+  // An absent value satisfies an absent operator: "is not" and "does not
+  // contain" keep the empty rows, as Notion's do; everything else needs a
+  // value to stand against.
+  if (empty) return op === "is_not" || op === "not_contains" || op === "neq";
+  switch (property.type) {
+    case "number": {
+      const left = Number(cell);
+      const right = Number(operand);
+      // A number compares as a number or not at all: "soon" is never 5, and
+      // never fails to be ≠ 5 either — only the truly empty are empty.
+      if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+      switch (op) {
+        case "eq": return left === right;
+        case "neq": return left !== right;
+        case "gt": return left > right;
+        case "gte": return left >= right;
+        case "lt": return left < right;
+        case "lte": return left <= right;
+      }
+      return false;
+    }
+    case "date":
+    case "created_time":
+    case "last_edited_time": {
+      const left = dayOf(property, cell);
+      const right = dayOf(property, operand);
+      if (!isDay(left) || !isDay(right)) return false;
+      switch (op) {
+        case "before": return left < right;
+        case "after": return left > right;
+        case "on_or_before": return left <= right;
+        case "on_or_after": return left >= right;
+        case "is": return left === right;
+      }
+      return false;
+    }
+    case "checkbox":
+      // An unchecked box reads "" where the condition's false says it.
+      return op === "is" && (cell === "true" ? "true" : "false") === operand;
+    case "select":
+    case "status":
+      return op === "is" ? cell === operand : cell !== operand;
+    case "multi_select": {
+      const held = multiValues(cell).includes(operand);
+      return op === "contains" ? held : !held;
+    }
+    default: {
+      // Words: contains is loose — case aside — and is is exact.
+      const lower = cell.toLocaleLowerCase();
+      const needle = operand.toLocaleLowerCase();
+      switch (op) {
+        case "contains": return lower.includes(needle);
+        case "not_contains": return !lower.includes(needle);
+        case "is": return cell === operand;
+        case "is_not": return cell !== operand;
+      }
+      return false;
+    }
+  }
+}
+
+/** The view's filters, conditions and the group alike — the legacy `filter`
+ *  as one `is`. What the filter panel edits. */
+export function viewFilters(view: Pick<DatabaseView, "filter" | "filters">): ViewFilter[] {
+  return filterItems(view);
+}
+
+/** The view's filters as a row test: conditions and groups, all AND-ed. */
+export function filtersMatch(row: NotePage, view: Pick<DatabaseView, "filter" | "filters">, properties: readonly DatabaseProperty[]): boolean {
+  return filterItems(view).every((item) =>
+    "conditions" in item && Array.isArray(item.conditions)
+      ? (item.logic === "or"
+        ? item.conditions.some((condition) => conditionMatches(row, condition as FilterCondition, properties))
+        : item.conditions.every((condition) => conditionMatches(row, condition as FilterCondition, properties)))
+      : conditionMatches(row, item as FilterCondition, properties));
+}
+
+/** The view filtering by `items` — nothing when empty — its old `filter`
+ *  gone either way. */
+export function withFilters(view: DatabaseView, items: readonly ViewFilter[]): DatabaseView {
+  const next: DatabaseView = { ...view };
+  delete next.filter;
+  if (items.length) next.filters = items.map((item) => "conditions" in item
+    ? { logic: item.logic, conditions: item.conditions.map((condition) => ({ ...condition })) }
+    : { ...item });
+  else delete next.filters;
+  return next;
+}
+
 /* ── Rows as a view sees them ──────────────────────────────────────────── */
 
 /* Each type sorts by what it means, not by the string that holds it: a
@@ -1097,9 +1374,7 @@ export function viewRows(
   const needle = query.trim().toLowerCase();
   if (needle) next = next.filter((page) => page.title.toLowerCase().includes(needle));
 
-  const filter = view.filter;
-  const filtered = filter ? properties.find((property) => property.id === filter.property_id) : undefined;
-  if (filter && filtered) next = next.filter((page) => propertyValue(page, filtered) === filter.value);
+  if (filterCount(view)) next = next.filter((page) => filtersMatch(page, view, properties));
 
   // Rows alike on every key keep the order they were added in: toSorted is
   // stable.
@@ -1134,6 +1409,192 @@ export function viewRows(
     });
   }
   return next;
+}
+
+/* ── Grouping ──────────────────────────────────────────────────────────── */
+
+/** A group of rows under one group header, as a table or list draws it. */
+export interface ViewGroup {
+  /** The group's stable key — its value, or "" for the no-value group. */
+  key: string;
+  /** The value the header shows: an option's name, a day, "true"/"false",
+   *  or "" — which the layout renders as "No <property>". */
+  value: string;
+  /** What a new row in this group should hold in the grouped property, or
+   *  null when adding there seeds nothing (the no-value group). */
+  seed: string | null;
+  rows: NotePage[];
+}
+
+/** `rows` — already filtered and sorted — under the headers `view.group_by`
+ *  names. Groups follow the property's own order: an optioned type's options
+ *  in their order, a checkbox's unchecked first as its sort goes, a date's
+ *  days ascending, a person's names sorted. A multi-select row belongs to
+ *  every option it holds; a row holding nothing — or a value the property
+ *  no longer knows — lands in the last, no-value group. */
+export function viewGroups(rows: readonly NotePage[], view: DatabaseView, properties: DatabaseProperty[]): ViewGroup[] {
+  const property = groupProperty(view, properties);
+  if (!property) return [{ key: "", value: "", seed: null, rows: [...rows] }];
+
+  const bucket = new Map<string, NotePage[]>();
+  const add = (key: string, row: NotePage) => {
+    const list = bucket.get(key);
+    if (list) list.push(row);
+    else bucket.set(key, [row]);
+  };
+  for (const row of rows) {
+    const value = propertyValue(row, property);
+    if (property.type === "multi_select") {
+      const held = multiValues(value);
+      // A multi-select row is in every group it names — Notion's own rule,
+      // the one place a row shows twice.
+      if (held.length) for (const name of held) add(name, row);
+      else add("", row);
+    } else if (property.type === "checkbox") {
+      add(value === "true" ? "true" : "false", row);
+    } else if (property.type === "date") {
+      add(dateRange(value)?.start ?? "", row);
+    } else {
+      add(value, row);
+    }
+  }
+
+  const optioned = property.type === "select" || property.type === "status" || property.type === "multi_select";
+  const order: string[] = [];
+  if (property.type === "checkbox") order.push("false", "true");
+  else if (optioned) order.push(...propertyOptions(property));
+  else if (property.type === "date") order.push(...[...bucket.keys()].filter(isDay).sort());
+  else order.push(...[...bucket.keys()].filter((key) => key !== "").sort((a, b) => a.localeCompare(b)));
+  // Keys the property's own order does not know — an option since renamed
+  // away — keep their rows, just ahead of the no-value group.
+  for (const key of bucket.keys()) if (key !== "" && !order.includes(key)) order.push(key);
+  order.push("");
+
+  return order.flatMap((key) => {
+    const held = bucket.get(key) ?? [];
+    // The no-value group exists only for the rows that need it; a person's
+    // or a date's groups are only those the rows make. An optioned type's
+    // stay — empty ones are where a new row is added.
+    if (!held.length && (key === "" || !optioned && property.type !== "checkbox")) return [];
+    return [{
+      key,
+      value: key,
+      seed: key === "" ? null : property.type === "multi_select" ? toMultiValue([key]) : key,
+      rows: held,
+    }];
+  });
+}
+
+/* ── Footer calculations ─────────────────────────────────────────────────
+   A table's `calcs` name, per column, which summary runs over the filtered
+   rows — the view's own rows, search and filter applied, sorted or not. */
+
+const COUNT_OPS = ["count", "count_unique", "count_empty", "count_not_empty"] as const;
+
+/** The properties a view draws — all but `hidden` names (the row-name
+ *  column is not a property, so it can never be hidden). */
+export function visibleProperties(view: Pick<DatabaseView, "hidden">, properties: DatabaseProperty[]): DatabaseProperty[] {
+  const hidden = new Set(Array.isArray(view.hidden) ? view.hidden : []);
+  return properties.filter((property) => !hidden.has(property.id));
+}
+
+/** The view with `column` running `kind` in its footer — or nothing, null. */
+export function withCalc(view: DatabaseView, column: string, kind: string | null): DatabaseView {
+  const calcs: Record<string, string> = { ...(view.calcs ?? {}) };
+  if (kind) calcs[column] = kind;
+  else delete calcs[column];
+  const next: DatabaseView = { ...view };
+  if (Object.keys(calcs).length) next.calcs = calcs;
+  else delete next.calcs;
+  return next;
+}
+
+/** The calculation names as the footer menu lists them. */
+export const CALC_LABELS: Record<string, string> = {
+  count: "Count", count_unique: "Unique", count_empty: "Empty", count_not_empty: "Not empty",
+  sum: "Sum", avg: "Average", min: "Min", max: "Max",
+  checked: "Checked", unchecked: "Unchecked", percent_checked: "% checked",
+  earliest: "Earliest", latest: "Latest",
+};
+
+/** The calculations a column offers. The row-name column counts only, and
+ *  an Image's values are files — it has none. */
+export function calcKinds(column: string, property: DatabaseProperty | undefined): readonly string[] {
+  if (column === TITLE_COLUMN || !property) return ["count"];
+  switch (property.type) {
+    case "number": return ["count", "sum", "avg", "min", "max"];
+    case "checkbox": return ["count", "checked", "unchecked", "percent_checked"];
+    case "select":
+    case "status":
+    case "multi_select": return COUNT_OPS;
+    case "date":
+    case "created_time":
+    case "last_edited_time": return ["count", "earliest", "latest"];
+    case "image": return [];
+    default: return COUNT_OPS;
+  }
+}
+
+/** `kind` run over `rows`' cells in `column`: a number's digits, a count, a
+ *  day or a timestamp — the footer's words. Null when there is nothing to
+ *  say (an average of no numbers), which the footer draws as a dash. */
+export function calcValue(
+  rows: readonly NotePage[],
+  column: string,
+  property: DatabaseProperty | undefined,
+  kind: string,
+): string | null {
+  const cells = rows.map((row) => column === TITLE_COLUMN ? row.title : property ? propertyValue(row, property) : "");
+  const empty = (value: string) => property?.type === "multi_select" ? !multiValues(value).length
+    : property?.type === "checkbox" ? false
+    : !value;
+  switch (kind) {
+    case "count": return String(rows.length);
+    case "count_unique": {
+      // A multi-select's uniques are its options, each counted once; a plain
+      // column's are its distinct words.
+      if (property?.type === "multi_select") {
+        const names = new Set<string>();
+        for (const cell of cells) for (const name of multiValues(cell)) names.add(name);
+        return String(names.size);
+      }
+      return String(new Set(cells.filter((cell) => !empty(cell))).size);
+    }
+    case "count_empty": return String(cells.filter(empty).length);
+    case "count_not_empty": return String(cells.filter((cell) => !empty(cell)).length);
+    case "checked": return String(cells.filter((cell) => cell === "true").length);
+    case "unchecked": return String(cells.filter((cell) => cell !== "true").length);
+    case "percent_checked": {
+      if (!rows.length) return null;
+      const checked = cells.filter((cell) => cell === "true").length;
+      return `${Math.round((checked / rows.length) * 100)}%`;
+    }
+    case "sum":
+    case "avg":
+    case "min":
+    case "max": {
+      const numbers = cells.map(Number).filter(Number.isFinite);
+      if (!numbers.length) return null;
+      const value = kind === "sum" ? numbers.reduce((a, b) => a + b, 0)
+        : kind === "avg" ? numbers.reduce((a, b) => a + b, 0) / numbers.length
+        : kind === "min" ? Math.min(...numbers)
+        : Math.max(...numbers);
+      // A sum of 1.5 + 2.05 is 3.55, not 3.5500000000000003 — and 4.00 is 4.
+      return String(Number(value.toFixed(2)));
+    }
+    case "earliest":
+    case "latest": {
+      let best = "";
+      for (const cell of cells) {
+        if (empty(cell)) continue;
+        const key = property?.type === "date" ? dateRange(cell)?.start ?? "" : cell;
+        if (!key) continue;
+        if (!best || (kind === "earliest" ? key < best : key > best)) best = key;
+      }
+      return best || null;
+    }
+  }
+  return null;
 }
 
 /* ── Calendar arithmetic ───────────────────────────────────────────────── */
