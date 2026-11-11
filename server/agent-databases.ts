@@ -9,7 +9,7 @@ import { blockRecordId } from "../src/platform/record-ids.ts";
 import {
   boardGroupableProperties, calcKinds, changePropertyType, changeViewKind, createView, databaseRows, dateRange,
   defaultFilterOp, FILTER_OPS, filterable, filterNeedsValue, groupableProperties, isDay, isMetaType, mapViewFilters,
-  MAX_ROW_IMAGES, OPTION_COLORS, propertyOptions, propertyValue, relationIds, relationMirrorProperty, relationPeer,
+  MAX_ROW_IMAGES, OPTION_COLORS, propertyOptions, propertyValue, relationIds, relationMirrorProperty,
   relationPeerWrites, removeProperty, sortable,
   statusOptions, TITLE_COLUMN, toMultiValue, viewRows,
 } from "../src/features/database/database-model.ts";
@@ -588,9 +588,12 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
     mutation(req, res, input, load(req), (who, db) => {
       checkRevision(store, db.scope, db.page.id, input.baseRevision);
       const patch = rowPatch(store, who, db, input);
-      if (patch.properties) patch.properties = Object.fromEntries(Object.entries(patch.properties).filter(([, value]) => value !== null));
+      const kept: Record<string, string> | undefined = patch.properties
+        ? Object.fromEntries(Object.entries(patch.properties as Record<string, string | null>).filter(([, value]) => value !== null)) as Record<string, string>
+        : undefined;
+      if (kept) patch.properties = kept;
       const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
-      const peers = patch.properties ? relationPeers(store, who, db, pageId, undefined, patch.properties) : [];
+      const peers = kept ? relationPeers(store, who, db, pageId, undefined, kept) : [];
       if (peers.length) commit(store, who, peers);
       return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId, ...peers.map((write) => write.id)] };
     });
@@ -606,7 +609,8 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
       const patch = rowPatch(store, who, db, input);
-      const peers = patch.properties ? relationPeers(store, who, db, rowId, store.state(who).pages[rowId]?.properties, patch.properties) : [];
+      const normalized = patch.properties as Record<string, string | null> | undefined;
+      const peers = normalized ? relationPeers(store, who, db, rowId, store.state(who).pages[rowId]?.properties, normalized) : [];
       commit(store, who, [pagePatch(store, who, db.scope, rowId, patch), ...peers], [rowId]);
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId, ...peers.map((write) => write.id)] };
     });

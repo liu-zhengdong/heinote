@@ -450,7 +450,8 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const view = viewIn(config, input.view_id);
       // filters passed here ride over the view's own — saved or not.
       const actual: DatabaseView = input.filters === undefined ? view : { ...view, filter: undefined, filters: input.filters };
-      const rows = viewRows(databaseRows(pages, page.id), actual, config.properties, input.search ?? "");
+      // A relation sorts by the first linked page's title.
+      const rows = viewRows(databaseRows(pages, page.id), actual, config.properties, input.search ?? "", (pageId) => pages[pageId]?.title);
       const at = input.after === undefined ? -1 : rows.findIndex((row) => row.id === input.after);
       if (input.after !== undefined && at < 0) refuse("not_found", "That cursor is no longer a row of this view: list again from the start.");
       const shown = rows.slice(at + 1, at + 1 + input.limit);

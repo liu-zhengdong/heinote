@@ -6700,6 +6700,58 @@ button.db__th:hover,
   font-size: calc(var(--read) * 0.92);
 }
 
+/* The one view a linked view draws, named where the tabs would stand: a
+   label, not a tab — it does not switch and does not show the active mark. */
+.view-tab--pinned {
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.view-tab--pinned:hover {
+  background: none;
+}
+
+.view-tab--pinned::after {
+  display: none;
+}
+
+/* A linked view's caption: what it is — a link, to this database, of this
+   view — and the way out of it to the database itself. */
+.block-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap svg {
+  flex: none;
+  color: var(--ink-4);
+}
+
+.block-cap__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-cap__open {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap__open:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
 /* A filter value or a sort name can be long; the button keeps its size. */
 .db__tool-label {
   max-width: 104px;

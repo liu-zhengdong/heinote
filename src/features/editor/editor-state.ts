@@ -127,6 +127,9 @@ export interface Editor {
   /** A YouTube or X link pasted onto a line of its own: offer its card, as
    *  Notion's paste menu offers an embed. */
   offerCard(blockId: string, href: string): void;
+  /** The `/linked` command: the slash is stripped and the database and view
+   *  are asked for; `pick` embeds the link once both are chosen. */
+  pickLinkedView(blockId: string, stripped: InlineContent, pick: (databaseId: string, viewId: string) => void): void;
   toast(message: string, tone?: ToastTone): void;
 }
 

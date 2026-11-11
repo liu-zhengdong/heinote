@@ -3,11 +3,9 @@ import {
   ArrowDownAZ,
   ArrowUp,
   ArrowUpRight,
-  CalendarDays,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Columns3,
   Copy,
   Eye,
   EyeOff,
@@ -15,8 +13,6 @@ import {
   Check,
   Filter,
   Layers,
-  LayoutGrid,
-  LayoutList,
   List,
   Lock,
   MoreHorizontal,
@@ -171,13 +167,11 @@ import { VIEW_KINDS } from "../../../schema";
 // The marks columns can wear come with the database, drawn from its first table.
 provideIcons(columnIcons);
 
-export function ViewIcon({ kind, size = 15 }: { kind: DatabaseViewKind; size?: number }) {
-  if (kind === "board") return <Columns3 size={size} />;
-  if (kind === "list") return <LayoutList size={size} />;
-  if (kind === "gallery") return <LayoutGrid size={size} />;
-  if (kind === "calendar") return <CalendarDays size={size} />;
-  return <Table2 size={size} />;
-}
+/* The view marks live in a module of their own, so a menu that only names
+   views does not pull this file into its chunk; re-exported for the places
+   that found them here. */
+import { ViewIcon } from "./view-icons";
+export { ViewIcon };
 
 /** A row's set values, small, for the layouts that cannot give every property
  *  a column. Only what was actually set: a list where every row repeats "Not
@@ -1431,6 +1425,7 @@ export function DatabaseView({
   variant,
   readOnly: heldReadOnly = false,
   title,
+  pinnedViewId,
 }: {
   databaseId: string;
   variant: "page" | "inline";
@@ -1440,14 +1435,19 @@ export function DatabaseView({
   /** An inline database's name, drawn at the start of its toolbar's row; on
    *  its own page the name is the page's. */
   title?: ReactNode;
+  /** A linked view's one view, by id: drawn always, pinned on the link —
+   *  no tabs to switch with, and nothing here is changed. */
+  pinnedViewId?: string;
 }) {
   const { document, preferences, setPreference, updatePage: writePage, createPage, selectPage, archivePage, canEdit, commitWrites, platform } = useWorkspace();
   const { peekPageId, openPeek, closePeek, toast } = useUi();
   /* Someone who can only view a shared database reads it, switches between
      its views (which view is open is theirs), filters nothing and changes
      nothing: every write it would send would be refused. A database shown
-     "Read only here" is read the same way, whoever reads it. */
-  const readOnly = heldReadOnly || !canEdit(databaseId);
+     "Read only here" is read the same way, whoever reads it. A linked view
+     is drawn read-only for everyone — the link shows the database, it does
+     not offer it for editing. */
+  const readOnly = heldReadOnly || Boolean(pinnedViewId) || !canEdit(databaseId);
   const updatePage = (pageId: string, patch: PagePatch) => { if (!readOnly) writePage(pageId, patch); };
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -1472,7 +1472,12 @@ export function DatabaseView({
     return row && row.parent_id === databaseId && !row.archived ? row.id : null;
   });
   const config = database?.database;
-  const view = config ? activeView(config, preferences.database_views[databaseId]) : null;
+  /* A linked view pins its view on the link — which it is belongs to the
+     page that carries it, never to the reader's remembered view. */
+  const view = config
+    ? (pinnedViewId ? config.views.find((item) => item.id === pinnedViewId) ?? null
+      : activeView(config, preferences.database_views[databaseId]))
+    : null;
   const properties = useMemo(() => config?.properties ?? [], [config]);
   /* Every row's pictures are where the database's readers can reach them,
      whichever view is open: shared from here or from any page above, the
@@ -1535,7 +1540,17 @@ export function DatabaseView({
     if (columnGone) setMenu(null);
   }, [columnGone]);
 
-  if (!database || !config || !view) return null;
+  /* A linked view's view gone (deleted since the link named it) keeps its
+     place as a named absence, where the view was drawn — the database's own
+     "no view" stays silent, as before. */
+  if (!database || !config) return null;
+  if (!view) {
+    return pinnedViewId ? (
+      <div className="dbv dbv--inline dbv--readonly">
+        <div className="dbv-missing"><Table2 size={15} />This view no longer exists</div>
+      </div>
+    ) : null;
+  }
 
   /* The properties a condition can name — everything but pictures — and the
      count the filter chip wears. */
@@ -2030,7 +2045,16 @@ export function DatabaseView({
           A second view brings the tabs, under the name. A row is added where
           the rows are (+ New), never from up here. */}
       <div className={`db__toolbar ${toolsHeld ? "is-held" : ""}`}>
-        {title ? <div className="db__title">{title}</div> : <div className="db__tabs">{tabs}</div>}
+        {title ? <div className="db__title">{title}</div> : pinnedViewId ? (
+          // A linked view has one view, named where the tabs would stand —
+          // a label, not a tab: it does not switch.
+          <div className="db__tabs">
+            <span className="view-tab view-tab--pinned">
+              <ViewIcon kind={view.kind} />
+              <span className="view-tab__name">{view.name || viewKindLabel(view.kind)}</span>
+            </span>
+          </div>
+        ) : <div className="db__tabs">{tabs}</div>}
         <div className="db__tools">
           {filterable.length && !readOnly ? (
             <Tooltip label={filters ? `${filters} filter${filters > 1 ? "s" : ""}` : "Filter"}>

@@ -18,6 +18,7 @@ export function InlineDatabase({
   databaseId,
   readOnly,
   historical,
+  pinnedViewId,
 }: {
   databaseId: string;
   /** Nothing in it is changed from here: a reader who may only view, a page
@@ -27,6 +28,9 @@ export function InlineDatabase({
   /** Drawn in an old version of the page, from its history: a picture of the
    *  past, not to be used — the database it shows is the live one. */
   historical: boolean;
+  /** A linked view: the one view the link pins, drawn read-only, with no
+   *  name input — the link's caption names it above. */
+  pinnedViewId?: string;
 }) {
   const { updatePage } = useWorkspace();
   const inlineRef = useRef<HTMLDivElement | null>(null);
@@ -78,9 +82,11 @@ export function InlineDatabase({
         databaseId={databaseId}
         variant="inline"
         readOnly={readOnly}
+        pinnedViewId={pinnedViewId}
         // Its icon before its name, in the page's text column, as Notion's
-        // inline database stands — no column of its own for a mark.
-        title={(
+        // inline database stands — no column of its own for a mark. A linked
+        // view is named by its link's caption instead.
+        title={pinnedViewId ? undefined : (
           <>
             <span className="dbv-inline__icon" aria-hidden="true"><PageIconMark page={database} size={16} /></span>
             <input

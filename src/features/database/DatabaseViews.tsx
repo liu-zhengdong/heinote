@@ -11,6 +11,7 @@ export function DatabaseViews({
   variant,
   readOnly,
   title,
+  pinnedViewId,
 }: {
   databaseId: string;
   variant: "page" | "inline";
@@ -18,10 +19,12 @@ export function DatabaseViews({
   readOnly?: boolean;
   /** An inline database's name, at the start of its toolbar's row. */
   title?: ReactNode;
+  /** A linked view's pinned view id; drawn read-only with no view tabs. */
+  pinnedViewId?: string;
 }) {
   return (
     <Suspense fallback={<div className="dbv-loading" aria-busy="true" />}>
-      <DatabaseView databaseId={databaseId} variant={variant} readOnly={readOnly} title={title} />
+      <DatabaseView databaseId={databaseId} variant={variant} readOnly={readOnly} title={title} pinnedViewId={pinnedViewId} />
     </Suspense>
   );
 }

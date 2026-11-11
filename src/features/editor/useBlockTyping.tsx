@@ -62,7 +62,7 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     page, tree, rows, embed, blocksRef, pagesRef, caretX, slash, setSlash, setSlashIndex, slashDismissed, mention,
     setMention, setMentionIndex, mentionDismissed, setFormat, resume, pendingTextSelection, ownerOf, createPage,
     checkpointHistory, annotateHistory, execute, runReplace, replaceSelection, applyMarkToBlocks, placeFiles,
-    pastedBlocks, adoptCutPages, offerCard,
+    pastedBlocks, adoptCutPages, offerCard, pickLinkedView,
   } = editor;
 
   /* ── Block editing ──────────────────────────────────────────────────── */
@@ -390,6 +390,17 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     if (!slash) return;
     const stripped = replaceRange(block.content, slash.from, slash.from + 1 + slash.query.length, "");
     setSlash(null);
+
+    if (command.action === "database-linked") {
+      // A linked view names a database's view before it is written: the
+      // editor asks for both, then the link lands expanded and locked.
+      pickLinkedView(block.id, stripped, (databaseId, viewId) => {
+        execute(embedPage(tree, block.id, databaseId, stripped, { embed: createId("block"), trailing: createId("block") }, {
+          shown: true, database: true, locked: true, view: viewId,
+        }));
+      });
+      return;
+    }
 
     if (command.action) {
       const ids = { embed: createId("block"), trailing: createId("block") };

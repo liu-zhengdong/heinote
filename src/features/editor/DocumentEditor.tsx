@@ -1,4 +1,4 @@
-import { ArrowUpRight, ImageIcon, RefreshCw, Smile, X } from "lucide-react";
+import { ArrowUpRight, ImageIcon, Link2, RefreshCw, Smile, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -46,6 +46,7 @@ import {
 import type { WorkspaceMutation } from "../../platform/workspace-document";
 import { readGrid } from "./table-clipboard";
 import { databaseFromList, databaseFromTable, isList, listRefusal, type ConversionIds } from "../database/convert";
+import { viewKindLabel } from "../database/database-model";
 import { markFresh } from "../database/fresh";
 import {
   hasCjkItalic,
@@ -147,6 +148,7 @@ import {
   type PendingTextSelection,
 } from "./selection";
 import { slashCommands, SlashMenu } from "./SlashMenu";
+import { LinkViewMenu } from "./LinkViewMenu";
 import { InlineDatabase } from "../database/InlineDatabase";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePages, useWorkspaceStore } from "../../app/workspace-store";
@@ -313,6 +315,14 @@ export function DocumentEditor({
   // A YouTube or X link just pasted onto a line of its own, its card offered.
   const [cardOffer, setCardOffer] = useState<CardOfferState | null>(null);
   const [moveTo, setMoveTo] = useState<{ ids: string[]; anchor: AnchorRect } | null>(null);
+  /* The `/linked` pick in flight: the slash's block and the pick it embeds
+     a linked view with once a database and a view are chosen. */
+  const [linkedPick, setLinkedPick] = useState<{
+    blockId: string;
+    stripped: InlineContent;
+    pick: (databaseId: string, viewId: string) => void;
+    anchor: AnchorRect | null;
+  } | null>(null);
   const [format, setFormat] = useState<FormatState | null>(null);
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [drop, setDrop] = useState<DropState | null>(null);
@@ -958,6 +968,12 @@ export function DocumentEditor({
     showInPlace, ownerOf, titleOf, anchorFor, createPage, checkpointHistory, annotateHistory,
     write, execute, executeOnBlocks, runReplace, replaceSelection, selectBlocks, deleteSelected, duplicateSelected,
     openMoveTo, closeMenus, applyMarkToBlocks, openLink, pastedBlocks, adoptCutPages, offerCard, toast,
+    pickLinkedView: (blockId, stripped, pick) => {
+      // The picker stands where the slash was typed; a block it cannot be
+      // drawn beside is a pick that never happens — the link is not written.
+      const anchor = anchorFor(blockId);
+      if (anchor) setLinkedPick({ blockId, stripped, pick, anchor });
+    },
   };
   const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, pickTarget, placeFiles, pickFile } = useMedia(editor);
   const typing = blockTyping({ ...editor, placeFiles });
@@ -1851,39 +1867,64 @@ export function DocumentEditor({
   /* A database shown in a page — a sub-page's row or a link, shown — is
      drawn as a page shown in place is: its mark and count at the start of
      its title, and under its title its views, live, one step in. Its mark
-     folds it back into its row or link, for everyone. */
-  const renderDatabase = (key: string, target: NotePage, handle: MountHandle): ReactNode => (
-    <div key={key} className="db-frame">
-      <PageFrame
-        pageId={target.id}
-        name={pageName(target)}
-        depth={0}
-        readOnly={!handle.movable}
-        locked={handle.locked}
-        menuOpen={pageMenu?.from === "database" && pageMenu.key === key}
-        dragging={false}
-        references={linksOf(target.id).length}
-        onMenu={(anchor) => setPageMenu({ from: "database", key, pageId: target.id, anchor, mount: handle })}
-        onDragStart={handle.dragStart}
-        onDragEnd={handle.dragEnd}
-        onReferences={(anchor) => setBacklinksFor({ id: target.id, anchor })}
-        mark={target.icon ? <span className="page-frame__mark-emoji">{target.icon}</span> : <DatabaseIcon size={16} />}
-        headKind="database"
-        onToggle={handle.showAsLink}
-      >
-        <InlineDatabase
-          databaseId={target.id}
-          readOnly={historical || handle.locked || !canEdit(target.id)}
-          historical={historical}
-        />
-      </PageFrame>
-    </div>
-  );
+     folds it back into its row or link, for everyone.
 
-  const renderPage = (key: string, target: NotePage, handle: MountHandle): ReactNode => {
+     A link that pins a view draws a linked view instead: a caption in the
+     title's place names what it is and which view it is, and the database
+     is read-only inside — the caption's Open is the way out to it. */
+  const renderDatabase = (key: string, target: NotePage, handle: MountHandle, pinnedViewId?: string): ReactNode => {
+    const pinnedView = pinnedViewId ? target.database?.views.find((item) => item.id === pinnedViewId) : undefined;
+    const caption = pinnedViewId ? (
+      <span className="block-cap">
+        <Link2 size={13} aria-hidden="true" />
+        <span className="block-cap__text">
+          Linked to {pageName(target) || "Untitled"}
+          {pinnedView ? <> · {pinnedView.name || viewKindLabel(pinnedView.kind)}</> : null}
+        </span>
+        <button
+          type="button"
+          className="block-cap__open"
+          onClick={() => selectPage(target.id)}
+        >
+          Open
+        </button>
+      </span>
+    ) : undefined;
+    return (
+      <div key={key} className="db-frame">
+        <PageFrame
+          pageId={target.id}
+          name={pageName(target)}
+          title={caption}
+          depth={0}
+          readOnly={!handle.movable}
+          locked={handle.locked}
+          menuOpen={pageMenu?.from === "database" && pageMenu.key === key}
+          dragging={false}
+          references={linksOf(target.id).length}
+          onMenu={(anchor) => setPageMenu({ from: "database", key, pageId: target.id, anchor, mount: handle })}
+          onDragStart={handle.dragStart}
+          onDragEnd={handle.dragEnd}
+          onReferences={(anchor) => setBacklinksFor({ id: target.id, anchor })}
+          mark={target.icon ? <span className="page-frame__mark-emoji">{target.icon}</span> : <DatabaseIcon size={16} />}
+          headKind="database"
+          onToggle={handle.showAsLink}
+        >
+          <InlineDatabase
+            databaseId={target.id}
+            readOnly={historical || handle.locked || !canEdit(target.id)}
+            historical={historical}
+            pinnedViewId={pinnedViewId}
+          />
+        </PageFrame>
+      </div>
+    );
+  };
+
+  const renderPage = (key: string, target: NotePage, handle: MountHandle, pinnedViewId?: string): ReactNode => {
     if (target.id === here) return null;
     // A database is drawn as the database it is, never as a page's words.
-    if (target.kind === "database") return renderDatabase(key, target, handle);
+    if (target.kind === "database") return renderDatabase(key, target, handle, pinnedViewId);
     if (shownPages.includes(target.id)) return <p key={key} className="mount-note" role="note">This page is shown above.</p>;
     return mountFrame(key, (
       <DocumentEditor
@@ -1905,7 +1946,7 @@ export function DocumentEditor({
       removeHere: () => removeMount(block, at),
     });
     const target = pages[link.page_id];
-    return target && !target.archived ? renderPage(`${link.page_id}:${at}`, target, handle) : null;
+    return target && !target.archived ? renderPage(`${link.page_id}:${at}`, target, handle, link.view) : null;
   };
 
   /* A paragraph that is nothing but a shown link IS the page or block, in its
@@ -2356,6 +2397,18 @@ export function DocumentEditor({
           count={topLevelBlocks(tree, moveTo.ids).length}
           onMove={(targetId) => { setMoveTo(null); moveToPage(moveTo.ids, targetId); }}
           onClose={() => setMoveTo(null)}
+        />
+      ) : null}
+
+      {linkedPick ? (
+        <LinkViewMenu
+          anchor={linkedPick.anchor}
+          onPick={(databaseId, viewId) => {
+            const pick = linkedPick.pick;
+            setLinkedPick(null);
+            pick(databaseId, viewId);
+          }}
+          onClose={() => setLinkedPick(null)}
         />
       ) : null}
 

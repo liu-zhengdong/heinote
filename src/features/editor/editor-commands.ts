@@ -247,13 +247,22 @@ export function embedPage(
   pageId: string,
   remaining: InlineContent,
   ids: { embed: string; trailing: string },
-  { shown = false, database = false }: { shown?: boolean; database?: boolean } = {},
+  { shown = false, database = false, locked = false, view }: {
+    shown?: boolean;
+    database?: boolean;
+    /** Shown read-only inside this page, folded with nothing lost: a linked
+     *  view's link carries it so it draws only what the link names. */
+    locked?: boolean;
+    /** A linked view's pinned view id on the link. */
+    view?: string;
+  } = {},
 ): EditorTransaction | null {
   const block = tree.by_id[blockId];
   if (!block) return null;
   const mutations: BlockMutation[] = [];
-  // The page's line holds nothing but its link — shown here, as a block.
-  const link = pageLine("", pageId, { expanded: shown }).content;
+  // The page's line holds nothing but its link — shown here, as a block. A
+  // linked view is a shown, locked link to it that also names the view.
+  const link = pageLine("", pageId, { expanded: shown, locked, view }).content;
   let embed: Block;
   if (!inlinePlainText(remaining)) {
     embed = { ...block, kind: "text", content: link, checked: undefined, language: undefined };
