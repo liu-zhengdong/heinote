@@ -172,7 +172,7 @@ export function attachGithubAuth(app: Express, ctx: Context) {
     const userId = id();
     const role = store.one("SELECT id FROM users LIMIT 1") ? "user" : "admin";
     // Empty password means this account has no password credential.
-    store.db.prepare("INSERT INTO users VALUES(?,?,?,?,?)").run(userId, handle, profile.displayName, "", role);
+    store.db.prepare("INSERT INTO users(id,handle,display_name,password,site_role,created_at) VALUES(?,?,?,?,?,?)").run(userId, handle, profile.displayName, "", role, new Date().toISOString());
     store.db.prepare("INSERT INTO oauth_identities VALUES('github',?,?,?)").run(profile.id, userId, profile.login);
     return { userId, created: true };
   });

@@ -14,6 +14,7 @@ import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
+import { Quotas } from "./quotas.ts";
 import { pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -23,7 +24,7 @@ export function fail(status: number, message: string, code?: string): never { th
 export const id = () => randomUUID();
 export const secret = () => randomBytes(32).toString("base64url");
 export const hash = (value: string | Buffer) => createHash("sha256").update(value).digest("hex");
-export type User = Person & { siteRole: "admin" | "user" };
+export type User = Person & { siteRole: "admin" | "user"; createdAt: string | null };
 export type Actor = { user: User; tokenAccess?: "read" | "write" };
 export type Row = Record<string, unknown>;
 export type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: Row; patch?: Row; base?: Row | null };
@@ -54,7 +55,10 @@ export class Store {
   readonly avatars: AvatarStore;
   readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
+  readonly quotas!: Quotas;
   private transactionDepth = 0;
+  /** The one-time collaboration rebuild at startup is not a user commit. */
+  quotaSuspended = false;
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(dataDir, "notes.sqlite"));
@@ -74,8 +78,10 @@ export class Store {
     this.files = new FileStore(this.db, dataDir);
     this.avatars = new AvatarStore(this.db, this.files);
     this.knowledgeBases = new KnowledgeBases(this);
+    this.quotas = new Quotas(this, dataDir);
     this.collaboration = new CollaborationStore(this);
-    this.collaboration.initialize();
+    this.quotaSuspended = true;
+    try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
   }
   all(sql: string, ...params: Array<string | number>): Row[] { return this.db.prepare(sql).all(...params) as Row[]; }
   one(sql: string, ...params: Array<string | number>): Row | undefined { return this.all(sql, ...params)[0]; }
@@ -83,11 +89,15 @@ export class Store {
     if (this.transactionDepth) return work();
     this.db.exec("BEGIN IMMEDIATE");
     this.transactionDepth = 1;
+    // Usage before the transaction's writes; UC-16 judges N against U and L.
+    const quotaBase = this.quotas ? this.quotas.usageAll() : new Map<string, number>();
     this.collaboration?.begin();
     let result: T;
     try {
       result = work();
       this.collaboration?.flush();
+      // Persisted collaboration state is part of usage, so check after flush.
+      if (this.quotas && !this.quotaSuspended) this.quotas.enforceAfter(quotaBase);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -104,7 +114,7 @@ export class Store {
     const github = this.one("SELECT provider_user_id FROM oauth_identities WHERE provider='github' AND user_id=?", userId);
     return github ? `https://avatars.githubusercontent.com/u/${encodeURIComponent(String(github.provider_user_id))}?s=96` : null;
   }
-  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatarUrl(String(row.id)), siteRole: row.site_role as User["siteRole"] }; }
+  user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatarUrl(String(row.id)), siteRole: row.site_role as User["siteRole"], createdAt: row.created_at == null ? null : String(row.created_at) }; }
   userById(userId: string): User | undefined { const row = this.one("SELECT * FROM users WHERE id=?", userId); return row && this.user(row); }
   scope(actor: Actor, requested: string, write = false): string {
     if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。");

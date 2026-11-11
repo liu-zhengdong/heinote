@@ -45,11 +45,13 @@ export function spaceSummary(store: Store, row: Row): SpaceSummary {
   const role = row.role as SpaceRole;
   const manager = role === "owner" || role === "admin";
   const knowledgeBase = store.knowledgeBases.get(spaceId);
+  const kbQuota = knowledgeBase ? store.quotas?.quota(`kb:${spaceId}`) : undefined;
   return {
     spaceId, name: String(row.name), role,
     canInvite: manager && !knowledgeBase?.archived,
     canManageRoles: manager, canRemoveMembers: manager, canLeave: role !== "owner",
-    ...(knowledgeBase ? { knowledgeBase } : {}),
+    // Managers see the capacity line; members see the KB without it.
+    ...(knowledgeBase ? { knowledgeBase: { ...knowledgeBase, ...(manager && kbQuota ? { storage: { used: kbQuota.used, limit: kbQuota.limit, over: kbQuota.over } } : {}) } } : {}),
   };
 }
 
@@ -101,6 +103,8 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
   app.post("/api/knowledge-bases", (req, res) => {
     const who = browserActor(req); const input = createSchema.parse(req.body);
     const result = mutation(who, req, input, () => {
+      // UC-16 V4: one slot check shared by create and ownership transfer.
+      store.quotas.assertTeamSlot(who.user.id, "请联系站点管理员调整创建上限。");
       const spaceId = id(); const homePageId = id(); const createdAt = new Date().toISOString();
       store.db.prepare("INSERT INTO spaces(id,name,owner_id) VALUES(?,?,?)").run(spaceId, input.name, who.user.id);
       store.db.prepare("INSERT INTO members(space_id,user_id,role) VALUES(?,?,?)").run(spaceId, who.user.id, "owner");
@@ -144,6 +148,8 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       if (input.userId === who.user.id) fail(400, "请选择其他已加入的成员。", "bad_request");
       const member = store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, input.userId);
       if (!member || member.role === "owner") fail(409, "接收者必须是当前知识库的其他成员。", "conflict");
+      // UC-16 E11: the receiver must have a free team slot.
+      store.quotas.assertTeamSlot(input.userId, "对方无法接收此团队。");
       store.db.prepare("UPDATE members SET role='admin' WHERE space_id=? AND user_id=?").run(spaceId, who.user.id);
       store.db.prepare("UPDATE members SET role='owner' WHERE space_id=? AND user_id=?").run(spaceId, input.userId);
       store.db.prepare("UPDATE spaces SET owner_id=? WHERE id=?").run(input.userId, spaceId);

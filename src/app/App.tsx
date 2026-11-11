@@ -23,6 +23,7 @@ import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store
 const ShareDialog = lazy(() => import("../features/share/ShareDialog").then((module) => ({ default: module.ShareDialog })));
 const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
+const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 
 /** The open page's editor, redrawn as the page changes — the shell around it
  *  is not. */
@@ -37,7 +38,7 @@ export function App() {
     selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace,
   } = useWorkspace();
   const store = useWorkspaceStore();
-  const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast } = useUi();
+  const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast, adminOpen, setAdminOpen } = useUi();
   const [historyOpen, setHistoryOpen] = useState(false);
   /* Opened once, the panel stays mounted, so it can slide out as it closes. */
   const [historyUsed, setHistoryUsed] = useState(false);
@@ -320,6 +321,11 @@ export function App() {
         onConfirm={() => void removeTrashedPage()}
       />
       <QuickFind />
+      {adminOpen ? (
+        <Suspense fallback={null}>
+          <AdminConsole onClose={() => setAdminOpen(false)} />
+        </Suspense>
+      ) : null}
     </div>
   );
 }

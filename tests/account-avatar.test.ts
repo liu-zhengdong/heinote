@@ -361,23 +361,28 @@ test("account avatar is consistent across session, bootstrap, admin, search, ros
   assert.deepEqual(status(await secondSession.request("/api/auth/login", { method: "POST", body: { handle: "alice", password } }), 200).user, a);
   assert.deepEqual(await session(secondSession), a);
   const checkUsers = async (expected: Json[]) => {
-    assert.deepEqual(status(await alice.request("/api/admin/users"), 200), expected);
+    const adminUsers = status(await alice.request("/api/admin/users"), 200);
+    assert.deepEqual(adminUsers.map((row: Json) => {
+      const { storageBytes: _a, storageLimit: _b, storageSource: _c, storageOver: _d, teamCount: _e, teamLimit: _f, teamLimitSource: _g, ...user } = row;
+      return user;
+    }), expected);
     for (const person of expected) {
-      const { siteRole: _role, ...publicPerson } = person;
+      const { siteRole: _role, createdAt: _created, ...publicPerson } = person;
       assert.deepEqual(status(await alice.request(`/api/users?query=${person.handle}`), 200), [publicPerson]);
     }
   };
   await checkUsers([a, b]);
   const { spaceId } = status(await alice.request("/api/spaces", { method: "POST", body: { name: "Avatar roster" } }), 201);
   status(await alice.request(`/api/spaces/${spaceId}/invitations`, { method: "POST", body: { handle: "bob", role: "editor" } }), 200);
+  const member = (person: Json, role: string) => { const { createdAt: _created, ...rest } = person; return { ...rest, role }; };
   const pending = status(await alice.request(`/api/spaces/${spaceId}/roster`), 200);
-  assert.deepEqual(pending.members, [{ ...a, role: "owner" }]);
-  const { siteRole: _role, ...invitee } = b;
+  assert.deepEqual(pending.members, [member(a, "owner")]);
+  const { siteRole: _role, createdAt: _created, ...invitee } = b;
   assert.deepEqual(pending.invitations[0].invitee, invitee);
   const changed = await upload(bob, await image("png", "green"));
   assert.equal(status(await alice.request(`/api/spaces/${spaceId}/roster`), 200).invitations[0].invitee.avatarUrl, changed.avatarUrl);
   status(await bob.request(`/api/invitations/${pending.invitations[0].id}`, { method: "POST", body: { accept: true } }), 200);
-  assert.deepEqual(status(await alice.request(`/api/spaces/${spaceId}/roster`), 200).members, [{ ...a, role: "owner" }, { ...changed, role: "editor" }]);
+  assert.deepEqual(status(await alice.request(`/api/spaces/${spaceId}/roster`), 200).members, [member(a, "owner"), member(changed, "editor")]);
   await f.restart();
   assert.deepEqual(await session(alice), a);
   assert.deepEqual(await session(bob), changed);
@@ -446,7 +451,7 @@ test("account avatar opens existing five-column users and preserves old files ac
   });
   const browser = f.browser();
   browser.cookie = "notes_session=legacy-session";
-  assert.deepEqual(await session(browser), { id: "legacy-id", handle: "legacy", displayName: "Legacy user", avatarUrl: null, siteRole: "admin" });
+  assert.deepEqual(await session(browser), { id: "legacy-id", handle: "legacy", displayName: "Legacy user", avatarUrl: null, siteRole: "admin", createdAt: null });
   const user = await upload(browser, await image());
   const newcomer = await register(f.browser(), "newcomer");
   assert.equal(newcomer.avatarUrl, null);
@@ -456,5 +461,5 @@ test("account avatar opens existing five-column users and preserves old files ac
   const old = await readAvatar(f.url(), browser, "/api/files/personal?path=files%2Fold.bin");
   assert.equal(old.status, 200);
   assert.deepEqual(old.bytes, legacyBytes);
-  assert.deepEqual(f.database((db) => db.prepare("PRAGMA table_info(users)").all()).map((column) => column.name), ["id", "handle", "display_name", "password", "site_role"]);
+  assert.deepEqual(f.database((db) => db.prepare("PRAGMA table_info(users)").all()).map((column) => column.name), ["id", "handle", "display_name", "password", "site_role", "created_at", "storage_limit", "team_creation_limit"]);
 });

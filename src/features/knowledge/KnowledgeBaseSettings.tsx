@@ -7,6 +7,7 @@ import { personName } from "../../components/ProfileAvatar";
 import type { SpaceSummary } from "../../core/types";
 import { ApiError } from "../../platform/http";
 import { useKnowledgeBaseModal } from "./KnowledgeBaseDialog";
+import { formatBytes } from "../admin/types";
 import "./knowledge-base.css";
 
 type Change =
@@ -140,6 +141,7 @@ export function KnowledgeBaseSettings({ space, onClose }: { space: SpaceSummary;
             <input id={`${id}-name`} value={name} required maxLength={200} readOnly={!editable || Boolean(unknown)} disabled={pending}
               aria-describedby={error ? `${id}-error` : undefined} onChange={(event) => { setName(event.target.value); setStatus(""); }} />
           </label>
+          {editable && metadata?.storage ? <p className="knowledge-base-note">存储 {formatBytes(metadata.storage.used)} / {formatBytes(metadata.storage.limit)}{metadata.storage.over > 0 ? "（已超额，请联系站点管理员）" : ""}</p> : null}
           <label className="knowledge-base-field" htmlFor={`${id}-description`}>
             <span>简介</span>
             <textarea id={`${id}-description`} value={description} rows={3} maxLength={2000} readOnly={!editable || Boolean(unknown)} disabled={pending}

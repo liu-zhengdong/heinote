@@ -304,6 +304,8 @@ export interface KnowledgeBase {
   sort: SidebarSort;
   revision: number;
   createdAt: string;
+  /** Quota figures for owners and admins; absent for other members. */
+  storage?: { used: number; limit: number; over: number };
 }
 
 /** A space this member belongs to, as Notes needs it: its name, their role

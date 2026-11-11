@@ -57,6 +57,12 @@ async function summary(browser: Browser, spaceId: string) {
   assert.ok(found, `Missing space ${spaceId}`);
   return found;
 }
+// Quota figures change with every write; structural comparisons strip them.
+function withoutStorage(summary: Json) {
+  if (!summary.knowledgeBase) return summary;
+  const { storage: _storage, ...knowledgeBase } = summary.knowledgeBase;
+  return { ...summary, knowledgeBase };
+}
 async function pages(browser: Browser, scope: string): Promise<Json[]> { return ok(await browser.request(`/api/records/${scope}/pages`)); }
 async function makeToken(browser: Browser, access: "read" | "write" = "write") {
   return ok(await browser.request("/api/tokens", { method: "POST", body: { name: `UC-13 ${access}`, access } }), 201).token as string;
@@ -92,7 +98,7 @@ test("UC-13 minimum: create one knowledge base, owner, and unique scoped home", 
   assert.equal(rows[0].value.parent_id ?? null, null);
   assert.equal(rows[0].value.share_space_id, kb.spaceId);
   assert.equal(rows[0].value.created_by, user.id);
-  assert.deepEqual(await summary(owner, kb.spaceId), kb);
+  assert.deepEqual(withoutStorage(await summary(owner, kb.spaceId)), withoutStorage(kb));
   assert.equal((await pages(owner, "personal")).some((row) => row.id === metadata.homePageId), false);
 });
 
@@ -209,7 +215,7 @@ test("UC-13: metadata follows per-library roles, shared sort, and revision confl
   assert.equal(kb.knowledgeBase.sort, "name-desc");
   assert.ok(kb.knowledgeBase.revision > previous.knowledgeBase.revision);
   for (const member of [owner, admin, editor, viewer]) assert.equal((await summary(member, kb.spaceId)).knowledgeBase.sort, "name-desc");
-  assert.deepEqual(ok(await patchLibrary(editor, previous, { sort: "name-desc" }, requestId)), kb);
+  assert.deepEqual(withoutStorage(ok(await patchLibrary(editor, previous, { sort: "name-desc" }, requestId))), withoutStorage(kb));
   ok(await patchLibrary(editor, previous, { sort: "created" }, requestId), 409);
   ok(await patchLibrary(owner, previous, { name: "Stale rename" }), 409);
   ok(await patchLibrary(owner, kb, { sort: "unsupported-sort" }), 400);
@@ -403,7 +409,7 @@ test("UC-13: library archive freezes all content, invalidates invitations, and p
   denied(await archive(admin, kb)); denied(await archive(editor, kb));
   const requestId = randomUUID(); const before = kb;
   kb = ok(await archive(owner, kb, true, requestId)); assert.equal(kb.knowledgeBase.archived, true);
-  assert.deepEqual(ok(await archive(owner, before, true, requestId)), kb);
+  assert.deepEqual(withoutStorage(ok(await archive(owner, before, true, requestId))), withoutStorage(kb));
   ok(await archive(owner, before, false, requestId), 409);
   assert.equal(ok(await owner.request(filePath(kb.spaceId), { rawResponse: true })), "saved bytes");
   assert.equal(ok(await readAgent(owner, bearer, created.id)).title, "Saved before archive");
@@ -456,7 +462,7 @@ test("UC-13: ownership transfer is atomic, unique, replayable, and preserves con
   kb = await summary(owner, kb.spaceId); const requestId = randomUUID(); const basis = kb;
   kb = ok(await transfer(owner, kb, successorUser.id, requestId));
   assert.equal(kb.role, "admin"); assert.equal(kb.knowledgeBase.homePageId, basis.knowledgeBase.homePageId);
-  assert.deepEqual(ok(await transfer(owner, basis, successorUser.id, requestId)), kb);
+  assert.deepEqual(withoutStorage(ok(await transfer(owner, basis, successorUser.id, requestId))), withoutStorage(kb));
   ok(await transfer(owner, basis, outsiderUser.id, requestId), 409);
   const roster = ok(await successor.request(`/api/spaces/${kb.spaceId}/roster`)).members;
   assert.equal(roster.filter((member: Json) => member.role === "owner").length, 1);
@@ -556,7 +562,7 @@ test("UC-13: restart and a complete backup preserve home, ownership, members, so
   const records = await pages(member, kb.spaceId);
   const versions = ok(await member.request(`/api/v1/pages/${created.id}/versions`, { token }));
   await f.restart();
-  assert.deepEqual(await summary(member, kb.spaceId), kb);
+  assert.deepEqual(withoutStorage(await summary(member, kb.spaceId)), withoutStorage(kb));
   assert.deepEqual(await pages(member, kb.spaceId), records);
   assert.equal(ok(await member.request(filePath(kb.spaceId), { rawResponse: true })), "persistent attachment\n");
   const backupRoot = await mkdtemp(join(tmpdir(), "notes-knowledge-bases-backup-"));
@@ -573,7 +579,7 @@ test("UC-13: restart and a complete backup preserve home, ownership, members, so
   execFileSync(process.execPath, [fileURLToPath(new URL("../scripts/backup.mjs", import.meta.url)), target], { env: { ...process.env, DATA_DIR: f.directory }, stdio: "pipe" });
   restored = await startServer({ dataDir: target, port: 0, host: "127.0.0.1", serveStatic: false });
   const restoredMember = new Browser(() => restored!.url); restoredMember.cookie = member.cookie;
-  assert.deepEqual(await summary(restoredMember, kb.spaceId), kb);
+  assert.deepEqual(withoutStorage(await summary(restoredMember, kb.spaceId)), withoutStorage(kb));
   assert.deepEqual(await pages(restoredMember, kb.spaceId), records);
   assert.deepEqual(ok(await restoredMember.request(`/api/v1/pages/${created.id}/versions`, { token })), versions);
   assert.equal(ok(await restoredMember.request(filePath(kb.spaceId), { rawResponse: true })), "persistent attachment\n");

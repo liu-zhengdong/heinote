@@ -59,6 +59,7 @@
 .settings-hero__identity input:focus { background: var(--fill); border-color: var(--hairline); }
 .settings-hero__identity input:disabled { opacity: .55; }
 .settings-hero__handle { color: var(--ink-2); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-quota { color: var(--ink-3); font-size: 12.5px; line-height: 1.5; margin: 2px 0 0; font-variant-numeric: tabular-nums; }
 .settings-hero__actions { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .settings-hero__actions .account-error { flex-basis: 100%; margin: 0; }
 .settings-avatar__meta { display: flex; min-width: 0; align-items: center; flex-wrap: wrap; gap: 4px 12px; margin-top: 14px; color: var(--ink-2); font-size: 12.5px; line-height: 20px; }

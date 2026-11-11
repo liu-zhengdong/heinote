@@ -4,6 +4,19 @@ import { AvatarSettings } from "./AvatarSettings";
 import { useSession } from "./AuthGate";
 import { api, ApiError, errorMessage } from "./api";
 import type { AccountPanelProps } from "./account-panel";
+import { formatBytes, type AccountQuota } from "../admin/types";
+
+/** UC-16 V5: the user sees their own storage and team-creation limits. */
+function QuotaLine() {
+  const [quota, setQuota] = useState<AccountQuota | null>(null);
+  useEffect(() => {
+    api<AccountQuota>("/api/account/quota").then(setQuota).catch(() => setQuota(null));
+  }, []);
+  if (!quota) return null;
+  const teams = `团队知识库 ${quota.teams.count}/${quota.teams.limit}`;
+  const storage = `存储 ${formatBytes(quota.storage.used)} / ${formatBytes(quota.storage.limit)}`;
+  return <p className="settings-quota">{storage} · {teams}</p>;
+}
 
 export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelProps & { onDirtyChange(dirty: boolean): void }) {
   const { user, refresh } = useSession();
@@ -67,6 +80,7 @@ export function ProfileSettings({ onBusyChange, onDirtyChange }: AccountPanelPro
         onChange={(event) => { setDraft(event.target.value); setError(""); setNotice(""); }}
         onKeyDown={(event) => { if (event.key === "Enter" && imeComposing(event)) event.preventDefault(); }} />
       <div className="settings-hero__handle">@{user.handle}</div>
+      <QuotaLine />
       {dirty || notice || error ? <div className="settings-hero__actions">
         {dirty ? <>
           <button type="submit" className="btn btn--primary" disabled={busy}>{pending ? "保存中…" : "保存"}</button>

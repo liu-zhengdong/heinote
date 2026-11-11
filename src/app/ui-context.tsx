@@ -29,6 +29,9 @@ interface UiContextValue {
   peekPageId: string | null;
   openPeek(pageId: string): void;
   closePeek(): void;
+  /** The admin console page. Full-window, opened from account settings. */
+  adminOpen: boolean;
+  setAdminOpen(open: boolean): void;
 }
 
 const UiContext = createContext<UiContextValue | null>(null);
@@ -64,6 +67,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sharePageId, setSharePageId] = useState<string | null>(null);
   const [peekPageId, setPeekPageId] = useState<string | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
 
   useThemeAttribute(preferences.theme);
 
@@ -93,8 +97,10 @@ export function UiProvider({ children }: { children: ReactNode }) {
       peekPageId,
       openPeek,
       closePeek,
+      adminOpen,
+      setAdminOpen,
     }),
-    [closePeek, closeShare, drawerOpen, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
+    [adminOpen, closePeek, closeShare, drawerOpen, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
   );
 
   return (

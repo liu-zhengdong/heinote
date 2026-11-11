@@ -15,6 +15,7 @@ import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
+import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
@@ -129,7 +130,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     store.transaction(() => {
       if (store.one("SELECT id FROM users WHERE handle=?", input.handle)) fail(409, "此用户名已注册。");
       const siteRole = store.one("SELECT id FROM users LIMIT 1") ? "user" : "admin";
-      store.db.prepare("INSERT INTO users VALUES(?,?,?,?,?)").run(userId, input.handle, input.displayName, password, siteRole);
+      store.db.prepare("INSERT INTO users(id,handle,display_name,password,site_role,created_at) VALUES(?,?,?,?,?,?)").run(userId, input.handle, input.displayName, password, siteRole, currentTime());
     });
     establish(req, res, userId); res.status(201).json({ user: store.userById(userId) });
   });
@@ -144,7 +145,132 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const value = cookie(req); if (value) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(value));
     res.clearCookie("notes_session", { path: "/", httpOnly: true, sameSite: "lax", secure }); res.json({ ok: true });
   });
-  app.get("/api/admin/users", (req, res) => { admin(req); res.json(store.all("SELECT * FROM users ORDER BY handle").map((row) => store.user(row))); });
+  const quotaUser = (row: Row) => {
+    const user = store.user(row);
+    const id = String(row.id);
+    const storage = store.quotas.quota(`user:${id}`);
+    const teams = store.quotas.teamCount(id);
+    const teamLimit = store.quotas.teamLimitOf(id);
+    return { ...user, storageBytes: storage.used, storageLimit: storage.limit, storageSource: storage.source, storageOver: storage.over, teamCount: teams, teamLimit: teamLimit.limit, teamLimitSource: teamLimit.source };
+  };
+  const quotaKb = (row: Row) => {
+    const spaceId = String(row.id);
+    const meta = store.knowledgeBases.get(spaceId)!;
+    const storage = store.quotas.quota(`kb:${spaceId}`);
+    const members = Number(store.one("SELECT count(*) AS n FROM members WHERE space_id=?", spaceId)?.n ?? 0);
+    return {
+      spaceId, name: String(row.name), ownerId: String(row.owner_id),
+      ownerName: String(store.one("SELECT display_name FROM users WHERE id=?", String(row.owner_id))?.display_name ?? ""),
+      memberCount: members, archived: meta.archived, createdAt: meta.createdAt,
+      storageBytes: storage.used, storageLimit: storage.limit, storageSource: storage.source, storageOver: storage.over,
+    };
+  };
+  app.get("/api/admin/overview", (req, res) => {
+    admin(req);
+    const today = store.quotas.today();
+    const users = Number(store.one("SELECT count(*) AS n FROM users")?.n ?? 0);
+    // Registration times are ISO strings; the site timezone fixes the boundary.
+    const newToday = store.all("SELECT created_at FROM users WHERE created_at IS NOT NULL")
+      .filter((row) => { try { return new Intl.DateTimeFormat("en-CA", { timeZone: store.quotas.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(String(row.created_at))) === today; } catch { return false; } }).length;
+    const active = Number(store.one("SELECT count(*) AS n FROM knowledge_bases WHERE archived=0")?.n ?? 0);
+    const archived = Number(store.one("SELECT count(*) AS n FROM knowledge_bases WHERE archived=1")?.n ?? 0);
+    const rows = store.quotas.usageRows();
+    const personal = rows.filter((row) => row.kind === "user").reduce((sum, row) => sum + row.used, 0);
+    const teams = rows.filter((row) => row.kind === "kb").reduce((sum, row) => sum + row.used, 0);
+    const disk = store.quotas.diskUsage();
+    const over = rows.filter((row) => row.over > 0).map((row) => ({ ...row, label: store.quotas.describe(`${row.kind}:${row.id}`) }));
+    res.json({ timezone: store.quotas.timezone, users, newToday, teams: { active, archived }, quotaBytes: { personal, teams, total: personal + teams }, disk, over });
+  });
+  app.get("/api/admin/users", (req, res) => { admin(req); res.json(store.all("SELECT * FROM users ORDER BY handle").map((row) => quotaUser(row))); });
+  app.patch("/api/admin/users/:id", (req, res) => {
+    admin(req); const input = parse(z.object({ siteRole: z.enum(["admin", "user"]) }), req.body);
+    const target = store.one("SELECT * FROM users WHERE id=?", text(req.params.id)); if (!target) fail(404, "用户不存在。");
+    store.transaction(() => {
+      const user = store.userById(String(target.id)); if (!user) fail(404, "用户不存在。");
+      if (user.siteRole === "admin" && input.siteRole === "user" && Number(store.one("SELECT count(*) AS count FROM users WHERE site_role='admin'")?.count) <= 1) fail(409, "至少保留一位站点管理员。");
+      store.db.prepare("UPDATE users SET site_role=? WHERE id=?").run(input.siteRole, user.id);
+    });
+    res.json(store.userById(String(target.id)));
+  });
+  const limitInput = z.object({
+    storageLimit: z.union([LIMIT_BYTES, z.null()]).optional(),
+    teamCreationLimit: z.union([TEAM_LIMIT, z.null()]).optional(),
+  }).refine((input) => input.storageLimit !== undefined || input.teamCreationLimit !== undefined, "请提供限额修改。");
+  app.patch("/api/admin/users/:id/limits", (req, res) => {
+    admin(req);
+    const input = parse(limitInput, req.body);
+    const row = store.one("SELECT * FROM users WHERE id=?", text(req.params.id));
+    if (!row) fail(404, "用户不存在。", "not_found");
+    // E6: refuse to overwrite a stale base with the client's blind write.
+    const expected = parse(z.object({
+      storageLimit: z.union([LIMIT_BYTES, z.null()]),
+      teamCreationLimit: z.union([TEAM_LIMIT, z.null()]),
+    }), req.body.base ?? {});
+    if (Number(row.storage_limit ?? -1) !== (expected.storageLimit ?? -1) || Number(row.team_creation_limit ?? -1) !== (expected.teamCreationLimit ?? -1)) {
+      res.status(409).json({ error: "限额已被其他管理员修改。", code: "conflict", current: quotaUser(row) });
+      return;
+    }
+    const storage = input.storageLimit === undefined ? (row.storage_limit == null ? null : Number(row.storage_limit)) : input.storageLimit;
+    const teams = input.teamCreationLimit === undefined ? (row.team_creation_limit == null ? null : Number(row.team_creation_limit)) : input.teamCreationLimit;
+    store.transaction(() => store.quotas.setUserLimits(String(row.id), storage, teams));
+    res.json(quotaUser(store.one("SELECT * FROM users WHERE id=?", String(row.id))!));
+  });
+  app.get("/api/admin/teams", (req, res) => {
+    admin(req);
+    res.json(store.all("SELECT s.* FROM spaces s JOIN knowledge_bases k ON k.space_id=s.id ORDER BY s.name").map(quotaKb));
+  });
+  app.patch("/api/admin/teams/:id/limits", (req, res) => {
+    admin(req);
+    const input = parse(z.object({ storageLimit: z.union([LIMIT_BYTES, z.null()]), base: z.object({ storageLimit: z.union([LIMIT_BYTES, z.null()]) }).optional() }), req.body);
+    const row = store.one("SELECT s.* FROM spaces s JOIN knowledge_bases k ON k.space_id=s.id WHERE s.id=?", text(req.params.id));
+    if (!row) fail(404, "知识库不存在。", "not_found");
+    const current = store.one("SELECT storage_limit FROM knowledge_bases WHERE space_id=?", String(row.id))?.storage_limit;
+    if (input.base && Number(current ?? -1) !== (input.base.storageLimit ?? -1)) {
+      res.status(409).json({ error: "限额已被其他管理员修改。", code: "conflict", current: quotaKb(row) });
+      return;
+    }
+    store.transaction(() => store.quotas.setKbLimit(String(row.id), input.storageLimit));
+    res.json(quotaKb(store.one("SELECT * FROM spaces WHERE id=?", String(row.id))!));
+  });
+  app.get("/api/admin/quota-settings", (req, res) => {
+    admin(req);
+    const defaults = store.quotas.defaults();
+    res.json({ personalStorageBytes: defaults.personalStorageBytes, teamStorageBytes: defaults.teamStorageBytes, teamCreation: defaults.teamCreation });
+  });
+  app.post("/api/admin/quota-settings/preview", (req, res) => {
+    admin(req);
+    const input = parse(z.object({ key: z.enum(["personal", "team", "creation"]), value: z.number().int().min(0).max(1_000_000_000_000_000) }), req.body);
+    if (input.key !== "creation" && input.value <= 0) fail(400, "存储限额必须为正值。", "bad_request");
+    res.json(store.quotas.impact(input.key, input.value));
+  });
+  app.put("/api/admin/quota-settings", (req, res) => {
+    admin(req);
+    const input = parse(z.object({
+      key: z.enum(["personal", "team", "creation"]),
+      value: z.number().int().min(0).max(1_000_000_000_000_000),
+      base: z.object({ personalStorageBytes: z.number(), teamStorageBytes: z.number(), teamCreation: z.number() }).optional(),
+    }), req.body);
+    if (input.key !== "creation" && input.value <= 0) fail(400, "存储限额必须为正值。", "bad_request");
+    if (input.base) {
+      const current = store.quotas.defaults();
+      const stale = current.personalStorageBytes !== input.base.personalStorageBytes
+        || current.teamStorageBytes !== input.base.teamStorageBytes
+        || current.teamCreation !== input.base.teamCreation;
+      if (stale) { res.status(409).json({ error: "默认限额已被其他管理员修改。", code: "conflict", current }); return; }
+    }
+    store.transaction(() => store.quotas.setDefault(input.key, input.value));
+    res.json(store.quotas.defaults());
+  });
+  app.get("/api/account/quota", (req, res) => {
+    const who = actor(req);
+    const storage = store.quotas.quota(`user:${who.user.id}`);
+    const managed = store.all("SELECT s.id FROM spaces s JOIN knowledge_bases k ON k.space_id=s.id JOIN members m ON m.space_id=s.id WHERE m.user_id=? AND m.role IN ('owner','admin')", who.user.id).map((row) => {
+      const quota = store.quotas.quota(`kb:${String(row.id)}`);
+      return { spaceId: String(row.id), name: String(store.one("SELECT name FROM spaces WHERE id=?", String(row.id))?.name ?? ""), used: quota.used, limit: quota.limit, over: quota.over };
+    });
+    const teams = { count: store.quotas.teamCount(who.user.id), ...store.quotas.teamLimitOf(who.user.id) };
+    res.json({ storage: { used: storage.used, limit: storage.limit, source: storage.source, over: storage.over }, teams, managed });
+  });
   app.patch("/api/admin/users/:id", (req, res) => {
     admin(req); const input = parse(z.object({ siteRole: z.enum(["admin", "user"]) }), req.body);
     store.transaction(() => {
@@ -155,7 +281,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/users", (req, res) => {
     actor(req); const query = text(req.query.query).trim().replace(/^@/, "").toLowerCase();
-    res.json(query.length < 2 ? [] : store.all("SELECT * FROM users WHERE instr(handle,?)>0 OR instr(lower(display_name),?)>0 ORDER BY handle LIMIT 20", query, query).map((row) => { const { siteRole: _siteRole, ...person } = store.user(row); return person; }));
+    res.json(query.length < 2 ? [] : store.all("SELECT * FROM users WHERE instr(handle,?)>0 OR instr(lower(display_name),?)>0 ORDER BY handle LIMIT 20", query, query).map((row) => { const { siteRole: _siteRole, createdAt: _createdAt, ...person } = store.user(row); return person; }));
   });
   app.get("/api/spaces", (req, res) => { const who = actor(req); res.json(store.all("SELECT s.*,m.role FROM spaces s JOIN members m ON s.id=m.space_id WHERE m.user_id=? ORDER BY s.id", who.user.id).map((row) => spaceSummary(store, row))); });
   app.post("/api/spaces", (req, res) => {
@@ -165,9 +291,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/spaces/:id/roster", (req, res) => {
     const who = actor(req); const spaceId = text(req.params.id); store.role(who, spaceId);
-    const members = store.all("SELECT u.*,m.role FROM users u JOIN members m ON u.id=m.user_id WHERE m.space_id=? ORDER BY u.handle", spaceId).map((row) => ({ ...store.user(row), role: row.role }));
+    const members = store.all("SELECT u.*,m.role FROM users u JOIN members m ON u.id=m.user_id WHERE m.space_id=? ORDER BY u.handle", spaceId).map((row) => { const { createdAt: _createdAt, ...person } = store.user(row); return { ...person, role: row.role }; });
     const invitations = store.all("SELECT i.*,u.handle,u.display_name,u.site_role FROM invitations i JOIN users u ON u.id=i.user_id WHERE i.space_id=? AND i.status='pending' AND i.expires>?", spaceId, Date.now()).map((row) => {
-      const { siteRole: _siteRole, ...invitee } = store.user({ ...row, id: row.user_id });
+      const { siteRole: _siteRole, createdAt: _createdAt, ...invitee } = store.user({ ...row, id: row.user_id });
       return { id: row.id, invitee, role: row.role, status: row.status, expiresAt: new Date(Number(row.expires)).toISOString() };
     });
     res.json({ members, invitations });
@@ -299,7 +425,10 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.put("/api/files/:scope", express.raw({ type: () => true, limit: "8mb" }), (req, res) => {
     const { scope, path } = fileInput(req, true); if (!Buffer.isBuffer(req.body)) fail(400, "需要附件内容。");
-    if (!store.files.write(scope, path, req.get("content-type") ?? "application/octet-stream", req.body)) fail(409, "附件路径已存在。");
+    // Inside the transaction so the quota check covers the new payload.
+    store.transaction(() => {
+      if (!store.files.write(scope, path, req.get("content-type") ?? "application/octet-stream", req.body)) fail(409, "附件路径已存在。");
+    });
     res.json({ ok: true });
   });
   app.get("/api/files/:scope", (req, res) => { const { scope, path } = fileInput(req); sendFile(res, scope, path); });
@@ -435,7 +564,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   }
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof z.ZodError) { res.status(400).json({ error: "输入格式无效。", code: "bad_request", details: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) }); return; }
-    if (error instanceof HttpError) { res.status(error.status).json({ error: error.message, code: error.code }); return; }
+    if (error instanceof HttpError) {
+      const quota = (error as { quota?: unknown }).quota;
+      res.status(error.status).json({ error: error.message, code: error.code, ...(quota ? { quota } : {}) });
+      return;
+    }
     if ((error as { type?: string })?.type === "entity.too.large") { res.status(413).json({ error: "请求过大。", code: "too_large" }); return; }
     if (error instanceof SyntaxError) { res.status(400).json({ error: "JSON 格式无效。", code: "bad_request" }); return; }
     console.error(error); res.status(500).json({ error: "服务暂时无法完成请求。", code: "internal_error" });

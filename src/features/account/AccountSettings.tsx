@@ -1,10 +1,11 @@
-import { Archive, ChevronLeft, Inbox, KeyRound, LogOut, Search, Settings2, UsersRound, X } from "lucide-react";
+import { Archive, ChevronLeft, Inbox, KeyRound, LogOut, Search, Settings2, ShieldCheck, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Modal } from "../../components/Modal";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { useWorkspace } from "../../app/workspace-context";
 import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { useSession } from "./AuthGate";
+import { useUi } from "../../app/ui-context";
 import { errorMessage } from "./api";
 import type { TokenSecret } from "./account-panel";
 import { ProfileSettings } from "./ProfileSettings";
@@ -12,7 +13,6 @@ import { PreferenceSettings } from "./PreferenceSettings";
 import { Invitations } from "./Invitations";
 import { AgentTokens } from "./AgentTokens";
 import { DataExport } from "./DataExport";
-import { AdminUsers } from "./AdminUsers";
 import { GithubLoginMethods } from "./GithubLoginMethods";
 import "./settings.css";
 
@@ -30,13 +30,14 @@ const sections = [
     fields: [{ name: "令牌 token API 权限 名称 接入", target: "tokens" }] },
   { id: "data", label: "数据", title: "数据", group: "功能", description: "把你的笔记打包带走。", icon: Archive,
     fields: [{ name: "导出 备份 zip Markdown 数据 下载 export backup 导入 Obsidian Notion 迁移 import", target: "export-download" }] },
-  { id: "users", label: "账号管理", title: "账号管理", group: "管理员", description: "管理站点账号与角色。", icon: UsersRound,
-    fields: [{ name: "管理员 用户 角色 站点", target: "users" }] },
+  { id: "users", label: "后台管理", title: "后台管理", group: "站点管理", description: "管理站点用户、团队知识库与存储限额。", icon: ShieldCheck,
+    fields: [{ name: "管理员 用户 角色 站点 限额 存储 后台 admin", target: "users" }] },
 ] satisfies { id: SectionId; label: string; title: string; group: string; description: string; icon: typeof Inbox | null; fields: { name: string; target: string }[] }[];
 const exitsSettings = (action: Action) => action.type === "close" || action.type === "logout" || action.type === "external";
 
 export function AccountSettings({ onClose, notice }: { onClose(): void; notice: GithubResult | null }) {
   const { user, logout, refresh } = useSession();
+  const { setAdminOpen } = useUi();
   const { document: workspaceDocument, selectPage } = useWorkspace();
   const [section, setSection] = useState<SectionId>("profile");
   const [visited, setVisited] = useState<SectionId[]>(["profile"]);
@@ -223,7 +224,10 @@ export function AccountSettings({ onClose, notice }: { onClose(): void; notice: 
                   : key === "invitations" ? <div data-setting="invitations" tabIndex={-1}><Invitations active={active} onBusyChange={setBusy} /></div>
                   : key === "tokens" ? <div data-setting="tokens" tabIndex={-1}><AgentTokens active={active} onBusyChange={setBusy} secret={secret} onSecretChange={setSecret} /></div>
                   : key === "data" ? <div data-setting="data" tabIndex={-1}><DataExport onBusyChange={setBusy} onOpenPage={(id) => { selectPage(id); perform({ type: "close" }); }} /></div>
-                  : <div data-setting="users" tabIndex={-1}><AdminUsers active={active} onBusyChange={setBusy} /></div>}
+                  : <div data-setting="users" tabIndex={-1} className="account-admin-link">
+                    <p className="account-muted">在独立页面中查看站点概览、管理用户与团队知识库、调整存储限额。</p>
+                    <button type="button" className="btn btn--primary" onClick={() => { onClose(); setAdminOpen(true); }}>打开后台管理</button>
+                  </div>}
               </section>;
             })}
             {error ? <p className="account-error" role="alert">{error}</p> : null}
