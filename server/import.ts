@@ -1,5 +1,6 @@
 import { inflateRawSync } from "node:zlib";
 import { createId } from "../src/core/ids.ts";
+import { analyzeBase, evalFormulas, parseFrontmatter, rowFacts, scanInlineTags, type BaseRow, type RowFacts } from "../src/core/base.ts";
 import { indexVault, noteToBlocks, planVault } from "../src/core/obsidian.ts";
 import { indexNotion, notionPageToBlocks, notionTitle } from "../src/core/notion.ts";
 import { storedRuns } from "../src/core/stored-runs.ts";
@@ -18,6 +19,8 @@ import type { Actor, Row, Store, Write } from "./store.ts";
 interface ZipEntryRead {
   name: string;
   size: number;
+  /** Modified time as epoch ms, decoded from the DOS stamp. */
+  mtime: number;
   /** Inflate if stored under deflate. */
   bytes(): Buffer;
 }
@@ -44,12 +47,19 @@ export function readZip(file: Buffer): ZipEntryRead[] {
     const commentLength = file.readUInt16LE(at + 32);
     const offset = file.readUInt32LE(at + 42);
     const name = decoder.decode(file.subarray(at + 46, at + 46 + nameLength));
+    const dosTime = file.readUInt16LE(at + 12);
+    const dosDate = file.readUInt16LE(at + 14);
+    const mtime = dosDate
+      ? new Date(((dosDate >> 9) & 0x7f) + 1980, ((dosDate >> 5) & 0xf) - 1, dosDate & 0x1f,
+          (dosTime >> 11) & 0x1f, (dosTime >> 5) & 0x3f, (dosTime & 0x1f) * 2).getTime()
+      : 0;
     at += 46 + nameLength + extraLength + commentLength;
     if (name.endsWith("/")) continue;
     if (flags & 1) throw new Error(`加密的 zip 条目无法导入：${name}`);
     entries.push({
       name,
       size,
+      mtime,
       bytes() {
         if (file.readUInt32LE(offset) !== 0x04034b50) throw new Error(`zip 条目损坏：${name}`);
         const headName = file.readUInt16LE(offset + 26);
@@ -133,6 +143,7 @@ export function startImport(store: Store, actor: Actor, source: "obsidian" | "no
 interface ScannedEntry {
   path: string;
   size: number;
+  mtime: number;
   read(): Buffer;
 }
 
@@ -151,7 +162,7 @@ const guessType = (name: string): string => {
 function runImport(store: Store, actor: Actor, job: ImportJob, zip: Buffer): void {
   job.status = "scanning";
   job.phase = "扫描文件…";
-  const entries: ScannedEntry[] = readZip(zip).map((entry) => ({ path: entry.name, size: entry.size, read: entry.bytes }));
+  const entries: ScannedEntry[] = readZip(zip).map((entry) => ({ path: entry.name, size: entry.size, mtime: entry.mtime, read: entry.bytes }));
   job.total = entries.length;
   if (job.source === "obsidian") importObsidian(store, actor, job, entries);
   else importNotion(store, actor, job, entries);
@@ -162,6 +173,14 @@ interface PageBuild {
   title: string;
   blocks: Block[];
   parentId?: string;
+  /** "database" makes the page a database; unset stays "document". */
+  kind?: "document" | "database";
+  /** Database config: the page is a database, its rows hang under it. */
+  database?: { properties: Row[]; views: Row[]; title_name?: string };
+  /** Row values for a database row page, keyed by property id. */
+  properties?: Record<string, string>;
+  /** Row ordering inside its database. */
+  row_order?: number;
 }
 
 /** Write pages + their blocks in one transaction. Nothing lands on failure. */
@@ -176,8 +195,11 @@ function commit(store: Store, actor: Actor, _scope: string, job: ImportJob, buil
       value: {
         id: page.id,
         title_content: storedRuns([{ text: page.title }]),
-        icon: "", kind: "document",
+        icon: "", kind: page.kind ?? "document",
         ...(page.parentId ? { parent_id: page.parentId } : {}),
+        ...(page.properties ? { properties: page.properties } : {}),
+        ...(page.row_order !== undefined ? { row_order: page.row_order } : {}),
+        ...(page.database ? { database: page.database } : {}),
         created_at: stamp, updated_at: stamp, created_by: who, updated_by: who,
       } as Row,
     });
@@ -256,7 +278,7 @@ function entryOfFactory(entries: ScannedEntry[]): (path: string) => ScannedEntry
 /* ── Obsidian ───────────────────────────────────────────────────────────── */
 
 function importObsidian(store: Store, actor: Actor, job: ImportJob, entries: ScannedEntry[]): void {
-  const thin = entries.map((e) => ({ path: e.path, bytes: new Uint8Array(), size: e.size }));
+  const thin = entries.map((e) => ({ path: e.path, bytes: new Uint8Array(), size: e.size, mtime: e.mtime }));
   const plan = planVault(thin);
   if (!plan) throw new Error("没有找到 Markdown 笔记。");
   const scope = `user:${actor.user.id}`;
@@ -285,6 +307,152 @@ function importObsidian(store: Store, actor: Actor, job: ImportJob, entries: Sca
 
   job.status = "importing";
   let links = 0;
+
+  /* Pass 1 — analyze every .base and decide which notes it claims. The
+   *  claim is recorded before any page is written, so a matched note's
+   *  parent lands on the database, not its folder. */
+  const baseNotes: BaseRow[] = plan.notes.map((note) => {
+    const entry = entryOf(note.path);
+    const body = entry ? entry.read().toString("utf8").replace(/\r\n?/g, "\n") : "";
+    const matter = /^---\n([\s\S]*?)\n---\n?/.exec(body);
+    const frontmatter = matter ? matter[1] : "";
+    const rest = matter ? body.slice(matter[0].length) : body;
+    return {
+      path: note.path,
+      props: parseFrontmatter(frontmatter),
+      tags: [...new Set([...scanInlineTags(rest), ...tagsOf(frontmatter)])],
+      mtime: entry ? entry.mtime : 0,
+      ctime: entry ? entry.mtime : 0,
+      size: entry ? entry.size : 0,
+    };
+  });
+  const facts: RowFacts[] = baseNotes.map(rowFacts);
+  const claims = new Map<string, { dbId: string; spec: ReturnType<typeof analyzeBase>; title: string }>();
+  const baseWarnings: string[] = [];
+  interface PlannedBase {
+    entry: ScannedEntry;
+    spec: NonNullable<ReturnType<typeof analyzeBase>>;
+    dbId: string;
+    title: string;
+    dir: string;
+    rows: BaseRow[];
+  }
+  const plannedBases: PlannedBase[] = [];
+  for (const entry of entries) {
+    if (!entry.path.toLowerCase().endsWith(".base")) continue;
+    const spec = analyzeBase(entry.read().toString("utf8"));
+    if (!spec) {
+      baseWarnings.push(`${entry.path}：YAML 解析失败，按普通页面导入`);
+      continue;
+    }
+    const title = entry.path.split("/").at(-1)!.replace(/\.base$/i, "");
+    const dir = entry.path.includes("/") ? entry.path.split("/").slice(0, -1).join("/") : "";
+    const matched = baseNotes.filter((_row, index) => spec.predicate(facts[index]));
+    const dbId = createId("page");
+    for (const row of matched) {
+      if (claims.has(row.path)) {
+        baseWarnings.push(`${entry.path}：笔记 ${row.path} 已被其他 database 占用，该行未移动`);
+        continue;
+      }
+      claims.set(row.path, { dbId, spec, title });
+    }
+    plannedBases.push({ entry, spec, dbId, title, dir, rows: matched.filter((row) => claims.get(row.path)?.dbId === dbId) });
+  }
+
+  /* Pass 2 — write every note. A claimed note's parent is its database
+   *  and it carries the property map; unclaimed notes stay in their
+   *  folders as before. */
+  const noteProperties = new Map<string, Record<string, string>>();
+  const noteOrder = new Map<string, number>();
+  for (const base of plannedBases) {
+    const spec = base.spec;
+    const propertyIds = new Map<string, string>();
+    const properties: Row[] = [];
+    const inferType = (key: string, values: YamlValue[]): { type: string; options?: string[] } => {
+      if (key.startsWith("formula.")) return { type: "text" };
+      if (key === "tags" || key === "file.tags") return { type: "select", options: [] };
+      const iso = values.every((value) => value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2})?/.test(value)));
+      if (iso && values.some((value) => value !== null)) return { type: "date" };
+      const discrete = new Set<string>();
+      let multi = false;
+      for (const value of values) {
+        if (Array.isArray(value)) { multi = true; for (const item of value) discrete.add(String(item)); }
+        else if (value !== null) discrete.add(String(value));
+      }
+      if (!multi && discrete.size && discrete.size <= 12) return { type: "select", options: [...discrete].sort() };
+      return { type: "text" };
+    };
+    const display = (key: string): string => spec.displayNames[key] ?? (key.startsWith("file.") ? fileFieldLabel(key) : key);
+    for (const key of spec.columnKeys) {
+      if (key === "file.name" || key === "file.basename") continue;
+      const values = base.rows.map((row) => valueForKey(key, row, spec));
+      const { type, options } = inferType(key, values);
+      const id = `property_${createId("p")}`;
+      propertyIds.set(key, id);
+      properties.push({ id, name: display(key), type, ...(options ? { options } : {}) } as Row);
+    }
+    base.rows.forEach((row, index) => {
+      const rowFactsLocal = facts[baseNotes.indexOf(row)];
+      const formulaValues = evalFormulas(spec.formulas, rowFactsLocal, []);
+      const map: Record<string, string> = {};
+      for (const key of spec.columnKeys) {
+        if (key === "file.name" || key === "file.basename") continue;
+        const id = propertyIds.get(key);
+        if (!id) continue;
+        const raw = valueForKey(key, row, spec, formulaValues);
+        if (raw === null || raw === undefined || raw === "") continue;
+        map[id] = Array.isArray(raw) ? raw.map(String).join("、") : String(raw);
+      }
+      noteProperties.set(row.path, map);
+      noteOrder.set(row.path, index * 1024);
+    });
+    const propertyFor = (key: string) => properties.find((row) => row.id === propertyIds.get(key));
+    const views: Row[] = spec.views.map((view) => {
+      const kind = view.type === "cards" ? (view.groupBy ? "board" : "gallery")
+        : view.type === "table" ? "table"
+        : view.type === "list" ? "list"
+        : "table";
+      const sorts = view.sort
+        .map((s) => ({ property_id: s.property === "file.name" ? "name" : propertyFor(s.property)?.id, direction: s.direction }))
+        .filter((s) => s.property_id) as Array<{ property_id: string; direction: string }>;
+      const filter = view.filter && view.filter.property !== "file.name"
+        ? { property_id: propertyFor(view.filter.property)?.id ?? "", value: view.filter.value }
+        : undefined;
+      const group_by = view.groupBy ? propertyFor(view.groupBy)?.id : undefined;
+      const widths: Record<string, number> = {};
+      for (const [key, width] of Object.entries(view.widths)) {
+        const id = key === "file.name" ? "name" : String(propertyFor(key)?.id ?? "");
+        if (id) widths[id] = width;
+      }
+      return {
+        id: `view_${createId("v")}`, name: view.name, kind,
+        ...(filter ? { filter } : {}),
+        ...(sorts.length ? { sorts } : {}),
+        ...(group_by ? { group_by } : {}),
+        ...(Object.keys(widths).length ? { widths } : {}),
+      } as Row;
+    });
+    // groupOrder reorders the grouped select's options: declared order
+    // first, then the rest in their inferred order.
+    for (const view of spec.views) {
+      if (!view.groupBy || !view.groupOrder.length) continue;
+      const property = propertyFor(view.groupBy) as Row | undefined;
+      const options = property?.options as string[] | undefined;
+      if (!options?.length) continue;
+      const ordered = [
+        ...view.groupOrder.filter((name) => options.includes(name)),
+        ...options.filter((name) => !view.groupOrder.includes(name)),
+      ];
+      if (property) property.options = ordered;
+    }
+    pages.push({
+      id: base.dbId, title: base.title, blocks: [], kind: "database",
+      database: { properties, views, title_name: spec.displayNames["file.name"] ?? "笔记" },
+      parentId: base.dir ? folderOf(base.dir) : rootId,
+    });
+    for (const warning of spec.warnings) baseWarnings.push(`${base.entry.path}：${warning}`);
+  }
+
   for (const note of plan.notes) {
     const entry = entryOf(note.path);
     if (!entry) continue;
@@ -293,25 +461,77 @@ function importObsidian(store: Store, actor: Actor, job: ImportJob, entries: Sca
     const dir = note.path.includes("/") ? note.path.split("/").slice(0, -1).join("/") : "";
     const { blocks } = noteToBlocks(entry.read().toString("utf8"), index, hooks, () => createId("block"));
     links += blocks.filter((b) => b.content.some((r) => r.mention?.kind === "page")).length;
+    const claim = claims.get(note.path);
     pages.push({
       id: idOf.get(note.path)!,
       title: note.path.split("/").at(-1)!.replace(/\.md$/i, ""),
       blocks,
-      parentId: dir ? folderOf(dir) : rootId,
+      parentId: claim ? claim.dbId : (dir ? folderOf(dir) : rootId),
+      ...(claim && noteProperties.get(note.path) ? { properties: noteProperties.get(note.path) } : {}),
+      ...(claim ? { row_order: noteOrder.get(note.path) } : {}),
     });
   }
 
   job.phase = "写入记录…";
   commit(store, actor, scope, job, pages);
-  job.result = { rootPageId: rootId, title: rootTitle, pages: pages.length, attachments: stored.size, links, unresolved, warnings };
+  job.result = { rootPageId: rootId, title: rootTitle, pages: pages.length, attachments: stored.size, links, unresolved, warnings: [...warnings, ...baseWarnings] };
   job.status = "done";
   job.phase = "完成";
 }
 
+const FILE_FIELD_LABELS: Record<string, string> = {
+  "file.ext": "扩展名",
+  "file.path": "路径",
+  "file.folder": "文件夹",
+  "file.size": "大小",
+  "file.mtime": "更新时间",
+  "file.ctime": "创建时间",
+  "file.tags": "标签",
+};
+
+function fileFieldLabel(key: string): string {
+  return FILE_FIELD_LABELS[key] ?? key;
+}
+
+/** Frontmatter `tags` normalized: a string or list → lowercase names. */
+function tagsOf(frontmatter: string): string[] {
+  const match = frontmatter.match(/^tags:\s*(.*)$/m);
+  if (!match) return [];
+  const raw = match[1].trim();
+  if (!raw) return [];
+  const values = raw.startsWith("[") ? raw.slice(1, -1).split(",") : [raw];
+  return values.map((value) => value.trim().replace(/^["']|["']$/g, "").toLowerCase()).filter(Boolean);
+}
+
+/** Pull a column's value for one row: file.* derived, formula.* computed,
+ *  bare keys from frontmatter, tags merged. */
+function valueForKey(
+  key: string,
+  row: BaseRow,
+  spec: { formulas: Array<{ name: string; expr: unknown }> },
+  formulaValues?: Record<string, YamlValue>,
+): YamlValue {
+  if (key.startsWith("formula.")) {
+    const computed = formulaValues ?? evalFormulas(spec.formulas as never, rowFacts(row), []);
+    return computed[key] ?? null;
+  }
+  if (key === "tags" || key === "file.tags") return row.tags;
+  if (key.startsWith("file.")) {
+    const raw = rowFacts(row)[key];
+    if ((key === "file.mtime" || key === "file.ctime") && typeof raw === "number" && raw > 0) {
+      return new Date(raw).toISOString().slice(0, 10);
+    }
+    return raw ?? null;
+  }
+  return row.props[key] ?? null;
+}
+
+type YamlValue = string | number | boolean | null | YamlValue[] | { [key: string]: YamlValue };
+
 /* ── Notion ─────────────────────────────────────────────────────────────── */
 
 function importNotion(store: Store, actor: Actor, job: ImportJob, entries: ScannedEntry[]): void {
-  const thin = entries.map((e) => ({ path: e.path, bytes: new Uint8Array(), size: e.size }));
+  const thin = entries.map((e) => ({ path: e.path, bytes: new Uint8Array(), size: e.size, mtime: e.mtime }));
   const index = indexNotion(thin);
   const notes = entries.filter((e) => e.path.toLowerCase().endsWith(".md"));
   if (!notes.length) throw new Error("没有找到 Markdown 笔记。");
