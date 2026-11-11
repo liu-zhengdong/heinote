@@ -8,7 +8,11 @@ import { usePages } from "../../app/workspace-store";
 import { useWorkspaceOptional } from "../../app/workspace-context";
 import "./artifact.css";
 
-/** The host bar under a running app, and the row drawn when it is not.
+/** The host bar under a running app, drawn only where it carries
+ *  something: embedded inside a document (name, bindings, collapse), a
+ *  draft preview (tag and stop/start), or an error. On the app's own page
+ *  and in public shares a plain run needs none of that — the strip below
+ *  already reports the app's state.
  *  `embedded` is the expanded link inside a parent page; the app page itself
  *  renders the same surface standalone, with its source and binding
  *  controls beside it (AppPage). */
@@ -140,6 +144,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
           {source ? (preview ? "未启用 · 预览" : "已收起") : "未配置源码"}
         </div>
       )}
+      {(embedded || preview || error || !running) && (
       <div className="app-surface__bar">
         {running && <span className="app-surface__dot" title="运行中" />}
         {/* On its own page the app is already the page; its name and the
@@ -168,6 +173,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
           <button type="button" className="app-surface__action app-surface__action--run" onClick={start}><ChevronsUpDown size={12} aria-hidden="true" />展开</button>
         ) : null}
       </div>
+      )}
     </div>
   );
 }
