@@ -30,6 +30,7 @@ export const PROPERTY_LABELS: Record<PropertyType, string> = {
   url: "URL",
   email: "Email",
   phone: "Phone",
+  relation: "Relation",
   created_time: "Created time",
   last_edited_time: "Last edited time",
   created_by: "Created by",
@@ -810,6 +811,83 @@ export function toMultiValue(names: readonly string[]): string {
   return names.length ? JSON.stringify(names) : "";
 }
 
+/* ── Relations ─────────────────────────────────────────────────────────── */
+
+/* A relation property links a row to pages of another database, stored as a
+ *  JSON list of page ids (the multi-select's convention). `relation_database`
+ *  names the target on every relation property. A forward property also
+ *  carries `relation_two_way`, `relation_limit` and `relation_backlink_name`;
+ *  the mirror a two-way relation makes on the target carries `relation_origin`
+ *  — the forward property's id — instead. */
+
+/** The database a relation property points at ("" — nothing — for a mirror
+ *  whose origin is gone). */
+export function relationTarget(property: Pick<DatabaseProperty, "relation_database">): string {
+  return property.relation_database ?? "";
+}
+
+/** The page ids a relation cell holds, in the order they were picked. A
+ *  value that is not a JSON list reads as one id, as a multi-select reads a
+ *  plain stored name — a limit-1 cell may hold one. */
+export function relationIds(value: string): string[] {
+  return multiValues(value).filter((id) => id.trim());
+}
+
+/** The property a relation writes back to, on the database its values point
+ *  at. A one-way relation has none. The forward property's peer is the
+ *  mirror its target holds — the property whose `relation_origin` is this
+ *  one's id; a mirror's peer is the forward property its `relation_origin`
+ *  names. */
+export function relationPeer(property: DatabaseProperty, other: DatabaseConfig | undefined): DatabaseProperty | undefined {
+  if (!other) return undefined;
+  if (property.relation_origin) {
+    const peer = other.properties.find((item) => item.id === property.relation_origin);
+    return peer?.type === "relation" ? peer : undefined;
+  }
+  if (!property.relation_two_way) return undefined;
+  return other.properties.find((item) => item.type === "relation" && item.relation_origin === property.id);
+}
+
+/** The mirror writes a relation cell change owes the other database's rows:
+ *  this row's id added under the peer property on every row newly linked,
+ *  removed from every one dropped — the two sides written together. `other`
+ *  is the database `next` ids belong to. Null for a one-way relation, or a
+ *  mirror the other side no longer holds. */
+export function relationPeerWrites(
+  property: DatabaseProperty,
+  other: DatabaseConfig | undefined,
+  otherRows: readonly NotePage[],
+  rowId: string,
+  previous: readonly string[],
+  next: readonly string[],
+): { peerId: string; writes: RowWrite[] } | null {
+  const peer = relationPeer(property, other);
+  if (!peer) return null;
+  const writes: RowWrite[] = [];
+  const linked = new Set(next);
+  for (const id of new Set([...previous, ...next])) {
+    const row = otherRows.find((item) => item.id === id);
+    if (!row) continue;
+    const held = relationIds(row.properties?.[peer.id] ?? "");
+    const has = held.includes(rowId);
+    if (linked.has(id) && !has) writes.push({ rowId: id, value: toMultiValue([...held, rowId]) });
+    else if (!linked.has(id) && has) writes.push({ rowId: id, value: toMultiValue(held.filter((item) => item !== rowId)) });
+  }
+  return { peerId: peer.id, writes };
+}
+
+/** The mirror property a two-way relation adds to its target's config —
+ *  named `relation_backlink_name`, else the database it points back at. */
+export function relationMirrorProperty(
+  forward: DatabaseProperty,
+  sourceDatabaseId: string,
+  sourceTitle: string,
+  id: string,
+): DatabaseProperty {
+  const name = forward.relation_backlink_name?.trim() || sourceTitle.trim() || "Relation";
+  return { id, name, type: "relation", relation_database: sourceDatabaseId, relation_origin: forward.id };
+}
+
 /* A meta column is read from the row's own record — when it was made and
  *  last touched, by whom, and its id — never from `properties`: there is no
  *  value to write, which is why writing one is refused. (Notion draws the
@@ -1078,6 +1156,7 @@ export const FILTER_OPS: Record<PropertyType, readonly string[]> = {
   checkbox: CHECKBOX_OPS,
   select: OPTION_OPS, status: OPTION_OPS,
   multi_select: MULTI_OPS,
+  relation: MULTI_OPS,
   image: [],
 };
 
@@ -1186,6 +1265,7 @@ function conditionMatches(row: NotePage, condition: FilterCondition, properties:
   if (!FILTER_OPS[property.type].includes(op)) return false;
   const cell = propertyValue(row, property);
   const empty = property.type === "multi_select" ? !multiValues(cell).length
+    : property.type === "relation" ? !relationIds(cell).length
     : property.type === "checkbox" ? false // a box is always checked or not
     : !cell;
   if (op === "is_empty") return empty;
@@ -1237,6 +1317,11 @@ function conditionMatches(row: NotePage, condition: FilterCondition, properties:
       return op === "is" ? cell === operand : cell !== operand;
     case "multi_select": {
       const held = multiValues(cell).includes(operand);
+      return op === "contains" ? held : !held;
+    }
+    case "relation": {
+      // The operand is a page id, the way the picker writes it.
+      const held = relationIds(cell).includes(operand);
       return op === "contains" ? held : !held;
     }
     default: {
@@ -1362,12 +1447,15 @@ export function rowOrderAfter(rows: readonly NotePage[], rowId: string, now: num
 }
 
 /** Search, filter and sort a database's rows (`databaseRows`) the way
- *  `view` asks. */
+ *  `view` asks. `pageTitle` gives a page's name by id — a relation sorts by
+ *  the title of its first link, the way a multi-select sorts by its first
+ *  option. */
 export function viewRows(
   rows: readonly NotePage[],
   view: DatabaseView,
   properties: DatabaseProperty[],
   query: string,
+  pageTitle?: (pageId: string) => string | undefined,
 ): NotePage[] {
   let next = [...rows];
 
@@ -1382,7 +1470,14 @@ export function viewRows(
     const property = properties.find((item) => item.id === sort.property_id);
     return {
       property,
-      read: (page: NotePage) => (property ? propertyValue(page, property) : page.title),
+      read: (page: NotePage) => {
+        if (!property) return page.title;
+        const value = propertyValue(page, property);
+        // A relation's order is its first link's name — not the stored list
+        // of ids, which would read as gibberish sorted or not.
+        if (property.type === "relation") return pageTitle?.(relationIds(value)[0] ?? "") ?? "";
+        return value;
+      },
       sign: sort.direction === "desc" ? -1 : 1,
     };
   });
@@ -1527,6 +1622,7 @@ export function calcKinds(column: string, property: DatabaseProperty | undefined
     case "select":
     case "status":
     case "multi_select": return COUNT_OPS;
+    case "relation": return ["count", "count_unique"];
     case "date":
     case "created_time":
     case "last_edited_time": return ["count", "earliest", "latest"];
@@ -1551,12 +1647,17 @@ export function calcValue(
   switch (kind) {
     case "count": return String(rows.length);
     case "count_unique": {
-      // A multi-select's uniques are its options, each counted once; a plain
-      // column's are its distinct words.
+      // A multi-select's uniques are its options, a relation's its linked
+      // pages, each counted once; a plain column's are its distinct words.
       if (property?.type === "multi_select") {
         const names = new Set<string>();
         for (const cell of cells) for (const name of multiValues(cell)) names.add(name);
         return String(names.size);
+      }
+      if (property?.type === "relation") {
+        const ids = new Set<string>();
+        for (const cell of cells) for (const id of relationIds(cell)) ids.add(id);
+        return String(ids.size);
       }
       return String(new Set(cells.filter((cell) => !empty(cell))).size);
     }

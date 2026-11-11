@@ -47,6 +47,7 @@ export function normalizeMention(value: unknown): Mention | undefined {
       page_id: candidate.page_id,
       ...(candidate.expanded === true ? { expanded: true } : {}),
       ...(candidate.locked === true ? { locked: true } : {}),
+      ...(typeof candidate.view === "string" && PAGE_ID.test(candidate.view) ? { view: candidate.view } : {}),
     };
   }
   if (candidate.kind === "date" && typeof candidate.date === "string" && ISO_DATE.test(candidate.date)
@@ -156,7 +157,7 @@ export function inlineReadable(content: InlineContent, describe: DescribeMention
 
 /** What a mention points at, and how a page's is shown, as one key. */
 function mentionKey(mention: Mention): string {
-  if (mention.kind === "page") return `${mention.page_id}:${mention.expanded ? "open" : ""}:${mention.locked ? "lock" : ""}`;
+  if (mention.kind === "page") return `${mention.page_id}:${mention.expanded ? "open" : ""}:${mention.locked ? "lock" : ""}:${mention.view ?? ""}`;
   if (mention.kind === "image") return `${mention.file.path}:${mention.file.preview ?? ""}:${mention.width ?? ""}`;
   return mention.date;
 }
@@ -303,7 +304,7 @@ export function mentionHtml(mention: Mention, describe?: DescribeMention): strin
   if (mention.kind === "image") return pictureHtml(mention);
   const identity = mention.kind === "page"
     ? `data-mention="page" data-page="${escapeHtml(mention.page_id)}"`
-      + `${mention.expanded ? ' data-expanded="true"' : ""}${mention.locked ? ' data-locked="true"' : ""}`
+      + `${mention.expanded ? ' data-expanded="true"' : ""}${mention.locked ? ' data-locked="true"' : ""}${mention.view ? ` data-view="${escapeHtml(mention.view)}"` : ""}`
     : `data-mention="date" data-date="${mention.date}"`;
   const view = describe?.(mention);
   const looks = view
@@ -360,6 +361,7 @@ export function mentionFromAttributes(read: (name: string) => string | undefined
       page_id: read("page"),
       expanded: read("expanded") === "true",
       locked: read("locked") === "true",
+      view: read("view"),
     });
   }
   if (kind === "image") {

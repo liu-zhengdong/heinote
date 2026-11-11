@@ -208,12 +208,13 @@ export function withLineLink(block: Block, update: (link: ShownLink) => ShownLin
   return { ...block, content: block.content.map((run) => (run.mention?.kind === "page" ? { ...run, mention: update(run.mention) } : run)) };
 }
 
-/** A line standing for `pageId`, shown in place when `expanded`. */
-export function pageLine(id: string, pageId: string, options: { parent_id?: string | null; order?: number; expanded?: boolean; locked?: boolean } = {}): Block {
-  const { expanded, locked, ...place } = options;
+/** A line standing for `pageId`, shown in place when `expanded` — a
+ *  database's link can also pin one of its views (`view`: a linked view). */
+export function pageLine(id: string, pageId: string, options: { parent_id?: string | null; order?: number; expanded?: boolean; locked?: boolean; view?: string } = {}): Block {
+  const { expanded, locked, view, ...place } = options;
   return createBlock(id, "text", {
     ...place,
-    content: [{ text: MENTION_CHAR, mention: { kind: "page", page_id: pageId, ...(expanded ? { expanded: true } : {}), ...(locked ? { locked: true } : {}) } }],
+    content: [{ text: MENTION_CHAR, mention: { kind: "page", page_id: pageId, ...(expanded ? { expanded: true } : {}), ...(locked ? { locked: true } : {}), ...(view ? { view } : {}) } }],
   });
 }
 

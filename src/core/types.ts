@@ -51,8 +51,9 @@ export type Mention =
   /** A page — and a block, which is a page. Shown (`expanded`), its content
    *  is drawn here, and edited here exactly as where it lives; `locked` keeps
    *  it read only here. Both are saved with the link, so everyone reading the
-   *  page sees the same. */
-  | { kind: "page"; page_id: string; expanded?: boolean; locked?: boolean }
+   *  page sees the same. `view` pins one of a database's views: the link
+   *  draws that view read-only, under a caption — a linked view. */
+  | { kind: "page"; page_id: string; expanded?: boolean; locked?: boolean; view?: string }
   | { kind: "date"; date: string }
   /** A picture in the words, as Google Docs has one "in line": it stands on
    *  the line like a large letter, `width` CSS pixels wide (its own width,

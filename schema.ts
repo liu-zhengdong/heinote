@@ -48,7 +48,7 @@ export const COVER_IDS = ["slate", "dawn", "moss", "tide", "orchid", "clay", "in
  *  property, never written — close the list. */
 export const PROPERTY_TYPES = [
   "text", "number", "select", "multi_select", "status", "date", "person", "image",
-  "checkbox", "url", "email", "phone",
+  "checkbox", "url", "email", "phone", "relation",
   "created_time", "last_edited_time", "created_by", "last_edited_by", "id",
 ] as const;
 export const VIEW_KINDS = ["table", "board", "list", "gallery", "calendar"] as const;
@@ -96,6 +96,10 @@ const run = t.object({
     kind: t.choice("page", "date"),
     page_id: t.id().optional(),
     date: t.date().optional(),
+    /** A page link shown in place, and the database view it pins. */
+    expanded: t.bool().optional(),
+    locked: t.bool().optional(),
+    view: t.id().optional().describe("A database view's id, when the page link pins one (a linked view)."),
   }).optional(),
 });
 
@@ -183,6 +187,18 @@ const property = t.object({
   })).optional(),
   /** The option a row reads as until one is chosen; unset, the first To-do. */
   default_status: t.string().optional(),
+  /* A relation's target: the database page its rows link to. On the mirror
+   *  a two-way relation makes on that database, `relation_origin` is the
+   *  forward property's id on the database that made it; the forward
+   *  property has `relation_two_way` and names the mirror. */
+  relation_database: t.id().optional(),
+  relation_limit: t.choice("unlimited", "1").optional(),
+  relation_two_way: t.bool().optional(),
+  /** The mirror property's name on the target database; unset, the
+   *  database's own title. */
+  relation_backlink_name: t.string().optional(),
+  /** A mirror's: the forward relation property's id, on `relation_database`. */
+  relation_origin: t.string().optional(),
 });
 
 const sort = t.object({ property_id: t.string(), direction: t.choice("asc", "desc") });
@@ -482,6 +498,7 @@ export default schema({
         ...paragraph,
         expanded: t.bool().optional().describe("A sub-page's: shown in place (true) or folded into its row (false)."),
         locked: t.bool().optional().describe("A sub-page shown in place: read only there."),
+        view: t.id().optional().describe("A database link's: the database view it pins, as a linked view (or empty, its own again)."),
       },
     },
     deleteBlocks: {
