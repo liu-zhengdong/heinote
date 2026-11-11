@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>方向 C · 折叠态 — Artifact v2</title>
+<link rel="stylesheet" href="assets/proto.css">
+</head>
+<body>
+
+<div class="theme" data-theme="light">
+  <div class="theme__label">LIGHT · 应用页（默认运行，可折叠成一行）</div>
+  <h1 class="proto-title">专注打卡</h1>
+  <p class="proto-note">「运行」不是一个要点击的入口，「停止」改为折叠——收起时 iframe 卸载、省资源。</p>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--white mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">6</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+      <div class="list">
+        <div class="list-title">最近打卡</div>
+        <div class="row"><span><span class="idx">1</span><span class="title">专注 23:45</span></span><span>11/10 23:45</span></div>
+        <div class="row"><span><span class="idx">2</span><span class="title">专注 23:47</span></span><span>11/10 23:47</span></div>
+      </div>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+
+  <div class="app-editor">
+    <div class="app-editor__head">
+      源码
+      <span class="app-editor__spacer"></span>
+      <button class="app-editor__btn">预览</button>
+      <button class="app-editor__btn">保存草稿</button>
+      <button class="app-editor__btn app-editor__btn--primary">启用</button>
+    </div>
+    <div class="app-editor__source">&lt;!doctype html&gt;</div>
+    <div class="app-editor__hint">4 KB / 2048 KB · 预览只读，不写入数据源；启用后成员看到的是启用版。</div>
+  </div>
+</div>
+
+<div class="theme" data-theme="dark">
+  <div class="theme__label">DARK · 应用页（默认运行，可折叠）</div>
+  <h1 class="proto-title">专注打卡</h1>
+  <p class="proto-note">折叠态就是今天「未运行」的形状，但语义从「等你运行」变成「已收起」。</p>
+
+  <!-- folded -->
+  <div class="app-surface__empty">
+    已收起 · 专注打卡 · 打卡记录
+    <span class="app-surface__spacer"></span>
+    <button class="app-surface__action app-surface__action--run">展开</button>
+  </div>
+  <p class="proto-note" style="margin-top:6px">↑ 折叠后</p>
+  <div style="height:12px"></div>
+
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--dark mini">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">6</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+</div>
+
+<div class="theme" data-theme="dark">
+  <div class="theme__label">DARK · 文档内嵌（未读过的运行自动起，折叠态由成员保留）</div>
+  <h1 class="proto-title">我的笔记</h1>
+  <p class="proto-note">下面嵌入的是小应用：</p>
+  <div class="app-surface">
+    <div class="app-surface__frame app-surface__frame--dark mini" style="min-height:200px">
+      <h2>专注打卡</h2>
+      <div class="sub">每完成一次专注，点一下。</div>
+      <div class="count">6</div>
+      <div class="count-label">累计打卡次数</div>
+      <button class="btn">打卡</button>
+    </div>
+    <div class="app-surface__bar">
+      <span class="dot"></span>
+      <span class="app-surface__name">专注打卡</span>
+      <span class="app-surface__dbs">打卡记录</span>
+      <span class="app-surface__spacer"></span>
+      <button class="app-surface__action">折叠</button>
+    </div>
+  </div>
+  <p class="proto-note" style="margin-top:14px">预览/草稿仍停在不执行状态，但措辞是「未启用」而非「未运行」。</p>
+  <div class="app-surface__empty">未启用 · 预览</div>
+</div>
+
+</body>
+</html>

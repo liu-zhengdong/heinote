@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AppWindow, Database, Play, Square } from "lucide-react";
+import { AppWindow, ChevronsDownUp, ChevronsUpDown, Database } from "lucide-react";
 import type { NotePage } from "../../core/types";
-import { appDocument, hasScript } from "../../core/artifact";
+import { appDocument } from "../../core/artifact";
 import { AppBridge } from "./bridge";
 import { usePages } from "../../app/workspace-store";
+import { useWorkspace } from "../../app/workspace-context";
 import "./artifact.css";
 
 /** The host bar under a running app, and the row drawn when it is not.
@@ -25,27 +26,50 @@ interface Props {
 
 const DB_SCOPE_NOTE = "数据源与应用在同一权限范围内运行。";
 
+/* The resolved theme: "system" follows the desk and re-resolves live, the
+ *  same rule ui-context applies to the root attribute. The iframe document
+ *  rebuilds on every change, so the app inside re-themes with the shell. */
+function useResolvedTheme(): "light" | "dark" {
+  const { preferences } = useWorkspace();
+  const pick = (): "light" | "dark" =>
+    preferences.theme === "light" || preferences.theme === "dark"
+      ? preferences.theme
+      : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  const [theme, setTheme] = useState<"light" | "dark">(pick);
+  useEffect(() => {
+    setTheme(pick());
+    if (preferences.theme !== "system") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => setTheme(query.matches ? "dark" : "light");
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferences.theme]);
+  return theme;
+}
+
 export function AppSurface({ page, embedded = false, onOpen, previewSource }: Props) {
   const pages = usePages();
   const enabled = page.app?.enabled ?? "";
   const source = previewSource ?? enabled;
-  const scripted = useMemo(() => hasScript(source), [source]);
+  /* Running is the default for enabled source, scripted or not. */
   const bindings = useMemo(() => page.app?.databases ?? [], [page.app]);
   const boundTitles = useMemo(
     () => bindings.map((binding) => pages[binding.id]?.title || binding.id),
     [bindings, pages],
   );
-  const [running, setRunning] = useState(false);
+  /* An enabled app runs on sight; "collapsed" is the member's pause. */
+  const [running, setRunning] = useState(true);
   const [runKey, setRunKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const bridgeRef = useRef<AppBridge | null>(null);
-  const preview = previewSource !== undefined && previewSource !== null;
 
-  /* Embedded, unscripted HTML renders on sight: it is the note's own
-   *  markup, like a card. Anything scripted waits for the member. */
+  /* A preview (draft) never auto-runs — it is an edit scratch, not the
+   *  enabled experience. */
+  const preview = previewSource !== undefined && previewSource !== null;
   useEffect(() => {
-    if (embedded && source && !scripted && !preview) setRunning(true);
-  }, [embedded, source, scripted, preview]);
+    if (preview) setRunning(false);
+  }, [preview]);
 
   const titleOf = (id: string) => pages[id]?.title || undefined;
   const start = () => { setError(null); setRunKey((key) => key + 1); setRunning(true); };
@@ -72,7 +96,8 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
     });
   };
 
-  const doc = useMemo(() => (source ? appDocument(source) : ""), [source]);
+  const theme = useResolvedTheme();
+  const doc = useMemo(() => (source ? appDocument(source, theme) : ""), [source, theme]);
 
   return (
     <div className={`app-surface${embedded ? " app-surface--embedded" : ""}`}>
@@ -88,10 +113,11 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
       ) : (
         <div className="app-surface__empty">
           <AppWindow size={18} aria-hidden="true" />
-          {enabled || previewSource ? "未运行" : "未配置源码"}
+          {source ? (preview ? "未启用 · 预览" : "已收起") : "未配置源码"}
         </div>
       )}
       <div className="app-surface__bar">
+        {running && <span className="app-surface__dot" title="运行中" />}
         <AppWindow size={14} aria-hidden="true" />
         <button type="button" className="app-surface__name" onClick={onOpen} title={DB_SCOPE_NOTE}>
           {page.title || "未命名小应用"}
@@ -106,9 +132,9 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
         {error && <span className="app-surface__error">{error}</span>}
         <span className="app-surface__spacer" />
         {running ? (
-          <button type="button" className="app-surface__action" onClick={stop}><Square size={12} aria-hidden="true" />停止</button>
+          <button type="button" className="app-surface__action" onClick={stop}><ChevronsDownUp size={12} aria-hidden="true" />折叠</button>
         ) : source ? (
-          <button type="button" className="app-surface__action app-surface__action--run" onClick={start}><Play size={12} aria-hidden="true" />运行</button>
+          <button type="button" className="app-surface__action app-surface__action--run" onClick={start}><ChevronsUpDown size={12} aria-hidden="true" />展开</button>
         ) : null}
       </div>
     </div>
