@@ -125,7 +125,10 @@ export function appDocument(source: string, theme?: "light" | "dark"): string {
     : source;
   const head = /<\s*head(?:\s[^>]*)?>/i.exec(themed);
   if (head) return `${themed.slice(0, head.index + head[0].length)}${meta}${scheme}${shim}${themed.slice(head.index + head[0].length)}`;
-  if (html) return `${themed.slice(0, html.index + html[0].length)}<head>${meta}${scheme}${shim}</head>${themed.slice(html.index + html[0].length)}`;
+  /* Re-locate <html> in `themed`: the added attribute moved its end,
+   *  so `html`'s offsets no longer point after the tag. */
+  const tag = /<\s*html(?:\s[^>]*)?>/i.exec(themed);
+  if (tag) return `${themed.slice(0, tag.index + tag[0].length)}<head>${meta}${scheme}${shim}</head>${themed.slice(tag.index + tag[0].length)}`;
   return `${meta}${scheme}${shim}${themed}`;
 }
 
