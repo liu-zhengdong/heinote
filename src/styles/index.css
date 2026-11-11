@@ -9391,6 +9391,10 @@ button.db__th:hover,
   background: var(--fill-hover);
 }
 
+.share__suggestions-empty {
+  margin: 6px 0 0;
+}
+
 .share__exit {
   display: flex;
   align-items: center;

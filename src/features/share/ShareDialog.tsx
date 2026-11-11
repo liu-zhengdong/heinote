@@ -134,16 +134,30 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     [invitations, members],
   );
 
+  /* The query the last search answered: lets an empty result say so instead
+     of looking like nothing happened. */
+  const [searchedQuery, setSearchedQuery] = useState("");
+  /* The suggestion ↑/↓ highlights and Enter invites; the first match is the
+     default so a short type + Enter invites the obvious person. */
+  const [activeIndex, setActiveIndex] = useState(0);
+
   useEffect(() => {
     if (!platform || query.trim().length < 2) {
       setSuggestions([]);
+      setSearchedQuery("");
       return;
     }
     let active = true;
     const timer = window.setTimeout(() => {
       void platform.users.search(query).then((results) => {
-        if (active) setSuggestions(results.filter((user) => !unavailableUserIds.has(user.id)));
-      }).catch(() => setSuggestions([]));
+        if (active) {
+          setSuggestions(results.filter((user) => !unavailableUserIds.has(user.id)));
+          setSearchedQuery(query.trim());
+          setActiveIndex(0);
+        }
+      }).catch(() => {
+        if (active) setSuggestions([]);
+      });
     }, 180);
     return () => {
       active = false;
@@ -151,10 +165,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     };
   }, [platform, query, unavailableUserIds]);
 
-  const chosen = useMemo(
-    () => suggestions.find((suggestion) => suggestion.handle === query.replace(/^@/, "")),
-    [query, suggestions],
-  );
+  const chosen = suggestions[activeIndex];
 
   const run = async (work: () => Promise<void>, failure: string) => {
     if (busyRef.current) return;
@@ -254,7 +265,22 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                 placeholder="Add people by handle…"
                 onChange={(event) => setQuery(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !imeComposing(event) && query.trim()) void invite();
+                  if (imeComposing(event)) return;
+                  if (event.key === "ArrowDown" && suggestions.length) {
+                    event.preventDefault();
+                    setActiveIndex((index) => (index + 1) % suggestions.length);
+                  } else if (event.key === "ArrowUp" && suggestions.length) {
+                    event.preventDefault();
+                    setActiveIndex((index) => (index - 1 + suggestions.length) % suggestions.length);
+                  } else if (event.key === "Escape" && suggestions.length) {
+                    // Close the list, not the dialog.
+                    event.stopPropagation();
+                    setSuggestions([]);
+                    setSearchedQuery("");
+                  } else if (event.key === "Enter" && query.trim()) {
+                    event.preventDefault();
+                    void invite();
+                  }
                 }}
               />
             </div>
@@ -271,14 +297,15 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
 
         {canInvite && suggestions.length ? (
           <div className="share__suggestions" role="listbox" aria-label="People">
-            {suggestions.slice(0, 5).map((suggestion) => (
+            {suggestions.slice(0, 5).map((suggestion, index) => (
               <button
                 type="button"
                 key={suggestion.id}
                 role="option"
-                aria-selected={chosen?.id === suggestion.id}
-                className="share__suggestion"
+                aria-selected={index === activeIndex}
+                className={`share__suggestion${index === activeIndex ? " share__suggestion--active" : ""}`}
                 disabled={busy}
+                onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => void invite(suggestion.handle)}
               >
                 <ProfileAvatar src={suggestion.avatarUrl} name={personName(suggestion)} size={24} />
@@ -289,6 +316,8 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
               </button>
             ))}
           </div>
+        ) : canInvite && searchedQuery && query.trim() === searchedQuery ? (
+          <p className="share__note share__suggestions-empty">没有匹配的用户，请核对用户名后重试。</p>
         ) : null}
 
         {error ? <div className="share__error" role="alert">{error}</div> : null}
