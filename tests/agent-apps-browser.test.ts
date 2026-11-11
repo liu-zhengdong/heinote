@@ -153,6 +153,11 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   const guestFrame = page.frameLocator("iframe.app-surface__frame");
   await expect(guestFrame.locator("#rows")).toContainText("databases:0");
   await expect(guestFrame.locator("#load")).toBeVisible();
+
+  // The public reader follows the desk theme — chrome matches the app's
+  //  resolved iframe theme under prefers-color-scheme: dark.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.screenshot({ path: join(evidence, "app-shared.png"), fullPage: false });
 
   expect(errors).toEqual([]);

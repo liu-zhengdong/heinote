@@ -148,6 +148,18 @@ function BlockChildren({ tree, parentId = null, context, ancestors = new Set<str
 export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const token = tokenProp ?? tokenFromPath();
   const [document, setDocument] = useState<PublicDocument | null>(null);
+  /* Guests have no stored preference — the public reader follows the
+   *  desk's color scheme directly so its chrome matches the app's
+   *  resolved iframe theme. */
+  useEffect(() => {
+    const root = globalThis.document.documentElement;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => { root.dataset.theme = query.matches ? "dark" : "light"; };
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [unavailable, setUnavailable] = useState(false);
