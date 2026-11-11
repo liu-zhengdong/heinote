@@ -118,6 +118,7 @@ test("real account panel uses the shared field in both themes", async ({ page },
   await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText("Select 示例");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
+  await page.getByRole("button", { name: "新建令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill("示例 Agent");
   const field = page.getByRole("combobox", { name: "权限", exact: true });
   await field.click();

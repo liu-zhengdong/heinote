@@ -434,6 +434,7 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const { kind } = input;
       if (input.view !== undefined && kind !== "database") refuse("bad_request", "view is a database's first view: give kind database.");
       if (input.expanded !== undefined && parent?.kind !== "document") refuse("bad_request", "expanded shows a page in place in the page that holds it: give parent_id, a document.");
+      if (input.text && kind === "app") refuse("bad_request", "An app has no body: set its source with the app commands, not text.");
       return change(h, () => {
         const id = h.workspace.createPage(parent?.id ?? null, kind, {
           select: false,

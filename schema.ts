@@ -233,7 +233,7 @@ export default schema({
         id: t.string(),
         title_content: t.richText().describe("Its name: the only place it is kept."),
         icon: t.string(),
-        kind: t.choice("document", "database"),
+        kind: t.choice("document", "database", "app"),
         /** The page it is in; none at the top level. */
         parent_id: t.string().optional(),
         /** A database row's values, words, and its pictures apart from them,
@@ -248,6 +248,14 @@ export default schema({
            *  and its mark; unset, "Name" and Notion's "Aa". */
           title_name: t.string().optional(),
           title_icon: t.string().optional(),
+        }).optional(),
+        /** An app's HTML source and the databases it may reach. `draft` is
+         *  the copy being edited; `enabled` is what members run. Public
+         *  shares strip this object before the record leaves the server. */
+        app: t.object({
+          enabled: t.string().optional(),
+          draft: t.string().optional(),
+          databases: t.list(t.object({ id: t.string(), read: t.bool(), write: t.bool() })).optional(),
         }).optional(),
         created_at: t.string(),
         updated_at: t.string(),
@@ -363,7 +371,7 @@ export default schema({
         icon: t.string(64).optional().describe("An emoji."),
         text: t.string(32000).optional().describe("Its first paragraph."),
         parent_id: t.id().optional().describe("The page or database it goes in; left out, the top level."),
-        kind: t.choice("document", "database").default("document").describe("A page of words, or a database."),
+        kind: t.choice("document", "database", "app").default("document").describe("A page of words, a database, or an HTML app."),
         view: t.choice(...VIEW_KINDS).optional().describe("A database's first view."),
         expanded: t.bool().optional().describe("Its link in its parent page shows it in place, as a block."),
       },

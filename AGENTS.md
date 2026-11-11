@@ -13,9 +13,8 @@
 - 共编架构见 [ADR-002](docs/adr/0002-realtime-collaboration.md)。富文本二进制、SQL 投影与权限必须在同一事务提交。
 - 普通文字只走一套历史。新字段未建立 Y.Text 时使用受控记录历史；结构补偿不得部分执行。
 - 拒绝后保留账号分区草稿，不给旧 Yjs 增量更换代次重发。
-- 长期 UC 总览：Obsidian `正在干什么/Terminus Notes/设计/Terminus Notes.md`。
-- 团队知识库：Obsidian `正在干什么/Terminus Notes/设计/维护与查用团队知识库.md`。当前实现说明见 [团队知识库](docs/atlas/team-knowledge.md)。
-- 候选位置：Obsidian `正在干什么/Terminus Notes/候选/`。开发文档见 [开发入口](docs/dev/README.md)。
-- 文档按 UC → dev 执行稿 → 验收 → dev 归档推进。已完成执行稿和交付记录保存在 `docs/dev/archive/`，保留当轮事实；Atlas 独立整理当前系统说明。
-- 历史执行稿见 [独立部署](docs/dev/archive/standalone.md)与[实时共编](docs/dev/archive/realtime-collaboration.md)。归档执行稿不计入在制上限。
+- 长期 UC 总览：Obsidian `正在干什么/Terminus Notes/Terminus Notes.md`。UC 卡在 `UC/`，问题卡在 `问题/`，设计笔记与早期交付记录在 `设计/`。
+- 团队知识库：Obsidian `正在干什么/Terminus Notes/UC/维护与查用团队知识库.md`。当前实现说明见 [团队知识库](docs/atlas/team-knowledge.md)。
+- 工作入口：Obsidian UC 卡与问题卡，按卡片状态推进。
+- 历史执行稿见 [独立部署](docs/dev/archive/standalone.md)与[实时共编](docs/dev/archive/realtime-collaboration.md)，保留当轮事实。不再新增 docs/dev 执行稿；Atlas 独立整理当前系统说明。
 - `data/` 和 `backups/` 含用户数据，不进入源码交付。

@@ -113,8 +113,9 @@ export interface MentionView {
   /** A page's icon from the computer: its bytes are painted in, as an image
    *  mention's are — `data-file` holds its record, `data-icon` stays empty. */
   iconFile?: StoredFile;
-  /** What it names, when that has a glyph of its own: a database's table. */
-  glyph?: "database";
+  /** What it names, when that has a glyph of its own: a database's table,
+   *  an app's window. */
+  glyph?: "database" | "app";
   /** `here`: a page or block on screen already, which is never shown twice. */
   state?: "missing" | "trashed" | "here";
 }

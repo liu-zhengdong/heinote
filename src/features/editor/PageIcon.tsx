@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { FileText, Table2 } from "lucide-react";
+import { AppWindow, FileText, Table2 } from "lucide-react";
 import { useWorkspace } from "../../app/workspace-context";
 import { normalizeStoredFile } from "../../core/files";
 import type { NotePage, StoredFile } from "../../core/types";
@@ -86,10 +86,10 @@ export function PageIconMark({ page, size = 16 }: { page: Pick<NotePage, "icon" 
   const icon = page ? pageIcon(page) : null;
   if (icon?.kind === "image") {
     return <IconImage file={icon.file} size={size}
-      fallback={page?.kind === "database" ? <Table2 size={size} /> : <FileText size={size} />} />;
+      fallback={page?.kind === "database" ? <Table2 size={size} /> : page?.kind === "app" ? <AppWindow size={size} /> : <FileText size={size} />} />;
   }
   if (icon?.kind === "emoji") return <>{icon.emoji}</>;
-  return page?.kind === "database" ? <Table2 size={size} /> : <FileText size={size} />;
+  return page?.kind === "database" ? <Table2 size={size} /> : page?.kind === "app" ? <AppWindow size={size} /> : <FileText size={size} />;
 }
 
 /** An icon's picture back as stored — its smaller copy made, or its bytes

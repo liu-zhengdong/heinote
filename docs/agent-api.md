@@ -17,9 +17,10 @@ Authorization: Bearer notes_...
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/pages` | 列出账号可见的未归档页面 |
-| POST | `/pages` | 创建文档页面 |
+| POST | `/pages` | 创建文档或应用页面 |
 | GET | `/pages/:id` | 读取正文、块树及修订值 |
-| PATCH | `/pages/:id` | 修改标题或替换纯文本正文 |
+| PATCH | `/pages/:id` | 修改标题或替换纯文本正文；应用页面改 `app` 字段 |
+| POST | `/pages/:id/enable` | 启用应用页面的草稿源码 |
 | POST | `/pages/:id/operations` | 幂等结构化修改或创建提案 |
 | GET | `/pages/:id/proposals` | 读取提案与处理状态 |
 | GET | `/pages/:id/versions` | 读取页面检查点 |
@@ -78,6 +79,37 @@ Authorization: Bearer notes_...
 `title` 和 `text` 均可省略。提供 `text` 会替换整页块树，保存为一个纯文本块。该操作不会保留原正文的富文本、表格或嵌入结构。只改标题时，应省略 `text`。
 
 服务器在修改前保存检查点。旧修订值返回 409。Agent 应重新读取页面，再决定如何处理冲突。
+
+### 应用页面
+
+`kind: "app"` 的页面运行 HTML 源码，不持有正文块。创建时省略 `text`：
+
+```json
+{
+  "kind": "app",
+  "title": "订单追踪器"
+}
+```
+
+源码经 `PATCH` 写入 `app.draft`，数据源经 `app.databases` 绑定：
+
+```json
+{
+  "baseRevision": "页面修订",
+  "app": {
+    "draft": "<html>…</html>",
+    "databases": [{"id": "数据库页面 ID", "read": true, "write": true}]
+  }
+}
+```
+
+`databases` 的 `id` 不重复；`read` 与 `write` 至少一真；`write` 隐含可读。每个绑定必须是同权限范围内未归档的 Database 页面。`draft` 上限为 2MB；传空串删除草稿。`POST /pages/:id/enable` 把草稿提升为启用源码并清空草稿：
+
+```json
+{"requestId": "幂等键", "baseRevision": "页面修订"}
+```
+
+空白草稿与旧修订分别返回 400 与 409。`requestId` 必填；相同请求体重放返回首次结果。应用经 `window.notes` 桥接读取绑定数据源，接口形状与小应用源码一致。
 
 ## 数据库接口
 

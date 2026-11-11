@@ -135,7 +135,7 @@ export function canMovePage(
   if ((page.parent_id ?? null) === targetId) return false;
   if (targetId) {
     const target = pages[targetId];
-    if (!target || target.kind === "database" || !editable(targetId)) return false;
+    if (!target || target.kind === "database" || target.kind === "app" || !editable(targetId)) return false;
     // Never under its own descendant, which would cut the whole branch off.
     if (pageAncestry(pages, targetId).some((page) => page.id === pageId) || inTrash(pages, targetId)) return false;
   }
