@@ -159,7 +159,13 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 {"requestId":"uc-filter-001","baseRevision":"数据库 revision","view":{"filter":{"property_id":"status","value":"In progress"},"sorts":[{"property_id":"priority","direction":"asc"}]}}
 ```
 
-视图配置沿用现有 `filter`、`sorts`、`group_by`、`date_by`、`minimal`、`card_preview`、`card_properties`、`widths` 和 `wrap` 字段。PATCH 不接受 `view.id`。`filter: null` 清除筛选。`sorts: []` 清除排序。
+视图配置沿用现有 `filter`、`sorts`、`group_by`、`date_by`、`minimal`、`card_preview`、`card_properties`、`widths` 和 `wrap` 字段，并支持 `filters`、`hidden` 和 `calcs`。PATCH 不接受 `view.id`。`filter: null` 清除全部筛选（含 `filters`）。`sorts: []` 清除排序。`hidden: []` 显示全部列，`calcs: {}` 清除汇总，`group_by: ""` 清除分组。
+
+`filters` 是条件列表，条目之间按 AND 组合。每项是一个条件 `{"property_id","op","value"}`，或一个条件组 `{"logic":"and"|"or","conditions":[…]}`。最多一个组，组内不能再含组。`op` 省略时使用该属性类型的默认运算符；`is_empty` 与 `is_not_empty` 不需要 `value`。写入 `filters` 会清除旧的单值 `filter` 字段；读取时非空 `filters` 优先，仅含 `filter` 的视图按一条 `is` 条件理解。写入 `filter` 同样清除 `filters`。`filters: []` 清除筛选。
+
+可用运算符按类型区分：文字类（text、url、email、phone、person、created_by、last_edited_by、id）为 `contains`、`not_contains`、`is`、`is_not`、`is_empty`、`is_not_empty`；number 为 `eq`、`neq`、`gt`、`gte`、`lt`、`lte` 加两个空值运算符；date 与两个时间元数据列为 `before`、`after`、`on_or_before`、`on_or_after`、`is` 加两个空值运算符；checkbox 只有 `is`（值为 `true` 或 `false`）；select 与 status 为 `is`、`is_not` 加两个空值运算符；multi_select 为 `contains`、`not_contains` 加两个空值运算符。image 不可筛选。选项类属性的 `value` 必须是已存在的选项名。
+
+`hidden` 是不绘制的属性 ID 列表，作用于 table 列与 list、gallery 的条目摘要。标题列不能隐藏。`calcs` 以列 ID（属性 ID 或 `name`）为键，值为汇总函数：`count`、`count_unique`、`count_empty`、`count_not_empty`；number 另有 `sum`、`avg`、`min`、`max`；checkbox 另有 `checked`、`unchecked`、`percent_checked`；date 与时间列另有 `earliest`、`latest`。汇总对筛选后的条目集合计算。`group_by` 在 table 与 list 上接受 Status、Select、Multi-select、Person、Checkbox 与 Date 属性，条目按值分行并显示分组头；board 仍只接受 Status 或有选项的 Select。
 
 配置更新要求数据库 `baseRevision`。新增返回 `201`，修改返回 `200`。两者均返回当前数据库页面对象。旧修订返回 `409`。数据库标题使用现有页面 PATCH 修改。
 
@@ -211,7 +217,10 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 ```json
 {
   "viewId":"table",
-  "filter":{"property_id":"status","value":"Not started"},
+  "filters":[{"logic":"or","conditions":[
+    {"property_id":"status","op":"is","value":"Not started"},
+    {"property_id":"amount","op":"gt","value":"10"}
+  ]}],
   "sorts":[{"property_id":"priority","direction":"asc"}],
   "query":"笔记",
   "offset":0,
@@ -219,9 +228,9 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 }
 ```
 
-查询是只读操作。只读令牌可以调用。省略 `viewId` 时使用第一个视图。提供 `filter`、`sorts` 时，仅覆盖本次查询的对应配置，不保存视图。`filter: null` 表示本次不筛选。`query` 搜索条目标题。
+查询是只读操作。只读令牌可以调用。省略 `viewId` 时使用第一个视图。提供 `filters`、`filter`、`sorts` 时，仅覆盖本次查询的对应配置，不保存视图。`filters` 优先于 `filter`；`filters: []` 或 `filter: null` 表示本次不筛选。`query` 搜索条目标题。
 
-筛选与界面一致，只支持一个 Select 或 Status 等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。Number 按数值排序，非数字值位于末尾。Date 按日期或区间开始日排序。Checkbox 未勾选在前、已勾选在后。Multi-select 按第一个选项名排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾（Checkbox 的空值即未勾选，不视为空值）。同值保留条目原顺序。
+`filters` 的结构与视图字段一致：条件列表按 AND 组合，可含一个 `and`/`or` 条件组。运算符按属性类型区分，同视图 `filters` 一节。`filter` 保留旧语义，是 Select 或 Status 的一个等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。Number 按数值排序，非数字值位于末尾。Date 按日期或区间开始日排序。Checkbox 未勾选在前、已勾选在后。Multi-select 按第一个选项名排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾（Checkbox 的空值即未勾选，不视为空值）。同值保留条目原顺序。
 
 ```json
 {"databaseId":"数据库 ID","revision":"数据库 revision","rows":[],"total":0,"hasMore":false,"nextOffset":null}

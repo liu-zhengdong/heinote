@@ -38,22 +38,30 @@ import { embedFromUrl, normalizeEmbed } from "../core/embeds";
 import { inlineFromText, isKeptLink, MENTION_CHAR, normalizeInlineContent, normalizeMention } from "../core/inline-content";
 import { descendantPageIds, inTrash } from "../core/page-tree";
 import { versionList } from "../core/versions";
-import type { Block, DatabaseConfig, DatabaseView, InlineContent, NotePage, StoredFile } from "../core/types";
+import type { Block, DatabaseConfig, DatabaseView, FilterCondition, InlineContent, NotePage, StoredFile, ViewFilter } from "../core/types";
 import {
+  boardGroupableProperties,
+  calcKinds,
   changePropertyType,
   changeViewKind,
   copiedColumn,
   createView,
   databaseRows,
   dateRange,
+  defaultFilterOp,
   duplicateProperty,
   duplicateView,
+  FILTER_OPS,
+  filterable,
+  filterNeedsValue,
+  groupableProperties,
   insertProperty,
   isDay,
   isMetaType,
   MAX_ROW_IMAGES,
   newDatabaseConfig,
   OPTION_COLOR_SET,
+  propertyOptions,
   PROPERTY_LABELS,
   removeProperty,
   removeView,
@@ -422,7 +430,9 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const pages = pagesOf(h);
       const { page, config } = databasePage(h, input.page_id, false);
       const view = viewIn(config, input.view_id);
-      const rows = viewRows(databaseRows(pages, page.id), view, config.properties, input.search ?? "");
+      // filters passed here ride over the view's own — saved or not.
+      const actual: DatabaseView = input.filters === undefined ? view : { ...view, filter: undefined, filters: input.filters };
+      const rows = viewRows(databaseRows(pages, page.id), actual, config.properties, input.search ?? "");
       const at = input.after === undefined ? -1 : rows.findIndex((row) => row.id === input.after);
       if (input.after !== undefined && at < 0) refuse("not_found", "That cursor is no longer a row of this view: list again from the start.");
       const shown = rows.slice(at + 1, at + 1 + input.limit);
@@ -897,13 +907,53 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
         return property;
       };
       if (input.name !== undefined) view.name = input.name;
+      if (input.filter_property_id !== undefined && input.filters !== undefined) refuse("bad_request", "Give filter_property_id or filters, not both.");
       if (input.filter_property_id !== undefined) {
-        if (!input.filter_property_id) delete view.filter;
-        else {
+        if (!input.filter_property_id) {
+          // Empty clears the whole filter — the new items and the old field.
+          delete view.filter;
+          delete view.filters;
+        } else {
           typed(input.filter_property_id, ["select", "status"]);
           if (input.filter_value === undefined) refuse("bad_request", "A filter needs filter_value.");
           view.filter = { property_id: input.filter_property_id, value: input.filter_value };
+          // The old single field is the one written: the newer list goes,
+          // or it would keep hiding the field that replaced it.
+          delete view.filters;
         }
+      }
+      if (input.filters !== undefined) {
+        const condition = (item: FilterCondition) => {
+          const property = typed(item.property_id);
+          if (!filterable(property)) refuse("bad_request", `Rows never filter by ${property.type}.`);
+          const op = item.op ?? defaultFilterOp(property.type);
+          if (!FILTER_OPS[property.type].includes(op)) refuse("bad_request", `${property.type} has no ${op} filter.`);
+          const next: FilterCondition = { property_id: item.property_id, op };
+          if (filterNeedsValue(op)) {
+            if (item.value === undefined) refuse("bad_request", `A ${op} filter needs a value.`);
+            next.value = item.value;
+          }
+          if ((property.type === "select" || property.type === "status" || property.type === "multi_select") && next.value !== undefined && !propertyOptions(property).includes(next.value)) {
+            refuse("bad_request", "The filter's value is not one of the property's options.");
+          }
+          if (property.type === "checkbox" && next.value !== undefined && next.value !== "true" && next.value !== "false") {
+            refuse("bad_request", "A checkbox filter's value is true or false.");
+          }
+          return next;
+        };
+        const items: ViewFilter[] = input.filters.map((item) => {
+          if ("conditions" in item) {
+            const conditions = item.conditions.map(condition);
+            if (!conditions.length) refuse("bad_request", "A filter group needs a condition.");
+            return { logic: item.logic, conditions };
+          }
+          return condition(item);
+        });
+        if (items.filter((item) => "conditions" in item).length > 1) refuse("bad_request", "A view's filter holds one group at most.");
+        if (items.length) view.filters = items;
+        else delete view.filters;
+        // A view saved with filters no longer holds the old single field.
+        delete view.filter;
       }
       const sortKey = (key: string) => {
         if (key !== TITLE_COLUMN && !sortable(typed(key))) refuse("bad_request", "Rows never sort by pictures.");
@@ -921,7 +971,11 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.group_by !== undefined) {
         if (!input.group_by) delete view.group_by;
         else {
-          typed(input.group_by, ["status", "select"]);
+          const property = typed(input.group_by);
+          const allowed = view.kind === "board" ? boardGroupableProperties([property]) : groupableProperties([property]);
+          if (!allowed.length) refuse("bad_request", view.kind === "board"
+            ? "A board groups by a Status, or a Select with options."
+            : "A board stays Status or Select; a table or list groups by Status, Select, Multi-select, Person, Checkbox or Date.");
           view.group_by = input.group_by;
         }
       }
@@ -940,6 +994,19 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.card_properties !== undefined) {
         input.card_properties.forEach((key) => typed(key));
         view.card_properties = input.card_properties;
+      }
+      if (input.hidden !== undefined) {
+        input.hidden.forEach((key) => typed(key));
+        if (input.hidden.length) view.hidden = input.hidden;
+        else delete view.hidden;
+      }
+      if (input.calcs !== undefined) {
+        for (const [key, fn] of Object.entries(input.calcs)) {
+          const property = key === TITLE_COLUMN ? undefined : typed(key);
+          if (!calcKinds(key, property).includes(fn)) refuse("bad_request", `${key === TITLE_COLUMN ? "The row-name column" : `Column ${key}`} has no ${fn} calculation.`);
+        }
+        if (Object.keys(input.calcs).length) view.calcs = input.calcs;
+        else delete view.calcs;
       }
       const next = withView(changed.config, view);
       return change(h, () => {

@@ -936,3 +936,192 @@ test("UC-22: sorts numbers numerically, ranges by start day and unchecked before
   assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_span", direction: "asc" }] })), [low.id, high.id, text.id, empty.id]);
   assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_done", direction: "asc" }] })), [low.id, empty.id, high.id, text.id]);
 });
+
+// UC-22 batch 2: multi-condition filters AND together; the one group keeps
+// its own or. Saved on a view they replace the old single `filter`.
+test("UC-22: filters combine conditions and groups, save to the view and clear", async (t) => {
+  const { agent: a } = await fixture(t);
+  const stage = [
+    { id: "option_design", name: "设计", color: "blue", group: "todo" },
+    { id: "option_dev", name: "开发", color: "orange", group: "progress" },
+    { id: "option_ship", name: "发布", color: "green", group: "complete" },
+  ];
+  let db = await a.create({ database: {
+    properties: [
+      { id: "property_stage", name: "阶段", type: "status", status_options: stage },
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_day", name: "排期", type: "date" },
+      { id: "property_who", name: "负责人", type: "person" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const small = await a.addRow(db, { title: "Small", properties: {
+    property_stage: "设计", property_amount: "4", property_tags: JSON.stringify(["急"]),
+    property_day: "2026-11-01/2026-11-03", property_who: "刘政东",
+  } });
+  db = await a.get(db.id);
+  const big = await a.addRow(db, { title: "Big", properties: {
+    property_stage: "开发", property_amount: "30", property_done: "true",
+    property_tags: JSON.stringify(["急", "发版"]), property_day: "2026-11-25/2026-11-28",
+  } });
+  db = await a.get(db.id);
+  const plain = await a.addRow(db, { title: "Plain" });
+  db = await a.get(db.id);
+
+  // Conditions on separate types AND: number gt AND stage is.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [
+    { property_id: "property_amount", op: "gt", value: "10" },
+    { property_id: "property_stage", op: "is", value: "开发" },
+  ] })), [big.id]);
+  // Checkbox holds only is; unchecked is value "false".
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_done", op: "is", value: "true" }] })), [big.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_done", op: "is", value: "false" }] })), [small.id, plain.id]);
+  // Multi-select contains any one option; not_contains keeps unset rows.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_tags", op: "contains", value: "发版" }] })), [big.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_tags", op: "not_contains", value: "急" }] })), [plain.id]);
+  // Dates compare by day, a range on its start day.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_day", op: "on_or_before", value: "2026-11-10" }] })), [small.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_day", op: "after", value: "2026-11-10" }] })), [big.id]);
+  // Words: person matches contains; the empties ask for no value.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_who", op: "contains", value: "刘" }] })), [small.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "is_empty" }] })), [plain.id]);
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "is_not_empty" }] })), [small.id, big.id]);
+  // An absent operator keeps the empty row, as Notion's does: unchecked and
+  // unset count as "not that"; a non-numeric cell still fails every number
+  // comparison, even neq.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [{ property_id: "property_amount", op: "neq", value: "4" }] })), [big.id, plain.id]);
+  // The group or-s inside; everything else still ANDs around it — the
+  // default-staged unchecked row belongs to both sides of it.
+  assert.deepEqual(ids(await a.query(db.id, { filters: [
+    { logic: "or", conditions: [
+      { property_id: "property_stage", op: "is", value: "设计" },
+      { property_id: "property_amount", op: "gt", value: "10" },
+    ] },
+    { property_id: "property_done", op: "is", value: "false" },
+  ] })), [small.id, plain.id]);
+  // A saved filter is what a plain query uses; the old field is gone.
+  db = await a.patchView(db, TABLE, { filters: [{ property_id: "property_stage", op: "is", value: "开发" }] });
+  assert.deepEqual(view(db, TABLE).filters, [{ property_id: "property_stage", op: "is", value: "开发" }]);
+  assert.equal(view(db, TABLE).filter ?? null, null);
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE })), [big.id]);
+  // A query's own filters outvote the saved ones; an empty list means none.
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE, filters: [{ property_id: "property_amount", op: "is_empty" }] })), [plain.id]);
+  assert.equal((await a.query(db.id, { viewId: TABLE, filters: [] })).total, 3);
+  // The legacy field still writes and reads as one is — and clears both.
+  db = await a.patchView(db, TABLE, { filter: { property_id: "property_stage", value: "设计" } });
+  assert.equal(view(db, TABLE).filter.value, "设计");
+  assert.equal(view(db, TABLE).filters ?? null, null);
+  // The unchecked row fell to the stage's default — "设计" — so it matches.
+  assert.deepEqual(ids(await a.query(db.id, { viewId: TABLE })), [small.id, plain.id]);
+  db = await a.patchView(db, TABLE, { filter: null });
+  assert.equal(view(db, TABLE).filter ?? null, null);
+  assert.equal((await a.query(db.id, { viewId: TABLE })).total, 3);
+});
+
+test("UC-22: rejects malformed filter conditions and nested groups", async (t) => {
+  const { agent: a } = await fixture(t);
+  const db = await a.create({ database: {
+    properties: [
+      { id: "property_stage", name: "阶段", type: "status" },
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_pic", name: "图", type: "image" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const attempts = [
+    // An operator the type does not take.
+    [{ property_id: "property_amount", op: "contains", value: "4" }],
+    [{ property_id: "property_tags", op: "is", value: "急" }],
+    [{ property_id: "property_done", op: "is_not", value: "true" }],
+    // A value-hungry operator with nothing to compare to.
+    [{ property_id: "property_amount", op: "gt" }],
+    // The value is not one of the options, or not the checkbox's true/false.
+    [{ property_id: "property_tags", op: "contains", value: "不存在的" }],
+    [{ property_id: "property_done", op: "is", value: "yes" }],
+    // A property that is not there, or holds no words — and the name column.
+    [{ property_id: "property_missing", op: "is", value: "x" }],
+    [{ property_id: "property_pic", op: "contains", value: "x" }],
+    [{ property_id: "name", op: "contains", value: "x" }],
+    // A group inside a group; two groups.
+    [{ logic: "and", conditions: [{ logic: "and", conditions: [{ property_id: "property_amount", op: "gt", value: "0" }] }] }],
+    [
+      { logic: "and", conditions: [{ property_id: "property_amount", op: "gt", value: "0" }] },
+      { logic: "or", conditions: [{ property_id: "property_amount", op: "lt", value: "9" }] },
+    ],
+  ];
+  for (const filters of attempts) {
+    invalid(await a.request(`/databases/${db.id}/query`, { method: "POST", body: { filters } }));
+    invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: { filters } } }));
+  }
+});
+
+test("UC-22: views keep hidden columns, footer calcs and extended group_by", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    properties: [
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"] },
+      { id: "property_day", name: "排期", type: "date" },
+      { id: "property_who", name: "负责人", type: "person" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  db = await a.patchView(db, TABLE, { hidden: ["property_amount", "property_who"], calcs: { name: "count", property_amount: "sum", property_done: "percent_checked" }, group_by: "property_who" });
+  assert.deepEqual(view(db, TABLE).hidden, ["property_amount", "property_who"]);
+  assert.deepEqual(view(db, TABLE).calcs, { name: "count", property_amount: "sum", property_done: "percent_checked" });
+  assert.equal(view(db, TABLE).group_by, "property_who");
+  // Empty collections and an empty group_by take the fields away.
+  db = await a.patchView(db, TABLE, { hidden: [], calcs: {}, group_by: "" });
+  assert.equal(view(db, TABLE).hidden ?? null, null);
+  assert.equal(view(db, TABLE).calcs ?? null, null);
+  assert.equal(view(db, TABLE).group_by ?? null, null);
+  // Table and list group by the new types; not by the name column, nothing,
+  // or an image — and a board still only takes status or select.
+  for (const by of ["property_done", "property_tags", "property_day"]) {
+    db = await a.patchView(db, TABLE, { group_by: by });
+    assert.equal(view(db, TABLE).group_by, by);
+  }
+  for (const body of [{ group_by: "name" }, { group_by: "property_missing" }, { calcs: { name: "sum" } }, { calcs: { property_amount: "contains" } }, { calcs: { property_missing: "count" } }, { hidden: ["name"] }, { hidden: ["property_missing"] }]) {
+    invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: body } }));
+  }
+  db = await a.addProperty(db, { id: "property_pic", name: "图", type: "image" });
+  invalid(await a.request(`/databases/${db.id}/views/${TABLE}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: db.revision, view: { group_by: "property_pic" } } }));
+  invalid(await a.request(`/databases/${db.id}/views`, { method: "POST", body: { requestId: randomUUID(), baseRevision: db.revision, view: { id: "view_board", name: "板", kind: "board", group_by: "property_done" } } }));
+});
+
+// UC-22 batch 2: renaming a status option rewrites the conditions naming it;
+// removing the option drops them — a group shrinks to what remains.
+test("UC-22: status option edits rewrite filter conditions, removals drop them", async (t) => {
+  const { agent: a } = await fixture(t);
+  const options = [
+    { id: "option_a", name: "Alpha", color: "default", group: "todo" },
+    { id: "option_b", name: "Beta", color: "blue", group: "progress" },
+  ];
+  let db = await a.create({ database: {
+    properties: [
+      { id: STATUS, name: "Status", type: "status", status_options: options },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急"] },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table", filters: [
+      { property_id: STATUS, op: "is", value: "Beta" },
+      { logic: "or", conditions: [
+        { property_id: STATUS, op: "is", value: "Beta" },
+        { property_id: "property_tags", op: "contains", value: "急" },
+      ] },
+    ] }],
+  } });
+  // Rename by stable id: both the plain condition's and the group's value.
+  db = await a.patchProperty(db, STATUS, { status_options: options.map((option) => ({ ...option, name: option.id === "option_b" ? "Gamma" : option.name })) });
+  const filters = view(db, TABLE).filters;
+  assert.equal(filters[0].value, "Gamma");
+  assert.equal(filters[1].conditions[0].value, "Gamma");
+  assert.equal(filters[1].conditions[1].value, "急");
+  // Remove the option: its conditions go; the group keeps what remains.
+  db = await a.patchProperty(db, STATUS, { status_options: options.filter((option) => option.id === "option_a") });
+  assert.deepEqual(view(db, TABLE).filters, [{ logic: "or", conditions: [{ property_id: "property_tags", op: "contains", value: "急" }] }]);
+});
