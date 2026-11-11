@@ -119,7 +119,9 @@ Authorization: Bearer notes_...
 
 省略 `database` 时，创建空属性与一个 Table 视图。省略 `views` 时，同样建立 Table。显式提供的视图列表不能是空数组。返回 `201` 和页面对象。`page.kind` 为 `database`，`page.database` 包含实际配置。
 
-属性类型为 `text`、`select`、`status`、`date`、`person` 和 `image`。视图类型为 `table`、`board`、`list`、`gallery` 和 `calendar`。属性和视图使用调用方指定的稳定 `id`。属性 ID `name` 保留给标题列。单库最多 100 个属性和 100 个视图。单个选项属性最多 100 个选项。
+属性类型为 `text`、`number`、`select`、`multi_select`、`status`、`date`、`person`、`image`、`checkbox`、`url`、`email`、`phone`、`created_time`、`last_edited_time`、`created_by`、`last_edited_by` 和 `id`。视图类型为 `table`、`board`、`list`、`gallery` 和 `calendar`。属性和视图使用调用方指定的稳定 `id`。属性 ID `name` 保留给标题列。单库最多 100 个属性和 100 个视图。单个选项属性最多 100 个选项。
+
+`created_time`、`last_edited_time`、`created_by`、`last_edited_by` 和 `id` 是只读元数据列。它们读取条目自身记录的创建、更新、归属和标识字段，不写入 `properties`。对它们写入 `properties` 返回 `400`。
 
 Board 缺少可分组属性时，系统按界面规则补充 Status。Calendar 缺少日期属性时，系统补充 Date。返回值包含生成的属性 ID。
 
@@ -137,11 +139,13 @@ Board 缺少可分组属性时，系统按界面规则补充 Status。Calendar �
 {"requestId":"uc-rename-001","baseRevision":"数据库 revision","property":{"name":"处理状态"}}
 ```
 
-PATCH 不接受 `property.id`。修改类型使用 `property.type`，并复用界面规则。转为 Select 时，已有文字值加入选项。转为 Status 时，已有文字值加入状态选项。类型变更保留原属性 ID 和条目值。
+PATCH 不接受 `property.id`。修改类型使用 `property.type`，并复用界面规则。转为 Select 或 Multi-select 时，已有文字值加入选项。转为 Status 时，已有文字值加入状态选项。类型变更保留原属性 ID 和条目值。
+
+Select 和 Multi-select 使用 `options` 选项名列表。两者共用 `option_colors` 保存选项颜色：对象以选项名为键，值为 `default` 或九种内容颜色之一（`gray`、`brown`、`orange`、`yellow`、`green`、`blue`、`purple`、`pink`、`red`）。键必须引用已存在的选项，否则返回 `400`。`option_colors` 整体替换；省略时保留。
 
 Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`group` 和 `color`。`group` 为 `todo`、`progress` 或 `complete`。系统按此组顺序保存，同组保留输入顺序。`color` 为 `default` 或现有内容颜色。`default_status` 使用状态选项的 ID；传 `null` 清除自定义默认值。状态列表至少保留一项。名称不能重复。
 
-修改选项名称时保留其 ID。系统在同一事务更新相应条目与视图筛选。删除状态选项后，原值清空并使用默认状态；对应视图取消该筛选。修改 Select 选项不会删除条目中已有的原始文字值。
+修改选项名称时保留其 ID。系统在同一事务更新相应条目与视图筛选。删除状态选项后，原值清空并使用默认状态；对应视图取消该筛选。修改 Select 选项不会删除条目中已有的原始文字值。重命名或删除 Select 选项通过 `options` 整体替换完成，不会重写条目值；条目中的原名称仍保留。
 
 新增视图的请求体使用 `view`：
 
@@ -188,15 +192,19 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 
 值规则：
 
-- Text 和 Person 使用文字。Person 是显示名，不关联账号 ID。
+- Text、Url、Email、Phone 和 Person 使用文字。Person 是显示名，不关联账号 ID。
+- Number 使用数字，或空字符串。支持正负号、小数和科学计数法；非数字返回 `400`。
 - Select 使用已定义的选项名称，或空字符串。
+- Multi-select 使用选项名列表。值保存为 JSON 数组字符串，例如 `["P1","P2"]`；逗号分隔的名称列表同样接受（名称不含逗号时）。每个名称必须是已定义选项，否则返回 `400`。空字符串清空。
 - Status 使用状态选项名称。未设置或清空时，界面使用默认状态。
-- Date 使用真实的 `YYYY-MM-DD` 日期，或空字符串。
+- Date 使用真实的 `YYYY-MM-DD` 日期，或区间 `YYYY-MM-DD/YYYY-MM-DD`，或空字符串。结束日期早于开始日期时系统按顺序保存。
+- Checkbox 使用 `true`，或空字符串；`false` 归一化为空字符串。
 - Image 使用 `propertyFiles`，不写入字符串 `properties`。每格最多 50 张图片。
+- 元数据列（`created_time` 等）只读，写入返回 `400`。
 
 `propertyFiles` 按图片属性 ID 保存已有 `StoredFile` 引用数组。文件必须已经存在于条目所属空间，且类型、大小和归属信息匹配。引用不上传附件字节。空数组清空该图片单元格。
 
-条目响应保留原有 `page.properties` 与 `page.property_files`。额外的 `values` 按属性 ID 返回非图片属性的界面有效值，包括默认状态。
+条目响应保留原有 `page.properties` 与 `page.property_files`。额外的 `values` 按属性 ID 返回非图片属性的界面有效值，包括默认状态和元数据列的记录值。
 
 ### 查询条目
 
@@ -213,7 +221,7 @@ Status 使用 `status_options` 自定义状态。每项包含 `id`、`name`、`g
 
 查询是只读操作。只读令牌可以调用。省略 `viewId` 时使用第一个视图。提供 `filter`、`sorts` 时，仅覆盖本次查询的对应配置，不保存视图。`filter: null` 表示本次不筛选。`query` 搜索条目标题。
 
-筛选与界面一致，只支持一个 Select 或 Status 等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾。同值保留条目原顺序。
+筛选与界面一致，只支持一个 Select 或 Status 等值条件。排序支持标题列 `name` 和非图片属性。Select 与 Status 按选项顺序排序。Number 按数值排序，非数字值位于末尾。Date 按日期或区间开始日排序。Checkbox 未勾选在前、已勾选在后。Multi-select 按第一个选项名排序。其他值使用界面的文字排序。空值在两个排序方向都位于末尾（Checkbox 的空值即未勾选，不视为空值）。同值保留条目原顺序。
 
 ```json
 {"databaseId":"数据库 ID","revision":"数据库 revision","rows":[],"total":0,"hasMore":false,"nextOffset":null}

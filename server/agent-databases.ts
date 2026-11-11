@@ -7,8 +7,9 @@ import { isImageType, normalizeStoredFile } from "../src/core/files.ts";
 import type { DatabaseConfig, DatabaseProperty, DatabaseView, NotePage } from "../src/core/types.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
 import {
-  changePropertyType, changeViewKind, createView, databaseRows, MAX_ROW_IMAGES,
-  propertyOptions, propertyValue, sortable, statusOptions, TITLE_COLUMN, viewRows,
+  changePropertyType, changeViewKind, createView, databaseRows, dateRange, isDay, isMetaType,
+  MAX_ROW_IMAGES, OPTION_COLORS, propertyOptions, propertyValue, sortable,
+  statusOptions, TITLE_COLUMN, toMultiValue, viewRows,
 } from "../src/features/database/database-model.ts";
 import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
 
@@ -22,6 +23,8 @@ const statusOption = propertyShape.shape.status_options.unwrap().element.strict(
 const propertySchema = propertyShape.strict().extend({
   id: propertyId, name: z.string().max(500), icon: z.string().max(100).optional(),
   options: z.array(z.string().trim().min(1).max(500)).max(100).optional(),
+  /** 每个选项的药丸颜色，按选项名：default 或九种内容色之一。 */
+  option_colors: z.record(safeKey, z.enum(OPTION_COLORS)).optional(),
   status_options: z.array(statusOption).min(1).max(100).transform((options) => options.toSorted((left, right) => ["todo", "progress", "complete"].indexOf(left.group) - ["todo", "progress", "complete"].indexOf(right.group))).optional(),
   default_status: safeKey.optional(),
 });
@@ -86,6 +89,12 @@ function checkProperty(property: DatabaseProperty): void {
   if (property.status_options) {
     distinct(property.status_options.map((option) => option.id), "状态标识");
     distinct(property.status_options.map((option) => option.name.trim().toLocaleLowerCase()), "状态名称");
+  }
+  // 选项颜色按选项名保存；一个颜色给了不存在的选项，就是拼写错了。
+  if (property.option_colors) {
+    for (const name of Object.keys(property.option_colors)) {
+      if (!(property.options ?? []).includes(name)) bad("选项颜色引用了不存在的选项。");
+    }
   }
   if (property.default_status && !statusOptions(property).some((option) => option.id === property.default_status)) bad("默认状态不存在。");
 }
@@ -155,14 +164,35 @@ function rowPatch(store: Store, who: Actor, db: Database, input: Pick<z.infer<ty
   const patch: Row = {};
   if (input.title !== undefined) patch.title_content = [{ text: input.title }];
   if (input.properties) {
+    const normalized: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(input.properties)) {
       const property = db.config.properties.find((item) => item.id === key);
       if (!property || property.type === "image") bad("属性不存在，或图片应使用 propertyFiles。");
+      // 元数据列读取条目自身记录（创建、更新、归属、标识），不可写。
+      if (isMetaType(property.type)) bad("该属性为只读的系统列。");
+      normalized[key] = value;
       if (value === null || value === "") continue;
       if (["status", "select"].includes(property.type) && !propertyOptions(property).includes(value)) bad("属性值不在选项中。");
-      if (property.type === "date" && (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(Date.parse(value + "T00:00:00Z")) || new Date(value + "T00:00:00Z").toISOString().slice(0, 10) !== value)) bad("日期必须是真实的 YYYY-MM-DD。");
+      if (property.type === "multi_select") {
+        // 存 JSON 数组，逗号在选项名里也能活；逗号列表作为便利输入同样接受。
+        let names: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((name) => typeof name === "string")) names = parsed;
+        } catch { /* not JSON: a comma list */ }
+        names ??= value.split(",").map((name) => name.trim()).filter(Boolean);
+        const deduped = [...new Set(names)];
+        if (!deduped.length || deduped.some((name) => !propertyOptions(property).includes(name))) bad("属性值不在选项中。");
+        normalized[key] = toMultiValue(deduped);
+      }
+      if (property.type === "number" && !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(value.trim())) bad("数值必须是数字或留空。");
+      if (property.type === "checkbox" && !["true", "false"].includes(value)) bad("勾选值必须是 true、false 或留空。");
+      if (property.type === "checkbox" && value === "false") normalized[key] = "";
+      const range = property.type === "date" ? dateRange(value) : null;
+      if (property.type === "date" && (!range || !isDay(range.start) || (range.end !== "" && !isDay(range.end)))) bad("日期必须是真实的 YYYY-MM-DD 或 YYYY-MM-DD/YYYY-MM-DD。");
+      if (property.type === "date" && range && range.end && range.end < range.start) normalized[key] = `${range.end}/${range.start}`;
     }
-    patch.properties = input.properties;
+    patch.properties = normalized;
   }
   if (input.propertyFiles) {
     for (const [key, files] of Object.entries(input.propertyFiles)) {
@@ -336,7 +366,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
     mutation(req, res, input, load(req), (who, db) => {
       checkRevision(store, db.scope, db.page.id, input.baseRevision);
       const patch = rowPatch(store, who, db, input);
-      if (input.properties) patch.properties = Object.fromEntries(Object.entries(input.properties).filter(([, value]) => value !== null));
+      if (patch.properties) patch.properties = Object.fromEntries(Object.entries(patch.properties).filter(([, value]) => value !== null));
       const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
       return { status: 201, body: rowDto(store, who, pageId, db.config), scope: db.scope, pageIds: [db.page.id, pageId] };
     });

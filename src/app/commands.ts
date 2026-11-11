@@ -45,11 +45,16 @@ import {
   copiedColumn,
   createView,
   databaseRows,
+  dateRange,
   duplicateProperty,
   duplicateView,
   insertProperty,
+  isDay,
+  isMetaType,
   MAX_ROW_IMAGES,
   newDatabaseConfig,
+  OPTION_COLOR_SET,
+  PROPERTY_LABELS,
   removeProperty,
   removeView,
   renameProperty,
@@ -57,6 +62,7 @@ import {
   sortable,
   statusOptions,
   TITLE_COLUMN,
+  toMultiValue,
   viewRows,
   withSorts,
   withView,
@@ -323,12 +329,28 @@ function viewIn(config: DatabaseConfig, id: string | undefined): DatabaseView {
   return view;
 }
 
-/** Select options as a list of distinct names. */
+/** Select and multi-select options as a list of distinct names. */
 function withOptions(config: DatabaseConfig, propertyId: string, options: string[] | undefined): DatabaseConfig {
   if (options === undefined) return config;
   const property = config.properties.find((candidate) => candidate.id === propertyId);
-  if (property?.type !== "select") refuse("bad_request", "Only a Select property takes options here; a Status's options are edited in Notes.");
+  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes options here; a Status's options are edited in Notes.");
   return { ...config, properties: config.properties.map((candidate) => candidate.id === propertyId ? { ...candidate, options: [...new Set(options)] } : candidate) };
+}
+
+/** Option colours by option name — each "default" or one of the nine, an
+ *  unknown colour read as "default", a colour for no option refused:
+ *  colouring nothing would say the name was typed wrong. */
+function withOptionColors(config: DatabaseConfig, propertyId: string, colors: Record<string, unknown> | undefined): DatabaseConfig {
+  if (colors === undefined) return config;
+  const property = config.properties.find((candidate) => candidate.id === propertyId);
+  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes option colours.");
+  const known = OPTION_COLOR_SET;
+  const next: Record<string, string> = {};
+  for (const [name, color] of Object.entries(colors)) {
+    if (!(property.options ?? []).includes(name)) refuse("bad_request", `No option ${JSON.stringify(name)} to colour: the options are ${JSON.stringify(property.options ?? [])}.`);
+    next[name] = typeof color === "string" && known.has(color) ? color : "default";
+  }
+  return { ...config, properties: config.properties.map((candidate) => candidate.id === propertyId ? { ...candidate, option_colors: next } : candidate) };
 }
 
 /** A row's values as agents read them. */
@@ -730,6 +752,7 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       let next = added.config;
       if (input.name !== undefined) next = renameProperty(next, added.property.id, input.name);
       next = withOptions(next, added.property.id, input.options);
+      next = withOptionColors(next, added.property.id, input.option_colors);
       return change(h, () => {
         h.workspace.updatePage(page.id, { database: next });
         return { database_id: page.id, property_id: added.property.id };
@@ -740,11 +763,12 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const h = await opened();
       const { page, config } = databasePage(h, input.page_id);
       const key = propertyIn(config, input.property_id, { title: true });
-      if (key === TITLE_COLUMN && (input.type !== undefined || input.options !== undefined)) refuse("bad_request", "The row-name column can only be renamed.");
-      if (input.name === undefined && input.type === undefined && input.options === undefined) refuse("bad_request", "Say what to change: name, type or options.");
+      if (key === TITLE_COLUMN && (input.type !== undefined || input.options !== undefined || input.option_colors !== undefined)) refuse("bad_request", "The row-name column can only be renamed.");
+      if (input.name === undefined && input.type === undefined && input.options === undefined && input.option_colors === undefined) refuse("bad_request", "Say what to change: name, type, options or option_colors.");
       let next = input.type !== undefined ? changePropertyType(config, key, input.type, databaseRows(pagesOf(h), page.id)) : config;
       if (input.name !== undefined) next = renameProperty(next, key, input.name);
       next = withOptions(next, key, input.options);
+      next = withOptionColors(next, key, input.option_colors);
       return change(h, () => {
         h.workspace.updatePage(page.id, { database: next });
         return { database_id: page.id, property_id: key };
@@ -787,17 +811,49 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       if (input.value === undefined) refuse("bad_request", oneOf);
       const { value } = input;
       if (property?.type === "image") refuse("bad_request", "An Image property takes images: file paragraph ids.");
+      /* The meta columns read the row's own record — nothing writes them. */
+      if (property && isMetaType(property.type)) refuse("bad_request", `${PROPERTY_LABELS[property.type]} is read-only: it reads the row's own record.`);
       if (property?.type === "status" && value && !statusOptions(property).some((option) => option.name === value)) {
         refuse("bad_request", `A status is one of ${JSON.stringify(statusOptions(property).map((option) => option.name))}.`);
       }
       if (property?.type === "select" && value && !property.options?.includes(value)) {
         refuse("bad_request", `A Select value is one of its options (${JSON.stringify(property.options ?? [])}): add it with update_property first.`);
       }
-      if (property?.type === "date" && value && !isDay(value)) refuse("bad_request", "A date is a real day, YYYY-MM-DD.");
+      let stored = value;
+      /* A multi-select's value is a JSON list of its options' names — a
+         comma-separated list says the same for a name without a comma; an
+         option it does not have is refused, as a select's is. */
+      if (property?.type === "multi_select" && value) {
+        let names: string[] | null = null;
+        try {
+          const parsed: unknown = JSON.parse(value);
+          if (Array.isArray(parsed) && parsed.every((name) => typeof name === "string")) names = parsed;
+        } catch { /* not JSON: a comma-separated list */ }
+        names ??= value.split(",").map((name) => name.trim()).filter(Boolean);
+        names = [...new Set(names)];
+        if (!names.length || names.some((name) => !(property.options ?? []).includes(name))) {
+          refuse("bad_request", `A Multi-select value lists its options (${JSON.stringify(property.options ?? [])}): add missing ones with update_property first.`);
+        }
+        stored = toMultiValue(names);
+      }
+      if (property?.type === "number" && value && !/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(value.trim())) {
+        refuse("bad_request", "A Number value is a real number, or empty.");
+      }
+      if (property?.type === "checkbox" && value && !["true", "false"].includes(value)) {
+        refuse("bad_request", "A Checkbox value is true, false or empty.");
+      }
+      /* Checked is "true"; the rest — "" and "false" alike — is not. */
+      if (property?.type === "checkbox" && value === "false") stored = "";
+      if (property?.type === "date" && value) {
+        const range = dateRange(value);
+        if (!range || !isDay(range.start) || (range.end !== "" && !isDay(range.end))) refuse("bad_request", "A date is a real day, YYYY-MM-DD, or a range, YYYY-MM-DD/YYYY-MM-DD.");
+        // A range is kept in order; no other reading is offered.
+        if (range.end && range.end < range.start) stored = `${range.end}/${range.start}`;
+      }
       return change(h, () => {
         if (key === TITLE_COLUMN) h.workspace.updatePage(row.id, { title: value });
-        else h.workspace.updatePage(row.id, rowValues(row, { [key]: value }));
-        return { page_id: row.id, property_id: key, value };
+        else h.workspace.updatePage(row.id, rowValues(row, { [key]: stored }));
+        return { page_id: row.id, property_id: key, value: stored };
       });
     },
 
@@ -957,9 +1013,4 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
   };
 }
 
-/** Whether `value` is a real calendar day, YYYY-MM-DD. */
-function isDay(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const day = new Date(`${value}T00:00:00Z`);
-  return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === value;
-}
+

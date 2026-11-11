@@ -542,7 +542,7 @@ test("UC-14: invalid definitions, references and typed values are atomic and pre
   for (const databaseInput of [
     { properties: [{ id: "name", name: "Reserved", type: "text" }] },
     { properties: [{ id: UC, name: "A", type: "text" }, { id: UC, name: "B", type: "text" }] },
-    { properties: [{ id: UC, name: "Bad type", type: "number" }] },
+    { properties: [{ id: UC, name: "Bad type", type: "formula" }] },
     { properties: [], views: [{ id: TABLE, name: "Bad", kind: "timeline" }] },
     { properties: [], views: [{ id: TABLE, name: "A", kind: "table" }, { id: TABLE, name: "B", kind: "list" }] },
     { properties: [], unsupported: true },
@@ -815,4 +815,124 @@ test("UC-14: image cells bind existing same-scope files and reject forged or mis
   const unauthorized = await outsider.request(`/databases/${strangerDb.id}/rows`, { method: "POST", body: { requestId: randomUUID(), baseRevision: strangerDb.revision, title: "Foreign image", propertyFiles: { [IMAGE]: [file] } } });
   assert.ok([400, 403, 404].includes(unauthorized.status), JSON.stringify(unauthorized.body));
   assert.equal((await outsider.query(strangerDb.id)).total, 0);
+});
+
+// UC-22 batch 1: new property types, option colors, multi-select, date
+// ranges, read-only meta columns and per-type value validation.
+test("UC-22: adds each new property type, colors options and validates per-type row values", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    title_name: "项目",
+    properties: [
+      { id: "property_amount", name: "金额", type: "number" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_tags", name: "标签", type: "multi_select", options: ["急", "发版"], option_colors: { "急": "red" } },
+      { id: "property_site", name: "站点", type: "url" },
+      { id: "property_mail", name: "邮箱", type: "email" },
+      { id: "property_tel", name: "电话", type: "phone" },
+      { id: "property_span", name: "排期", type: "date" },
+      { id: "property_created", name: "创建时间", type: "created_time" },
+      { id: "property_edited", name: "编辑时间", type: "last_edited_time" },
+      { id: "property_maker", name: "创建者", type: "created_by" },
+      { id: "property_editor", name: "编辑者", type: "last_edited_by" },
+      { id: "property_id", name: "编号", type: "id" },
+    ],
+  } });
+  assert.equal(property(db, "property_tags").type, "multi_select");
+  assert.deepEqual(property(db, "property_tags").option_colors, { "急": "red" });
+
+  // Each remaining type is also addable after creation.
+  db = await a.addProperty(db, { id: "property_note", name: "备注", type: "text" });
+  assert.equal(property(db, "property_note").type, "text");
+
+  // Colors are set and read back; an unknown option name is refused.
+  db = await a.patchProperty(db, "property_tags", { option_colors: { "急": "orange", "发版": "green" } });
+  assert.deepEqual(property(db, "property_tags").option_colors, { "急": "orange", "发版": "green" });
+  const stale = await a.get(db.id);
+  invalid(await a.request(`/databases/${db.id}/properties/property_tags`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: stale.revision, property: { option_colors: { "不存在": "blue" } } } }));
+  assert.deepEqual(property(await a.get(db.id), "property_tags").option_colors, { "急": "orange", "发版": "green" });
+  invalid(await a.request(`/databases/${db.id}/properties`, { method: "POST", body: { requestId: randomUUID(), baseRevision: stale.revision, property: { id: "property_bad", name: "错色", type: "multi_select", options: ["A"], option_colors: { "B": "blue" } } } }));
+
+  // A row exercising every new type; stored formats are the canonical ones.
+  const row1 = await a.addRow(db, {
+    title: "发布项目",
+    properties: {
+      property_amount: "12.5", property_done: "true",
+      property_tags: JSON.stringify(["急", "发版"]),
+      property_site: "https://notes.example", property_mail: "a@b.cc", property_tel: "+86 138",
+      property_span: "2026-11-20/2026-11-28",
+    },
+  });
+  assert.equal(row1.page.properties?.property_amount, "12.5");
+  assert.equal(row1.page.properties?.property_done, "true");
+  assert.equal(row1.page.properties?.property_tags, JSON.stringify(["急", "发版"]));
+  assert.equal(row1.values.property_tags, JSON.stringify(["急", "发版"]));
+  assert.equal(row1.page.properties?.property_span, "2026-11-20/2026-11-28");
+
+  // Meta columns resolve from the row record: set, and the same set.
+  assert.ok(row1.values.property_created);
+  assert.ok(row1.values.property_edited);
+  assert.ok(row1.values.property_maker);
+  assert.ok(row1.values.property_editor);
+  assert.equal(row1.values.property_id, row1.id);
+  assert.equal(row1.page.properties?.property_created ?? undefined, undefined);
+
+  // Comma-separated input normalizes to the JSON array; dedupe applies.
+  db = await a.get(db.id);
+  const row2 = await a.updateRow(db, row1, { properties: { property_tags: "发版,急,急" } });
+  assert.equal(row2.page.properties?.property_tags, JSON.stringify(["发版", "急"]));
+
+  // Per-type rejections: bad number, bad checkbox, unknown multi-select
+  // option, bogus date, meta write — nothing lands.
+  const attempts = [
+    { property_amount: "abc" }, { property_amount: "12.5.3" },
+    { property_done: "yes" }, { property_done: "1" },
+    { property_tags: "不存在的选项" }, { property_tags: JSON.stringify(["急", "不存在的选项"]) },
+    { property_span: "2026-02-30" }, { property_span: "2026-11-20/2026-13-40" }, { property_span: "2026-11-20/12-01" },
+    { property_created: "2026-11-20" }, { property_id: "forged" }, { property_maker: "someone" },
+  ];
+  const before = await a.query(db.id);
+  for (const properties of attempts) {
+    const changed = await a.request(`/databases/${db.id}/rows/${row1.id}`, { method: "PATCH", body: { requestId: randomUUID(), baseRevision: row2.revision, databaseRevision: db.revision, properties } });
+    assert.ok([400, 403, 404].includes(changed.status), `Expected rejection: ${JSON.stringify(properties)} got ${JSON.stringify(changed.body)}`);
+  }
+  assert.deepEqual(await a.query(db.id), before);
+
+  // false normalizes to empty (unchecked); a reversed range is kept in order.
+  const row3 = await a.updateRow(db, row2, { properties: { property_done: "false", property_span: "2026-11-28/2026-11-20" } });
+  assert.equal(row3.page.properties?.property_done, "");
+  assert.equal(row3.page.properties?.property_span, "2026-11-20/2026-11-28");
+  const cleared = await a.updateRow(db, row3, { properties: { property_tags: "", property_amount: "" } });
+  assert.equal(cleared.values.property_tags, "");
+  assert.equal(cleared.values.property_amount, "");
+});
+
+// UC-22 batch 1: sorting follows each new type's own order.
+test("UC-22: sorts numbers numerically, ranges by start day and unchecked before checked", async (t) => {
+  const { agent: a } = await fixture(t);
+  let db = await a.create({ database: {
+    properties: [
+      // Text first, so a word can live where a number will: typed before the
+      // column had a type, it stays — and sorts after every number.
+      { id: "property_amount", name: "金额", type: "text" },
+      { id: "property_done", name: "完成", type: "checkbox" },
+      { id: "property_span", name: "排期", type: "date" },
+    ],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  const high = await a.addRow(db, { title: "High", properties: { property_amount: "30", property_done: "true", property_span: "2026-11-25/2026-11-28" } });
+  db = await a.get(db.id);
+  const low = await a.addRow(db, { title: "Low", properties: { property_amount: "4", property_span: "2026-11-01/2026-11-03" } });
+  db = await a.get(db.id);
+  const text = await a.addRow(db, { title: "Text", properties: { property_amount: "soon", property_done: "true" } });
+  db = await a.get(db.id);
+  const empty = await a.addRow(db, { title: "Empty" });
+  db = await a.patchProperty(db, "property_amount", { type: "number" });
+  assert.equal(property(db, "property_amount").type, "number");
+  // Numbers: 4 < 30, the non-numeric "soon" trails, empty stays last.
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_amount", direction: "asc" }] })), [low.id, high.id, text.id, empty.id]);
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_amount", direction: "desc" }] })), [high.id, low.id, text.id, empty.id]);
+  // Ranges sit on their start day; unchecked sorts before checked.
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_span", direction: "asc" }] })), [low.id, high.id, text.id, empty.id]);
+  assert.deepEqual(ids(await a.query(db.id, { sorts: [{ property_id: "property_done", direction: "asc" }] })), [low.id, empty.id, high.id, text.id]);
 });
