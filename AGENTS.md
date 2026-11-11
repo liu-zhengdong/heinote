@@ -8,7 +8,7 @@
 - `npm run build` 检查类型并构建生产资源。
 - `npm test` 运行原有核心回归及 HTTP 验收。
 - `npm run test:e2e` 运行真实浏览器流程，使用临时数据库。
-- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`。
+- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/terminus-notes/SKILL.md`。
 - 当前系统说明见 [Atlas](docs/atlas/README.md)，包括 [基础能力](docs/atlas/standalone.md)与[实时共编](docs/atlas/realtime-collaboration.md)。Atlas 面向人阅读，按主题维护当前事实。
 - 共编架构见 [ADR-002](docs/adr/0002-realtime-collaboration.md)。富文本二进制、SQL 投影与权限必须在同一事务提交。
 - 普通文字只走一套历史。新字段未建立 Y.Text 时使用受控记录历史；结构补偿不得部分执行。
