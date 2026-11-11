@@ -22,6 +22,8 @@ interface Props {
   /** Draft source to run instead of the enabled one — the standalone
    *  page's preview, which is read-only. */
   previewSource?: string | null;
+  /** Fill the stage instead of a fixed height — the standalone page. */
+  grow?: boolean;
 }
 
 const DB_SCOPE_NOTE = "数据源与应用在同一权限范围内运行。";
@@ -48,7 +50,7 @@ function useResolvedTheme(): "light" | "dark" {
   return theme;
 }
 
-export function AppSurface({ page, embedded = false, onOpen, previewSource }: Props) {
+export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false }: Props) {
   const pages = usePages();
   const enabled = page.app?.enabled ?? "";
   const source = previewSource ?? enabled;
@@ -100,7 +102,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
   const doc = useMemo(() => (source ? appDocument(source, theme) : ""), [source, theme]);
 
   return (
-    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}`}>
+    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}${grow ? " app-surface--grow" : ""}`}>
       {running && source ? (
         <iframe
           key={runKey}
@@ -118,15 +120,22 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource }: Pr
       )}
       <div className="app-surface__bar">
         {running && <span className="app-surface__dot" title="运行中" />}
-        <AppWindow size={14} aria-hidden="true" />
-        <button type="button" className="app-surface__name" onClick={onOpen} title={DB_SCOPE_NOTE}>
-          {page.title || "未命名小应用"}
-        </button>
-        {bindings.length > 0 && (
-          <span className="app-surface__dbs" title={`数据源：${boundTitles.join("、")}`}>
-            <Database size={12} aria-hidden="true" />
-            {boundTitles.join("、")}
-          </span>
+        {/* On its own page the app is already the page; its name and the
+         *  bound databases live in the strip below, so the bar only names
+         *  itself when it is embedded inside another document. */}
+        {embedded && (
+          <>
+            <AppWindow size={14} aria-hidden="true" />
+            <button type="button" className="app-surface__name" onClick={onOpen} title={DB_SCOPE_NOTE}>
+              {page.title || "未命名小应用"}
+            </button>
+            {bindings.length > 0 && (
+              <span className="app-surface__dbs" title={`数据源：${boundTitles.join("、")}`}>
+                <Database size={12} aria-hidden="true" />
+                {boundTitles.join("、")}
+              </span>
+            )}
+          </>
         )}
         {preview && <span className="app-surface__tag">预览</span>}
         {error && <span className="app-surface__error">{error}</span>}

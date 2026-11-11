@@ -109,7 +109,10 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   // Nothing enabled yet: the surface sits collapsed, not pretending to run.
   await expect(page.locator(".app-surface__empty")).toContainText("未配置源码");
 
-  // Preview the draft (read-only), then enable it.
+  // Preview the draft (read-only), then enable it — through the manage
+  //  sheet: the strip is the closed page's only chrome, source lives in it.
+  await page.getByRole("button", { name: "管理", exact: true }).click();
+  await page.getByRole("tab", { name: "源码", exact: true }).click();
   await page.getByRole("button", { name: "启用", exact: true }).click();
   await expect.poll(async () => {
     const dto = await agent(token, "GET", `/api/v1/pages/${app.body.id}`);
@@ -122,13 +125,25 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   await frame.locator("#load").click();
   await expect(frame.locator("#rows")).toContainText("rows:1");
 
+  // The bound database reads as an object in the sheet: name, direction,
+  //  fields, recent rows.
+  await page.getByRole("tab", { name: "数据源", exact: true }).click();
+  await expect(page.locator(".app-ds-list__item")).toContainText("计数条目");
+  await expect(page.locator(".app-inspect")).toContainText("备注");
+  await expect(page.locator(".app-inspect")).toContainText("第一条");
+  await page.screenshot({ path: join(evidence, "app-page-sheet.png"), fullPage: false });
+
+  // Collapsed again, the stage is the app and the strip its summary.
+  await page.getByRole("button", { name: "收起", exact: true }).click();
+  await expect(page.locator(".app-strip")).toContainText("数据源 1");
+  await page.screenshot({ path: join(evidence, "app-page.png"), fullPage: false });
+
   // The sandbox has no storage or ambient identity of its own.
   const storage = await frame.locator("body").evaluate(() => {
     try { return `localStorage:${typeof localStorage}`; } catch { return "localStorage:blocked"; }
   });
   expect(storage).toMatch(/localStorage:(blocked|undefined)/);
 
-  await page.screenshot({ path: join(evidence, "app-page.png"), fullPage: false });
   expect(errors).toEqual([]);
 });
 
