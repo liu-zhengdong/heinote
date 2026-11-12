@@ -762,7 +762,18 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     app.get("/{*path}", (_req, res) => res.sendFile(resolve(root, "index.html")));
   }
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (error instanceof z.ZodError) { res.status(400).json({ error: "输入格式无效。", code: "bad_request", details: error.issues.map((issue) => ({ path: issue.path, message: issue.message })) }); return; }
+    if (error instanceof z.ZodError) {
+      // error 带出首个字段的位置和原因；调用方只展示 error 时也能定位。
+      const [first] = error.issues;
+      const where = first?.path?.join(".") ?? "";
+      const reason = first?.message ?? "";
+      res.status(400).json({
+        error: reason ? (where ? `${where}：${reason}` : `输入格式无效：${reason}`) : "输入格式无效。",
+        code: "bad_request",
+        details: error.issues.map((issue) => ({ path: issue.path, message: issue.message })),
+      });
+      return;
+    }
     if (error instanceof HttpError) {
       const quota = (error as { quota?: unknown }).quota;
       res.status(error.status).json({ error: error.message, code: error.code, ...(quota ? { quota } : {}) });

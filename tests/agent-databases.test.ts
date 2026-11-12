@@ -905,6 +905,46 @@ test("UC-22: adds each new property type, colors options and validates per-type 
   const cleared = await a.updateRow(db, row3, { properties: { property_tags: "", property_amount: "" } });
   assert.equal(cleared.values.property_tags, "");
   assert.equal(cleared.values.property_amount, "");
+
+  // JSON scalars coerce to the stored strings: apps write booleans,
+  // numbers and arrays as values, not pre-flattened strings.
+  const coerced = await a.updateRow(db, cleared, { properties: {
+    property_done: true, property_amount: 7.5, property_tags: ["急", "发版"], property_note: 2026,
+  } });
+  assert.equal(coerced.page.properties?.property_done, "true");
+  assert.equal(coerced.page.properties?.property_amount, "7.5");
+  assert.equal(coerced.page.properties?.property_tags, JSON.stringify(["急", "发版"]));
+  assert.equal(coerced.page.properties?.property_note, "2026");
+  const unchecked = await a.updateRow(db, coerced, { properties: { property_done: false } });
+  assert.equal(unchecked.page.properties?.property_done, "");
+  const posted = await a.addRow(db, { title: "app 写入", properties: { property_done: true, property_amount: 42 } });
+  assert.equal(posted.page.properties?.property_done, "true");
+  assert.equal(posted.page.properties?.property_amount, "42");
+});
+
+// Issue #1: a schema rejection names the field and the reason in `error`,
+// not only in `details` — apps surface `error` to their users directly.
+test("bad_request carries the first field path in error", async (t) => {
+  const { agent: a } = await fixture(t);
+  const db = await a.create({ database: {
+    properties: [{ id: "property_done", name: "完成", type: "checkbox" }],
+    views: [{ id: TABLE, name: "表", kind: "table" }],
+  } });
+  // A nested object has no string reading; it still fails — but `error`
+  // itself says where and why.
+  const reply = await a.request(`/databases/${db.id}/rows`, {
+    method: "POST",
+    body: { requestId: randomUUID(), baseRevision: db.revision, title: "x", properties: { property_done: { nested: true } } },
+  });
+  const body = ok(reply, 400);
+  assert.equal(body.code, "bad_request");
+  assert.match(body.error, /properties\.property_done/);
+  assert.ok(Array.isArray(body.details) && body.details.length > 0);
+  // A missing required field names it too.
+  const missing = ok(await a.request(`/databases/${db.id}/rows`, {
+    method: "POST", body: { requestId: randomUUID(), title: "x" },
+  }), 400);
+  assert.match(missing.error, /baseRevision/);
 });
 
 // UC-22 batch 1: sorting follows each new type's own order.

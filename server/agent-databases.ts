@@ -43,12 +43,24 @@ const propertySchema = propertyShape.strict().extend({
 });
 const propertyPatch = propertySchema.omit({ id: true }).partial().extend({ default_status: safeKey.nullable().optional() }).refine((value) => Object.keys(value).length > 0, "请提供属性修改。");
 const viewShape = storedConfig.shape.views.element;
-const filterSchema = viewShape.shape.filter.unwrap().strict().extend({ property_id: propertyId, value: z.string().max(100000) });
+/* 值在存储层都是字符串，但编写 app 的人自然写 JSON 标量：true、42、
+   字符串数组。这里归一化为等价的字符串写法，交给逐类型的校验判断
+   合法性 —— 数字交给 number 的格式检查，true/false 交给 checkbox，
+   数组交给 multi_select 和 relation 的 JSON 解析。非字符串数组先
+   JSON 化字符串元素；其它对象类型没有合理的字符串读法，仍拒绝。 */
+const scalarString = (limit: number) => z.union([
+  z.string().max(limit),
+  z.number().finite().transform((value) => String(value)),
+  z.boolean().transform((value) => String(value)),
+  z.array(z.union([z.string().max(limit), z.number().finite().transform(String), z.boolean().transform(String)]))
+    .max(1000).transform((values) => JSON.stringify(values)),
+]);
+const filterSchema = viewShape.shape.filter.unwrap().strict().extend({ property_id: propertyId, value: scalarString(100000) });
 // 一个条件：属性、运算符（缺省用该类型的第一个）和需要值时的值。
 const conditionSchema = z.object({
   property_id: propertyId,
   op: z.string().min(1).max(100).optional(),
-  value: z.string().max(100000).optional(),
+  value: scalarString(100000).optional(),
 }).strict();
 // 条件可并列，也可放进一个组（组内 and/or）；组里不能再有组。
 const filtersSchema = z.array(z.union([
@@ -81,7 +93,7 @@ const fileSchema = schema.definition.collections.pages.fields.cover_image.unwrap
 });
 const rowFields = {
   title: z.string().max(500).optional(),
-  properties: z.record(propertyId, z.string().max(100000).nullable()).optional(),
+  properties: z.record(propertyId, scalarString(100000).nullable()).optional(),
   propertyFiles: z.record(propertyId, z.array(fileSchema).max(MAX_ROW_IMAGES)).optional(),
 };
 const createSchema = z.object({

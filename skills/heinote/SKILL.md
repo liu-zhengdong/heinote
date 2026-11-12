@@ -121,8 +121,10 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 ## 条目属性值规则（properties 字段，属性 ID 为键）
 
 Select 用选项名；Multi-select 用选项名列表；Status 用状态名；Date 用
-`YYYY-MM-DD` 或 `起/止` 区间；Relation 用页面 ID 数组字符串；Checkbox 用
-`true`；`null` 清除。Image 经 `propertyFiles` 引用已存在的 StoredFile。
+`YYYY-MM-DD` 或 `起/止` 区间；Relation 用页面 ID 数组（或 JSON 数组字符串）；
+Checkbox 用布尔 `true` 或字符串 `"true"`，`false`/`"false"` 表示未勾选；
+`null` 清除。Number、多选等也接受 JSON 标量与数组，会归一化为存储字符串。
+Image 经 `propertyFiles` 引用已存在的 StoredFile。
 完整规则见 `docs/agent-api.md`。
 
 ## 参考实现
