@@ -3353,12 +3353,14 @@ h3.block__editable {
   padding: 10px 2px;
 }
 
+/* A rule is a pause, not a border: Notion draws it in the faintest hairline,
+ *  so the page reads as sections of words rather than boxed parts. */
 .block__rule {
   width: 100%;
   height: 1px;
   border: 0;
   margin: 0;
-  background: var(--hairline-strong);
+  background: var(--hairline);
 }
 
 .block--code > .block__content {
