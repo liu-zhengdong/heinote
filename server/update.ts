@@ -131,7 +131,7 @@ const spawnRunner = (config: UpdateConfig, state: UpdateState): number => {
  * The runner performs the heavy work so an admin request never blocks.
  */
 export const applyUpdate = async (config: UpdateConfig, port: number): Promise<UpdateState> => {
-  const state = readState(config.dataDir) as UpdateState;
+  const state = updateStatus(config);
   if (state.status === "running") fail(409, "已有更新任务进行中。", "conflict");
   const release = await checkUpdate(config);
   if (!release.newer) fail(409, "当前已是最新版本。", "conflict");
@@ -157,4 +157,15 @@ export const applyUpdate = async (config: UpdateConfig, port: number): Promise<U
   return next;
 };
 
-export const updateStatus = (config: UpdateConfig): UpdateState => readState(config.dataDir);
+/** A container restart ends the old runner. A responding runtime at the target
+ * version can finish that hand-off without depending on the old process. */
+export const updateStatus = (config: UpdateConfig): UpdateState => {
+  const state = readState(config.dataDir);
+  if (state.status === "running" && (state.step === "restart" || state.step === "check")
+    && state.version?.replace(/^v/i, "") === config.version.replace(/^v/i, "")) {
+    const applied: UpdateState = { ...state, status: "applied", step: "check", finishedAt: new Date().toISOString() };
+    writeState(config.dataDir, applied);
+    return applied;
+  }
+  return state;
+};

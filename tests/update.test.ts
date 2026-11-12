@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { startServer } from "../server/index.ts";
 import { newerVersion } from "../server/update.ts";
-import { readState, switchCurrent, versionsDir } from "../server/update-core.ts";
+import { readState, switchCurrent, versionsDir, writeState, type UpdateState } from "../server/update-core.ts";
 import { Browser, type Json, type Reply } from "./helpers/github.ts";
 
 // UC-32 acceptance uses real HTTP plus the real detached runner (test mode).
@@ -114,6 +114,48 @@ test("update-check reports a newer release and non-admin gets 403", async (t) =>
   await status(await guest.request("/api/auth/register", { method: "POST", body: { handle: "bob", displayName: "Bob", password } }), 201);
   assert.equal((await guest.request("/api/admin/update-check")).status, 403);
   assert.equal((await guest.request("/api/admin/update-apply", { method: "POST" })).status, 403);
+});
+
+test("update-status completes a restarted runtime only when its version matches", async (t) => {
+  const f = await fixture(t, await releaseStub(t, "v9.9.9"));
+  const about = status(await f.browser.request("/api/admin/about"), 200);
+  const version = `v${about.version}`;
+  for (const step of ["restart", "check"] as const) {
+    writeState(f.directory, { status: "running", step, version, startedAt: "2026-11-12T11:46:56.357Z" });
+    const state = status(await f.browser.request("/api/admin/update-status"), 200);
+    assert.equal(state.status, "applied");
+    assert.equal(state.step, "check");
+    assert.equal(state.version, version);
+    assert.equal(state.startedAt, "2026-11-12T11:46:56.357Z");
+    assert.ok(state.finishedAt);
+    assert.deepEqual(readState(f.directory), state, "completion survives the next read");
+  }
+  const unchanged: UpdateState[] = [
+    { status: "running", step: "restart", version: "v9.9.9" },
+    { status: "running", step: "download", version },
+    { status: "running", step: "switch", version },
+    { status: "failed", step: "check", version, error: "health check failed" },
+  ];
+  for (const expected of unchanged) {
+    writeState(f.directory, expected);
+    assert.deepEqual(status(await f.browser.request("/api/admin/update-status"), 200), expected);
+    assert.deepEqual(readState(f.directory), expected);
+    if (expected.status === "running") {
+      assert.equal((await f.browser.request("/api/admin/update-apply", { method: "POST" })).status, 409);
+    }
+  }
+});
+
+test("update-apply accepts the next release after a completed container restart", async (t) => {
+  process.env.HEINOTE_UPDATE_TEST_MODE = "no-restart";
+  process.env.HEINOTE_UPDATE_SKIP_NPM = "1";
+  t.after(() => { delete process.env.HEINOTE_UPDATE_TEST_MODE; delete process.env.HEINOTE_UPDATE_SKIP_NPM; });
+  const f = await fixture(t, await releaseStub(t, "v9.9.9"));
+  const about = status(await f.browser.request("/api/admin/about"), 200);
+  writeState(f.directory, { status: "running", step: "restart", version: `v${about.version}` });
+  status(await f.browser.request("/api/admin/update-apply", { method: "POST" }), 202);
+  const applied = await waitState(f.directory, "applied");
+  assert.equal(applied.version, "v9.9.9");
 });
 
 test("update-apply without archive or newer version returns 409", async (t) => {
