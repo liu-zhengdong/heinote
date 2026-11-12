@@ -1,7 +1,7 @@
-import { DatabaseSync, backup } from "node:sqlite";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { cp } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import { snapshotDatabaseFile, stagedDirectory } from "../server/snapshot.mjs";
 
 const source = realpathSync(resolve(process.env.DATA_DIR ?? "data"));
 const databasePath = join(source, "notes.sqlite");
@@ -17,21 +17,17 @@ mkdirSync(dirname(requested), { recursive: true, mode: 0o700 });
 // Resolve the parent too, so a symlink cannot place a backup inside attachments.
 const destination = join(realpathSync(dirname(requested)), basename(requested));
 checkDestination(destination);
-const staging = mkdtempSync(join(dirname(destination), ".notes-backup-"));
+const staging = stagedDirectory(dirname(destination));
 try {
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try { await backup(database, join(staging, "notes.sqlite")); }
-  finally { database.close(); }
+  await snapshotDatabaseFile(databasePath, staging.dir);
   // Files commit before their index and remain immutable. Copy after the database snapshot.
-  await cp(attachments, join(staging, "attachments"), {
+  await cp(attachments, join(staging.dir, "attachments"), {
     recursive: true,
     filter: (path) => !basename(path).endsWith(".tmp"),
   });
   checkDestination(destination);
-  renameSync(staging, destination);
+  staging.finalize(basename(destination));
   console.log(`Backup: ${destination}`);
 } finally {
-  // Only remove the private staging directory created by this invocation.
-  if (dirname(staging) !== dirname(destination) || !basename(staging).startsWith(".notes-backup-")) throw new Error("Unexpected backup staging path.");
-  rmSync(staging, { recursive: true, force: true });
+  staging.cleanup();
 }

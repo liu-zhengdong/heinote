@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { GithubStatus } from "../../core/github-auth";
+import { useUi } from "../../app/ui-context";
 import { useWorkspace } from "../../app/workspace-context";
 import { api, ApiError, errorMessage } from "./api";
 import { GithubMark } from "./Github";
@@ -13,6 +14,7 @@ export function GithubLoginMethods({ onBusyChange, active = true, notice, notice
   requestExternal(action: () => void): void;
 }) {
   const { document: workspaceDocument } = useWorkspace();
+  const { toast } = useUi();
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -67,10 +69,14 @@ export function GithubLoginMethods({ onBusyChange, active = true, notice, notice
     onBusyChange(false);
   };
 
+  useEffect(() => {
+    if (!notice) return;
+    toast(notice, noticeError ? "error" : "success");
+  }, [notice, noticeError, toast]);
+
   const identity = status?.identity ?? null;
   return (
     <>
-      {notice ? <p className="account-notice" role={noticeError ? "alert" : "status"}>{notice}</p> : null}
       <ListStatus loading={loading} error={error} retry={retry} empty={!status} emptyText="无法读取 GitHub 登录状态" />
       {status ? (
         <ul className="account-list" aria-label="GitHub 登录方式" aria-busy={Boolean(pending)}>
