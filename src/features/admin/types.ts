@@ -59,6 +59,42 @@ export interface About {
   startedAt: string;
 }
 
+/* UC-31 backup admin types. `password` never leaves the server; the client
+   sees only `passwordSet`. */
+export interface BackupMaskedConfig {
+  enabled: boolean;
+  webdav: { url: string; user: string; passwordSet: boolean };
+  schedule: { hour: number; minute: number };
+  retention: number;
+  chunkBytes: number;
+}
+
+export type BackupResultKind = "ok" | "auth" | "network" | "other" | "interrupted";
+
+export interface BackupState {
+  running: boolean;
+  runningSince: string | null;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastResult: BackupResultKind | null;
+  lastError: string | null;
+  lastArchiveId: string | null;
+  remoteCount: number | null;
+  pending: { archiveId: string; file: string; url: string; user: string } | null;
+}
+
+export interface BackupStatus {
+  config: BackupMaskedConfig;
+  state: BackupState;
+}
+
+export interface BackupTestResult {
+  ok: boolean;
+  warning?: string;
+  kind?: string;
+  error?: string;
+}
+
 export interface AccountQuota {
   storage: { used: number; limit: number; source: QuotaSource; over: number };
   teams: { count: number; limit: number; source: QuotaSource };

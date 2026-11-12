@@ -48,6 +48,21 @@
 }
 .ac-queue__row:hover { background: var(--fill-hover, rgba(55,53,47,.045)); }
 .ac-queue__name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac-queue__row--static { cursor: default; }
+.ac-queue__row--static:hover { background: none; }
+
+/* ————— backup tab (UC-31) ————— */
+.ac-tile--danger { border-color: color-mix(in srgb, var(--danger, #eb5757) 45%, transparent); background: color-mix(in srgb, var(--danger, #eb5757) 5%, transparent); }
+.ac-tile--danger .ac-tile__value { color: var(--danger, #eb5757); font-size: 18px; }
+.ac-input {
+  height: 30px; padding: 0 8px; font: inherit; color: inherit; min-width: 0;
+  border: 1px solid var(--hairline-strong, rgba(55,53,47,.16)); border-radius: 6px; background: none; outline: none;
+  flex: 1; max-width: 380px;
+}
+.ac-input:focus { border-color: var(--blue, #2383e2); }
+.ac-input--mid { flex: 0 1 220px; }
+.ac-input--s { flex: 0 0 auto; width: 64px; }
+.ac-fields--form .ac-field dd + dd { padding-top: 8px; }
 
 /* ————— master / detail ————— */
 .ac-split { flex: 1; min-width: 0; display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }

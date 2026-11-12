@@ -344,7 +344,9 @@ test("client-supplied paths never escape onto the filesystem", async (t) => {
   assert.equal(existsSync(resolve(f.directory, "../../nested")), false);
   assert.equal(existsSync(resolve(f.directory, "../inside.bin")), false);
   for (const entry of readdirSync(f.directory)) {
-    assert.ok(/^notes\.sqlite(-wal|-shm)?$/.test(entry) || entry === "attachments", `traversal paths must not create ${entry} in DATA_DIR`);
+    // `backups/` + `backup-config.json` are the UC-31 backup feature's own
+    // DATA_DIR entries, not something a traversal path can create.
+    assert.ok(/^notes\.sqlite(-wal|-shm)?$/.test(entry) || ["attachments", "backups", "backup-config.json"].includes(entry), `traversal paths must not create ${entry} in DATA_DIR`);
   }
   for (const rel of attachmentFiles(f.directory)) {
     assert.match(rel, HASH_LAYOUT, `attachment ${rel} must be addressed by content hash, never by client path`);

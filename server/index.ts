@@ -26,6 +26,7 @@ import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from
 import { writeExport } from "./export.ts";
 import { importJob, startImport } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
+import { attachAdminBackupRoutes, Backups } from "./backups.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -68,7 +69,7 @@ const parse = <T extends z.ZodType>(schema: T, input: unknown): z.infer<T> => sc
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const currentTime = () => new Date().toISOString();
 
-export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean } = {}) {
+export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean; backupRetryDelays?: number[] } = {}) {
   const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
   const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
   const startedAt = new Date();
@@ -131,6 +132,10 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (who.user.siteRole !== "admin") fail(403, "需要站点管理员权限。");
     return who;
   };
+  // UC-31: scheduled site backups to a WebDAV target, admin-console managed.
+  const backups = new Backups(dataDir, store, undefined, { retryDelays: options.backupRetryDelays });
+  attachAdminBackupRoutes(app, backups, admin);
+  backups.startScheduler();
   const establish = (req: Request, res: Response, userId: string) => {
     const previous = cookie(req);
     if (previous) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(previous));
@@ -753,7 +758,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { collaborationSocket?.close(); await vite?.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
