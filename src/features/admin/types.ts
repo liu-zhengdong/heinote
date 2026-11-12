@@ -59,6 +59,24 @@ export interface About {
   startedAt: string;
 }
 
+export interface UpdateCheck {
+  tag: string;
+  name: string;
+  notes: string;
+  asset: string | null;
+  newer: boolean;
+}
+
+export type UpdateStep = "download" | "verify" | "unpack" | "install" | "switch" | "restart" | "check";
+export interface UpdateStatus {
+  status: "idle" | "running" | "failed" | "applied";
+  step?: UpdateStep;
+  version?: string;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface AccountQuota {
   storage: { used: number; limit: number; source: QuotaSource; over: number };
   teams: { count: number; limit: number; source: QuotaSource };

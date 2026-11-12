@@ -106,6 +106,11 @@ test("UC-16 console: overview, users, teams and quota settings render", async ({
   const repo = page.locator(".ac-about__link");
   await expect(repo).toHaveAttribute("href", /^https:\/\//);
   await expect(repo).toHaveAttribute("target", "_blank");
+  // UC-32: the update card renders and checking resolves to a release result
+  // or an error with a retry button — the button is never dead.
+  await expect(page.locator(".ac-update")).toContainText("版本更新");
+  await page.getByRole("button", { name: "检查更新", exact: true }).click();
+  await expect(page.locator(".ac-update")).toContainText(/发现新版本|已是最新版本|重试/, { timeout: 20000 });
   await shots("about");
 
   // The console has its own URL: a reload stays on it, 返回笔记 returns.
