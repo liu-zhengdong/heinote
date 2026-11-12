@@ -13,7 +13,7 @@ export const githubMessages = {
   invalid_request: "GitHub 授权已失效，请重新发起。",
   unavailable: "暂时无法连接 GitHub，请重新登录。",
   registration_closed: "注册已关闭。已有账号请先用密码登录，再绑定 GitHub。",
-  identity_in_use: "此 GitHub 身份已绑定其他 Notes 账号。",
+  identity_in_use: "此 GitHub 身份已绑定其他小黑笔记账号。",
   already_linked: "当前账号已绑定其他 GitHub 身份，请先解除原关联。",
   session_changed: "登录状态已变化，请重新进入目标账号后发起授权。",
   disabled: "GitHub 登录尚未启用。",

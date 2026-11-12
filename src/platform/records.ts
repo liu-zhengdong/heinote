@@ -9,13 +9,13 @@ import type { Block, BlockRecord, HistoryPart, NotePage, PageRecord, PageVersion
 import { historyParts, versionOfParts } from "./history-record";
 import { blockRecordId, parseBlockRecordId, parseHistoryId } from "./record-ids";
 
-/* What Notes keeps, as records — and the workspace they make.
+/* What HeiNote keeps, as records — and the workspace they make.
 
    Every field of a record is a top-level field, written by a patch of the
    fields that changed (`writeFor`), so two people changing different fields
    of one page or paragraph both keep their change and the later of two
    changes to one field wins it. A paragraph's words (`content`) and a page's
-   name (`title_content`) are rich text: Terminus merges their runs character
+   name (`title_content`) are rich text: the server merges their runs character
    by character from the value each write started from (`base`).
 
    - `pages/<page id>`: a page, without its paragraphs.
@@ -30,10 +30,10 @@ import { blockRecordId, parseBlockRecordId, parseHistoryId } from "./record-ids"
    in that space, holding the shared page trees that live there. */
 
 export const COLLECTIONS = ["pages", "blocks", "versions", "workspace_settings"] as const;
-export type NotesCollection = typeof COLLECTIONS[number];
+export type HeiNoteCollection = typeof COLLECTIONS[number];
 
 /** What a space's plane holds: its page trees. Settings are the member's own. */
-export const SPACE_COLLECTIONS = ["pages", "blocks", "versions"] as const satisfies readonly NotesCollection[];
+export const SPACE_COLLECTIONS = ["pages", "blocks", "versions"] as const satisfies readonly HeiNoteCollection[];
 
 /** The member's own plane; any other is a space's id. */
 export const PERSONAL = "personal";
@@ -46,23 +46,23 @@ interface NotesRecords {
   workspace_settings: SettingsRecord;
 }
 
-/** A record of Notes', as schema.ts declares its collection's. */
-export type RecordValue = NotesRecords[NotesCollection];
+/** A record of HeiNote's, as schema.ts declares its collection's. */
+export type RecordValue = NotesRecords[HeiNoteCollection];
 
 /** A JSON Merge Patch of a record: its fields that changed, null for one
  *  that went. */
 export type RecordPatch = Record<string, unknown>;
 
-/** A record of Notes': its collection and its id. */
+/** A record of HeiNote's: its collection and its id. */
 export interface RecordRef {
-  collection: NotesCollection;
+  collection: HeiNoteCollection;
   id: string;
 }
 
 export const refKey = (ref: RecordRef) => `${ref.collection}/${ref.id}`;
 
 /** What one plane holds: each collection's records by id. */
-export type PlaneRecords = Readonly<Record<NotesCollection, ReadonlyMap<string, RecordValue>>>;
+export type PlaneRecords = Readonly<Record<HeiNoteCollection, ReadonlyMap<string, RecordValue>>>;
 
 export const emptyPlane = (): PlaneRecords => ({
   pages: new Map(), blocks: new Map(), versions: new Map(), workspace_settings: new Map(),
@@ -72,9 +72,9 @@ export const emptyPlane = (): PlaneRecords => ({
  *  A patch's rich-text fields merge from the runs the window showed, or from
  *  `base` when it says otherwise. */
 export type RecordWrite =
-  | { action: "put"; collection: NotesCollection; id: string; value: RecordValue }
-  | { action: "patch"; collection: NotesCollection; id: string; patch: RecordPatch; base?: Record<string, RichText> }
-  | { action: "delete"; collection: NotesCollection; id: string };
+  | { action: "put"; collection: HeiNoteCollection; id: string; value: RecordValue }
+  | { action: "patch"; collection: HeiNoteCollection; id: string; patch: RecordPatch; base?: Record<string, RichText> }
+  | { action: "delete"; collection: HeiNoteCollection; id: string };
 
 /** The page a record belongs to; none for the member's settings. */
 export function pageOfRef(ref: RecordRef): string | undefined {

@@ -88,7 +88,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
 
   /* Saving is a state, not news. At rest nothing is shown; while a write is
      on its way a dot breathes; it holds amber while there is no connection
-     to send it on, and red once Terminus refused a change for good. It never
+     to send it on, and red once the server refused a change for good. It never
      rests while something is not saved. Words would take a third of this
      bar on a narrow window for something that is true almost all of the
      time. */

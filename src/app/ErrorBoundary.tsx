@@ -18,7 +18,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    void log.error("Notes could not draw its window", {
+    void log.error("HeiNote could not draw its window", {
       error: `${error.name}: ${error.message}`.slice(0, 300),
       where: (info.componentStack ?? "").slice(0, 2000),
     }).catch(() => undefined);
@@ -32,7 +32,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
         <h1>Something went wrong</h1>
         <div className="state-screen__actions">
           <button type="button" className="btn" onClick={() => this.setState({ error: null })}>Try again</button>
-          <button type="button" className="btn btn--primary" onClick={() => window.location.reload()}>Reload Notes</button>
+          <button type="button" className="btn btn--primary" onClick={() => window.location.reload()}>Reload HeiNote</button>
         </div>
       </main>
     );

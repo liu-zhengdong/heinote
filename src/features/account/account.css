@@ -1,10 +1,10 @@
-/* Account surfaces inherit Notes' colours, controls and motion. */
+/* Account surfaces inherit HeiNote' colours, controls and motion. */
 .account-gate,
 .account-settings,
 .account-entry,
 .public-links,
 .public-reader {
-  font-family: var(--terminus-font-body, "Mona Sans VF", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Noto Sans Backtick Fix", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji");
+  font-family: var(--heinote-font-body, "Mona Sans VF", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Noto Sans Backtick Fix", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji");
   color: var(--ink);
 }
 
@@ -188,7 +188,7 @@
 .account-secret__head .account-muted { margin: 0; font-size: 12px; }
 .account-secret__line { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 .account-secret__line .account-icon-btn { flex: none; }
-.account-secret__value { min-width: 0; flex: 1; height: 34px; padding: 6px 10px; border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); font-family: var(--terminus-font-code, monospace) !important; font-size: 12.5px !important; line-height: 1.4; user-select: text; }
+.account-secret__value { min-width: 0; flex: 1; height: 34px; padding: 6px 10px; border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); font-family: var(--heinote-font-code, monospace) !important; font-size: 12.5px !important; line-height: 1.4; user-select: text; }
 .account-secret__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .account-secret__foot .account-muted { margin: 0; font-size: 12px; }
 
@@ -236,8 +236,8 @@
 .public-reader__cover { display: block; width: 100%; height: clamp(120px, 22vw, 240px); object-fit: cover; }
 .public-reader__content { max-width: 780px; margin: 0 auto; padding: 38px clamp(20px, 4vw, 48px); font-size: 16px; line-height: 1.75; overflow-wrap: anywhere; }
 .public-reader__document--wide .public-reader__content { max-width: none; }
-.public-reader__content--serif { font-family: var(--terminus-font-serif, Georgia, "Noto Serif SC", serif); }
-.public-reader__content--mono { font-family: var(--terminus-font-code, monospace); }
+.public-reader__content--serif { font-family: var(--heinote-font-serif, Georgia, "Noto Serif SC", serif); }
+.public-reader__content--mono { font-family: var(--heinote-font-code, monospace); }
 .public-reader__icon { font-size: 42px; line-height: 1.4; margin-bottom: 12px; }
 .public-reader__content h1 { margin: 0 0 24px; font-size: clamp(26px, 4vw, 34px); font-weight: 700; line-height: 1.35; }
 .public-reader__content h2 { margin: 22px 0 8px; font-size: 25px; line-height: 1.4; font-weight: 650; }
@@ -257,7 +257,7 @@
 .public-reader__content blockquote { margin: 10px 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--ink-4); }
 .public-reader__content hr { border: 0; border-top: 1px solid var(--hairline-strong); margin: 18px 0; }
 .public-reader__content pre { max-width: 100%; overflow-x: auto; padding: 16px; border-radius: var(--r-sm); background: var(--fill); white-space: pre; font-size: 14px; }
-.public-reader__content code { font-family: var(--terminus-font-code, monospace); padding: 2px 4px; border-radius: var(--r-xs); background: var(--code-bg); color: var(--code-ink); font-size: .9em; }
+.public-reader__content code { font-family: var(--heinote-font-code, monospace); padding: 2px 4px; border-radius: var(--r-xs); background: var(--code-bg); color: var(--code-ink); font-size: .9em; }
 .public-reader__content pre code { padding: 0; background: none; color: inherit; font-size: inherit; }
 .public-reader__image { display: inline-block; vertical-align: middle; border-radius: var(--r-xs); object-fit: contain; }
 .public-reader__callout { display: flex; align-items: start; gap: 10px; padding: 14px 16px; border-radius: var(--r-sm); background: var(--callout-bg); }

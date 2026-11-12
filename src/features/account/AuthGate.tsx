@@ -142,8 +142,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   return (
     <SessionContext.Provider value={value}>
       <main className="account-gate">
-        <section className="account-gate__card" aria-label={signupMode ? "GitHub 登录选择" : registering ? "创建 Notes 账号" : "登录 Notes"} aria-busy={loading || busy}>
-          <div className="account-gate__brand"><span className="account-gate__mark"><img src="/brand/notes-icon.svg" width="34" height="34" alt="" /></span>Notes</div>
+        <section className="account-gate__card" aria-label={signupMode ? "GitHub 登录选择" : registering ? "创建小黑笔记账号" : "登录小黑笔记"} aria-busy={loading || busy}>
+          <div className="account-gate__brand"><span className="account-gate__mark"><img src="/brand/heinote-icon.png" width="34" height="34" alt="" /></span>小黑笔记</div>
           <h1>{loading ? "正在连接" : signupMode ? "GitHub 登录" : registering ? "创建账号" : "登录"}</h1>
           {loading ? <p className="account-muted" role="status">正在读取登录状态…</p> : !session ? (
             <>

@@ -5,9 +5,9 @@ import * as Y from "yjs";
 import WebSocket from "ws";
 
 const engine = process.env.CONTAINER_ENGINE ?? "podman";
-const image = process.env.NOTES_IMAGE ?? "localhost/terminus-notes:collaboration";
+const image = process.env.NOTES_IMAGE ?? "localhost/heinote:latest";
 const runId = randomUUID();
-const container = `notes-accept-${runId}`;
+const container = `heinote-accept-${runId}`;
 const volume = `${container}-data`;
 const run = (...args) => execFileSync(engine, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60000 }).trim();
 const documents = new Set();

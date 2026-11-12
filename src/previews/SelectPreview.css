@@ -1,5 +1,5 @@
 body { overflow: auto; background: var(--sidebar); }
-.select-preview { max-width: 960px; margin: 0 auto; padding: 32px 32px 64px; color: var(--ink); font-family: var(--terminus-font-body); }
+.select-preview { max-width: 960px; margin: 0 auto; padding: 32px 32px 64px; color: var(--ink); font-family: var(--heinote-font-body); }
 .select-preview__nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin-bottom: 44px; font-size: 14px; }
 .select-preview__brand { display: flex; align-items: center; gap: 9px; font-weight: 600; }
 .select-preview__brand img { width: 24px; height: 24px; }

@@ -10,8 +10,8 @@
 | 实时共编与冲突恢复 | [实时共编](archive/realtime-collaboration.md) | [共编交付](archive/realtime-collaboration-delivery.md) |
 | Agent 提案审核界面 | [提案审核](archive/proposal-review.md) | [审核界面验收](archive/realtime-collaboration-delivery.md#提案审核界面更新) |
 | 登录与注册界面 | [账号界面](archive/auth-interface.md) | [账号界面交付](archive/auth-interface-delivery.md) |
-| Notes 品牌图标 | — | [图标交付](archive/brand-delivery.md) |
+| 小黑笔记品牌图标 | — | [图标交付](archive/brand-delivery.md) |
 
 归档文档保留当轮事实。后续工作使用新的执行稿，不将历史方案视为当前规范。新增归档须使用未占用的名称，并同步修复引用。
 
-长期 UC 保存在 Obsidian 的 Terminus Notes 项目 `设计/` 中。面向人的当前系统说明见 [Atlas](../atlas/README.md)。
+长期 UC 保存在 Obsidian 的 小黑笔记项目 `设计/` 中。面向人的当前系统说明见 [Atlas](../atlas/README.md)。

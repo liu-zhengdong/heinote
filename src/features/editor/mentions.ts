@@ -40,7 +40,7 @@ export function mentionDescriber(
   return describe;
 }
 
-/** How mentions read once they leave Notes — copied as HTML or Markdown:
+/** How mentions read once they leave HeiNote — copied as HTML or Markdown:
  *  a page as its name, a date written out. (core/export-markdown.ts; the
  *  export writes them the same way.) */
 export { readableDescriber } from "../../core/export-markdown";

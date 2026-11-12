@@ -59,8 +59,8 @@ function shareRoot(pages: Record<string, NotePage>, pageId: string, spaceId: str
 
 /** Who can open a page, and what they may do with it.
  *
- * A page is shared through a Terminus space: inviting someone asks them to
- * join it (they accept from their Terminus notifications), and everything in
+ * A page is shared through a space: inviting someone asks them to join it
+ * (they accept from their notifications), and everything in
  * the page — every page inside it too — is theirs to read, and to change
  * unless they may only view. The owner and anyone with Full access invite,
  * move people between Full access, Can edit and Can view, and remove them.

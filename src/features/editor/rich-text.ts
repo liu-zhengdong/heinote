@@ -16,7 +16,7 @@ export function keptOffset(before: string, after: string, offset: number): numbe
   return after.length - suffix;
 }
 
-/** The mark an element is, when it is one of Notes': a span only as one of
+/** The mark an element is, when it is one of HeiNote': a span only as one of
  *  Notion's colours, a link only to the web or a page. Any other element —
  *  a pasted style, a browser's wrapper — gives way to its words. */
 function markOf(element: Element): InlineMarks | undefined {

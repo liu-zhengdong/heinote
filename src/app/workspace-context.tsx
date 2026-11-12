@@ -129,7 +129,7 @@ export interface WorkspaceContextValue {
   /** Leaves the space a page was shared through; its pages go with it. */
   leaveShare(pageId: string): Promise<void>;
   /** The spaces this member belongs to, by id: their role in each and what
-   *  it lets them do. Kept current by Terminus's live membership feed. */
+   *  it lets them do. Kept current by the live membership feed. */
   spaces: Record<string, SpaceSummary>;
   /** Who is in each space and who has been asked in, by space — each kept
    *  current by its own live roster. */
@@ -321,7 +321,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           globalThis.document.removeEventListener("visibilitychange", onVisibility);
         };
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Notes could not open"))
+      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "HeiNote could not open"))
       .finally(() => {
         if (active) setLoading(false);
       });
@@ -712,7 +712,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }).catch((error) => publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "版本未恢复。", writes: [] }));
   }, [document, platform]);
 
-  /* The spaces this member belongs to, kept current by Terminus's live
+  /* The spaces this member belongs to, kept current by the server's live
      membership feed — a page shared with them appears, a space they were
      removed from (or left) goes — and each space's roster by a feed of its
      own, read again only when that space says someone joined, left, was
@@ -746,14 +746,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [document, platform, setSpaceCatalog]);
 
   const ensureShareSpace = useCallback(async (pageId: string) => {
-    if (!document || !platform) throw new Error("Notes is still opening");
+    if (!document || !platform) throw new Error("HeiNote is still opening");
     const page = document.state.pages[pageId];
     if (!page) throw new Error("Page no longer exists");
     // Inside a shared tree, a page is shared through its root's space: one
     // page lives in one space.
     const inherited = spaceOfPage(document.state.pages, pageId);
     if (inherited) return inherited;
-    const created = await platform.spaces.create(`Notes · ${pageName(page)}`);
+    const created = await platform.spaces.create(`小黑笔记 · ${pageName(page)}`);
     await document.sharePageTree(pageId, created.spaceId);
     // Nothing is read again: the platform tells a space's maker it opened,
     // in every window, so the live list — and the space's roster — follow.
@@ -824,7 +824,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const unknownRequests = useRef(new Set<string>());
   const knowledgeBases = useMemo<KnowledgeBaseClient>(() => {
     const perform = async (requestId: string, action: () => Promise<SpaceSummary>, waitForWrites = true): Promise<SpaceSummary> => {
-      if (!platform || !document) throw new Error("Notes 尚未打开。");
+      if (!platform || !document) throw new Error("小黑笔记尚未打开。");
       const work = async () => {
         if (collaborationAccount() !== platform.bootstrap.user.id) throw new Error("账号已改变，请重新打开操作。");
         let result = unknownRequests.current.has(requestId) ? await platform.knowledgeBases.operation(requestId) : undefined;
@@ -849,25 +849,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
     return {
       async create(input) {
-        if (!platform) throw new Error("Notes 尚未打开。");
+        if (!platform) throw new Error("小黑笔记尚未打开。");
         const result = await perform(input.requestId, () => platform.knowledgeBases.create(input), false);
         switchSpace(result.spaceId);
         return result;
       },
       update: (spaceId, input) => perform(input.requestId, () => {
-        if (!platform) throw new Error("Notes 尚未打开。");
+        if (!platform) throw new Error("小黑笔记尚未打开。");
         return platform.knowledgeBases.update(spaceId, input);
       }),
       archive: (spaceId, input) => perform(input.requestId, () => {
-        if (!platform) throw new Error("Notes 尚未打开。");
+        if (!platform) throw new Error("小黑笔记尚未打开。");
         return platform.knowledgeBases.archive(spaceId, input);
       }),
       transfer: (spaceId, input) => perform(input.requestId, () => {
-        if (!platform) throw new Error("Notes 尚未打开。");
+        if (!platform) throw new Error("小黑笔记尚未打开。");
         return platform.knowledgeBases.transfer(spaceId, input);
       }),
       async operation(requestId) {
-        if (!platform) throw new Error("Notes 尚未打开。");
+        if (!platform) throw new Error("小黑笔记尚未打开。");
         return platform.knowledgeBases.operation(requestId);
       },
     };
@@ -1112,7 +1112,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const activity = useMemo<ActivityValue>(() => ({ saveStatus, presence }), [presence, saveStatus]);
 
   /* What this window does for people, offered to the agents the person lets
-     use Notes (schema.ts's window operations): the Terminus desktop runs them
+     use HeiNote (schema.ts's window operations). No host routes calls to a
+     window in this build — agents use the server API — but the handlers run
      here, in the window as it is when the call comes. */
   useWindowCommands(document && platform
     ? { workspace: value, document, author: platform.bootstrap.user.displayName, selectedPageId }

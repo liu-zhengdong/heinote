@@ -37,7 +37,7 @@ const PAGE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A mention read from anywhere — a record, the clipboard, the DOM — is
- *  untrusted: only the shapes Notes writes survive. */
+ *  untrusted: only the shapes HeiNote writes survive. */
 export function normalizeMention(value: unknown): Mention | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
@@ -149,7 +149,7 @@ export function inlineReadableText(content: InlineContent, describe: DescribeMen
 }
 
 /** Content with each mention written out as words, keeping its marks — for
- *  HTML and Markdown that leave Notes. */
+ *  HTML and Markdown that leave HeiNote. */
 export function inlineReadable(content: InlineContent, describe: DescribeMention): InlineContent {
   return normalizeInlineContent(content.map((run) => (
     run.mention ? { text: describe(run.mention).label, ...(run.marks ? { marks: run.marks } : {}) } : run

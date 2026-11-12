@@ -2,9 +2,9 @@ import { MENTION_CHAR, normalizeInlineContent } from "./inline-content";
 import type { InlineContent, InlineMarks, Mention } from "./types";
 
 /* Words as a record keeps them: the runs of a rich-text field (schema.ts,
-   `t.richText()`), which Terminus merges character by character. A run is
+   `t.richText()`), which the server merges character by character. A run is
    words with their marks, or an embed — one character that stands for
-   something — and Notes' one embed is a mention. In the window a mention is
+   something — and HeiNote's one embed is a mention. In the window a mention is
    the run of MENTION_CHAR that carries it; in a record it is
    `{ embed: { mention } }`, so the merge counts it as one character too. */
 

@@ -246,7 +246,7 @@ export function blockOrderBetween(
 }
 
 /** A paragraph read from the clipboard or a checkpoint — another client
- *  wrote it — with only what Notes writes kept. */
+ *  wrote it — with only what HeiNote writes kept. */
 function normalizeStoredBlock(value: unknown): Block | null {
   if (!value || typeof value !== "object") return null;
   const candidate = pictureLine(value as Record<string, unknown>);

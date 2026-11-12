@@ -935,7 +935,7 @@ export function DocumentEditor({
     }
   }, [movePage, ownerOf, page.id, store]);
 
-  /** What a paste brings, as blocks: blocks copied from Notes, or text of
+  /** What a paste brings, as blocks: blocks copied from HeiNote, or text of
    *  more than one line. Null for one line of text, which is typed in. A
    *  block that was cut keeps its id, so the paste moves that very page. */
   const pastedBlocks = useCallback((data: DataTransfer): { incoming: CopiedBlocks | null; fragment: BlockTree } | null => {

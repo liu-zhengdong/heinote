@@ -80,7 +80,7 @@ function merge(before: Value, patch: Value): Value {
 }
 function platform(initial: SpaceSummary[] = []): PlatformClient {
   return {
-    bootstrap: { appId: "notes", appName: "Notes", user: { id: hooks.account, handle: "author", displayName: "Author", avatarUrl: null } },
+    bootstrap: { appId: "notes", appName: "HeiNote", user: { id: hooks.account, handle: "author", displayName: "Author", avatarUrl: null } },
     presence: { set: vi.fn(), watch: vi.fn(), release: vi.fn().mockResolvedValue(undefined) },
     users: { search: vi.fn() }, files: { write: vi.fn(), read: vi.fn(), url: vi.fn() },
     spaces: {

@@ -6,7 +6,7 @@ import { GithubMark } from "./Github";
 import { ListStatus } from "./ListStatus";
 import type { AccountPanelProps } from "./account-panel";
 
-/** Show the bound GitHub identity. Check settings drafts before leaving Notes. */
+/** Show the bound GitHub identity. Check settings drafts before leaving HeiNote. */
 export function GithubLoginMethods({ onBusyChange, active = true, notice, noticeError, requestExternal }: AccountPanelProps & {
   notice?: string;
   noticeError?: boolean;

@@ -193,7 +193,7 @@ function PostMediaGrid({ embed }: { embed: PostEmbed }) {
   );
 }
 
-/** A post, drawn by Notes as compact as Notion's bookmark (Winston, round
+/** A post, drawn by HeiNote as compact as Notion's bookmark (Winston, round
  *  66: "the width is bigger than height; the image and videos inside should
  *  be small; also, make it more compact"): its author on one line, its
  *  words beside its pictures, and nothing to press but the card itself,

@@ -4,9 +4,9 @@
   "engines": {
     "node": ">=24"
   },
-  "name": "terminus-notes",
+  "name": "heinote",
   "version": "1.0.0",
-  "repository": "https://github.com/liu-zhengdong/terminus-notes",
+  "repository": "https://github.com/liu-zhengdong/heinote",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env server/index.ts --dev",
     "start": "node --env-file-if-exists=.env --import tsx server/index.ts",

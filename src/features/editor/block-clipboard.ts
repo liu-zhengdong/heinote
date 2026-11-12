@@ -1,7 +1,7 @@
 /* Blocks on the clipboard.
 
    Copying blocks puts three things on the clipboard, the way Notion does: the
-   blocks themselves, for pasting back into Notes exactly — kinds, nesting,
+   blocks themselves, for pasting back into HeiNote exactly — kinds, nesting,
    marks, checkboxes, the pages behind page blocks; HTML, for a rich-text
    editor elsewhere; and Markdown, for plain text. The blocks ride under their
    own type and again inside the HTML, because some clipboards (another
@@ -67,7 +67,7 @@ function blocksHtml(tree: BlockTree, parentId: string | null): string {
         html += tableToHtml(tableCells(grid), grid.header_row);
         break;
       }
-      // A block is its paragraphs; outside Notes it has no mark of its own.
+      // A block is its paragraphs; outside HeiNote it has no mark of its own.
       case "page": html += children; break;
       case "file": html += `<p>${escapeHtml(block.file?.name ?? "")}${inner ? ` — ${inner}` : ""}</p>`; break;
       case "embed": {
@@ -102,7 +102,7 @@ function payloadFromHtml(html: string): string {
   return holder?.getAttribute("data-notes-blocks") ?? "";
 }
 
-/** Blocks copied from Notes, or null for anything else. */
+/** Blocks copied from HeiNote, or null for anything else. */
 export function readBlocks(data: DataTransfer): CopiedBlocks | null {
   const raw = data.getData(BLOCKS_MIME) || payloadFromHtml(data.getData("text/html"));
   if (!raw) return null;

@@ -31,7 +31,7 @@ export function PreferenceSettings({ onBusyChange }: AccountPanelProps) {
   return <section className="settings-group" aria-label="外观设置">
     <h2>外观</h2>
     <div className="settings-row">
-      <div className="settings-row__text"><label htmlFor="settings-theme">外观</label><p>选择 Notes 的显示主题。</p></div>
+      <div className="settings-row__text"><label htmlFor="settings-theme">外观</label><p>选择小黑笔记的显示主题。</p></div>
       <Select id="settings-theme" aria-label="外观" data-setting="theme" value={preferences.theme} disabled={pending}
         onValueChange={(theme) => void change(theme)} options={[
           { value: "system", label: "跟随系统" }, { value: "light", label: "浅色" }, { value: "dark", label: "深色" },

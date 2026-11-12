@@ -42,7 +42,7 @@ export interface PlatformClient {
 
 export async function createPlatformClient(): Promise<PlatformClient> {
   const { user } = await request<{ user: Person | null }>("/api/session");
-  if (!user) throw new Error("请先登录 Notes。");
+  if (!user) throw new Error("请先登录小黑笔记。");
   configureCollaboration(user.id);
   const stops = new Set<() => void>();
   const watch = <T,>(read: () => Promise<T>, listener: (value: T) => void) => {
@@ -62,7 +62,7 @@ export async function createPlatformClient(): Promise<PlatformClient> {
     for (const [spaceId, state] of presenceStates) void request(`/api/spaces/${spaceId}/presence`, json("POST", { state, clientId: presenceId })).catch(() => undefined);
   }, 15000);
   return {
-    bootstrap: { appId: "notes", installationId: "standalone", appName: "Notes", user },
+    bootstrap: { appId: "notes", installationId: "standalone", appName: "HeiNote", user },
     presence: {
       async set(state, spaceId) {
         if (!spaceId) return;

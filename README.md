@@ -1,6 +1,6 @@
-# Notes
+# 小黑笔记（HeiNote）
 
-Notes 是可独立部署的多人笔记应用。它保留原有页面、块编辑器、数据库视图和页面历史。应用使用 React、Node.js 24 和 SQLite。运行时不需要 Terminus 平台、外部账号服务或外部数据库。
+小黑笔记是可独立部署的多人笔记应用。它保留原有页面、块编辑器、数据库视图和页面历史。应用使用 React、Node.js 24 和 SQLite。运行时不需要 Terminus 平台、外部账号服务或外部数据库。包名为 `heinote`，中文名取自用户头像「无限」灵感的小黑。
 
 ## 本地部署
 
@@ -30,21 +30,21 @@ npm run dev
 docker compose up -d --build
 ```
 
-打开 <http://localhost:3000>。Compose 把数据库和附件目录保存在 `notes_data` 持久卷。更新镜像和重启容器不会清空该卷。
+打开 <http://localhost:3000>。Compose 把数据库和附件目录保存在 `heinote_data` 持久卷。更新镜像和重启容器不会清空该卷。
 
 ```sh
-docker compose logs -f notes
+docker compose logs -f heinote
 docker compose up -d --build
 ```
 
 已使用 Podman 6.1.4 在 Linux ARM64 环境构建并运行此 Dockerfile。原生 Docker Engine 尚未单独实跑。Podman 也可以直接部署：
 
 ```sh
-podman build --format docker -t localhost/terminus-notes:collaboration .
-podman volume create notes_data
-podman run -d --name terminus-notes \
-  -p 3000:3000 -v notes_data:/app/data \
-  localhost/terminus-notes:collaboration
+podman build --format docker -t localhost/heinote:latest .
+podman volume create heinote_data
+podman run -d --name heinote \
+  -p 3000:3000 -v heinote_data:/app/data \
+  localhost/heinote:latest
 ```
 
 `--format docker` 保留镜像内的健康检查。Compose 另外声明了同样的检查，适用于使用 Compose 的运行方式。
@@ -78,21 +78,21 @@ GitHub 登录是可选配置。账号密码登录继续可用。
 4. 生成 Client Secret。
 5. 把 `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET` 和 `PUBLIC_URL` 写入服务端 `.env`。
 6. 重启服务；使用 Compose 时重新创建容器。
-7. 在 Notes 登录页选择“使用 GitHub 登录”，确认返回预期账号。
+7. 在登录页选择“使用 GitHub 登录”，确认返回预期账号。
 
 本地示例使用 `PUBLIC_URL=http://localhost:3000`，回调为 `http://localhost:3000/api/auth/github/callback`。正式环境使用 HTTPS。`PUBLIC_URL` 只包含协议、主机与端口，不包含路径、查询参数或用户信息。浏览器须从同一个源访问应用。开发和生产建议分别注册 OAuth App。
 
 没有配置 Client ID 和 Client Secret 时，页面隐藏 GitHub 入口。只配置部分字段时，服务启动失败并指出缺项。密钥只在服务端使用，不进入浏览器资源。GitHub 登录只读取公开身份，不申请仓库或私有邮箱权限。
 
-已有 Notes 用户先用密码登录，再打开“账号 → 登录方式”绑定 GitHub。绑定保留原账号的笔记与权限。Notes 使用 GitHub 数字用户 ID 识别身份，不按用户名或邮箱自动合并。
+已有账号用户先用密码登录，再打开“账号 → 登录方式”绑定 GitHub。绑定保留原账号的笔记与权限。应用使用 GitHub 数字用户 ID 识别身份，不按用户名或邮箱自动合并。
 
-新用户首次授权后创建 Notes 账号。同名用户名冲突时，页面提供“创建新账号”与“登录已有账号”。选择新建会生成独立账号，不包含同名账号的笔记。纯 GitHub 账号没有密码，不能解除唯一登录方式。本版本不提供设置密码或账号合并。
+新用户首次授权后创建账号。同名用户名冲突时，页面提供“创建新账号”与“登录已有账号”。选择新建会生成独立账号，不包含同名账号的笔记。纯 GitHub 账号没有密码，不能解除唯一登录方式。本版本不提供设置密码或账号合并。
 
 `REGISTRATION_OPEN=false` 拒绝新的 GitHub 账号注册；空库仍允许创建首个管理员。已关联账号可以继续登录。已有密码账号仍可绑定或解除绑定。
 
-GitHub 授权请求与同名选择票据有效期为 10 分钟。服务重启会使未完成请求失效，重新发起即可。账号与身份关联保存在 SQLite，随数据副本一起保留。退出 Notes 撤销当前 Notes 会话，不退出 GitHub。在 GitHub 撤销授权后，下次登录需要重新授权；已有 Notes 会话沿用本地有效期。
+GitHub 授权请求与同名选择票据有效期为 10 分钟。服务重启会使未完成请求失效，重新发起即可。账号与身份关联保存在 SQLite，随数据副本一起保留。退出账号撤销当前会话，不退出 GitHub。在 GitHub 撤销授权后，下次登录需要重新授权；已有会话沿用本地有效期。
 
-移除两个 GitHub 配置项可停用新的 GitHub 登录。已保存的关联与 Notes 会话继续保留。恢复原应用配置后，用户继续进入原账号。
+移除两个 GitHub 配置项可停用新的 GitHub 登录。已保存的关联与会话继续保留。恢复原应用配置后，用户继续进入原账号。
 
 ## 账号与权限
 
@@ -187,8 +187,8 @@ npm run backup -- backups/manual
 容器内备份：
 
 ```sh
-docker compose exec notes node scripts/backup.mjs /app/data/backup
-docker compose cp notes:/app/data/backup ./notes-backup
+docker compose exec heinote node scripts/backup.mjs /app/data/backup
+docker compose cp heinote:/app/data/backup ./heinote-backup
 ```
 
 默认命令创建带时间戳的独立目录。可按需要保留几份历史副本；脚本不自动删除旧副本。
@@ -209,7 +209,7 @@ npm run test:e2e
 容器验收：
 
 ```sh
-podman build --format docker -t localhost/terminus-notes:collaboration .
+podman build --format docker -t localhost/heinote:latest .
 npm run test:container
 ```
 

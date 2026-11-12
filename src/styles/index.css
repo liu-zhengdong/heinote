@@ -1,4 +1,4 @@
-/* Notes follows Notion's typography and surface scale.
+/* HeiNote follows Notion's typography and surface scale.
    Desktop: 44px top bar, 14px navigation, 16px body and 40px page titles.
    Narrow views retain the rail and drawer. User sidebar widths remain saved.
    Page controls appear on hover or focus. The concrete data-theme owns dark
@@ -149,7 +149,7 @@
 
   color: var(--ink);
   background: var(--paper);
-  font-family: var(--terminus-font-body);
+  font-family: var(--heinote-font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -305,7 +305,7 @@ button:disabled {
 }
 
 kbd {
-  font-family: var(--terminus-font-body);
+  font-family: var(--heinote-font-body);
   font-size: 11px;
   letter-spacing: 0.02em;
 }
@@ -601,9 +601,9 @@ kbd {
   line-height: 1.2;
 }
 
-.font-row__option--default .font-row__sample { font-family: var(--terminus-font-body); }
-.font-row__option--serif .font-row__sample { font-family: var(--terminus-font-serif); }
-.font-row__option--mono .font-row__sample { font-family: var(--terminus-font-code); }
+.font-row__option--default .font-row__sample { font-family: var(--heinote-font-body); }
+.font-row__option--serif .font-row__sample { font-family: var(--heinote-font-serif); }
+.font-row__option--mono .font-row__sample { font-family: var(--heinote-font-code); }
 
 .font-row__label {
   color: var(--ink-3);
@@ -2617,19 +2617,19 @@ kbd {
    buttons, column heads, counts); and code stays code, because `pre` and
    `code` name the mono themselves. */
 .doc {
-  --font-page: var(--terminus-font-body);
-  --font-page-italic: var(--terminus-font-body-italic);
+  --font-page: var(--heinote-font-body);
+  --font-page-italic: var(--heinote-font-body-italic);
 }
 
 .doc--font-serif {
-  --font-page: var(--terminus-font-serif);
-  --font-page-italic: var(--terminus-font-serif-italic);
+  --font-page: var(--heinote-font-serif);
+  --font-page-italic: var(--heinote-font-serif-italic);
 }
 
 .doc--font-mono {
-  --font-page: var(--terminus-font-code);
-  --font-page-italic: var(--terminus-font-code);
-  /* Terminus Code has no italic, and synthesis is off app-wide: without this
+  --font-page: var(--heinote-font-code);
+  --font-page-italic: var(--heinote-font-code);
+  /* The code face has no italic, and synthesis is off app-wide: without this
      a ⌘I in a Mono page would change nothing anyone could see. */
   font-synthesis: style;
 }
@@ -2649,7 +2649,7 @@ kbd {
   .db-card__title,
   .db-cal__item
 ) {
-  font-family: var(--font-page, var(--terminus-font-body));
+  font-family: var(--font-page, var(--heinote-font-body));
 }
 
 /* Chinese in an italic run is set in Kai, the CJK way to set emphasis, and
@@ -3226,7 +3226,7 @@ kbd {
   border-radius: var(--r-xs);
   background: var(--code-bg);
   color: var(--code-ink);
-  font-family: var(--terminus-font-code);
+  font-family: var(--heinote-font-code);
   font-size: 0.88em;
   line-height: 1.4;
 }
@@ -3378,7 +3378,7 @@ h3.block__editable {
 
 pre.block__editable {
   overflow-x: auto;
-  font-family: var(--terminus-font-code);
+  font-family: var(--heinote-font-code);
   font-size: 13.5px;
   line-height: 1.5;
   tab-size: 2;
@@ -3778,7 +3778,7 @@ pre.block__editable {
 }
 
 .slash__hint {
-  font-family: var(--terminus-font-code);
+  font-family: var(--heinote-font-code);
   font-size: 11px;
 }
 
@@ -3950,7 +3950,7 @@ pre.block__editable {
   padding: 12px 72px 32px 14px;
   background: linear-gradient(rgba(0, 0, 0, 0.62), transparent);
   color: #fff;
-  font-family: var(--terminus-font-body);
+  font-family: var(--heinote-font-body);
   text-align: left;
 }
 
@@ -4046,7 +4046,7 @@ pre.block__editable {
   background: var(--paper);
   box-shadow: inset 0 0 0 1px var(--hairline-strong);
   color: var(--ink);
-  font-family: var(--terminus-font-body);
+  font-family: var(--heinote-font-body);
   text-decoration: none;
   transition: background var(--t-tap) var(--e-out);
 }
@@ -4598,7 +4598,7 @@ pre.block__editable {
   min-height: calc(1.5em + 14px);
   padding: 7px 9px;
   color: var(--ink);
-  font-family: var(--font-page, var(--terminus-font-body));
+  font-family: var(--font-page, var(--heinote-font-body));
   /* Notion's cells read a step smaller than the page: 14px beside 16px. */
   font-size: calc(var(--read) * 0.875);
   line-height: 1.5;
@@ -4609,7 +4609,7 @@ pre.block__editable {
   border-radius: var(--r-xs);
   background: var(--code-bg);
   color: var(--code-ink);
-  font-family: var(--terminus-font-code);
+  font-family: var(--heinote-font-code);
   font-size: 0.88em;
 }
 

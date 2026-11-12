@@ -34,7 +34,7 @@ function filePathHref(path: string, token: string): string {
 }
 
 /** A page's mark in the shared document: the picture or emoji it was given,
- *  else the page glyph — as it reads in the page list back in Notes. */
+ *  else the page glyph — as it reads in the page list back in HeiNote. */
 function PublicPageIcon({ page, token, size = 16 }: { page: NotePage; token: string; size?: number }) {
   const icon = pageIcon(page);
   if (icon?.kind === "image") {
@@ -209,7 +209,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     return () => controller.abort();
   }, [token, revision]);
   const context = useMemo<ReaderContext>(() => ({ token, pages: new Map(document?.pages.map((page) => [page.id, page]) ?? []) }), [document, token]);
-  /* The nav mirrors the page list back in Notes: each page nested under
+  /* The nav mirrors the page list back in HeiNote: each page nested under
    *  the page that holds it, sorted by name. A page whose parent is not
    *  public lists at the top. */
   const tree = useMemo<PageTree | undefined>(() => (document
@@ -221,12 +221,12 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   useEffect(() => {
     if (!document) return;
     const previous = window.document.title;
-    window.document.title = `${active ? titleOf(active) : document.title} · Notes`;
+    window.document.title = `${active ? titleOf(active) : document.title} · HeiNote`;
     return () => { window.document.title = previous; };
   }, [active, document]);
 
   return <main className="public-reader">
-    <header className="public-reader__head"><a href="/" className="public-reader__brand">Notes</a><span><Globe size={14} aria-hidden="true" />公开阅读</span></header>
+    <header className="public-reader__head"><a href="/" className="public-reader__brand">HeiNote</a><span><Globe size={14} aria-hidden="true" />公开阅读</span></header>
     {loading ? <p className="public-reader__status account-muted" role="status">正在加载笔记…</p>
       : error ? <section className="public-reader__status"><h1>{unavailable ? "无法打开此页" : "加载失败"}</h1><p className="account-error" role="alert">{error}</p>
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>

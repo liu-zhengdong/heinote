@@ -18,7 +18,7 @@ function status(reply: Reply, expected: number): Json {
 }
 
 async function fixture(t: TestContext, github: GithubConfig = null) {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-profile-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-profile-"));
   let server: RunningServer | undefined;
   t.after(async () => {
     try {
@@ -26,7 +26,7 @@ async function fixture(t: TestContext, github: GithubConfig = null) {
     } finally {
       const target = resolve(directory);
       assert.equal(dirname(target), resolve(tmpdir()));
-      assert.ok(basename(target).startsWith("terminus-notes-profile-"));
+      assert.ok(basename(target).startsWith("heinote-profile-"));
       await rm(target, { recursive: true, force: true });
     }
   });

@@ -200,7 +200,7 @@ export function AppPage({ page }: Props) {
                     </button>
                   );
                 })}
-                {bindings.length === 0 && <p className="app-inspect__hint">未绑定数据源。应用仍可运行，但不能读写 Notes 数据。</p>}
+                {bindings.length === 0 && <p className="app-inspect__hint">未绑定数据源。应用仍可运行，但不能读写小黑笔记数据。</p>}
                 {editable && (
                   <button type="button" className="app-ds-list__add" onClick={() => setAdding((open) => !open)}>
                     <Plus size={14} aria-hidden="true" />添加数据源

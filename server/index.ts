@@ -46,7 +46,7 @@ const roleSchema = z.enum(["admin", "editor", "viewer"]);
 // values like "github:owner/repo" or "git+https://..." normalize to an https
 // URL the console can link directly.
 const packageMeta = (() => {
-  const fallback = { name: "terminus-notes", version: "", repository: "" };
+  const fallback = { name: "heinote", version: "", repository: "" };
   try {
     const manifest = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
     const raw = manifest.repository;
@@ -755,7 +755,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const server = await startServer({ dev: process.argv.includes("--dev") });
-  console.log(`Notes: ${server.url}`);
+  console.log(`HeiNote: ${server.url}`);
   const stop = () => void server.close().then(() => process.exit(0));
   process.once("SIGTERM", stop); process.once("SIGINT", stop);
 }

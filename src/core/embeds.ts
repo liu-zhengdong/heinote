@@ -2,11 +2,11 @@ import type { Embed, PostEmbed, PostMedia, VideoEmbed } from "./types";
 
 /* Links that become a card, as Notion embeds them (Winston, round 65): a
    YouTube video, played in YouTube's privacy-enhanced player, and a post on
-   X, drawn by Notes — compact, its pictures small (round 66) — from what X
+   X, drawn by HeiNote — compact, its pictures small (round 66) — from what X
    gives out about it. A card is recognised from its address alone; its
-   words, and where its pictures are, are read by the Lego brick Terminus
-   publishes for it — the built-in service @terminus/web-card-preview
-   (round 67), which reads the providers — for
+   words, and where its pictures are, are read by the card-preview service
+   declared in schema.ts (`@heinote/web-card-preview`, round 67), which
+   reads the providers — for
    whoever made the card, checked here, and stored beside the address. A
    post's pictures are then fetched by each reader through the platform,
    never from X's host by the page itself.

@@ -13,7 +13,7 @@
    in another window — has written a path since, the step is replayed on top
    of what they wrote rather than over it: in a block, field by field; in its
    words (or a page's name), as a change from the runs the step started
-   from, which Terminus merges with theirs character by character, so taking
+   from, which the server merges with theirs character by character, so taking
    back your words leaves theirs beside them; in the two id lists (the
    top-level pages and a database's rows), only this step's own insertions
    and removals. Where both touched the same field, theirs stands.

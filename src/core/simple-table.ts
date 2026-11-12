@@ -405,7 +405,7 @@ export function pasteCells(
   return { writes, clipped };
 }
 
-/* ── Outside Notes: Markdown, tab-separated text, HTML ────────────────── */
+/* ── Outside HeiNote: Markdown, tab-separated text, HTML ────────────────── */
 
 /** A cell as Markdown's table cell holds it: one line, its pipes escaped. */
 function markdownCell(text: string): string {

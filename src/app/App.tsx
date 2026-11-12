@@ -127,9 +127,9 @@ export function App() {
 
   /* A page id in the fragment opens that page — the target of every "Copy
      link" in the app, a block's too: a block is a page. So does a place
-     Terminus asks the window to go to, `/?page=<id>` — the address the window
-     was opened at (a notification, the desk), or one handed to it while it is
-     open (`routes.listen`: an agent's `open`, the desktop). Each is honoured
+     the window is asked to go to, `/?page=<id>` — the address the window
+     was opened at, or one handed to it while it is open (`routes.listen` in
+     the platform shim: today a `popstate` listener). Each is honoured
      once: it is asked again as pages arrive, and must not drag the reader
      back after they navigate away. */
   const openedFromHash = useRef("");
@@ -208,9 +208,9 @@ export function App() {
 
   if (loading) {
     return (
-      <div className="state-screen state-screen--loading" role="status" aria-label="Opening Notes">
+      <div className="state-screen state-screen--loading" role="status" aria-label="正在打开小黑笔记">
         <span className="state-screen__mark"><NotebookPen size={20} /></span>
-        <p>Opening Notes…</p>
+        <p>正在打开小黑笔记…</p>
       </div>
     );
   }
@@ -219,7 +219,7 @@ export function App() {
     return (
       <main className="state-screen">
         <span className="state-screen__mark state-screen__mark--danger"><CircleAlert size={20} /></span>
-        <h1>Notes couldn’t open</h1>
+        <h1>小黑笔记无法打开</h1>
         <p>{error}</p>
         <button type="button" className="btn btn--primary" onClick={() => window.location.reload()}>Try again</button>
       </main>

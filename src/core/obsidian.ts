@@ -4,7 +4,7 @@ import { normalizeInlineContent } from "./inline-content";
 import { isImageType } from "./files";
 import type { Block, InlineContent, StoredFile } from "./types";
 
-/* An Obsidian vault as it maps onto Notes: every .md a page under the
+/* An Obsidian vault as it maps onto HeiNote: every .md a page under the
    folder's page, [[links]] page mentions, ![[embeds]] the picture's inline
    mention or a file paragraph, frontmatter kept as a yaml code block.
    Resolution follows Obsidian's rule: a link names the page whose path is

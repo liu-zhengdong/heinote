@@ -1,4 +1,4 @@
-# Notes 开发入口
+# 小黑笔记（HeiNote）开发入口
 
 - 这是独立 Node.js / SQLite 应用。运行时无需 Terminus 平台。
 - 本地和 Docker 使用同一个服务入口 `server/index.ts`。
@@ -9,13 +9,13 @@
 - `npm test` 运行原有核心回归及 HTTP 验收。
 - `npm run test:e2e` 运行真实浏览器流程，使用临时数据库。
 - 测试必须保持全绿。交付前运行相关测试；UI 改动同步更新受其影响的用例；发现主干红时先修复再合入。
-- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/terminus-notes/SKILL.md`。
+- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/heinote/SKILL.md`。
 - 当前系统说明见 [Atlas](docs/atlas/README.md)，包括 [基础能力](docs/atlas/standalone.md)与[实时共编](docs/atlas/realtime-collaboration.md)。Atlas 面向人阅读，按主题维护当前事实。
 - 共编架构见 [ADR-002](docs/adr/0002-realtime-collaboration.md)。富文本二进制、SQL 投影与权限必须在同一事务提交。
 - 普通文字只走一套历史。新字段未建立 Y.Text 时使用受控记录历史；结构补偿不得部分执行。
 - 拒绝后保留账号分区草稿，不给旧 Yjs 增量更换代次重发。
-- 长期 UC 总览：Obsidian `正在干什么/Terminus Notes/Terminus Notes.md`。UC 卡在 `UC/`，问题卡在 `问题/`，设计笔记与早期交付记录在 `设计/`。
-- 团队知识库：Obsidian `正在干什么/Terminus Notes/UC/维护与查用团队知识库.md`。当前实现说明见 [团队知识库](docs/atlas/team-knowledge.md)。
+- 长期 UC 总览：Obsidian `正在干什么/小黑笔记/小黑笔记.md`。UC 卡在 `UC/`，问题卡在 `问题/`，设计笔记与早期交付记录在 `设计/`。
+- 团队知识库：Obsidian `正在干什么/小黑笔记/UC/维护与查用团队知识库.md`。当前实现说明见 [团队知识库](docs/atlas/team-knowledge.md)。
 - 工作入口：Obsidian UC 卡与问题卡，按卡片状态推进。
 - 历史执行稿见 [独立部署](docs/dev/archive/standalone.md)与[实时共编](docs/dev/archive/realtime-collaboration.md)，保留当轮事实。不再新增 docs/dev 执行稿；Atlas 独立整理当前系统说明。
 - `data/` 和 `backups/` 含用户数据，不进入源码交付。

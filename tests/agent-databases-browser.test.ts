@@ -154,7 +154,7 @@ test("UC-14: agent-built database renders, filters and sorts like HTTP, and edit
   const db = await buildDatabase(token, "uc14a");
   // Insert order differs from priority order, so a sort visibly reorders.
   const first = await addRow(token, db, "uc14a-row-1", { title: "修改笔记", text: "浏览器要改这行。", properties: { number: "UC-02", status: "In progress", priority: "P1" } });
-  const second = await addRow(token, db, "uc14a-row-2", { title: "创建笔记", text: "参与者：Notes 用户。", properties: { number: "UC-01", status: "Not started", priority: "P2" } });
+  const second = await addRow(token, db, "uc14a-row-2", { title: "创建笔记", text: "参与者：小黑笔记用户。", properties: { number: "UC-01", status: "Not started", priority: "P2" } });
   const third = await addRow(token, db, "uc14a-row-3", { title: "查询笔记", properties: { priority: "P3" } });
   expect(second.values).toMatchObject({ number: "UC-01", status: "Not started", priority: "P2" });
   // An unset status reads as the property's default, as the cell does.

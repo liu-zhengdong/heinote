@@ -277,7 +277,7 @@ function previewText(row: NotePage, lines: number): string[] {
 /* ── Layouts ───────────────────────────────────────────────────────────── */
 
 /** A click that asks for the whole page rather than the side peek, as a
- *  link does everywhere in Notes. */
+ *  link does everywhere in HeiNote. */
 const fullPage = (event: { metaKey: boolean; ctrlKey: boolean }) => event.metaKey || event.ctrlKey;
 
 /** Opens a link in a row's name to a page of this workspace (`#page`) the

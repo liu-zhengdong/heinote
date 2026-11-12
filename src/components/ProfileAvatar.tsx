@@ -42,7 +42,7 @@ export function ProfileAvatar({
   );
 }
 
-/** How a member is named when all Terminus gives is their handle. */
+/** How a member is named when all the server gives is their handle. */
 export function memberName(handle: string): string {
   return handle
     .split(/[._-]+/)

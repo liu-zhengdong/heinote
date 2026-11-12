@@ -1,15 +1,14 @@
-# Notes icon
+# HeiNote brand assets
 
-Folded paper N. Blue #216EAF, white paper, one pale-blue folded face.
+Current icon: black-cat avatar, drawn from the user's own avatar. Used on the login page, admin console and browser tab.
 
-- notes-icon.svg: primary vector icon with transparent corners.
-- notes-icon-small.svg: flat silhouette for browser tabs and tiny sizes.
-- notes-mark.svg: background-free, single-colour mark. Set currentColor when used inline.
-- notes-16.png through notes-1024.png: transparent raster exports; 16/24 use the simplified silhouette.
-- favicon.ico: 16/32/48/64/128/256 sizes.
-- apple-touch-icon.png: opaque 180px blue square for platform masking.
-- notes-icon-preview.png: scale and wordmark presentation.
+- heinote-icon.png: 512px primary icon.
+- heinote-icon-32.png / heinote-icon-64.png: small raster exports.
+- apple-touch-icon.png: 180px icon for iOS home-screen masking.
+- favicon.ico: browser tab icon; favicon-48.png is its 48px raster export.
 
-Use the complete blue-square icon on dark backgrounds. The default blue transparent mark is intended for light backgrounds; set its currentColor to a light colour when embedding it on dark surfaces.
+Current usage is documented in docs/atlas/brand.md.
 
-SVG paths are the editable master. Raster exports use the same geometry. The generative concept was redrawn into precise vector shapes; no generated texture is included in production assets.
+## Historical assets
+
+notes-*.png, notes-icon.svg, notes-icon-small.svg, notes-mark.svg/png and notes-icon-preview.png are the retired folded-paper N icon. They are kept for reference only and are no longer referenced by the UI.

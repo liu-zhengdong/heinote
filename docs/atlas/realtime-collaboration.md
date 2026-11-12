@@ -41,4 +41,4 @@ HTTP 批次是统一写入口。WebSocket 只推送已经提交的状态。跨�
 
 已有验收覆盖双浏览器乱序输入、中文组合事件、个人撤销、断线重连、草稿恢复、提案审核和容器持久化。系统输入法候选窗口、其他浏览器与手机软键盘未单独验证。尚未进入用户连续日用验证。
 
-本页关联 UC-06、UC-07 至 UC-10。长期 UC 保存在 Obsidian 的 Terminus Notes 项目设计目录。方案与验收细节见 [共编执行稿](../dev/archive/realtime-collaboration.md)、[提案审核执行稿](../dev/archive/proposal-review.md)和[共编交付记录](../dev/archive/realtime-collaboration-delivery.md)。
+本页关联 UC-06、UC-07 至 UC-10。长期 UC 保存在 Obsidian 的 小黑笔记项目设计目录。方案与验收细节见 [共编执行稿](../dev/archive/realtime-collaboration.md)、[提案审核执行稿](../dev/archive/proposal-review.md)和[共编交付记录](../dev/archive/realtime-collaboration-delivery.md)。

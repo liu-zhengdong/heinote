@@ -114,13 +114,13 @@ function denied(reply: Reply): void {
 }
 
 async function fixture(t: TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-files-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-files-"));
   let server: RunningServer | undefined = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false });
   t.after(async () => {
     await server?.close();
     const target = resolve(directory);
     assert.equal(dirname(target), resolve(tmpdir()));
-    assert.ok(basename(target).startsWith("terminus-notes-files-"));
+    assert.ok(basename(target).startsWith("heinote-files-"));
     await rm(target, { recursive: true, force: true });
   });
   return {

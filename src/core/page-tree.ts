@@ -6,7 +6,7 @@ type PermissionSpace = { role?: string; knowledgeBase?: Pick<KnowledgeBase, "hom
 /* Where a page lives, and where it may go.
 
    A member's own pages are in their own records. A page tree they share is
-   copied into a Terminus space of its own, and from then on it lives THERE:
+   copied into a shared space of its own, and from then on it lives THERE:
    every member reads and writes that space's records, and the space's
    membership is who can. A member who leaves a space, or is removed from
    it, loses everything that lives there. */

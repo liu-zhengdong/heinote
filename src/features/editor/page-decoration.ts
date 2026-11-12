@@ -1,6 +1,6 @@
 /** Page icons and covers.
  *
- * Notion lets a page carry an emoji and a cover image. Notes carries the emoji
+ * Notion lets a page carry an emoji and a cover image. HeiNote carries the emoji
  * the same way. A cover is one of a fixed set of gradients — a stored token —
  * or a picture from the member's computer, stored with the page the way an
  * image block's bytes are. */
@@ -93,9 +93,9 @@ export function randomCoverId(exclude?: string): CoverId {
 }
 
 /** The page fonts in Notion's order: Default is the face the app itself is
- *  set in (Terminus Sans), Serif is Terminus Serif (Palatino, with GenKiMin2
- *  TC for CJK) and Mono is Terminus Code — all three Terminus's system fonts,
- *  which every page has (`platform/fonts.ts`). */
+ *  set in, Serif is a Palatino-flavoured stack (with Noto Serif CJK for
+ *  CJK) and Mono the code face — all three the app's own font stacks
+ *  (styles/standalone.css, `platform/fonts.ts`). */
 export const PAGE_FONTS: readonly { id: PageFont; label: string }[] = [
   { id: "default", label: "Default" },
   { id: "serif", label: "Serif" },

@@ -1,4 +1,4 @@
-/* What Notes does for people, by name: each a function of one input object,
+/* What HeiNote does for people, by name: each a function of one input object,
    doing what the window's own controls do — through the workspace's actions
    (createPage, updatePage, movePage…), the editor's commands on a page's
    composed tree (composite.ts, editor-commands.ts) and the databases' own
@@ -6,13 +6,14 @@
 
    schema.ts declares each as a window operation agents may call, and how
    (description, input, effect); the window registers them once, as it
-   opens (`useWindowCommands`, workspace-context.tsx), and the Terminus
-   desktop runs them in the person's window when an agent the person allowed
-   calls one. A command may rely on what is on screen, as a person does: a
+   opens (`useWindowCommands`, workspace-context.tsx); in this standalone
+   build no host routes calls to them — agents use the server API instead —
+   and the handlers stay so their types keep checking. A command may rely
+   on what is on screen, as a person does: a
    `page_id` left out is the page open in the window.
 
    How they can go wrong, and what each does about it:
-   - Notes is still opening: wait for the workspace (OPEN_WAIT_MS), else
+   - HeiNote is still opening: wait for the workspace (OPEN_WAIT_MS), else
      `not_ready`.
    - A page, paragraph, property, view or version that is not there — or a
      page in the trash where only a live one will do: `not_found`,
@@ -23,7 +24,7 @@
      among its options, a date that is no day, a link that is not http(s) or
      a page, a sort on pictures): `bad_request` before anything is written.
    - A write the platform does not store at once: the change is in the
-     window and queued (it is saved when Terminus can be reached), and the
+     window and queued (it is saved when the server can be reached), and the
      agent is told `not_saved` rather than that it is done.
    - An agent's change landing inside the person's typing: a write command
      is one step of the window's undo of its own (checkpointed before and
@@ -108,7 +109,7 @@ function refuse(code: string, message: string): never {
   throw Object.assign(new Error(message), { code });
 }
 
-/** The window, once Notes has opened in it. */
+/** The window, once HeiNote has opened in it. */
 export interface CommandHost {
   /** Its workspace's actions, as the provider has them now. */
   workspace: WorkspaceContextValue;
@@ -121,13 +122,13 @@ export interface CommandHost {
 
 /** The window's operations as schema.ts declares them, each handed its
  *  input typed and checked by the SDK. */
-type NotesCommands = Parameters<typeof app.commands>[0];
+type HeiNoteCommands = Parameters<typeof app.commands>[0];
 
 /** What createBlock and updateBlock both take: a paragraph's words and
  *  fields (schema.ts `paragraph`). */
-type ParagraphInput = Omit<Parameters<NonNullable<NotesCommands["createBlock"]>>[0], "page_id" | "before_id" | "after_id" | "parent_block_id">;
+type ParagraphInput = Omit<Parameters<NonNullable<HeiNoteCommands["createBlock"]>>[0], "page_id" | "before_id" | "after_id" | "parent_block_id">;
 
-/** How long a command waits for Notes to open in a window just started. */
+/** How long a command waits for HeiNote to open in a window just started. */
 const OPEN_WAIT_MS = 15_000;
 
 const pause = (ms: number) => new Promise((resolve) => { setTimeout(resolve, ms); });
@@ -141,7 +142,7 @@ function pageOf(host: CommandHost, id: string | undefined, options: { trash?: bo
   const pageId = id ?? host.selectedPageId;
   if (!pageId) refuse("not_found", "No page is open in the window: name one with page_id (find_pages finds it).");
   const page = pagesOf(host)[pageId];
-  if (!page) refuse("not_found", `There is no page ${pageId} in this person's Notes.`);
+  if (!page) refuse("not_found", `There is no page ${pageId} in this person's HeiNote.`);
   if (!options.trash && inTrash(pagesOf(host), page.id)) {
     refuse("in_trash", `${describe(page)} is in the trash: restore_page brings it back first.`);
   }
@@ -199,7 +200,7 @@ async function change<T>(host: CommandHost, run: () => T): Promise<T> {
   try {
     await host.document.flush();
   } catch {
-    refuse("not_saved", "Notes made the change in the window but could not save it yet: it stays queued there and is saved once Terminus takes it.");
+    refuse("not_saved", "HeiNote made the change in the window but could not save it yet: it stays queued there and is saved once the server takes it.");
   }
   return result;
 }
@@ -283,7 +284,7 @@ function fileOf(host: CommandHost, blockId: string): StoredFile {
     const file = block?.file ?? (picture?.kind === "image" ? picture.file : undefined);
     if (file) return structuredClone(file);
   }
-  return refuse("not_found", "source_file_block_id names no file paragraph, nor a paragraph holding a picture, in this person's Notes: new bytes are added in Notes itself.");
+  return refuse("not_found", "source_file_block_id names no file paragraph, nor a paragraph holding a picture, in this person's HeiNote: new bytes are added in HeiNote itself.");
 }
 
 /** A paragraph with what an agent asked of it, held to what the editor can
@@ -313,7 +314,7 @@ function shaped(host: CommandHost, input: ParagraphInput, original: Block): Bloc
     else if (file.type.startsWith("image/")) next.content = [...next.content, { text: MENTION_CHAR, mention: { kind: "image", file } }];
     else refuse("bad_request", "That is a file, not a picture: it goes in a paragraph of kind file.");
   }
-  if (next.kind === "file" && !next.file) refuse("bad_request", "A file paragraph reuses the bytes of one already in Notes: source_file_block_id.");
+  if (next.kind === "file" && !next.file) refuse("bad_request", "A file paragraph reuses the bytes of one already in HeiNote: source_file_block_id.");
   // A card is its link: a YouTube video or a post on X. Its words are read
   // by the first editor who sees it (EmbedBlock), not here.
   if (input.embed_url !== undefined) {
@@ -359,7 +360,7 @@ function viewIn(config: DatabaseConfig, id: string | undefined): DatabaseView {
 function withOptions(config: DatabaseConfig, propertyId: string, options: string[] | undefined): DatabaseConfig {
   if (options === undefined) return config;
   const property = config.properties.find((candidate) => candidate.id === propertyId);
-  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes options here; a Status's options are edited in Notes.");
+  if (property?.type !== "select" && property?.type !== "multi_select") refuse("bad_request", "Only a Select or Multi-select property takes options here; a Status's options are edited in HeiNote.");
   return { ...config, properties: config.properties.map((candidate) => candidate.id === propertyId ? { ...candidate, options: [...new Set(options)] } : candidate) };
 }
 
@@ -391,14 +392,14 @@ function rowSummary(pages: Record<string, NotePage>, row: NotePage) {
 
 /* ── The commands ──────────────────────────────────────────────────────── */
 
-/** Notes' commands over the window `host()` answers — null until Notes has
+/** HeiNote's commands over the window `host()` answers — null until HeiNote has
  *  opened there. */
-export function notesCommands(host: () => CommandHost | null): NotesCommands {
+export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands {
   async function opened(): Promise<CommandHost> {
     for (const started = Date.now(); ;) {
       const current = host();
       if (current) return current;
-      if (Date.now() - started > OPEN_WAIT_MS) refuse("not_ready", "Notes is still opening in this window: try again in a moment.");
+      if (Date.now() - started > OPEN_WAIT_MS) refuse("not_ready", "HeiNote is still opening in this window: try again in a moment.");
       await pause(100);
     }
   }
@@ -496,7 +497,7 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
             ? { database: newDatabaseConfig(input.view ?? "table", firstViewId, () => createId("property")) }
             : {}),
         });
-        if (!id) refuse("not_ready", "Notes is still opening in this window: try again in a moment.");
+        if (!id) refuse("not_ready", "HeiNote is still opening in this window: try again in a moment.");
         if (input.icon) h.workspace.updatePage(id, { icon: input.icon });
         const made = pagesOf(h)[id];
         if (input.text && made) {
@@ -559,7 +560,7 @@ export function notesCommands(host: () => CommandHost | null): NotesCommands {
       const page = writablePage(h, input.page_id);
       return change(h, () => {
         const copy = h.workspace.duplicatePage(page.id);
-        if (!copy) refuse("not_ready", "Notes is still opening in this window: try again in a moment.");
+        if (!copy) refuse("not_ready", "HeiNote is still opening in this window: try again in a moment.");
         return { page: summary(pagesOf(h), pagesOf(h)[copy]) };
       });
     },

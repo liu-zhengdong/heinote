@@ -14,7 +14,7 @@ const TURN_INTO: BlockKind[] = [
 ];
 
 /** The menu for selected paragraphs (⌘/): what Notion offers for blocks,
- *  minus comments, which Notes has no model for — and, since a paragraph is
+ *  minus comments, which HeiNote has no model for — and, since a paragraph is
  *  not a block here, a way to make them one. It acts on all of them. */
 export function BlockMenu({
   anchor,

@@ -29,14 +29,14 @@ interface FixtureOptions {
 const checkDirectory = async (directory: string) => {
   const target = resolve(directory);
   assert.equal(dirname(target), resolve(tmpdir()));
-  assert.ok(basename(target).startsWith("terminus-notes-github-"));
+  assert.ok(basename(target).startsWith("heinote-github-"));
   await rm(target, { recursive: true, force: true });
 };
 
 // Boot a throwaway server for configuration tests. The temp directory is
 // cleaned even when boot itself fails.
 async function boot(t: TestContext, options: ServerOptions): Promise<RunningServer> {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-github-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-github-"));
   let server: RunningServer;
   try {
     server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false, ...options });
@@ -53,7 +53,7 @@ async function boot(t: TestContext, options: ServerOptions): Promise<RunningServ
 
 // Assert startServer rejects a configuration; returns the thrown error.
 async function bootFails(t: TestContext, options: ServerOptions): Promise<Error> {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-github-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-github-"));
   t.after(() => checkDirectory(directory));
   const outcome = await Promise.resolve()
     .then(() => startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false, ...options }))
@@ -66,7 +66,7 @@ async function bootFails(t: TestContext, options: ServerOptions): Promise<Error>
 }
 
 async function fixture(t: TestContext, options: FixtureOptions = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-github-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-github-"));
   const stub = await startGithubStub();
   let serverOptions: FixtureOptions = { github: githubConfig(stub), ...options };
   let server: RunningServer = await startServer({

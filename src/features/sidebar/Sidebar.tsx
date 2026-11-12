@@ -873,7 +873,7 @@ export function Sidebar() {
   return (
     <>
       {railed ? (
-        <nav className="rail" aria-label="Notes navigation">
+        <nav className="rail" aria-label="HeiNote navigation">
           <div className="rail__group">
             <Tooltip label={folded ? "All pages" : "Show the list"} hint={folded ? undefined : "⌘\\"} placement="right-start">
               <button

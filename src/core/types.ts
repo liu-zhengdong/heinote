@@ -2,7 +2,7 @@ import type { CollectionHandle } from "../platform/schema";
 import type app from "../../schema";
 import type { COLOR_NAMES } from "../../schema";
 
-/* What Notes holds. Each record's shape is declared once, in schema.ts, and
+/* What HeiNote holds. Each record's shape is declared once, in schema.ts, and
    read here from its collection's handle: a page, a paragraph, a file, a
    database, the member's settings. Where the window holds a field otherwise
    — a paragraph's words as the editor's runs, a page's tree of paragraphs,
@@ -99,7 +99,7 @@ export type SimpleTable = Omit<TableRecord, "rows"> & { rows: Record<string, Tab
 
 /** A paragraph of a page's tree: its record without the page it is in, its
  *  words as the window's runs, at the top of the page with no parent, and
- *  its table and card as Notes reads them. */
+ *  its table and card as HeiNote reads them. */
 export type Block = Omit<BlockRecord, "page" | "kind" | "parent_id" | "content" | "table" | "embed"> & {
   kind: BlockKind;
   parent_id: string | null;
@@ -199,7 +199,7 @@ export type FilterCondition = Extract<ViewFilter, { property_id: string }>;
 export type FilterGroup = Extract<ViewFilter, { conditions: unknown }>;
 
 /** One way of looking at a database, its widths, wraps, hidden columns and
- *  footer calculations as Notes reads them (`columnWidth`, `columnWraps`,
+ *  footer calculations as HeiNote reads them (`columnWidth`, `columnWraps`,
  *  `viewCalcs`). */
 export type DatabaseView = Omit<ViewRecord, "widths" | "wrap" | "calcs"> & {
   widths?: Record<string, number>;
@@ -218,7 +218,7 @@ export type PageFont = NonNullable<PageRecord["font"]>;
 /** A page as the window holds it: its record, with its name's plain words
  *  (`title`) beside their runs, which it holds only while a link is among
  *  them (core/title.ts); at the top level with no parent; its paragraphs as
- *  a tree; and its maps as Notes reads them. */
+ *  a tree; and its maps as HeiNote reads them. */
 export type NotePage = Omit<PageRecord, "title_content" | "parent_id" | "properties" | "property_files" | "database"> & {
   title: string;
   title_content?: InlineContent;
@@ -286,7 +286,7 @@ export interface WorkspaceState {
  *  It changes the records the path lands in (platform/records.ts), field by
  *  field. `base`: for a write of a paragraph's words or a page's name, the
  *  runs the change started from, when they are not what the window shows —
- *  an undo over someone else's edit — so Terminus merges the two. */
+ *  an undo over someone else's edit — so the server merges the two. */
 export interface WorkspaceMutation {
   type: "set" | "delete";
   path: string[];
@@ -319,7 +319,7 @@ export interface KnowledgeBase {
   storage?: { used: number; limit: number; over: number };
 }
 
-/** A space this member belongs to, as Notes needs it: its name, their role
+/** A space this member belongs to, as HeiNote needs it: its name, their role
  *  there, and what that role allows. */
 export interface SpaceSummary {
   spaceId: string;

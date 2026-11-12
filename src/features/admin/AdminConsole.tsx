@@ -91,7 +91,7 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
   return <div className="admin" ref={root} tabIndex={-1} data-detail={detail ? "1" : undefined} aria-busy={busy || undefined}>
     <header className="admin__top">
       <button type="button" className="btn admin__back" onClick={onClose}><ArrowLeft size={16} />返回笔记</button>
-      <strong className="admin__brand">Terminus 笔记</strong>
+      <strong className="admin__brand">小黑笔记</strong>
       <span className="admin__who">{user ? `管理员 · ${personName(user)}` : ""}</span>
     </header>
     <nav className="admin__tabs" role="tablist" aria-label="后台管理">
@@ -534,7 +534,7 @@ function AboutPanel() {
     <div className="ac-about__head">
       <span className="ac-about__logo"><Info size={22} /></span>
       <div>
-        <h3>Terminus 笔记</h3>
+        <h3>小黑笔记</h3>
         <p className="ac-muted">自托管的团队笔记与知识库。</p>
       </div>
     </div>

@@ -220,9 +220,9 @@ export function showFile(files: Files, file: StoredFile, which: "page" | "origin
   };
 }
 
-/** What a view shows before Notes has opened: nothing, for now. */
+/** What a view shows before HeiNote has opened: nothing, for now. */
 export function notShown(): ShownFile {
-  const ready = Promise.reject(new Error("Notes is still opening"));
+  const ready = Promise.reject(new Error("HeiNote is still opening"));
   ready.catch(() => undefined);
   return { url: null, ready, release() {} };
 }

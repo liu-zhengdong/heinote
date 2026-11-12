@@ -4,8 +4,8 @@ import { tableGrid, tableToMarkdown } from "./simple-table";
 import type { Block, BlockTree, InlineContent, InlineMarks, StoredFile } from "./types";
 import { layout } from "./block-layout";
 
-/* A page as Markdown outside Notes — copied to the clipboard, or written
-   into an export archive (server/export.ts). Outside Notes a mention is its
+/* A page as Markdown outside HeiNote — copied to the clipboard, or written
+   into an export archive (server/export.ts). Outside HeiNote a mention is its
    words and a file its name; an export may give each file a real place with
    `fileHref`. */
 
@@ -28,7 +28,7 @@ function wrapMarkdown(value: string, marks?: InlineMarks): string {
 /** A mention's run is one invisible character: in Markdown it is written out
  *  as `describe` reads it, one with the words beside it that share its marks. */
 export function inlineContentToMarkdown(content: InlineContent, describe: DescribeMention, href: FileHref = fileHref): string {
-  // The bytes stay in Notes; outside it a picture is Markdown's, by its name.
+  // The bytes stay in HeiNote; outside it a picture is Markdown's, by its name.
   const parts: string[] = [];
   let words: InlineContent = [];
   const flush = () => {
@@ -62,15 +62,15 @@ function markdownLine(block: Block, number: number, describe: DescribeMention, h
     case "divider": return "---";
     case "table": return tableToMarkdown(tableGrid(block.table), (content) => inlineContentToMarkdown(content, describe, href));
     case "code": return `\`\`\`${block.language ?? ""}\n${inlinePlainText(block.content)}\n\`\`\``;
-    // The bytes stay in Notes; outside it a file is its name.
+    // The bytes stay in HeiNote; outside it a file is its name.
     case "file": return `[${block.file?.name || "file"}](${href(block.file ?? { path: "", owner: "", name: "file", size: 0, type: "" })})${text ? ` ${text}` : ""}`;
-    // Outside Notes a card is its link.
+    // Outside HeiNote a card is its link.
     case "embed": return normalizeEmbed(block.embed)?.url ?? "";
     default: return text;
   }
 }
 
-/** How mentions read once they leave Notes — copied as HTML or Markdown:
+/** How mentions read once they leave HeiNote — copied as HTML or Markdown:
  *  a page as its name, a date written out. */
 export function readableDescriber(titleOf: (pageId: string) => string): DescribeMention {
   return (mention) => ({
@@ -92,7 +92,7 @@ export function wikilinkDescriber(titleOf: (pageId: string) => string): Describe
   };
 }
 
-/** What a page block — or a mention — reads as outside Notes: the page's
+/** What a page block — or a mention — reads as outside HeiNote: the page's
  *  name; a date mention, the date written out. */
 export function readableTree(tree: BlockTree, titleOf: (pageId: string) => string): BlockTree {
   const describe = readableDescriber(titleOf);
@@ -103,7 +103,7 @@ export function readableTree(tree: BlockTree, titleOf: (pageId: string) => strin
   return { by_id: byId };
 }
 
-/** The tree as Markdown, as it reads outside Notes (`readableTree`): a page
+/** The tree as Markdown, as it reads outside HeiNote (`readableTree`): a page
  *  by its name, its rows too, and a date written out — line by line as the
  *  editor draws them (`layout`), a block's paragraphs at the level it sits
  *  and a list numbered as it shows. */

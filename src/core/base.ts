@@ -1,4 +1,4 @@
-/* An Obsidian .base file as Notes reads it: a small YAML subset parsed by
+/* An Obsidian .base file as HeiNote reads it: a small YAML subset parsed by
  * hand, then evaluated against the notes the importer already scanned.
  *
  * Two things are modelled separately:

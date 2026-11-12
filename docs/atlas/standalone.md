@@ -2,7 +2,7 @@
 
 verified: 2026-11-10
 
-Notes 是独立部署的多人笔记应用。它使用 React、Node.js 24 和 SQLite。运行时无需 Terminus 平台、外部账号服务或外部数据库。
+小黑笔记是独立部署的多人笔记应用。它使用 React、Node.js 24 和 SQLite。运行时无需 Terminus 平台、外部账号服务或外部数据库。
 
 ## 部署与数据
 
@@ -34,6 +34,6 @@ Agent 使用 HTTP REST。接口契约见 [Agent API](../agent-api.md)。当前�
 
 ## 设计与追溯
 
-基础流程关联 UC-01 至 UC-06。长期 UC 保存在 Obsidian 的 Terminus Notes 项目设计目录。架构选择见 [ADR-001](../adr/0001-standalone.md)。普通文字并发策略见 [ADR-002](../adr/0002-realtime-collaboration.md)。附件存储与数据副本见 [ADR-003](../adr/0003-attachment-files.md)。
+基础流程关联 UC-01 至 UC-06。长期 UC 保存在 Obsidian 的 小黑笔记项目设计目录。架构选择见 [ADR-001](../adr/0001-standalone.md)。普通文字并发策略见 [ADR-002](../adr/0002-realtime-collaboration.md)。附件存储与数据副本见 [ADR-003](../adr/0003-attachment-files.md)。
 
 [初版执行稿](../dev/archive/standalone.md)和[初版交付记录](../dev/archive/standalone-delivery.md)保留当轮方案与验收事实。后续共编验收见 [共编交付记录](../dev/archive/realtime-collaboration-delivery.md)。

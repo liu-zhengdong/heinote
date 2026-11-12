@@ -46,7 +46,7 @@ export function normalizeVersion(item: unknown): PageVersion | null {
 const ROOTS = new Set(["pages", "versions", "roots", "preferences"]);
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
-/** Whether a write addresses something Notes keeps: a page or what is in
+/** Whether a write addresses something HeiNote keeps: a page or what is in
  *  it, a page's history or one version, the page list, the preferences —
  *  and never through a key that would reach an object's prototype. */
 export function isWorkspaceMutation(value: unknown): value is WorkspaceMutation {

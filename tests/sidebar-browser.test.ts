@@ -390,7 +390,7 @@ test("topbar creation works from every view and from the desktop rail", async ({
     expect(await savedPages(page)).toHaveLength(baseline.length + 1);
   }
   await page.getByRole("button", { name: "Collapse to rail", exact: true }).click();
-  const rail = page.getByRole("navigation", { name: "Notes navigation", exact: true });
+  const rail = page.getByRole("navigation", { name: "HeiNote navigation", exact: true });
   await expect(rail).toBeVisible();
   await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toHaveCount(0);
   const baseline = await savedPages(page);

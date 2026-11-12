@@ -6,7 +6,7 @@ import { useMountTransition } from "../hooks/useMountTransition";
 
 export const POPOVER_EXIT_MS = 110;
 
-/** Every floating surface in Notes — menus, the slash list, the format bar, the
+/** Every floating surface in HeiNote — menus, the slash list, the format bar, the
  *  icon picker — is one of these. Portalled to the body so no `overflow` on an
  *  ancestor can clip it, pinned with `position: fixed`, and given the same
  *  short rise-and-fade on the way in and out. */

@@ -1,4 +1,4 @@
-/* What Notes is built on, declared once. Its collections: its records
+/* What HeiNote is built on, declared once. Its collections: its records
    (src/platform/records.ts), kept in the member's own scope and, for the
    page trees shared there, in a space's (`scopes`), each with its shape
    (`fields`), which every host checks on every write and from which the
@@ -6,18 +6,18 @@
    it says so. A paragraph's words and a page's name are rich text
    (`t.richText()`): they merge character by character when two people type
    in them at once; every other field is written by a patch of the fields
-   that changed. `terminus push` sends them with the release and the
-   platform holds each collection to its definition, so a definition never
-   changes in place. The services it uses, each at the version it is built
-   against: the web's pictures, and the card brick that reads a YouTube
-   video or a post on X (src/features/editor/embed-details.ts). Its
-   typefaces are Terminus's system fonts, which
+   that changed. The server holds each collection to its definition, so a
+   definition never changes in place. The services it uses, each at the
+   version it is built against: the web's pictures, and the card service
+   that reads a YouTube video or a post on X
+   (src/features/editor/embed-details.ts). Its typefaces are the app's own
+   font stacks, which
    every page has (src/platform/fonts.ts). And what agents may use: the
    records they may read (a collection's `agents` word), and the window's
-   operations, which agents call in the person's Notes window.
+   operations, which agents call in the person's HeiNote window.
 
    What it declares — the kinds, the colours, the covers, history's limits —
-   the app reads from here. It imports nothing of Notes'.
+   the app reads from here. It imports nothing of HeiNote's.
 
    The browser (src/main.tsx) imports this file first; a `Plane`
    (src/platform/plane.ts) opens a collection through the handle it answers,
@@ -74,7 +74,7 @@ const HISTORY_RETENTION = {
 /* ── What the commands take ───────────────────────────────────────────────
    `t` fields, each saying what it is to the agent choosing it, and left out
    unless it is required. Field names are the agents': snake_case, as
-   Notes' ids. */
+   HeiNote's ids. */
 
 const pageId = t.id().optional().describe("The page: its id (find_pages, list_pages, whats_open). Left out, the page open in the window.");
 const databaseId = t.id().optional().describe("The database page: its id. Left out, the page open in the window.");
@@ -121,7 +121,7 @@ const paragraph = {
 
 /* ── What each record holds ────────────────────────────────────────────
    Its fields, at every depth, as the code writes them. What a record
-   schema cannot say is a JSON object here (`t.json`), read through Notes'
+   schema cannot say is a JSON object here (`t.json`), read through HeiNote's
    own checks: a card, and the maps a database and a table keep. */
 
 const object = () => t.json({ type: "object" });
@@ -370,14 +370,15 @@ export default schema({
   },
   services: {
     /** A post's pictures and a video's still, as bytes (embed-details.ts). */
-    web: "@terminus/web@0.0.1",
+    web: "@heinote/web@0.0.1",
     /** What a card says: a video's title and channel, a post's author,
      *  words and pictures (embed-details.ts). */
-    cards: "@terminus/web-card-preview@0.0.1",
+    cards: "@heinote/web-card-preview@0.0.1",
   },
-  /* The window's operations (src/app/commands.ts): what Notes does for
-     people, which agents call in the person's Notes window on the Terminus
-     desktop. They see every page the window does — the person's own and
+  /* The window's operations (src/app/commands.ts): what the app does for
+     people in the person's window. Agents reach HeiNote's data through the
+     server API; these stay declared so the handlers' types keep checking.
+     They see every page the window does — the person's own and
      their spaces' — and change them as the window's own controls do. */
   operations: {
     findPages: {
@@ -389,7 +390,7 @@ export default schema({
     exportMarkdown: {
       runs: "window",
       effect: "read",
-      description: "Read a page as Markdown, as Notes copies it: its paragraphs in order with the blocks shown in it — headings, lists, to-dos, quotes, code, tables, dividers, links and page mentions; pictures and files by name. version_id reads a checkpoint from its history (list_versions) instead. A database's rows are list_rows'.",
+      description: "Read a page as Markdown, as HeiNote copies it: its paragraphs in order with the blocks shown in it — headings, lists, to-dos, quotes, code, tables, dividers, links and page mentions; pictures and files by name. version_id reads a checkpoint from its history (list_versions) instead. A database's rows are list_rows'.",
       input: { page_id: pageId, version_id: t.id().optional().describe("A checkpoint of the page's, from list_versions.") },
     },
     getBacklinks: {
@@ -435,7 +436,7 @@ export default schema({
     updatePage: {
       runs: "window",
       effect: "write",
-      description: "Rename or decorate a page: its title (a rename keeps the links on the words it leaves), icon (an emoji; empty for none), cover (one of Notes' gradients; empty for none — it replaces a cover picture), full_width, and font. A database row's values are set with set_row_property.",
+      description: "Rename or decorate a page: its title (a rename keeps the links on the words it leaves), icon (an emoji; empty for none), cover (one of HeiNote's gradients; empty for none — it replaces a cover picture), full_width, and font. A database row's values are set with set_row_property.",
       input: {
         page_id: pageId,
         title: t.string(500).optional().describe("Its new name."),
@@ -488,7 +489,7 @@ export default schema({
     createBlock: {
       runs: "window",
       effect: "write",
-      description: "Add a paragraph to a page: its kind (text unless said; headings, todo, bullet, numbered, quote, callout, divider, code, file, embed) with text or content (runs with marks, http(s) or #page links, page and date mentions), checked, language, color, icon, align. target_page_id links a page at the end of its words — alone, the line stands for the page; file shows an existing file paragraph's bytes, and any other kind takes a picture already in Notes at the end of its words (source_file_block_id); embed_url makes a YouTube or X card. At the end unless before_id, after_id or parent_block_id (inside it) says.",
+      description: "Add a paragraph to a page: its kind (text unless said; headings, todo, bullet, numbered, quote, callout, divider, code, file, embed) with text or content (runs with marks, http(s) or #page links, page and date mentions), checked, language, color, icon, align. target_page_id links a page at the end of its words — alone, the line stands for the page; file shows an existing file paragraph's bytes, and any other kind takes a picture already in HeiNote at the end of its words (source_file_block_id); embed_url makes a YouTube or X card. At the end unless before_id, after_id or parent_block_id (inside it) says.",
       input: {
         page_id: pageId,
         ...paragraph,
@@ -661,7 +662,7 @@ export default schema({
     setPreferences: {
       runs: "window",
       effect: "write",
-      description: "Change the person's own Notes settings, which nobody else sees: theme, the page list's view and sort, whether the page list is folded, and the view a database opens on (database_id with view_id).",
+      description: "Change the person's own HeiNote settings, which nobody else sees: theme, the page list's view and sort, whether the page list is folded, and the view a database opens on (database_id with view_id).",
       input: {
         theme: t.choice(...THEMES).optional().describe("Its colours."),
         sidebar_view: t.choice(...SIDEBAR_VIEWS).optional().describe("What the page list shows."),

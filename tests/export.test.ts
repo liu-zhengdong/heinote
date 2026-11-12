@@ -59,13 +59,13 @@ class Browser {
 const password = "Correct-horse-battery-2026!";
 
 async function fixture(t: TestContext) {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-export-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-export-"));
   let server: RunningServer | undefined = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false });
   t.after(async () => {
     await server?.close();
     const target = resolve(directory);
     assert.equal(dirname(target), resolve(tmpdir()));
-    assert.ok(basename(target).startsWith("terminus-notes-export-"));
+    assert.ok(basename(target).startsWith("heinote-export-"));
     await rm(target, { recursive: true, force: true });
   });
   return { browser: () => new Browser(() => server!.url) };

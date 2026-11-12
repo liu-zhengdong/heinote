@@ -11,7 +11,7 @@
   padding: 22px 24px 16px; border-radius: var(--r-lg);
   background: var(--paper); color: var(--ink);
   box-shadow: var(--shadow-pop);
-  font-family: var(--terminus-font-body); line-height: 1.55;
+  font-family: var(--heinote-font-body); line-height: 1.55;
   animation: save-recovery-arrive 180ms var(--e-pop) both;
 }
 @keyframes save-recovery-arrive { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: none; } }
@@ -65,7 +65,7 @@
   min-height: 36px; padding: 0 14px; border-radius: 18px;
   background: var(--paper); color: var(--ink);
   box-shadow: var(--shadow-menu);
-  font-family: var(--terminus-font-body); font-size: 13px; font-weight: 550;
+  font-family: var(--heinote-font-body); font-size: 13px; font-weight: 550;
 }
 .save-recovery-pill:hover { background: var(--fill-hover); }
 .save-recovery-pill svg { color: var(--yellow); }
@@ -86,7 +86,7 @@
   --proposal-delete-fill: color-mix(in srgb, var(--danger) 9%, var(--elevated));
   display: flex; min-width: 0; flex-direction: column; width: min(680px, 100%);
   max-height: calc(100dvh - 112px); margin-top: 32px; overflow: hidden;
-  font-family: var(--terminus-font-body);
+  font-family: var(--heinote-font-body);
 }
 .agent-proposals__head { display: flex; flex: none; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px 24px 18px; }
 .agent-proposals__head > div { min-width: 0; }

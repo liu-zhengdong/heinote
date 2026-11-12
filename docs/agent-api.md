@@ -214,7 +214,7 @@ PATCH 镜像属性（携带 `relation_origin`）不允许修改类型或方向�
   "requestId":"uc-row-001",
   "baseRevision":"数据库 revision",
   "title":"创建笔记",
-  "text":"参与者：Notes 用户。\n主流程：输入标题和正文，系统保存。",
+  "text":"参与者：小黑笔记用户。\n主流程：输入标题和正文，系统保存。",
   "properties":{"number":"UC-01","status":"Not started","priority":"P1"}
 }
 ```

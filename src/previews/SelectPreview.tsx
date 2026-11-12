@@ -36,7 +36,7 @@ function SelectPreview() {
 
   return <main className="select-preview">
     <nav className="select-preview__nav" aria-label="组件预览">
-      <span className="select-preview__brand"><img src="/brand/notes-32.png" alt="" />Notes <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> / 组件预览</span></span>
+      <span className="select-preview__brand"><img src="/brand/heinote-icon.png" alt="" width="24" height="24" />小黑笔记 <span style={{ color: "var(--ink-3)", fontWeight: 400 }}> / 组件预览</span></span>
       <span className="select-preview__themes" aria-label="主题">
         <button type="button" aria-pressed={theme === "light"} onClick={() => setTheme("light")}><Sun size={14} />浅色</button>
         <button type="button" aria-pressed={theme === "dark"} onClick={() => setTheme("dark")}><Moon size={14} />深色</button>

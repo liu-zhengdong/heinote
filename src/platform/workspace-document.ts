@@ -73,15 +73,15 @@ function baseOf(mutation: WorkspaceMutation): [string, Record<string, RichText>]
  *  taken back, so the rest are saved. */
 export type SyncStatus = "saved" | "saving" | "offline" | "refused";
 
-/** Notes' workspace in this window, made from the records of the member's
+/** HeiNote's workspace in this window, made from the records of the member's
  *  own plane and of every space whose pages they read (records.ts).
 
  *  A change is made here at once and handed, record by record, to the
  *  plane's live collections (plane.ts): the fields that changed, each a
  *  top-level field of its record, as a patch — a paragraph's words and a
- *  page's name with the runs the window showed as their base, so Terminus
+ *  page's name with the runs the window showed as their base, so the server
  *  merges them with whatever anyone else typed meanwhile. The collections
- *  show the write until it lands, then the record as Terminus merged it. */
+ *  show the write until it lands, then the record as the server merged it. */
 export class WorkspaceDocument {
   readonly platform: PlatformClient;
   state: WorkspaceState = emptyWorkspace();
@@ -124,7 +124,7 @@ export class WorkspaceDocument {
     return document;
   }
 
-  /** The spaces this member's Notes can read. Failed discovery leaves only personal records. */
+  /** The spaces this member's HeiNote can read. Failed discovery leaves only personal records. */
   private async discoverSpaces(known?: readonly SpaceSummary[]): Promise<string[]> {
     let list = known;
     if (!list) {
@@ -361,7 +361,7 @@ export class WorkspaceDocument {
     for (const listener of this.syncListeners) listener(next);
   }
 
-  /** Whether there are writes Terminus does not have yet. */
+  /** Whether there are writes the server does not have yet. */
   get unsaved(): boolean {
     return this.writing.size > 0;
   }
@@ -384,7 +384,7 @@ export class WorkspaceDocument {
         new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(0, deadline - Date.now()))),
       ]);
     }
-    if (this.refusals > refused) throw new Error("Terminus refused some of these changes: they were taken back.");
+    if (this.refusals > refused) throw new Error("The server refused some of these changes: they were taken back.");
     if (this.writing.size) throw new Error("Some changes are not saved yet: they go on trying.");
   }
 
@@ -403,7 +403,7 @@ export class WorkspaceDocument {
     return ids;
   }
 
-  /** Shares a page tree through a Terminus space: the space is read first,
+  /** Shares a page tree through a shared space: the space is read first,
    *  then the page's home becomes it, so it is copied in whole (see
    *  `transact`), and from then on every member of the space reads and
    *  writes it there. */

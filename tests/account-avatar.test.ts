@@ -24,14 +24,14 @@ function status(reply: Reply, expected: number): Json {
 }
 
 async function fixture(t: TestContext, seed?: (directory: string) => Promise<void>, github: GithubConfig | null = null) {
-  const directory = await mkdtemp(join(tmpdir(), "terminus-notes-avatar-"));
+  const directory = await mkdtemp(join(tmpdir(), "heinote-avatar-"));
   let server: RunningServer | undefined;
   t.after(async () => {
     try { await server?.close(); }
     finally {
       const target = resolve(directory);
       assert.equal(dirname(target), resolve(tmpdir()));
-      assert.ok(basename(target).startsWith("terminus-notes-avatar-"));
+      assert.ok(basename(target).startsWith("heinote-avatar-"));
       await rm(target, { recursive: true, force: true });
     }
   });

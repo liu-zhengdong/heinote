@@ -8,7 +8,7 @@ import { escapeHtml } from "../../core/inline-content";
    block on screen is told once, and colours itself. */
 
 export interface CodeLanguage {
-  /** What a block stores. The first twelve are what Notes has always stored. */
+  /** What a block stores. The first twelve are what HeiNote has always stored. */
   id: string;
   label: string;
   /** The highlight.js grammar, when there is one. */

@@ -17,7 +17,7 @@ export function GithubMark({ size = 18 }: { size?: number }) {
 
 /** Step 7c of the sign-up flow: the GitHub login matches an existing local
  * handle. The user either creates a separate account or signs in with the
- * password and links GitHub later — Notes never merges identities. */
+ * password and links GitHub later — HeiNote never merges identities. */
 export function GithubSignupChoice({ ticket, enabled, onCreate, onDismissed }: {
   ticket: string;
   enabled: boolean;
@@ -99,7 +99,7 @@ export function GithubSignupChoice({ ticket, enabled, onCreate, onDismissed }: {
         </span>
       </div>
       <p className="account-muted">
-        同名 Notes 账号已存在。登录已有账号后，可以在「账号 → 登录方式」绑定 GitHub。
+        同名小黑笔记账号已存在。登录已有账号后，可以在「账号 → 登录方式」绑定 GitHub。
       </p>
       <p className="account-muted">创建新账号会建立独立的笔记空间。此 GitHub 身份随后无法转移到已有账号。</p>
       {error ? <p className="account-error" role="alert">{error}</p> : null}

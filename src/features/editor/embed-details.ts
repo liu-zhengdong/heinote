@@ -13,10 +13,11 @@ import type { Embed } from "../../core/types";
  *  different times, share it and keep their own addresses. */
 const asked = new Map<string, Promise<unknown>>();
 
-/** What Terminus's card brick says about a card — an official service,
- *  declared in schema.ts and called as any app calls a service, once a
- *  session per video or post. It reads the providers, so the provider never
- *  sees who reads the page. */
+/** What the card service says about a card — declared in schema.ts and
+ *  called as any app calls a service, once a session per video or post. It
+ *  reads the providers, so the provider never sees who reads the page. In
+ *  this standalone build the platform shim answers nothing (its call
+ *  returns null), so a card stays its address alone. */
 function ask(embed: Embed): Promise<unknown> {
   const key = embed.provider === "youtube" ? `video ${embed.video_id}` : `post ${embed.post_id}`;
   let reading = asked.get(key);

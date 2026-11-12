@@ -4,10 +4,10 @@
 @import "@fontsource/noto-sans-sc/700.css";
 
 :root {
-  --terminus-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Noto Sans SC", "Noto Sans Backtick Fix", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --terminus-font-serif: "Iowan Old Style", "Palatino Linotype", "Noto Serif CJK SC", "Songti SC", serif;
-  --terminus-font-code: "SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans SC", monospace;
-  --terminus-font-body-italic: var(--terminus-font-body);
-  --terminus-font-serif-italic: var(--terminus-font-serif);
+  --heinote-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Noto Sans SC", "Noto Sans Backtick Fix", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --heinote-font-serif: "Iowan Old Style", "Palatino Linotype", "Noto Serif CJK SC", "Songti SC", serif;
+  --heinote-font-code: "SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans SC", monospace;
+  --heinote-font-body-italic: var(--heinote-font-body);
+  --heinote-font-serif-italic: var(--heinote-font-serif);
 }
 .sidebar__foot .account-entry { flex: 1; }

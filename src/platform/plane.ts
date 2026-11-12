@@ -1,9 +1,9 @@
 import type { CollectionHandle, LiveCollection, RecordPatch } from "./schema";
 import app from "../../schema";
-import { COLLECTIONS, emptyPlane, SPACE_COLLECTIONS, type NotesCollection, type PlaneRecords, type RecordRef, type RecordValue, type RecordWrite } from "./records";
+import { COLLECTIONS, emptyPlane, SPACE_COLLECTIONS, type HeiNoteCollection, type PlaneRecords, type RecordRef, type RecordValue, type RecordWrite } from "./records";
 
-/** Every collection Notes keeps, by name: the handles schema.ts answers. */
-const HANDLES: Readonly<Record<NotesCollection, CollectionHandle<RecordValue>>> = {
+/** Every collection HeiNote keeps, by name: the handles schema.ts answers. */
+const HANDLES: Readonly<Record<HeiNoteCollection, CollectionHandle<RecordValue>>> = {
   pages: app.pages,
   blocks: app.blocks,
   versions: app.versions,
@@ -13,20 +13,20 @@ const HANDLES: Readonly<Record<NotesCollection, CollectionHandle<RecordValue>>> 
 const isObject = (value: unknown): value is RecordValue =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** One plane of Notes' records — the member's own, or a space's — as the
- *  SDK's live collections hold it: what Terminus has, with this window's
+/** One plane of HeiNote's records — the member's own, or a space's — as the
+ *  local live collections hold it: what the server has, with this window's
  *  writes over it until they land. A write goes to its collection, which
  *  shows it at once, queues it behind any write of that record still on its
  *  way, sends it, and tries again while it cannot be sent; a rich-text field
  *  it sets merges with whatever anyone else typed since the runs the window
  *  showed. Nothing is merged or kept here. */
 export class Plane {
-  private constructor(private readonly live: ReadonlyMap<NotesCollection, LiveCollection<RecordValue>>) {}
+  private constructor(private readonly live: ReadonlyMap<HeiNoteCollection, LiveCollection<RecordValue>>) {}
 
   /** The member's own records, or a space's (`spaceId`): settings are the
    *  member's own alone. */
   static async open(spaceId?: string): Promise<Plane> {
-    const names: readonly NotesCollection[] = spaceId ? SPACE_COLLECTIONS : COLLECTIONS;
+    const names: readonly HeiNoteCollection[] = spaceId ? SPACE_COLLECTIONS : COLLECTIONS;
     const settled = await Promise.allSettled(names.map((name) => (spaceId ? HANDLES[name].in(spaceId) : HANDLES[name]).live()));
     const opened = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     const refused = settled.find((result) => result.status === "rejected");

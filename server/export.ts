@@ -232,5 +232,5 @@ function pageMarkdown(pages: Record<string, NotePage>, page: NotePage, depth: nu
 function readme(exports: ScopeExport[]): string {
   const scopes = exports.map((part) =>
     `- \`${part.dir}/\` — ${part.label}：\`pages/\` 每页一个 Markdown、\`trash/\` 回收站、\`attachments/\` 图片与文件、\`records.json\` 无损原始记录（含历史版本）`).join("\n");
-  return `# Notes 导出\n\n每个目录对应一个可见范围（个人笔记或空间）：\n\n${scopes || "- （无可导出内容）"}\n\n\`export.json\` 说明导出的范围与时间。\n\n- Markdown 中的图片与文件链接指向本压缩包内的 \`attachments/\`。\n- 页面引用保持为页面名称。\n- 完整字段、历史版本与数据库视图定义见各目录的 \`records.json\`。\n`;
+  return `# 小黑笔记导出\n\n每个目录对应一个可见范围（个人笔记或空间）：\n\n${scopes || "- （无可导出内容）"}\n\n\`export.json\` 说明导出的范围与时间。\n\n- Markdown 中的图片与文件链接指向本压缩包内的 \`attachments/\`。\n- 页面引用保持为页面名称。\n- 完整字段、历史版本与数据库视图定义见各目录的 \`records.json\`。\n`;
 }

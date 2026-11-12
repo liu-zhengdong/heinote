@@ -1,14 +1,14 @@
 ---
-name: terminus-notes
-tags: notes, terminus-notes, http-api, rest, agent-api
+name: heinote
+tags: notes, heinote, 小黑笔记, http-api, rest, agent-api
 description: >
-  通过 HTTP REST API 读写 Terminus Notes：页面、数据库条目、结构化修改、
-  审核提案与版本恢复。当 Agent 需要在 Terminus Notes 中创建、查询或修改
+  通过 HTTP REST API 读写 小黑笔记：页面、数据库条目、结构化修改、
+  审核提案与版本恢复。当 Agent 需要在 小黑笔记 中创建、查询或修改
   笔记内容，或遇到 NOTES_URL / NOTES_TOKEN / /api/v1 时使用。
-  触发词：笔记、notes、terminus、知识库写入、数据库条目、提案。
+  触发词：笔记、notes、小黑笔记、知识库写入、数据库条目、提案。
 ---
 
-# Terminus Notes HTTP 接入
+# 小黑笔记 HTTP 接入
 
 本技能只覆盖 HTTP 接入方式。浏览器界面操作不适用。
 

@@ -141,7 +141,7 @@ export function attachGithubAuth(app: Express, ctx: Context) {
     }));
     if (!token.success) fail("unavailable", 502);
     const parsed = z.object({ id: z.number().int().positive().safe(), login: z.string().min(1).max(100), name: z.string().nullable().optional() }).safeParse(await json(urls.user, {
-      headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token.data.access_token}`, "User-Agent": "Notes" },
+      headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token.data.access_token}`, "User-Agent": "HeiNote" },
     }));
     if (!parsed.success) fail("unavailable", 502);
     return { id: String(parsed.data.id), login: parsed.data.login, displayName: (parsed.data.name?.trim() || parsed.data.login).slice(0, 100) };
