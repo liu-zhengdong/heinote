@@ -47,6 +47,8 @@ description: >
 
 ```sh
 heinote pages [--full]                        # 列出页面（默认 id/title/kind 摘要）
+heinote search <query> [--space S] [--limit N] [--offset N]
+                                              # 跨空间搜索页面标题与正文
 heinote page <id>                             # 读页面与块树
 heinote create-page --title T [--text F] [--parent-id P] [--space-id S]
 heinote set-title <id> --title T              # 只改标题
@@ -74,6 +76,7 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 任务 | 命令 |
 | --- | --- |
 | 列出可见页面 | `heinote pages` |
+| 跨空间搜索页面 | `heinote search "关键词"` |
 | 读页面与块树 | `heinote page <id>` |
 | 追加文字 | `heinote append <id> --text "内容"` 或 `--text -` |
 | 局部修改 | `heinote ops <id> --ops ops.json`（操作见下） |

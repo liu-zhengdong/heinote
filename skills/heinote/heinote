@@ -157,6 +157,19 @@ def ops_body(client, page_id, operations, mode, request_id_arg, force=False):
            ("ops", page_id, mode, operations), request_id_arg, force)
 
 
+def cmd_search(client, a):
+    from urllib.parse import urlencode
+    params = {"q": a.query}
+    if a.space:
+        params["space"] = a.space
+    if a.limit is not None:
+        params["limit"] = a.limit
+    if a.offset:
+        params["offset"] = a.offset
+    status, payload = client.request("GET", f"/api/v1/search?{urlencode(params)}")
+    emit(status, payload)
+
+
 def cmd_pages(client, a):
     status, payload = client.request("GET", "/api/v1/pages")
     if a.full or not isinstance(payload, list):
@@ -335,6 +348,13 @@ def build_parser():
         if force:
             sp.add_argument("--force", action="store_true",
                             help="生成新幂等标识，允许有意重复相同业务输入。")
+
+    sp = sub.add_parser("search", help="跨空间搜索页面（个人 + 团队知识库）")
+    sp.add_argument("query", help="搜索关键词")
+    sp.add_argument("--space", help="限定空间：personal 或空间 ID")
+    sp.add_argument("--limit", type=int, help="每页条数，默认 12，上限 100")
+    sp.add_argument("--offset", type=int, default=0)
+    sp.set_defaults(fn=cmd_search)
 
     sp = sub.add_parser("pages", help="列出可见页面（默认摘要，--full 完整对象）")
     sp.add_argument("--full", action="store_true")
