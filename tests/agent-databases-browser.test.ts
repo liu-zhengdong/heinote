@@ -41,8 +41,7 @@ async function createToken(page: Page, name: string, access: "read" | "write") {
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
   await page.getByRole("button", { name: "新建令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill(name);
-  await page.getByRole("combobox", { name: "权限", exact: true }).click();
-  await page.getByRole("option", { name: access === "write" ? "读写" : "只读", exact: true }).click();
+  await page.getByRole("radio", { name: access === "write" ? "读写" : "只读", exact: true }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const value = await page.getByLabel("令牌", { exact: true }).inputValue();
   // The one-time value stays dismissable before the next token is made.
@@ -177,10 +176,16 @@ test("UC-14: agent-built database renders, filters and sorts like HTTP, and edit
   await expect(row(page, first.id).getByRole("combobox", { name: "状态" })).toContainText("In progress");
   await expect(row(page, second.id).getByRole("combobox", { name: "优先级" })).toContainText("P2");
 
-  /* The UI filter behaves like the same filter over /query. */
+  /* The UI filter behaves like the same filter over /query. The panel lists
+     one condition row: property, operator and the value it compares to. */
   await page.getByRole("button", { name: "Filter", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Not started", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Filtered by 状态: Not started", exact: true })).toBeVisible();
+  const filterPanel = page.locator(".filter-panel");
+  await expect(filterPanel).toBeVisible();
+  await filterPanel.getByRole("combobox", { name: "Filter property", exact: true }).click();
+  await page.getByRole("option", { name: "状态", exact: true }).click();
+  await filterPanel.getByRole("combobox", { name: "Filter value", exact: true }).click();
+  await page.getByRole("option", { name: "Not started", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Filtered by 1 condition", exact: true })).toBeVisible();
   await expect.poll(() => rowTitles(page)).toEqual(["创建笔记", "查询笔记"]);
   expect((await queryRows(token, db.id, { filter: { property_id: "status", value: "Not started" } })).map((row) => row.title))
     .toEqual(await rowTitles(page));
@@ -193,7 +198,7 @@ test("UC-14: agent-built database renders, filters and sorts like HTTP, and edit
     view: { filter: { property_id: "status", value: "In progress" }, sorts: [] },
   });
   expect(filtered.status).toBe(200);
-  await expect(page.getByRole("button", { name: "Filtered by 状态: In progress", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Filtered by 1 condition", exact: true })).toBeVisible();
   await expect.poll(() => rowTitles(page)).toEqual(["修改笔记"]);
   const cleared = await agent(token, "PATCH", `/api/v1/databases/${db.id}/views/table`, {
     requestId: "uc14a-view-clear",
@@ -203,7 +208,9 @@ test("UC-14: agent-built database renders, filters and sorts like HTTP, and edit
   expect(cleared.status).toBe(200);
   await expect.poll(() => rowTitles(page)).toEqual(["修改笔记", "创建笔记", "查询笔记"]);
 
-  /* The UI sort behaves like the same sorts over /query. */
+  /* The UI sort behaves like the same sorts over /query. Close the filter
+     panel first so its popover cannot swallow the Sort press. */
+  await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Sort", exact: true }).click();
   await page.getByRole("menuitem", { name: "优先级", exact: true }).click();
   await expect(page.getByRole("button", { name: "Sorted by 优先级", exact: true })).toBeVisible();

@@ -100,7 +100,7 @@ async function tryAction(control: Locator) {
 async function submitProfile(page: Page) {
   const save = settings(page).getByRole("button", { name: "保存", exact: true });
   if (await save.isVisible() && await save.isEnabled()) await save.click();
-  else await settings(page).getByLabel("显示名", { exact: true }).press("Enter");
+  else await settings(page).locator('[name="profileDisplayName"]').press("Enter");
 }
 async function noOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -190,7 +190,7 @@ test("AC-01/02: save a trimmed display name with Enter, refresh identity and fut
   await expect(category(page, "我的账号")).toBeFocused();
   await expect(dialog.getByRole("tab", { name: "登录方式", exact: true })).toHaveCount(0);
   await expect(dialog.getByText(`@${account.handle}`, { exact: true })).toBeVisible();
-  const field = dialog.getByLabel("显示名", { exact: true });
+  const field = dialog.locator('[name="profileDisplayName"]');
   await expect(field).toHaveValue(account.displayName);
   await expect(dialog.getByRole("button", { name: "保存", exact: true }).and(dialog.locator(":enabled"))).toHaveCount(0);
   await field.fill("  新的显示名  ");
@@ -221,13 +221,13 @@ test("AC-01/02: save a trimmed display name with Enter, refresh identity and fut
   await expectIdentity(page, "新的显示名");
   expect(await sessionUser(page, app)).toEqual({ ...account, displayName: "新的显示名" });
   await openSettings(page);
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("新的显示名");
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue("新的显示名");
   expect(errors).toEqual([]);
 });
 
 test("AC-02: invalid names and explicit save failure retain input; cancel restores the confirmed value", async ({ page, app, account }) => {
   await openSettings(page);
-  const field = settings(page).getByLabel("显示名", { exact: true });
+  const field = settings(page).locator('[name="profileDisplayName"]');
   const patches: unknown[] = [];
   await page.route(profilePath, async (route) => {
     if (route.request().method() !== "PATCH") return route.continue();
@@ -264,7 +264,7 @@ test("AC-02: invalid names and explicit save failure retain input; cancel restor
 
 test("AC-09: category changes retain profile and token drafts; close and logout require an explicit choice", async ({ page, app, account }) => {
   await openSettings(page);
-  await settings(page).getByLabel("显示名", { exact: true }).fill("尚未保存的名字");
+  await settings(page).locator('[name="profileDisplayName"]').fill("尚未保存的名字");
   await category(page, "Agent 令牌").click();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await settings(page).locator('input[name="tokenName"]').fill("尚未创建的 Agent");
@@ -274,12 +274,12 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await expect(settings(page).locator('input[name="tokenName"]')).toHaveValue("尚未创建的 Agent");
   await expect(settings(page).getByRole("radio", { name: "读写", exact: true })).toBeChecked();
   await category(page, "我的账号").click();
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("尚未保存的名字");
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue("尚未保存的名字");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   const prompt = page.getByRole("alertdialog");
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "继续编辑", exact: true }).click();
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("尚未保存的名字");
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue("尚未保存的名字");
   await settings(page).getByRole("button", { name: "退出登录", exact: true }).click();
   await expect(prompt).toBeVisible();
   await prompt.getByRole("button", { name: "继续编辑", exact: true }).click();
@@ -290,7 +290,7 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
   await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
   await expectIdentity(page, account.displayName);
   await openSettings(page);
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(account.displayName);
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue(account.displayName);
   await category(page, "Agent 令牌").click();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   await expect(settings(page).locator('input[name="tokenName"]')).toHaveValue("");
@@ -299,7 +299,7 @@ test("AC-09: category changes retain profile and token drafts; close and logout 
 
 test("AC-09: pending profile save blocks navigation, Escape, close, logout, and duplicate submission", async ({ page, app }) => {
   await openSettings(page);
-  await settings(page).getByLabel("显示名", { exact: true }).fill("等待服务端确认");
+  await settings(page).locator('[name="profileDisplayName"]').fill("等待服务端确认");
   let release!: () => void;
   let entered!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -322,7 +322,7 @@ test("AC-09: pending profile save blocks navigation, Escape, close, logout, and 
     await page.keyboard.press("Enter");
     await page.keyboard.press("Escape");
     await expect(category(page, "我的账号")).toHaveAttribute("aria-selected", "true");
-    await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue("等待服务端确认");
+    await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue("等待服务端确认");
     await expect(page.getByRole("alertdialog")).toHaveCount(0);
     expect(patches).toBe(1);
   } finally { release(); }
@@ -403,7 +403,7 @@ test("AC-04: preference write failure is visible and does not become a confirmed
 
 test("AC-01/08: search locates appearance, restores empty results, and hides administration from a normal user", async ({ page, app, account, browser }) => {
   await openSettings(page);
-  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(category(page, name)).toBeVisible();
+  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "数据", "后台管理"]) await expect(category(page, name)).toBeVisible();
   for (const name of ["邮箱", "修改密码", "通行密钥", "双重身份验证", "通知", "计费"]) await expect(settings(page).getByRole("tab", { name, exact: true })).toHaveCount(0);
   const search = settings(page).getByPlaceholder("搜索设置", { exact: true });
   await search.fill("主题");
@@ -413,17 +413,17 @@ test("AC-01/08: search locates appearance, restores empty results, and hides adm
   await expect(settings(page).getByText("未找到设置", { exact: true })).toBeVisible();
   await settings(page).getByRole("button", { name: /清空/ }).first().click();
   await expect(search).toHaveValue("");
-  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(category(page, name)).toBeVisible();
+  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "数据", "后台管理"]) await expect(category(page, name)).toBeVisible();
   expect((await sessionUser(page, app)).id).toBe(account.id);
   const memberContext = await browser.newContext();
   try {
     const member = await memberContext.newPage();
     await register(member, app, "settings_member", "普通设置用户");
     await openSettings(member);
-    await expect(category(member, "账号管理")).toHaveCount(0);
-    await settings(member).getByPlaceholder("搜索设置", { exact: true }).fill("账号管理");
+    await expect(category(member, "后台管理")).toHaveCount(0);
+    await settings(member).getByPlaceholder("搜索设置", { exact: true }).fill("后台管理");
     await expect(settings(member).getByText("未找到设置", { exact: true })).toBeVisible();
-    await expect(category(member, "账号管理")).toHaveCount(0);
+    await expect(category(member, "后台管理")).toHaveCount(0);
     expect((await member.request.get(`${app.url}/api/admin/users`)).status()).toBe(403);
   } finally { await memberContext.close(); }
 });
@@ -433,23 +433,42 @@ test("AC-07: preserve the last administrator and return to account after self-de
   try {
     const member = await memberContext.newPage();
     const other = await register(member, app, "settings_admin_peer", "另一位管理员");
+    // Site administration lives in the /admin console behind the 后台管理 tab.
     await openSettings(page);
-    await category(page, "账号管理").click();
-    const ownRole = settings(page).getByRole("combobox", { name: `${account.displayName}的站点角色`, exact: true });
+    await category(page, "后台管理").click();
+    await settings(page).getByRole("button", { name: "打开后台管理", exact: true }).click();
+    await expect(page.locator(".admin__brand")).toHaveText("Terminus 笔记");
+    await page.getByRole("tab", { name: "用户", exact: true }).click();
+    const inspector = page.locator(".ac-ins__inner");
+
+    // The last administrator cannot demote themselves.
+    await page.locator(".ac-item", { hasText: account.displayName }).click();
+    await expect(inspector).toBeVisible();
+    const ownRole = inspector.getByRole("combobox", { name: "站点角色", exact: true });
     await ownRole.click();
     await page.getByRole("option", { name: "用户", exact: true }).click();
-    await expect(settings(page).getByRole("alert")).toContainText(/至少保留/);
+    await expect(page.getByRole("status").filter({ hasText: /至少保留/ })).toBeVisible();
     await expect(ownRole).toHaveText("管理员");
     expect((await sessionUser(page, app)).siteRole).toBe("admin");
-    await settings(page).getByRole("combobox", { name: `${other.displayName}的站点角色`, exact: true }).click();
+
+    // Promoting a second administrator makes self-demotion legal.
+    await page.locator(".ac-item", { hasText: other.displayName }).click();
+    const peerRole = inspector.getByRole("combobox", { name: "站点角色", exact: true });
+    await peerRole.click();
     await page.getByRole("option", { name: "管理员", exact: true }).click();
     await expect.poll(async () => (await sessionUser(member, app)).siteRole).toBe("admin");
+
+    await page.locator(".ac-item", { hasText: account.displayName }).click();
     await ownRole.click();
     await page.getByRole("option", { name: "用户", exact: true }).click();
-    await expect(category(page, "账号管理")).toHaveCount(0);
+    await expect.poll(async () => (await sessionUser(page, app)).siteRole).toBe("user");
+    await page.getByRole("button", { name: "返回笔记", exact: true }).click();
+
+    // Back in settings the admin tab is gone and the API rejects admin calls.
+    await openSettings(page);
+    await expect(category(page, "后台管理")).toHaveCount(0);
     await expect(category(page, "我的账号")).toHaveAttribute("aria-selected", "true");
-    await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(account.displayName);
-    expect((await sessionUser(page, app)).siteRole).toBe("user");
+    await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue(account.displayName);
     expect((await page.request.get(`${app.url}/api/admin/users`)).status()).toBe(403);
   } finally { await memberContext.close(); }
 });
@@ -588,11 +607,11 @@ test("AC-09: vertical tab keys and Select Escape preserve the parent and restore
   await expect(category(page, "偏好")).toBeFocused();
   await expect(category(page, "偏好")).toHaveAttribute("aria-selected", "true");
   await page.keyboard.press("End");
-  await expect(category(page, "账号管理")).toBeFocused();
+  await expect(category(page, "后台管理")).toBeFocused();
   await page.keyboard.press("Home");
   await expect(own).toBeFocused();
   await page.keyboard.press("ArrowUp");
-  await expect(category(page, "账号管理")).toBeFocused();
+  await expect(category(page, "后台管理")).toBeFocused();
   await category(page, "Agent 令牌").click();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
   const field = settings(page).getByRole("radio", { name: "只读", exact: true });
@@ -605,7 +624,7 @@ test("AC-09: vertical tab keys and Select Escape preserve the parent and restore
 
 test("AC-09: native IME Enter does not save and IME Escape does not close settings", async ({ page, app, account }) => {
   await openSettings(page);
-  const field = settings(page).getByLabel("显示名", { exact: true });
+  const field = settings(page).locator('[name="profileDisplayName"]');
   await field.focus();
   let patches = 0;
   page.on("request", (request) => { if (request.method() === "PATCH" && request.url() === `${app.url}/api/account/profile`) patches++; });
@@ -628,12 +647,12 @@ test("AC-11: mobile opens navigation first and returns without losing long-name 
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.getByRole("button", { name: "All pages", exact: true })).toBeVisible();
   await openSettings(page);
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toBeHidden();
-  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(category(page, name)).toBeVisible();
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toBeHidden();
+  for (const name of ["我的账号", "偏好", "邀请", "Agent 令牌", "数据", "后台管理"]) await expect(category(page, name)).toBeVisible();
   await noOverflow(page);
   await photo(page, testInfo, "mobile-navigation-light");
   await category(page, "我的账号").click();
-  const field = settings(page).getByLabel("显示名", { exact: true });
+  const field = settings(page).locator('[name="profileDisplayName"]');
   const longName = "长名称用于检查手机设置的阅读与操作边界".repeat(6).slice(0, 100);
   await field.fill(longName);
   await expect(settings(page).getByRole("button", { name: "返回设置", exact: true })).toBeInViewport();
@@ -697,7 +716,9 @@ test("AC-11: capture 2x light/dark desktop, short-window, and 200 percent layout
   await expect(settings(page).getByRole("button", { name: "关闭设置", exact: true })).toBeInViewport();
   await expect(settings(page).getByRole("button", { name: "退出登录", exact: true })).toBeInViewport();
   await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
-  await expect(settings(page).getByRole("radiogroup", { name: "权限", exact: true })).toBeInViewport({ ratio: 1 });
+  const access = settings(page).getByRole("radiogroup", { name: "权限", exact: true });
+  await access.scrollIntoViewIfNeeded();
+  await expect(access).toBeInViewport({ ratio: 1 });
   await photo(page, testInfo, "short-window-token-form-dark");
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   // Browser zoom halves the CSS viewport. Exercise the same 200% reflow boundary.
@@ -705,7 +726,7 @@ test("AC-11: capture 2x light/dark desktop, short-window, and 200 percent layout
   await openSettings(page);
   await category(page, "我的账号").click();
   await noOverflow(page);
-  await expect(settings(page).getByLabel("显示名", { exact: true })).toBeInViewport();
+  await expect(settings(page).locator('[name="profileDisplayName"]')).toBeInViewport();
   await expect(settings(page).getByRole("button", { name: "关闭设置", exact: true })).toBeInViewport();
   await photo(page, testInfo, "reflow-200-percent-equivalent-dark");
 });
@@ -723,7 +744,7 @@ test("AC-11: record settings transitions and preserve feedback with reduced moti
     await chooseTheme(page, "dark");
     await expect(settings(page).getByRole("status").filter({ hasText: /^已保存$/ })).toBeVisible();
     await category(page, "我的账号").click();
-    await settings(page).getByLabel("显示名", { exact: true }).fill("修改后的交互用户");
+    await settings(page).locator('[name="profileDisplayName"]').fill("修改后的交互用户");
     await submitProfile(page);
     await expect(settings(page).getByRole("status").filter({ hasText: /^已保存$/ })).toBeVisible();
     await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();

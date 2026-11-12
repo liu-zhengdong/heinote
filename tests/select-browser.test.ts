@@ -117,20 +117,17 @@ test("real account panel uses the shared field in both themes", async ({ page },
   await expect(page.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "切换空间", exact: true }).locator(".space-switcher__user")).toHaveText("Select 示例");
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
-  await page.getByRole("button", { name: "新建令牌", exact: true }).click();
-  await page.locator('input[name="tokenName"]').fill("示例 Agent");
-  const field = page.getByRole("combobox", { name: "权限", exact: true });
+  await page.getByRole("tab", { name: "偏好", exact: true }).click();
+  const field = page.getByRole("combobox", { name: "外观", exact: true });
   await field.click();
-  const list = page.getByRole("listbox", { name: "权限", exact: true });
+  const list = page.getByRole("listbox", { name: "外观", exact: true });
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((next) => { document.documentElement.dataset.theme = next; }, theme);
     await expect(list).toHaveCSS("background-color", theme === "dark" ? "rgb(37, 37, 37)" : "rgb(255, 255, 255)");
     await page.screenshot({ path: testInfo.outputPath(`notes-account-select-${theme}.png`), animations: "disabled" });
   }
-  await list.getByRole("option", { name: "读写", exact: true }).click();
-  await expect(field).toHaveText("读写");
-  await expect(page.getByRole("tab", { name: "Agent 令牌", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("tab", { name: "偏好", exact: true })).toBeVisible();
 });
 
 test("short-window lists scroll internally and close on viewport changes", async ({ page }) => {

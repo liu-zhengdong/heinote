@@ -71,7 +71,21 @@ async function openDrawer(page: Page) {
   if (!await switcher(page).isVisible()) await page.getByRole("button", { name: "All pages", exact: true }).click();
   await expect(switcher(page)).toBeVisible();
 }
+// A refused save keeps the draft in a recovery dialog. Later refusals can
+// reopen it mid-test, and its scrim swallows clicks, so discard it before any
+// step that presses a button.
+async function dismissRecovery(page: Page) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const recovery = page.getByRole("alertdialog", { name: "你写的内容已经保留" });
+    if ((await recovery.count()) === 0) return;
+    await recovery.getByRole("button", { name: /^丢弃/ }).click();
+    await recovery.getByRole("button", { name: /^确认丢弃/ }).click();
+    await expect(recovery).toHaveCount(0);
+    await page.waitForTimeout(500);
+  }
+}
 async function switchSpace(page: Page, name: string) {
+  await dismissRecovery(page);
   await openDrawer(page); await switcher(page).click();
   await expect(spaceMenu(page)).toBeVisible();
   await spaceMenu(page).getByRole("menuitem").filter({ hasText: name }).click();
@@ -148,7 +162,7 @@ test("UC-13 browser: create from the username menu and keep the Notes views and 
   await expect(body(page)).toHaveText("通过真实编辑器保存团队内容");
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(settings(page)).toBeVisible();
-  for (const section of ["我的账号", "偏好", "邀请", "Agent 令牌", "账号管理"]) await expect(settings(page).getByRole("tab", { name: section, exact: true })).toBeVisible();
+  for (const section of ["我的账号", "偏好", "邀请", "Agent 令牌", "数据", "后台管理"]) await expect(settings(page).getByRole("tab", { name: section, exact: true })).toBeVisible();
   await settings(page).getByRole("button", { name: "关闭设置", exact: true }).click();
   await expect(title(page)).toHaveText("团队主题");
   await screenshot(page, info, "knowledge-base-desktop");
@@ -287,14 +301,20 @@ for (const revocation of ["remove", "archive"] as const) {
       const rejected = page.waitForResponse((response) => response.url().endsWith("/api/records/batch") && targets(response.request(), a.spaceId, aPage.id));
       pending.release(); const refusal = await rejected;
       expect([403, 409]).toContain(refusal.status());
+      // The save-recovery dialog keeps the rejected draft for the user and
+      // can reopen on late refusals; dismissRecovery also runs inside each
+      // switchSpace and before the fills below.
+      await dismissRecovery(page);
       await page.unroute("**/api/records/batch", handler);
       expect(await savedBody(owner, app, a.spaceId, aPage.id)).toContain("A最后已确认正文");
       expect(await savedBody(owner, app, a.spaceId, aPage.id)).not.toContain("A撤权后的拒绝草稿");
       await switchSpace(page, "个人空间"); await expect(title(page)).toHaveText("个人独立写入");
+      await dismissRecovery(page);
       await body(page).fill("A拒绝后个人空间真正保存成功");
       await expect.poll(() => savedBody(page, app, "personal", personal.id)).toContain("A拒绝后个人空间真正保存成功");
       await page.reload(); await expect(body(page)).toHaveText("A拒绝后个人空间真正保存成功");
       await switchSpace(page, b.name); await expect(title(page)).toHaveText("B独立写入");
+      await dismissRecovery(page);
       await body(page).fill("A拒绝后B空间真正保存成功");
       await expect.poll(() => savedBody(owner, app, b.spaceId, bPage.id)).toContain("A拒绝后B空间真正保存成功");
       await page.reload(); await expect(body(page)).toHaveText("A拒绝后B空间真正保存成功");

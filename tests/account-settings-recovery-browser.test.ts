@@ -119,7 +119,7 @@ test("AC-10/E8: session expiry hides a new token and keeps old account drafts ou
     const otherPage = await otherContext.newPage();
     const other = await register(otherPage, app, "recovery_next_user", "切换后的账号");
     await openSettings(page);
-    await settings(page).getByLabel("显示名", { exact: true }).fill("只能属于旧账号的草稿");
+    await settings(page).locator('[name="profileDisplayName"]').fill("只能属于旧账号的草稿");
     await category(page, "Agent 令牌").click();
     await settings(page).getByRole("button", { name: "新建令牌", exact: true }).click();
     await settings(page).locator('input[name="tokenName"]').fill("会话失效前创建的 Agent");
@@ -139,10 +139,10 @@ test("AC-10/E8: session expiry hides a new token and keeps old account drafts ou
     await login(page, other);
     expect((await sessionUser(page, app))?.id).toBe(other.id);
     await openSettings(page);
-    await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(other.displayName);
+    await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue(other.displayName);
     await category(page, "Agent 令牌").click();
     await expect(settings(page).getByLabel("令牌", { exact: true })).toHaveCount(0);
-    await expect(settings(page).getByText("暂无令牌", { exact: true })).toBeVisible();
+    await expect(settings(page).getByText("还没有令牌", { exact: true })).toBeVisible();
     expect(await api<unknown[]>(page, app, "/api/tokens")).toEqual([]);
     await secretAbsentFromStorage(page, secret);
     // Session expiry clears the display. The created token stays valid.
@@ -254,7 +254,7 @@ test("AC-05/E3: expired invitations cannot join, and a failed acceptance retains
 
 test("AC-12/E5: GitHub binding guards an unsaved profile before any OAuth request, then returns to the same account", async ({ page, app, account }) => {
   await openSettings(page);
-  const field = settings(page).getByLabel("显示名", { exact: true });
+  const field = settings(page).locator('[name="profileDisplayName"]');
   await field.fill("绑定外跳前的未保存名字");
   let linkPosts = 0;
   let authorizeVisits = 0;
@@ -339,14 +339,14 @@ test("AC-10/E9: preserve a long document's real scroll position and refresh exte
     await expect(page.getByRole("button", { name: "设置", exact: true })).toBeFocused();
     await expectIdentity(page, account.displayName);
     await openSettings(page);
-    await category(page, "账号管理").click();
-    await expect(settings(page).getByRole("combobox", { name: `${account.displayName}的站点角色`, exact: true })).toBeVisible();
+    await category(page, "后台管理").click();
+    await expect(settings(page).getByRole("button", { name: "打开后台管理", exact: true })).toBeVisible();
     await api(adminPage, app, `/api/admin/users/${account.id}`, { method: "PATCH", data: { siteRole: "user" } });
     // Window focus is the public session-refresh trigger used by settings.
     await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-    await expect(category(page, "账号管理")).toHaveCount(0);
+    await expect(category(page, "后台管理")).toHaveCount(0);
     await expect(category(page, "我的账号")).toHaveAttribute("aria-selected", "true");
-    await expect(settings(page).getByLabel("显示名", { exact: true })).toHaveValue(account.displayName);
+    await expect(settings(page).locator('[name="profileDisplayName"]')).toHaveValue(account.displayName);
     expect((await sessionUser(page, app))?.siteRole).toBe("user");
     await api(page, app, "/api/admin/users", { status: 403 });
     const privateRead = await adminPage.request.get(`${app.url}/api/collaboration/personal/${note.id}`);

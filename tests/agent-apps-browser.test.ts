@@ -40,8 +40,7 @@ async function createToken(page: Page, name: string, access: "read" | "write") {
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
   await page.getByRole("button", { name: "新建令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill(name);
-  await page.getByRole("combobox", { name: "权限", exact: true }).click();
-  await page.getByRole("option", { name: access === "write" ? "读写" : "只读", exact: true }).click();
+  await page.getByRole("radio", { name: access === "write" ? "读写" : "只读", exact: true }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const value = await page.getByLabel("令牌", { exact: true }).inputValue();
   await page.getByRole("button", { name: "已保存", exact: true }).click();

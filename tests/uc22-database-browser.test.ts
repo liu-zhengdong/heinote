@@ -41,8 +41,7 @@ async function createToken(page: Page, name: string) {
   await page.getByRole("tab", { name: "Agent 令牌", exact: true }).click();
   await page.getByRole("button", { name: "新建令牌", exact: true }).click();
   await page.locator('input[name="tokenName"]').fill(name);
-  await page.getByRole("combobox", { name: "权限", exact: true }).click();
-  await page.getByRole("option", { name: "读写", exact: true }).click();
+  await page.getByRole("radio", { name: "读写", exact: true }).click();
   await page.getByRole("button", { name: "创建", exact: true }).click();
   const value = await page.getByLabel("令牌", { exact: true }).inputValue();
   await page.getByRole("button", { name: "已保存", exact: true }).click();
@@ -185,7 +184,8 @@ test("UC-22: new property types, relation, views and linked view render and are 
   // The meta columns read the row's own record: the author name, a
   // creation time and the row's id.
   const firstRow = table.locator(`tbody tr[data-page-id="${first.id}"]`);
-  await expect(firstRow.locator("[data-meta='last_edited_by']")).toContainText("uc22_owner");
+  // Rows were written by the agent token, so the author names the token.
+  await expect(firstRow.locator("[data-meta='last_edited_by']")).toContainText("UC-22 验收");
   await expect(firstRow.locator("[data-meta='id']")).toHaveText(first.id);
   // Relation chips name the linked pages.
   const relCell = firstRow.locator(".db-rel-cell");
