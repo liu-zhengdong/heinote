@@ -111,6 +111,22 @@ docker compose up -d        # http://localhost:3000
 
 在 GitHub OAuth App 设置 `Authorization callback URL` 为 `PUBLIC_URL/api/auth/github/callback`，填入上面两个变量即可。「使用 GitHub 登录」按钮自动出现。
 
+### 发布与自动部署
+
+`.github/workflows/release.yml` 串起发版与生产更新：推送 `v*` 标签（或 Actions 里手动 Run workflow 填标签）后，流水线跑类型检查与回归，构建并把运行时产物挂到 GitHub Release，随后登录生产站调用服务自身的更新接口（与后台「关于」页一键更新同一条路径：下载产物 → 校验 → 切换 `DATA_DIR/current` → 重启 → 健康检查失败自动回滚），最后核对线上版本号。
+
+需要在仓库配置一次：
+
+| 位置 | 名称 | 内容 |
+| --- | --- | --- |
+| Actions Variable | `HEINOTE_DEPLOY_URL` | 站点地址，如 `https://heinote.shrc.babelgo.cn` |
+| Actions Secret | `HEINOTE_DEPLOY_HANDLE` | 站点管理员用户名 |
+| Actions Secret | `HEINOTE_DEPLOY_PASSWORD` | 对应密码 |
+
+发版：`git tag v1.2.0 && git push origin v1.2.0`。进度看 Actions 页与服务器 `DATA_DIR/update-log/`；部署失败流水线标红，站点保留旧版本。
+
+也可不入 CI：管理员在后台「关于」页点「检查更新」走同一条链路手动升级。
+
 ## 数据与备份
 
 - 数据库与附件都在 `DATA_DIR` 内。整体备份复制整个目录；容器内备份执行 `node scripts/backup.mjs`，产物写入 `./backups/`。

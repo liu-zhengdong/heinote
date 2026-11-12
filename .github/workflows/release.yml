@@ -1,0 +1,86 @@
+# Release → Tencent deploy pipeline.
+# Push a tag v* (or run it by hand with a tag name): the tests gate, then the
+# runtime archive is attached to a GitHub Release — UC-32's update source —
+# and the deploy job logs in on the production site and applies it through
+# the server's own one-click update path.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.2.0"
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Resolve tag
+        id: meta
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in v*) ;; *) echo "tag must look like v1.2.0, got: $tag" >&2; exit 1 ;; esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - run: npm ci
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Builds the production bundle itself; kept as the single source of the
+      # archive layout the update runner unpacks.
+      - name: Package runtime archive
+        run: node scripts/package-runtime.mjs "${{ steps.meta.outputs.tag }}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "release/heinote-runtime-$TAG.tar.gz" "release/heinote-runtime-$TAG.tar.gz.sha256" --clobber
+          else
+            gh release create "$TAG" \
+              "release/heinote-runtime-$TAG.tar.gz" \
+              "release/heinote-runtime-$TAG.tar.gz.sha256" \
+              --title "$TAG" --generate-notes --latest
+          fi
+
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      HEINOTE_DEPLOY_URL: ${{ vars.HEINOTE_DEPLOY_URL }}
+      HEINOTE_DEPLOY_HANDLE: ${{ secrets.HEINOTE_DEPLOY_HANDLE }}
+      HEINOTE_DEPLOY_PASSWORD: ${{ secrets.HEINOTE_DEPLOY_PASSWORD }}
+      HEINOTE_EXPECTED_TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Apply update on the production site
+        run: node scripts/deploy-update.mjs

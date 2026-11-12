@@ -8,6 +8,7 @@ data/
 backups/
 test-results/
 playwright-report/
+release/
 !.env.example
 
 # Local tool state and temp scripts
