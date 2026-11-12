@@ -7,9 +7,9 @@
 
 /* Rows breathe: a line of title, or title + matched excerpt — both under the
    old ceiling, but no longer pressed against the row edges. */
-.quickfind .menu__item { min-height:36px; padding:5px 8px; }
-.quickfind .menu__copy { gap:2px; }
-.quickfind .menu__description { font-size:12.5px; }
+.quickfind .menu__item { min-height:36px; padding:6px 10px; }
+.quickfind .menu__copy { gap:4px; }
+.quickfind .menu__description { font-size:12.5px; line-height:1.4; }
 
 /* The matched text itself: blue marks where the query won, kept to the
    characters so the row's greyscale hierarchy is untouched. */

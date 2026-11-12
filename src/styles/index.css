@@ -9179,7 +9179,7 @@ button.db__th:hover,
    one two presses away is the kind of drift that reads as age. */
 .quickfind .menu__item {
   min-height: 36px;
-  padding: 5px 8px;
+  padding: 6px 10px;
 }
 
 .quickfind__crumb {

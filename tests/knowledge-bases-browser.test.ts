@@ -549,5 +549,5 @@ test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", a
   expect(crumbBox!.width).toBeLessThanOrEqual(dialogBox!.width * 0.5);
   const excerpt = hit.locator(".menu__description");
   await expect(excerpt).toHaveCSS("white-space", "nowrap");
-  expect(itemBox!.height).toBeLessThan(50);
+  expect(itemBox!.height).toBeLessThan(55);
 });
