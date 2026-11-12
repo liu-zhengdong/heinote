@@ -3652,8 +3652,7 @@ pre.block__editable {
 }
 
 .block.is-link-line > .block__content .mention::after {
-  font-weight: 400;
-  text-underline-offset: 0.16em;
+  font-weight: 600;
 }
 
 /* A page shown whole in another: its title over its words, its mark at the
@@ -5103,11 +5102,8 @@ pre.block__editable {
 
 .mention[data-mention="page"]::after {
   content: attr(data-label);
-  font-weight: 500;
-  text-decoration: underline;
-  text-decoration-color: var(--ink-4);
-  text-decoration-thickness: 1px;
-  text-underline-offset: 0.18em;
+  /* No underline: the mark plus a firmer weight read the name as a link. */
+  font-weight: 600;
 }
 
 .mention[data-state]::after {
