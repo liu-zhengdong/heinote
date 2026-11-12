@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+"""heinote — 小黑笔记 HTTP API 命令行封装。
+
+配置（二选一，环境变量优先）:
+  export HEINOTE_URL=http://localhost:3000
+  export HEINOTE_TOKEN=notes_...
+或写入 ~/.config/heinote/env（建议 chmod 600）:
+  HEINOTE_URL=http://localhost:3000
+  HEINOTE_TOKEN=notes_...
+
+用法概览见 `heinote --help`。写命令自动完成：
+  - Bearer 认证头
+  - 写前 GET 目标，注入当前 generation / baseRevision / databaseRevision
+  - 确定性 requestId：业务参数（不含服务端修订）的 SHA-256 前 32 位。
+    同一命令重试命中服务端幂等缓存，不重复写入；--request-id 可显式覆盖。
+"""
+import argparse
+import hashlib
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+ENV_FILE = os.path.expanduser("~/.config/heinote/env")
+DEFAULT_URL = "http://localhost:3000"
+
+
+def die(message, code=2):
+    print(f"heinote: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def load_config():
+    cfg = {}
+    if os.path.exists(ENV_FILE):
+        try:
+            for line in open(ENV_FILE, encoding="utf-8"):
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                cfg[key.strip()] = value.strip().strip('"').strip("'")
+        except OSError as e:
+            die(f"无法读取 {ENV_FILE}: {e}")
+    for key in ("HEINOTE_URL", "HEINOTE_TOKEN"):
+        if os.environ.get(key):
+            cfg[key] = os.environ[key]
+    return cfg
+
+
+def read_value(value):
+    """`-` 从标准输入读取，否则按原样返回。"""
+    return sys.stdin.read() if value == "-" else value
+
+
+def read_json(value):
+    text = read_value(value)
+    if os.path.exists(text):
+        try:
+            text = open(text, encoding="utf-8").read()
+        except OSError as e:
+            die(f"无法读取 {text}: {e}")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as e:
+        die(f"JSON 解析失败: {e}")
+
+
+class Client:
+    def __init__(self):
+        cfg = load_config()
+        self.url = (cfg.get("HEINOTE_URL") or DEFAULT_URL).rstrip("/")
+        self.token = cfg.get("HEINOTE_TOKEN")
+        if not self.token:
+            die("缺少 HEINOTE_TOKEN。在账号 → Agent 令牌创建后，"
+                "export HEINOTE_TOKEN=notes_... 或写入 " + ENV_FILE)
+
+    def request(self, method, path, body=None):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(
+            self.url + path, data=data, method=method,
+            headers={"Authorization": f"Bearer {self.token}",
+                     "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=60) as res:
+                status, text = res.status, res.read().decode()
+        except urllib.error.HTTPError as e:
+            status, text = e.code, e.read().decode()
+        except urllib.error.URLError as e:
+            die(f"无法连接 {self.url}: {e.reason}")
+        try:
+            payload = json.loads(text) if text else None
+        except json.JSONDecodeError:
+            payload = text
+        print(f"# {method} {path} -> {status}", file=sys.stderr)
+        return status, payload
+
+
+def emit(status, payload):
+    print(json.dumps(payload, ensure_ascii=False, indent=2)
+          if payload is not None else "null")
+    if status >= 400:
+        sys.exit(1)
+
+
+def is_duplicate_conflict(payload) -> bool:
+    """服务端缓存了同 requestId 但摘要不同的请求：本次命令在另一修订下
+    已被应用过（通常是重跑已成功命令）。返回 True 表示「已应用，无需重发」。"""
+    return (isinstance(payload, dict)
+            and payload.get("code") == "conflict"
+            and "已用于其他操作" in str(payload.get("error", "")))
+
+
+def request_id(*parts):
+    seed = json.dumps(parts, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "heinote-" + hashlib.sha256(seed.encode()).hexdigest()[:32]
+
+
+def page_state(client, page_id):
+    status, payload = client.request("GET", f"/api/v1/pages/{page_id}")
+    if status != 200 or not isinstance(payload, dict):
+        emit(status, payload)
+    return payload
+
+
+def mutate(client, method, path, body, seed, request_id_arg, force=False):
+    """写请求：确定性 requestId（只含业务参数，不含服务端修订）+ 输出。
+
+    同一命令重跑得到相同 requestId。若上次已成功、修订已前进，
+    服务端因摘要不同返回 409「请求 ID 已用于其他操作」。此时输出
+    「已应用」提示而非原始报错，避免把重跑误当失败，也避免双写。
+    `--force`（或 --request-id）生成新标识，允许有意重复相同输入。"""
+    if "requestId" not in body:
+        body["requestId"] = request_id_arg or request_id(method, path, seed)
+    if force:
+        body["requestId"] = request_id(method, path, seed, "force")
+    status, payload = client.request(method, path, body)
+    if status == 409 and is_duplicate_conflict(payload):
+        print(f"# {method} {path} -> 409（相同命令已应用，未重复写入）", file=sys.stderr)
+        print(json.dumps({"deduplicated": True, "requestId": body["requestId"],
+                          "hint": "上次同命令已成功；如需再次应用请加 --force 或 --request-id"},
+                         ensure_ascii=False))
+        sys.exit(0)
+    emit(status, payload)
+
+
+def ops_body(client, page_id, operations, mode, request_id_arg, force=False):
+    page = page_state(client, page_id)
+    collab = page.get("collaboration") or {}
+    body = {"generation": collab.get("generation"),
+            "baseRevision": page.get("revision"),
+            "mode": mode, "operations": operations}
+    if not body["generation"]:
+        die("页面响应缺少 collaboration.generation，无法提交结构化修改。")
+    mutate(client, "POST", f"/api/v1/pages/{page_id}/operations", body,
+           ("ops", page_id, mode, operations), request_id_arg, force)
+
+
+def cmd_pages(client, a):
+    status, payload = client.request("GET", "/api/v1/pages")
+    if a.full or not isinstance(payload, list):
+        emit(status, payload)
+    summary = [{"id": p.get("id"), "title": p.get("title"),
+                "kind": (p.get("page") or {}).get("kind"),
+                "parent_id": (p.get("page") or {}).get("parent_id"),
+                "scope": p.get("scope")} for p in payload]
+    emit(status, summary)
+
+
+def cmd_page(client, a):
+    status, payload = client.request("GET", f"/api/v1/pages/{a.id}")
+    emit(status, payload)
+
+
+def cmd_create_page(client, a):
+    body = {"title": a.title or "", "text": read_value(a.text) if a.text else ""}
+    for flag, key in (("parent_id", "parentId"), ("space_id", "spaceId"), ("scope", "scope")):
+        if getattr(a, flag):
+            body[key] = getattr(a, flag)
+    if a.kind:
+        body["kind"] = a.kind
+        body.pop("text")
+    status, payload = client.request("POST", "/api/v1/pages", body)
+    emit(status, payload)
+
+
+def cmd_set_title(client, a):
+    page = page_state(client, a.id)
+    body = {"baseRevision": page["revision"], "title": a.title}
+    status, payload = client.request("PATCH", f"/api/v1/pages/{a.id}", body)
+    emit(status, payload)
+
+
+def cmd_append(client, a):
+    op = {"type": "insert_block", "text": read_value(a.text)}
+    if a.kind:
+        op["kind"] = a.kind
+    ops_body(client, a.id, [op], "suggest" if a.suggest else "apply", a.request_id, a.force)
+
+
+def cmd_ops(client, a):
+    operations = read_json(a.ops)
+    if not isinstance(operations, list):
+        die("--ops 需要 JSON 操作数组。")
+    ops_body(client, a.id, operations, "suggest" if a.suggest else "apply", a.request_id, a.force)
+
+
+def cmd_proposals(client, a):
+    status, payload = client.request("GET", f"/api/v1/pages/{a.id}/proposals")
+    emit(status, payload)
+
+
+def cmd_versions(client, a):
+    status, payload = client.request("GET", f"/api/v1/pages/{a.id}/versions")
+    emit(status, payload)
+
+
+def cmd_checkpoint(client, a):
+    body = {"summary": a.summary} if a.summary else {}
+    status, payload = client.request("POST", f"/api/v1/pages/{a.id}/checkpoint", body)
+    emit(status, payload)
+
+
+def cmd_restore(client, a):
+    body = {"versionId": a.version_id}
+    if not a.no_revision:
+        body["baseRevision"] = page_state(client, a.id)["revision"]
+    status, payload = client.request("POST", f"/api/v1/pages/{a.id}/restore", body)
+    emit(status, payload)
+
+
+def cmd_enable(client, a):
+    page = page_state(client, a.id)
+    body = {"baseRevision": page["revision"]}
+    mutate(client, "POST", f"/api/v1/pages/{a.id}/enable", body,
+           ("enable", a.id), a.request_id, a.force)
+
+
+def db_state(client, db_id):
+    status, payload = client.request("GET", f"/api/v1/databases/{db_id}")
+    if status != 200 or not isinstance(payload, dict):
+        emit(status, payload)
+    return payload
+
+
+def cmd_db(client, a):
+    status, payload = client.request("GET", f"/api/v1/databases/{a.id}")
+    emit(status, payload)
+
+
+def cmd_db_query(client, a):
+    body = read_json(a.query) if a.query else {}
+    status, payload = client.request("POST", f"/api/v1/databases/{a.id}/query", body)
+    emit(status, payload)
+
+
+def cmd_db_create(client, a):
+    data = read_json(a.data)
+    body = data if isinstance(data, dict) else {}
+    mutate(client, "POST", "/api/v1/databases", body,
+           ("db-create", body), a.request_id, a.force)
+
+
+def cmd_row_create(client, a):
+    db = db_state(client, a.db)
+    data = read_json(a.data)
+    if not isinstance(data, dict):
+        die("--data 需要 JSON 对象（title / text / properties）。")
+    body = {"baseRevision": db["revision"], **data}
+    mutate(client, "POST", f"/api/v1/databases/{a.db}/rows", body,
+           ("row-create", a.db, data), a.request_id, a.force)
+
+
+def cmd_row_set(client, a):
+    db = db_state(client, a.db)
+    row = page_state(client, a.row)
+    data = read_json(a.data)
+    if not isinstance(data, dict):
+        die("--data 需要 JSON 对象（title / properties / propertyFiles）。")
+    body = {"baseRevision": row["revision"],
+            "databaseRevision": db["revision"], **data}
+    mutate(client, "PATCH", f"/api/v1/databases/{a.db}/rows/{a.row}", body,
+           ("row-set", a.db, a.row, data), a.request_id, a.force)
+
+
+def cmd_db_prop(client, a):
+    db = db_state(client, a.db)
+    data = read_json(a.data)
+    if not isinstance(data, dict):
+        die("--data 需要 JSON 属性对象。")
+    body = {"baseRevision": db["revision"], "property": data}
+    if a.property_id:
+        path = f"/api/v1/databases/{a.db}/properties/{a.property_id}"
+        mutate(client, "PATCH", path, body, ("db-prop", a.db, a.property_id, data), a.request_id, a.force)
+    else:
+        path = f"/api/v1/databases/{a.db}/properties"
+        mutate(client, "POST", path, body, ("db-prop", a.db, data), a.request_id, a.force)
+
+
+def cmd_db_view(client, a):
+    db = db_state(client, a.db)
+    data = read_json(a.data)
+    if not isinstance(data, dict):
+        die("--data 需要 JSON 视图对象。")
+    body = {"baseRevision": db["revision"], "view": data}
+    if a.view_id:
+        path = f"/api/v1/databases/{a.db}/views/{a.view_id}"
+        mutate(client, "PATCH", path, body, ("db-view", a.db, a.view_id, data), a.request_id, a.force)
+    else:
+        path = f"/api/v1/databases/{a.db}/views"
+        mutate(client, "POST", path, body, ("db-view", a.db, data), a.request_id, a.force)
+
+
+def cmd_req(client, a):
+    path = a.path if a.path.startswith("/api/v1") else "/api/v1" + (a.path if a.path.startswith("/") else "/" + a.path)
+    body = read_json(a.data) if a.data else None
+    method = a.method.upper()
+    # 默认不注入 requestId：接口严格校验未知字段，盲目注入会让
+    # POST /pages 等不需要 requestId 的接口返回 400。--request-id auto
+    # 生成确定性标识；--request-id <值> 显式指定；不传则原样透传。
+    if body is not None and a.request_id:
+        body["requestId"] = (request_id(method, path, body)
+                             if a.request_id == "auto" else a.request_id)
+    status, payload = client.request(method, path, body)
+    emit(status, payload)
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="heinote", description="小黑笔记 HTTP API 命令行封装。")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    def rid(sp, force=True):
+        sp.add_argument("--request-id", help="显式幂等标识；默认按业务参数自动生成。")
+        if force:
+            sp.add_argument("--force", action="store_true",
+                            help="生成新幂等标识，允许有意重复相同业务输入。")
+
+    sp = sub.add_parser("pages", help="列出可见页面（默认摘要，--full 完整对象）")
+    sp.add_argument("--full", action="store_true")
+    sp.set_defaults(fn=cmd_pages)
+
+    sp = sub.add_parser("page", help="读取页面与块树")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_page)
+
+    sp = sub.add_parser("create-page", help="创建文档页或应用页")
+    sp.add_argument("--title")
+    sp.add_argument("--text", help="正文文字；`-` 从标准输入读取")
+    sp.add_argument("--kind", choices=["document", "app"])
+    sp.add_argument("--parent-id")
+    sp.add_argument("--space-id")
+    sp.add_argument("--scope")
+    sp.set_defaults(fn=cmd_create_page)
+
+    sp = sub.add_parser("set-title", help="只修改标题，不动正文")
+    sp.add_argument("id")
+    sp.add_argument("--title", required=True)
+    sp.set_defaults(fn=cmd_set_title)
+
+    sp = sub.add_parser("append", help="在页面末尾追加一个块")
+    sp.add_argument("id")
+    sp.add_argument("--text", required=True, help="块文字；`-` 从标准输入读取")
+    sp.add_argument("--kind", help="块类型，默认 text")
+    sp.add_argument("--suggest", action="store_true", help="保存为提案而不直接修改")
+    rid(sp)
+    sp.set_defaults(fn=cmd_append)
+
+    sp = sub.add_parser("ops", help="提交结构化修改（--ops 为 JSON 数组）")
+    sp.add_argument("id")
+    sp.add_argument("--ops", required=True, help="JSON 数组、文件路径或 `-`")
+    sp.add_argument("--suggest", action="store_true")
+    rid(sp)
+    sp.set_defaults(fn=cmd_ops)
+
+    sp = sub.add_parser("proposals", help="读取页面提案与处理状态")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_proposals)
+
+    sp = sub.add_parser("versions", help="读取页面检查点")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_versions)
+
+    sp = sub.add_parser("checkpoint", help="保存检查点")
+    sp.add_argument("id")
+    sp.add_argument("--summary")
+    sp.set_defaults(fn=cmd_checkpoint)
+
+    sp = sub.add_parser("restore", help="恢复检查点")
+    sp.add_argument("id")
+    sp.add_argument("--version-id", required=True)
+    sp.add_argument("--no-revision", action="store_true", help="不携带当前修订")
+    sp.set_defaults(fn=cmd_restore)
+
+    sp = sub.add_parser("enable", help="启用应用页面的草稿源码")
+    sp.add_argument("id")
+    rid(sp)
+    sp.set_defaults(fn=cmd_enable)
+
+    sp = sub.add_parser("db", help="读取数据库、配置和修订")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_db)
+
+    sp = sub.add_parser("db-query", help="只读查询条目")
+    sp.add_argument("id")
+    sp.add_argument("--query", help="JSON 对象、文件路径或 `-`；缺省查询全部")
+    sp.set_defaults(fn=cmd_db_query)
+
+    sp = sub.add_parser("db-create", help="创建数据库")
+    sp.add_argument("--data", required=True, help="JSON 对象（title/database/parentId/spaceId）")
+    rid(sp)
+    sp.set_defaults(fn=cmd_db_create)
+
+    sp = sub.add_parser("row-create", help="在数据库中创建条目")
+    sp.add_argument("db")
+    sp.add_argument("--data", required=True, help="JSON 对象（title/text/properties）")
+    rid(sp)
+    sp.set_defaults(fn=cmd_row_create)
+
+    sp = sub.add_parser("row-set", help="修改条目标题与属性值")
+    sp.add_argument("db")
+    sp.add_argument("row")
+    sp.add_argument("--data", required=True, help="JSON 对象（title/properties/propertyFiles）")
+    rid(sp)
+    sp.set_defaults(fn=cmd_row_set)
+
+    sp = sub.add_parser("db-prop", help="新增或修改数据库属性")
+    sp.add_argument("db")
+    sp.add_argument("--data", required=True, help="JSON 属性对象")
+    sp.add_argument("--property-id", help="提供则 PATCH 该属性，否则新增")
+    rid(sp)
+    sp.set_defaults(fn=cmd_db_prop)
+
+    sp = sub.add_parser("db-view", help="新增或修改数据库视图")
+    sp.add_argument("db")
+    sp.add_argument("--data", required=True, help="JSON 视图对象")
+    sp.add_argument("--view-id", help="提供则 PATCH 该视图，否则新增")
+    rid(sp)
+    sp.set_defaults(fn=cmd_db_view)
+
+    sp = sub.add_parser("req", help="透传任意 /api/v1 请求")
+    sp.add_argument("method")
+    sp.add_argument("path", help="如 pages 或 /api/v1/pages/x/operations")
+    sp.add_argument("--data", help="JSON 对象、文件路径或 `-`")
+    sp.add_argument("--request-id",
+                    help="`auto` 按业务参数生成确定性标识；其他值原样使用。缺省不注入。")
+    sp.set_defaults(fn=cmd_req)
+    return p
+
+
+def main():
+    args = build_parser().parse_args()
+    args.fn(Client(), args)
+
+
+if __name__ == "__main__":
+    main()
