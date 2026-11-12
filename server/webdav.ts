@@ -93,7 +93,18 @@ class Webdav implements WebdavTarget {
       throw new WebdavError(`WebDAV ${method} 认证失败 (${response.status})。`, "auth", response.status);
     }
     if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
       await response.arrayBuffer().catch(() => undefined);
+      // Collection-level redirects (e.g. 123pan MKCOL /dir → /dir/) are
+      // benign only for bodyless calls on the same origin; a stream body
+      // cannot be re-sent and cross-origin would leak credentials.
+      if (!put && location) {
+        let target: URL;
+        try { target = new URL(location, url); } catch { throw new WebdavError(`WebDAV ${method} 重定向地址无效 (${response.status})。`, "network", response.status); }
+        if (target.origin === new URL(this.base).origin) {
+          return await this.call(method, target.toString(), init, put);
+        }
+      }
       throw new WebdavError(`WebDAV ${method} 被重定向 (${response.status})，请检查目标地址。`, "network", response.status);
     }
     return response;
@@ -116,7 +127,7 @@ class Webdav implements WebdavTarget {
     let prefix = origin;
     for (const segment of segments) {
       prefix += `/${segment}`;
-      const response = await this.call("MKCOL", prefix);
+      const response = await this.call("MKCOL", `${prefix}/`);
       await this.expect(response, "MKCOL", [200, 201, 204, 405]);
     }
   }

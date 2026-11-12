@@ -71,6 +71,8 @@ interface DavStub {
   drops: number;
   /** Hold every PUT this long before streaming (makes runs overlap). */
   putHoldMs: number;
+  /** Redirect bare-path MKCOL to the slash form, like 123pan. */
+  mkcolRedirect: boolean;
   close(): Promise<void>;
   objects(): Promise<string[]>;
 }
@@ -79,7 +81,7 @@ async function davStub(directory: string): Promise<DavStub> {
   const root = join(directory, "dav-store");
   const stub: DavStub = {
     url: "", directory: root, user: "dav-user", password: "dav-pass",
-    putLog: [], failAuth: false, failAuthPut: false, dropNameSuffix: "", dropLimit: 0, dropAfterBytes: 512 * 1024, drops: 0, putHoldMs: 0,
+    putLog: [], failAuth: false, failAuthPut: false, dropNameSuffix: "", dropLimit: 0, dropAfterBytes: 512 * 1024, drops: 0, putHoldMs: 0, mkcolRedirect: false,
     async close() { server.closeAllConnections(); await new Promise<void>((ok, bad) => server.close((e) => e ? bad(e) : ok())); },
     async objects() { return await readdir(join(root, "backups")).catch(() => [] as string[]); },
   };
@@ -95,6 +97,12 @@ async function davStub(directory: string): Promise<DavStub> {
     if (auth !== expected || stub.failAuth || (stub.failAuthPut && req.method === "PUT")) { send(401); return; }
 
     if (req.method === "MKCOL") {
+      // Mimic 123pan: MKCOL on a bare (non-slash) path 307s to the slash form.
+      if (stub.mkcolRedirect && !pathname.endsWith("/")) {
+        res.writeHead(307, { Location: `${pathname}/` });
+        res.end();
+        return;
+      }
       const dir = fileOf(pathname);
       try { await stat(dir); send(405); return; } catch { /* absent */ }
       await mkdir(dir, { recursive: true });
@@ -371,6 +379,17 @@ test("UC-31 AC-04: a second trigger while a run is in flight does not run concur
   assert.equal(second.body.result.kind, "skipped", JSON.stringify(second.body));
   const objects = await f.dav.objects();
   assert.equal(objects.filter((name) => name.endsWith(".manifest.json")).length, 1);
+});
+
+test("UC-31: a collection that 307-redirects MKCOL to its slash form is handled (123pan)", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  await register(browser, "admin");
+  await configure(browser, f.dav);
+  f.dav.mkcolRedirect = true;
+  status(await runBackup(browser), 200);
+  const objects = await f.dav.objects();
+  assert.ok(objects.some((name) => name.endsWith(".manifest.json")), JSON.stringify(objects));
 });
 
 /* ————— AC-06 断点续传 ————— */
