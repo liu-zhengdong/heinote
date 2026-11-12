@@ -437,7 +437,7 @@ test("AC-07: preserve the last administrator and return to account after self-de
     await openSettings(page);
     await category(page, "后台管理").click();
     await settings(page).getByRole("button", { name: "打开后台管理", exact: true }).click();
-    await expect(page.locator(".admin__brand")).toHaveText("Terminus 笔记");
+    await expect(page.locator(".admin__brand")).toHaveText("小黑笔记");
     await page.getByRole("tab", { name: "用户", exact: true }).click();
     const inspector = page.locator(".ac-ins__inner");
 

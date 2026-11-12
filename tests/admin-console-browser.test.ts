@@ -52,7 +52,7 @@ async function openConsole(page: Page) {
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "后台管理", exact: true }).click();
   await page.getByRole("button", { name: "打开后台管理", exact: true }).click();
-  await expect(page.locator(".admin__brand")).toHaveText("Terminus 笔记");
+  await expect(page.locator(".admin__brand")).toHaveText("小黑笔记");
 }
 
 test("UC-16 console: overview, users, teams and quota settings render", async ({ page }, info) => {
