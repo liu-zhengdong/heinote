@@ -9367,13 +9367,13 @@ button.db__th:hover,
   line-height: 1.45;
 }
 
+/* The suggestion list is a floating Popover under the invite field, so it
+   never pushes the member roster down; .pop owns the surface, this owns the
+   rows inside it. */
 .share__suggestions {
   display: flex;
   flex-direction: column;
   padding: 4px;
-  margin-top: 6px;
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-card);
 }
 
 .share__suggestion {
@@ -9392,7 +9392,7 @@ button.db__th:hover,
 }
 
 .share__suggestions-empty {
-  margin: 6px 0 0;
+  padding: 7px 8px;
 }
 
 .share__exit {

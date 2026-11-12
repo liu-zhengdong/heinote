@@ -26,7 +26,9 @@ export function Modal({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !imeComposing(event)) {
-        if (document.querySelector('[popover="auto"]:popover-open')) return;
+        // An open floating surface — a menu, a suggestion list — takes the
+        // Escape and closes itself; the dialog stays until they are gone.
+        if (document.querySelector('[popover="auto"]:popover-open, .pop')) return;
         event.stopPropagation();
         onClose();
       }

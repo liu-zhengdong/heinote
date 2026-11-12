@@ -11,7 +11,7 @@ import {
   UserCog,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Modal } from "../../components/Modal";
 import { Popover } from "../../components/Popover";
@@ -140,6 +140,23 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
   /* The suggestion ↑/↓ highlights and Enter invites; the first match is the
      default so a short type + Enter invites the obvious person. */
   const [activeIndex, setActiveIndex] = useState(0);
+  /* Suggestions float under the invite field instead of pushing the roster
+     down. The anchor is the field's rect, re-measured while the list is
+     visible; an outside press, Escape or scroll hides the list but keeps the
+     results, so Enter and Invite still take the highlighted person. */
+  const [suggestAnchor, setSuggestAnchor] = useState<AnchorRect | null>(null);
+  const [suggestDismissed, setSuggestDismissed] = useState(false);
+  const searched = searchedQuery !== "" && query.trim() === searchedQuery;
+  const resultsOpen = Boolean((suggestions.length || searched) && !suggestDismissed);
+
+  useLayoutEffect(() => {
+    const field = fieldRef.current;
+    if (!field || !resultsOpen) return;
+    const measure = () => setSuggestAnchor(rectOf(field));
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [resultsOpen]);
 
   useEffect(() => {
     if (!platform || query.trim().length < 2) {
@@ -190,6 +207,7 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
     const receipt = await platform.spaces.invite(target, handle, role);
     setQuery("");
     setSuggestions([]);
+    setSuggestDismissed(false);
     // A new invitation shows itself under Invited as the roster hears of
     // it; only a repeat, which changes nothing on screen, needs saying.
     if (!receipt.created) toast(`@${handle} already has an invitation waiting`, "info");
@@ -263,20 +281,20 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
                 autoFocus
                 aria-label="Add people by handle"
                 placeholder="Add people by handle…"
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setSuggestDismissed(false);
+                }}
                 onKeyDown={(event) => {
                   if (imeComposing(event)) return;
                   if (event.key === "ArrowDown" && suggestions.length) {
                     event.preventDefault();
+                    setSuggestDismissed(false);
                     setActiveIndex((index) => (index + 1) % suggestions.length);
                   } else if (event.key === "ArrowUp" && suggestions.length) {
                     event.preventDefault();
+                    setSuggestDismissed(false);
                     setActiveIndex((index) => (index - 1 + suggestions.length) % suggestions.length);
-                  } else if (event.key === "Escape" && suggestions.length) {
-                    // Close the list, not the dialog.
-                    event.stopPropagation();
-                    setSuggestions([]);
-                    setSearchedQuery("");
                   } else if (event.key === "Enter" && query.trim()) {
                     event.preventDefault();
                     void invite();
@@ -294,31 +312,6 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
         ) : (
           <p className="share__note">{library?.archived ? "知识库已归档，暂不能邀请新成员。" : "Only the owner and people with Full access can invite others."}</p>
         )}
-
-        {canInvite && suggestions.length ? (
-          <div className="share__suggestions" role="listbox" aria-label="People">
-            {suggestions.slice(0, 5).map((suggestion, index) => (
-              <button
-                type="button"
-                key={suggestion.id}
-                role="option"
-                aria-selected={index === activeIndex}
-                className={`share__suggestion${index === activeIndex ? " share__suggestion--active" : ""}`}
-                disabled={busy}
-                onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => void invite(suggestion.handle)}
-              >
-                <ProfileAvatar src={suggestion.avatarUrl} name={personName(suggestion)} size={24} />
-                <span className="share__member-identity">
-                  <strong>{personName(suggestion)}</strong>
-                  <small>@{suggestion.handle}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-        ) : canInvite && searchedQuery && query.trim() === searchedQuery ? (
-          <p className="share__note share__suggestions-empty">没有匹配的用户，请核对用户名后重试。</p>
-        ) : null}
 
         {error ? <div className="share__error" role="alert">{error}</div> : null}
 
@@ -406,6 +399,48 @@ export function ShareDialog({ page, onClose }: { page: NotePage; onClose(): void
           )}
         </div>
       ) : null}
+
+      <Popover
+        open={resultsOpen}
+        anchor={suggestAnchor}
+        placement="bottom-start"
+        gap={4}
+        role="presentation"
+        label="People"
+        onDismiss={() => setSuggestDismissed(true)}
+      >
+        {suggestions.length ? (
+          <div
+            className="share__suggestions"
+            role="listbox"
+            aria-label="People"
+            style={{ width: suggestAnchor?.width }}
+          >
+            {suggestions.slice(0, 5).map((suggestion, index) => (
+              <button
+                type="button"
+                key={suggestion.id}
+                role="option"
+                aria-selected={index === activeIndex}
+                className={`share__suggestion${index === activeIndex ? " share__suggestion--active" : ""}`}
+                disabled={busy}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => void invite(suggestion.handle)}
+              >
+                <ProfileAvatar src={suggestion.avatarUrl} name={personName(suggestion)} size={24} />
+                <span className="share__member-identity">
+                  <strong>{personName(suggestion)}</strong>
+                  <small>@{suggestion.handle}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="share__note share__suggestions-empty" style={{ width: suggestAnchor?.width }}>
+            没有匹配的用户，请核对用户名后重试。
+          </p>
+        )}
+      </Popover>
 
       <Popover
         open={Boolean(roleAnchor) && canInvite}
