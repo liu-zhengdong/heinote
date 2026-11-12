@@ -5,7 +5,7 @@ import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { useUi } from "../../app/ui-context";
 import { useSession } from "../account/AuthGate";
 import { api, ApiError, errorMessage } from "../account/api";
-import { formatBytes, formatDate, formatDateTime, parseBytesInput, type About, type AdminTeam, type AdminUser, type Overview, type QuotaImpact, type QuotaSettings } from "./types";
+import { formatBytes, formatDate, formatDateTime, parseBytesInput, type About, type AdminTeam, type AdminUser, type Overview, type QuotaImpact, type QuotaSettings, type UpdateCheck, type UpdateStatus, type UpdateStep } from "./types";
 import "./admin.css";
 
 type Tab = "overview" | "users" | "teams" | "quotas" | "about";
@@ -559,5 +559,74 @@ function AboutPanel() {
       </div>
     </dl>
     <p className="ac-muted ac-about__foot">包标识 {data.name} · 反馈问题请前往仓库提交 Issue。</p>
+    <UpdateCard current={data.version} />
   </div>;
+}
+
+const STEP_LABEL: Record<UpdateStep, string> = {
+  download: "下载产物", verify: "校验完整性", unpack: "解包", install: "安装依赖",
+  switch: "切换版本", restart: "重启服务", check: "健康检查",
+};
+
+function UpdateCard({ current }: { current: string }) {
+  const [check, setCheck] = useState<UpdateCheck | null>(null);
+  const [status, setStatus] = useState<UpdateStatus | null>(null);
+  const [error, setError] = useState("");
+  const [checking, setChecking] = useState(false);
+  const { toast } = useUi();
+
+  // Poll the durable state file: the runner owns it, so progress survives
+  // the service restarting mid-update.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const next = await api<UpdateStatus>("/api/admin/update-status");
+        if (!stopped) setStatus(next);
+        if (next.status === "running" && !stopped) timer = setTimeout(poll, 2000);
+      } catch {
+        // The service is down mid-restart; keep polling until it returns.
+        if (!stopped) timer = setTimeout(poll, 2500);
+      }
+    };
+    void poll();
+    return () => { stopped = true; if (timer) clearTimeout(timer); };
+  }, []);
+
+  const doCheck = useCallback(async () => {
+    setChecking(true); setError("");
+    try { setCheck(await api<UpdateCheck>("/api/admin/update-check")); }
+    catch (reason) { setError(errorMessage(reason)); }
+    finally { setChecking(false); }
+  }, []);
+
+  const apply = useCallback(async () => {
+    try {
+      const state = await api<UpdateStatus>("/api/admin/update-apply", { method: "POST" });
+      setStatus(state);
+      toast(`正在更新到 ${state.version}，服务会短暂重启…`);
+    } catch (reason) { setError(errorMessage(reason)); }
+  }, [toast]);
+
+  const running = status?.status === "running";
+  return <section className="ac-update">
+    <h4 className="ac-update__title">版本更新</h4>
+    {running ? <p className="ac-muted">正在更新到 {status?.version}：{status?.step ? STEP_LABEL[status.step] : "准备中"}… 服务会短暂不可用。</p> : null}
+    {status?.status === "failed" ? <p className="ac-update__error">上次更新失败（{status?.step ? STEP_LABEL[status.step] : "未知阶段"}）：{status?.error}</p> : null}
+    {status?.status === "applied" ? <p className="ac-muted">已更新到 {status?.version}。</p> : null}
+    {check && !running ? (
+      check.newer ? (
+        <div className="ac-update__release">
+          <p>发现新版本 <strong>{check.tag}</strong>{check.notes ? `：${check.notes.split("\n")[0].slice(0, 120)}` : ""}</p>
+          {check.asset
+            ? <button type="button" className="btn" onClick={() => void apply()}>更新到 {check.tag}</button>
+            : <p className="ac-muted">该版本未提供自动更新产物，请手动升级。</p>}
+        </div>
+      ) : <p className="ac-muted">当前 v{current} 已是最新版本（{check.tag}）。</p>
+    ) : null}
+    {error ? <p className="ac-update__error">{error} <button type="button" className="btn" onClick={() => void doCheck()}>重试</button></p> : null}
+    {!running && !check && !error ? <button type="button" className="btn" disabled={checking} onClick={() => void doCheck()}>{checking ? "检查中…" : "检查更新"}</button> : null}
+    {!running && check ? <button type="button" className="btn btn--outline" onClick={() => void doCheck()}>{checking ? "检查中…" : "重新检查"}</button> : null}
+  </section>;
 }

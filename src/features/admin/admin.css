@@ -157,3 +157,11 @@
   .ac-qrow { grid-template-columns: 1fr; }
   .ac-qrow__side { flex-direction: row; align-items: center; }
 }
+
+/* ————— update card (UC-32) ————— */
+.ac-update { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--line, rgba(55,53,47,.12)); border-radius: 10px; display: grid; gap: 10px; }
+.ac-update__title { margin: 0; font-size: 14px; font-weight: 600; }
+.ac-update__error { margin: 0; color: var(--red, #c4554d); font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ac-update__release { display: grid; gap: 8px; }
+.ac-update__release p { margin: 0; }
+.ac-update .btn { justify-self: start; }

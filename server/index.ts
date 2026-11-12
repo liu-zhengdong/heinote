@@ -26,6 +26,7 @@ import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from
 import { writeExport } from "./export.ts";
 import { importJob, startImport } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
+import { applyUpdate, checkUpdate, updateStatus, type UpdateConfig } from "./update.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -68,13 +69,17 @@ const parse = <T extends z.ZodType>(schema: T, input: unknown): z.infer<T> => sc
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const currentTime = () => new Date().toISOString();
 
-export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean } = {}) {
+export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean; update?: Pick<UpdateConfig, "apiBase" | "runnerPath"> } = {}) {
   const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
   const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
   const startedAt = new Date();
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? "data");
   await migrateDatabase(dataDir);
   const store = new Store(dataDir);
+  const updateConfig: UpdateConfig = {
+    repository: packageMeta.repository, version: packageMeta.version || "0.0.0",
+    dataDir, apiBase: options.update?.apiBase, runnerPath: options.update?.runnerPath,
+  };
   const app = express();
   let collaborationSocket: ReturnType<typeof attachCollaborationSocket> | undefined;
   app.use((_req, res, next) => { res.once("finish", () => collaborationSocket?.revalidate()); next(); });
@@ -307,6 +312,23 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       timezone: store.quotas.timezone,
       startedAt: startedAt.toISOString(),
     });
+  });
+  // UC-32: one-click update. The runner reports progress through state.json,
+  // which update-status reads even while this process is restarting.
+  app.get("/api/admin/update-check", async (req, res, next) => {
+    try { admin(req); res.json(await checkUpdate(updateConfig)); }
+    catch (error) { next(error); }
+  });
+  app.post("/api/admin/update-apply", async (req, res, next) => {
+    try {
+      admin(req);
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : 0;
+      res.status(202).json(await applyUpdate(updateConfig, port));
+    } catch (error) { next(error); }
+  });
+  app.get("/api/admin/update-status", (req, res) => {
+    admin(req); res.json(updateStatus(updateConfig));
   });
   app.get("/api/account/quota", (req, res) => {
     const who = actor(req);
