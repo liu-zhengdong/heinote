@@ -1,6 +1,6 @@
 # HeiNote brand assets
 
-Current icon: black-cat avatar, drawn from the user's own avatar. Used on the login page, admin console and browser tab.
+Current icon: a black cat with a yellow pencil over an open book, on a cream rounded-square tile. Used on the login page, admin console and browser tab. All sizes are uniform resamples of the same composition; there is no simplified small-size variant.
 
 - heinote-icon.png: 512px primary icon.
 - heinote-icon-32.png / heinote-icon-64.png: small raster exports.
