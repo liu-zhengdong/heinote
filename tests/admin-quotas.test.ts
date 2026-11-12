@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -314,4 +314,27 @@ test("UC-16: overview lists over-limit objects and teams endpoint reports KB usa
   // Non-admin access refuses cleanly.
   const denied = await user.request("/api/admin/overview");
   assert.equal(denied.status, 403);
+});
+
+test("UC-29: about endpoint reports package metadata to admins only", async (t) => {
+  const f = await fixture(t);
+  const admin = f.browser();
+  const user = f.browser();
+  await register(admin, "admin");
+  await register(user, "bob");
+
+  const about = status(await admin.request("/api/admin/about"), 200);
+  const manifest = JSON.parse(await readFile(resolve("package.json"), "utf8"));
+  assert.equal(about.name, manifest.name);
+  assert.equal(about.version, manifest.version);
+  assert.equal(about.repository, manifest.repository);
+  assert.ok(/^https:\/\//.test(about.repository), "repository normalizes to an https URL");
+  assert.equal(typeof about.node, "string");
+  assert.ok(about.timezone.length > 0);
+  assert.ok(!Number.isNaN(Date.parse(about.startedAt)), "startedAt is an ISO timestamp");
+
+  const denied = await user.request("/api/admin/about");
+  assert.equal(denied.status, 403);
+  const anonymous = await f.browser().request("/api/admin/about");
+  assert.equal(anonymous.status, 401);
 });

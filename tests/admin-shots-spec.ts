@@ -57,6 +57,9 @@ test("capture admin console screenshots", async () => {
   await page.getByRole("tab", { name: "限额设置", exact: true }).click();
   await page.locator(".ac-qrow").first().waitFor();
   await page.screenshot({ path: "docs/evidence/admin-console/admin-quotas@2x.png" });
+  await page.getByRole("tab", { name: "关于", exact: true }).click();
+  await page.locator(".ac-about__link").waitFor();
+  await page.screenshot({ path: "docs/evidence/admin-console/admin-about@2x.png" });
   await browser.close();
   await server.close();
 });

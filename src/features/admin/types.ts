@@ -50,6 +50,15 @@ export interface QuotaImpact {
   overIds: string[];
 }
 
+export interface About {
+  name: string;
+  version: string;
+  repository: string;
+  node: string;
+  timezone: string;
+  startedAt: string;
+}
+
 export interface AccountQuota {
   storage: { used: number; limit: number; source: QuotaSource; over: number };
   teams: { count: number; limit: number; source: QuotaSource };
@@ -75,4 +84,11 @@ export function formatDate(iso: string | null): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "未知";
   return date.toLocaleDateString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit" });
+}
+
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return "未知";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "未知";
+  return date.toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
