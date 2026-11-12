@@ -51,7 +51,11 @@ const call = async (path, options = {}) => {
     let detail = "";
     try { detail = (await response.json())?.message ?? (await response.text()).slice(0, 200); }
     catch { /* not json */ }
-    throw new Error(`${options.method ?? "GET"} ${path} → ${response.status}${detail ? `：${detail}` : ""}`);
+    // 502/503/504 是边缘层在容器重启窗口的空口：和传输失败一样算
+    // transient，让轮询继续等到站点回来，别把重启当部署失败。
+    const error = new Error(`${options.method ?? "GET"} ${path} → ${response.status}${detail ? `：${detail}` : ""}`);
+    if (response.status >= 502 && response.status <= 504) error.transient = true;
+    throw error;
   }
   return response.status === 204 ? null : response.json();
 };
