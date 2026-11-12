@@ -619,3 +619,32 @@ test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", a
   await expect(excerpt).toHaveCSS("white-space", "nowrap");
   expect(itemBox!.height).toBeLessThan(55);
 });
+
+// Direction A (docs/prototypes/quickfind/assets/proto.css) is the accepted
+// baseline. Keep the search sheet's result geometry on those values; do not
+// replace them with inferred spacing rules.
+test("Quick Find browser: result rows match direction A spacing", async ({ page, app }) => {
+  await register(page, app, "qf_spacing");
+  await api(page, app, "/api/v1/pages", "POST", { title: "间距条目甲", text: "匹配词 spacing-hit 出现在正文" }, 201);
+  await api(page, app, "/api/v1/pages", "POST", { title: "间距条目乙", text: "匹配词 spacing-hit 出现在正文" }, 201);
+  await api(page, app, "/api/v1/pages", "POST", { title: "间距条目丙", text: "匹配词 spacing-hit 也出现在正文" }, 201);
+  await page.reload(); await expect(switcher(page)).toBeVisible();
+
+  await page.keyboard.press("Meta+k");
+  const dialog = page.getByRole("dialog", { name: "Search pages", exact: true });
+  await dialog.getByRole("textbox", { name: "Search pages", exact: true }).fill("spacing-hit");
+  const rows = dialog.locator(".menu__item");
+  await expect(rows).toHaveCount(3);
+  await expect(dialog).toHaveCSS("width", "520px");
+  const geometry = await rows.evaluateAll((items) => {
+    const boxes = items.map((item) => item.getBoundingClientRect());
+    const label = items[0].querySelector(".menu__label")!.getBoundingClientRect();
+    const excerpt = items[0].querySelector(".menu__description")!.getBoundingClientRect();
+    const copy = getComputedStyle(items[0].querySelector(".menu__copy")!);
+    return { rowGap: boxes[1].top - boxes[0].bottom, innerGap: excerpt.top - label.bottom, copyGap: parseFloat(copy.rowGap), rowHeight: boxes[0].height };
+  });
+  expect(geometry.rowGap).toBe(0);
+  expect(geometry.copyGap).toBe(3);
+  expect(Math.abs(geometry.innerGap - 3)).toBeLessThan(0.5);
+  expect(geometry.rowHeight).toBeLessThan(55);
+});

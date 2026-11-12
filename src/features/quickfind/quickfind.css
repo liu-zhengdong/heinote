@@ -5,16 +5,8 @@
 .quickfind__seg button:hover:not(.is-on) { color:var(--ink-2); }
 .quickfind__seg button.is-on { background:var(--elevated); box-shadow:var(--shadow-card); color:var(--ink); }
 
-/* Rows breathe: a line of title, or title + matched excerpt — both under the
-   old ceiling, but no longer pressed against the row edges. */
-.quickfind .menu__item { min-height:36px; padding:6px 10px; }
-.quickfind .menu__copy { gap:4px; }
-.quickfind .menu__description { font-size:12.5px; line-height:1.4; }
-
-/* The crumb belongs to the title line, not the row's middle: centered across
-   a two-line row it reads as sitting on the excerpt, which is what made the
-   alignment look broken. */
-.quickfind__crumb { align-self:flex-start; padding-top:3px; }
+/* Spacing lives in styles/index.css so the layer order is deterministic.
+   This module owns the scope segment and the match highlight. */
 
 /* The matched text itself: blue marks where the query won, kept to the
    characters so the row's greyscale hierarchy is untouched. */

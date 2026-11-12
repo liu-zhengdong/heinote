@@ -9169,24 +9169,28 @@ button.db__th:hover,
   color: var(--ink-4);
 }
 
+/* Direction A in docs/prototypes/quickfind is the accepted baseline: a
+   520px sheet, 36px result rows, 3px between a result's title and excerpt,
+   and no gap between result rows. Keep these values in sync with proto.css. */
 .quickfind .menu {
   max-height: none;
   padding: 5px;
 }
 
-/* The same inset, rounded row the page menu and the page list use. One
-   selected shape in the app: an edge-to-edge highlight here beside a rounded
-   one two presses away is the kind of drift that reads as age. */
 .quickfind .menu__item {
   /* Scroll the list when it fills; shrinking a two-line row eats its padding. */
   flex-shrink: 0;
   min-height: 36px;
-  padding: 6px 10px;
+  padding: 5px 8px;
 }
+
+.quickfind .menu__copy { gap: 3px; }
+.quickfind .menu__label { font-size: 14px; }
+.quickfind .menu__description { font-size: 12.5px; line-height: 1.4; }
 
 .quickfind__crumb {
   flex: none;
-  max-width: 45%;
+  max-width: 42%;
   overflow: hidden;
   color: var(--ink-3);
   font-size: 12px;
