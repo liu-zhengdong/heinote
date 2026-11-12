@@ -99,6 +99,15 @@ test("UC-16 console: overview, users, teams and quota settings render", async ({
   await expect(page.locator(".ac-list .ac-empty")).toContainText("暂无团队知识库");
   await shots("teams-empty");
 
+  // UC-29: the about tab shows version, runtime and a working repository link.
+  await page.getByRole("tab", { name: "关于", exact: true }).click();
+  await expect(page.locator(".ac-about")).toContainText("v");
+  await expect(page.locator(".ac-about")).toContainText("Node.js");
+  const repo = page.locator(".ac-about__link");
+  await expect(repo).toHaveAttribute("href", /^https:\/\//);
+  await expect(repo).toHaveAttribute("target", "_blank");
+  await shots("about");
+
   // The console has its own URL: a reload stays on it, 返回笔记 returns.
   await expect(page).toHaveURL(/\/admin$/);
   await page.reload();

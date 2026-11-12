@@ -1,19 +1,20 @@
-import { AlertTriangle, ArrowLeft, BookMarked, HardDrive, Search, Settings2, Users } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookMarked, Code2, ExternalLink, HardDrive, Info, Search, Settings2, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Select } from "../../components/Select";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { useUi } from "../../app/ui-context";
 import { useSession } from "../account/AuthGate";
 import { api, ApiError, errorMessage } from "../account/api";
-import { formatBytes, formatDate, parseBytesInput, type AdminTeam, type AdminUser, type Overview, type QuotaImpact, type QuotaSettings } from "./types";
+import { formatBytes, formatDate, formatDateTime, parseBytesInput, type About, type AdminTeam, type AdminUser, type Overview, type QuotaImpact, type QuotaSettings } from "./types";
 import "./admin.css";
 
-type Tab = "overview" | "users" | "teams" | "quotas";
+type Tab = "overview" | "users" | "teams" | "quotas" | "about";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "概览" },
   { id: "users", label: "用户" },
   { id: "teams", label: "团队知识库" },
   { id: "quotas", label: "限额设置" },
+  { id: "about", label: "关于" },
 ];
 
 function useBusy() {
@@ -103,6 +104,7 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
       {tab === "users" ? <UsersPanel selected={selectedUser} onSelect={(id) => { setSelectedUser(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
       {tab === "teams" ? <TeamsPanel selected={selectedTeam} onSelect={(id) => { setSelectedTeam(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
       {tab === "quotas" ? <QuotasPanel onConfirm={setConfirm} /> : null}
+      {tab === "about" ? <AboutPanel /> : null}
     </main>
     {confirm ? <div className="ac-confirm-scrim" role="presentation" onClick={() => !confirming && setConfirm(null)}>
       <div className="ac-confirm" role="alertdialog" aria-modal="true" aria-label={confirm.title} onClick={(event) => event.stopPropagation()}>
@@ -510,5 +512,52 @@ function QuotasPanel({ onConfirm }: { onConfirm(state: ConfirmState | null): voi
         </div>
       </li>)}
     </ul>
+  </div>;
+}
+
+/* ————————————————— 关于 ————————————————— */
+
+function AboutPanel() {
+  const [data, setData] = useState<About | null>(null);
+  const [error, setError] = useState("");
+  const load = useCallback(async () => {
+    setError("");
+    try { setData(await api<About>("/api/admin/about")); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  if (error) return <div className="ac-empty"><p>{error}</p><button type="button" className="btn" onClick={() => void load()}>重试</button></div>;
+  if (!data) return <div className="ac-empty"><p>载入中…</p></div>;
+
+  return <div className="ac-quotas ac-about">
+    <div className="ac-about__head">
+      <span className="ac-about__logo"><Info size={22} /></span>
+      <div>
+        <h3>Terminus 笔记</h3>
+        <p className="ac-muted">自托管的团队笔记与知识库。</p>
+      </div>
+    </div>
+    <dl className="ac-fields">
+      <div className="ac-field">
+        <dt>版本</dt>
+        <dd><strong className="ac-about__value">{data.version ? `v${data.version}` : "未知"}</strong></dd>
+      </div>
+      <div className="ac-field">
+        <dt>代码仓库</dt>
+        <dd>
+          {data.repository ? <a className="ac-about__link" href={data.repository} target="_blank" rel="noreferrer"><Code2 size={15} /> {data.repository.replace(/^https?:\/\//, "")} <ExternalLink size={13} /></a> : <span className="ac-muted">未在 package.json 中声明。</span>}
+        </dd>
+      </div>
+      <div className="ac-field">
+        <dt>运行环境</dt>
+        <dd><span className="ac-muted">Node.js {data.node} · 站点时区 {data.timezone}</span></dd>
+      </div>
+      <div className="ac-field">
+        <dt>服务启动于</dt>
+        <dd><span className="ac-muted">{formatDateTime(data.startedAt)}</span></dd>
+      </div>
+    </dl>
+    <p className="ac-muted ac-about__foot">包标识 {data.name} · 反馈问题请前往仓库提交 Issue。</p>
   </div>;
 }

@@ -2,6 +2,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import { scrypt, timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream";
+import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { pathToFileURL } from "node:url";
@@ -39,6 +40,29 @@ const passwordMatches = async (password: string, encoded: string) => {
 };
 const handle = z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_.-]{1,39}$/);
 const roleSchema = z.enum(["admin", "editor", "viewer"]);
+
+// Site about data (UC-29): name/version/repository come from the deployed
+// package.json so the admin console never maintains a second copy. Git-style
+// values like "github:owner/repo" or "git+https://..." normalize to an https
+// URL the console can link directly.
+const packageMeta = (() => {
+  const fallback = { name: "terminus-notes", version: "", repository: "" };
+  try {
+    const manifest = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8"));
+    const raw = manifest.repository;
+    let repository = typeof raw === "string" ? raw : typeof raw?.url === "string" ? raw.url : "";
+    repository = repository.replace(/^git\+/, "").replace(/^git:\/\//, "https://").replace(/\.git$/, "");
+    const shorthand = /^github:(.+)$/.exec(repository);
+    if (shorthand) repository = `https://github.com/${shorthand[1]}`;
+    return {
+      name: typeof manifest.name === "string" ? manifest.name : fallback.name,
+      version: typeof manifest.version === "string" ? manifest.version : "",
+      repository,
+    };
+  } catch {
+    return fallback;
+  }
+})();
 const parse = <T extends z.ZodType>(schema: T, input: unknown): z.infer<T> => schema.parse(input);
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const currentTime = () => new Date().toISOString();
@@ -46,6 +70,7 @@ const currentTime = () => new Date().toISOString();
 export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean } = {}) {
   const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
   const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
+  const startedAt = new Date();
   const store = new Store(resolve(options.dataDir ?? process.env.DATA_DIR ?? "data"));
   const app = express();
   let collaborationSocket: ReturnType<typeof attachCollaborationSocket> | undefined;
@@ -268,6 +293,17 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     }
     store.transaction(() => store.quotas.setDefault(input.key, input.value));
     res.json(store.quotas.defaults());
+  });
+  app.get("/api/admin/about", (req, res) => {
+    admin(req);
+    res.json({
+      name: packageMeta.name,
+      version: packageMeta.version,
+      repository: packageMeta.repository,
+      node: process.versions.node,
+      timezone: store.quotas.timezone,
+      startedAt: startedAt.toISOString(),
+    });
   });
   app.get("/api/account/quota", (req, res) => {
     const who = actor(req);
