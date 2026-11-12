@@ -15,6 +15,7 @@ import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
 import { Quotas } from "./quotas.ts";
+import { LATEST_VERSION } from "./migrations/index.ts";
 import { pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -63,8 +64,9 @@ export class Store {
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(join(dataDir, "notes.sqlite"));
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, handle TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, password TEXT NOT NULL, site_role TEXT NOT NULL);
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`);
+    const hadUsersTable = Boolean(this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get());
+    this.db.exec(`CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, handle TEXT UNIQUE NOT NULL, display_name TEXT NOT NULL, password TEXT NOT NULL, site_role TEXT NOT NULL, created_at TEXT, storage_limit INTEGER, team_creation_limit INTEGER);
       CREATE TABLE IF NOT EXISTS sessions(hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS spaces(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner_id TEXT NOT NULL REFERENCES users(id));
       CREATE TABLE IF NOT EXISTS members(space_id TEXT NOT NULL REFERENCES spaces(id), user_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL, PRIMARY KEY(space_id,user_id));
@@ -75,12 +77,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS token_events(id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES tokens(id), action TEXT NOT NULL, page_id TEXT NOT NULL, page_title TEXT NOT NULL, version_id TEXT, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS token_events_token ON token_events(token_id,created_at);
       CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL, page_id TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
-      PRAGMA user_version=1;`);
-    for (const column of ["display_name TEXT", "avatar TEXT"]) {
-      if (!this.db.prepare("SELECT 1 FROM pragma_table_info('tokens') WHERE name=?").get(column.split(" ")[0]))
-        this.db.prepare(`ALTER TABLE tokens ADD COLUMN ${column}`).run();
-    }
+      CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));`);
+    // UC-33: user_version is the migration cursor. A database whose version
+    // disagrees with this code means migrateDatabase was skipped (or never
+    // ran on a legacy, unstamped file); the constructor refuses rather than
+    // guessing. user_version 0 without a users table is a fresh database and
+    // gets stamped; 0 with tables is legacy and must migrate first.
+    const version = Number((this.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version);
+    if (version === 0 && !hadUsersTable) this.db.exec(`PRAGMA user_version=${LATEST_VERSION}`);
+    else if (version !== LATEST_VERSION)
+      throw new Error(`数据库版本 ${version} 与本应用版本 ${LATEST_VERSION} 不一致：请先通过 migrateDatabase 完成迁移。`);
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
     this.files = new FileStore(this.db, dataDir);
     this.avatars = new AvatarStore(this.db, this.files);

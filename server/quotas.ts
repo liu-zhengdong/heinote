@@ -22,10 +22,6 @@ const KEYS = {
 export type QuotaDefaults = { personalStorageBytes: number; teamStorageBytes: number; teamCreation: number };
 const INITIAL: QuotaDefaults = { personalStorageBytes: 5 * GB, teamStorageBytes: 10 * GB, teamCreation: 5 };
 
-function columnExists(store: Store, table: string, column: string): boolean {
-  return store.all(`PRAGMA table_info(${table})`).some((row) => row.name === column);
-}
-
 export class Quotas {
   readonly dataDir: string;
   readonly timezone: string;
@@ -36,17 +32,9 @@ export class Quotas {
     try { if (zone) new Intl.DateTimeFormat("en", { timeZone: this.timezone }); }
     catch { throw new Error(`SITE_TIMEZONE 不是有效的 IANA 时区：${zone}`); }
 
-    // Existing databases lack the columns; CREATE TABLE alone cannot add them.
-    const addColumn = (table: string, column: string, type: string) => {
-      if (columnExists(store, table, column)) return;
-      store.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
-    };
-    addColumn("users", "created_at", "TEXT");
-    addColumn("users", "storage_limit", "INTEGER");
-    addColumn("users", "team_creation_limit", "INTEGER");
-    if (store.one("SELECT name FROM sqlite_master WHERE type='table' AND name='knowledge_bases'")) {
-      addColumn("knowledge_bases", "storage_limit", "INTEGER");
-    }
+    // UC-33: quota columns and this seeding belong to the migration chain and
+    // the baseline CREATE statements. The table itself is still ensured here
+    // because a fresh database stamps the latest version without migrating.
     store.db.exec(`CREATE TABLE IF NOT EXISTS site_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     for (const [key, value] of [
       [KEYS.personalStorageGB, "5"],

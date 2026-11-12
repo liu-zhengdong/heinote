@@ -26,7 +26,8 @@ export class KnowledgeBases {
       archived INTEGER NOT NULL CHECK(archived IN (0,1)),
       sort TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK(revision > 0),
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      storage_limit INTEGER
     )`);
   }
 

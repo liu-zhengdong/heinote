@@ -16,7 +16,7 @@
     "build": "npm run typecheck && vite build",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "test": "vitest run src && npm run test:server",
-    "test:server": "tsx --test tests/server.test.ts tests/collaboration.test.ts tests/files.test.ts tests/export.test.ts tests/github-auth.test.ts tests/account-profile.test.ts tests/agent-databases.test.ts tests/account-avatar.test.ts tests/knowledge-bases.test.ts tests/import.test.ts tests/import-base.test.ts tests/admin-quotas.test.ts tests/agent-tokens.test.ts",
+    "test:server": "tsx --test tests/server.test.ts tests/collaboration.test.ts tests/files.test.ts tests/export.test.ts tests/github-auth.test.ts tests/account-profile.test.ts tests/agent-databases.test.ts tests/account-avatar.test.ts tests/knowledge-bases.test.ts tests/import.test.ts tests/import-base.test.ts tests/admin-quotas.test.ts tests/agent-tokens.test.ts tests/migrations.test.ts",
     "test:watch": "vitest src"
   },
   "dependencies": {

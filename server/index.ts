@@ -25,6 +25,7 @@ import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvat
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
 import { importJob, startImport } from "./import.ts";
+import { migrateDatabase } from "./migrations/index.ts";
 
 const derive = promisify(scrypt);
 const passwordHash = async (password: string) => {
@@ -71,7 +72,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
   const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
   const startedAt = new Date();
-  const store = new Store(resolve(options.dataDir ?? process.env.DATA_DIR ?? "data"));
+  const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? "data");
+  await migrateDatabase(dataDir);
+  const store = new Store(dataDir);
   const app = express();
   let collaborationSocket: ReturnType<typeof attachCollaborationSocket> | undefined;
   app.use((_req, res, next) => { res.once("finish", () => collaborationSocket?.revalidate()); next(); });
