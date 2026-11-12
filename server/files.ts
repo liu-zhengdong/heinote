@@ -55,10 +55,14 @@ export class FileStore {
     if (!this.batched) return;
     this.batched = false;
     try {
-      for (const folder of [...this.touchedDirs, this.directory]) {
-        const descriptor = openSync(folder, "r");
-        try { fsyncSync(descriptor); }
-        finally { closeSync(descriptor); }
+      // Windows cannot open a directory for fsync; the rename and the
+      // filesystem there are left to persist on their own.
+      if (process.platform !== "win32") {
+        for (const folder of [...this.touchedDirs, this.directory]) {
+          const descriptor = openSync(folder, "r");
+          try { fsyncSync(descriptor); }
+          finally { closeSync(descriptor); }
+        }
       }
       for (const row of this.pending)
         (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash) VALUES(?,?,?,?,?)")).run(row.scope, row.path, row.type, row.size, row.hash);
@@ -115,8 +119,10 @@ export class FileStore {
           // commitBatch persists these directories before any index row.
           this.touchedDirs.add(directory);
           this.newBlobs.set(hash, destination);
-        } else {
+        } else if (process.platform !== "win32") {
           // Persist the rename and its shard directory before recording a reference.
+          // Windows cannot open a directory for fsync, so the rename's durability is
+          // left to the filesystem there instead of failing the write.
           for (const folder of [directory, this.directory]) {
             const descriptor = openSync(folder, "r");
             try { fsyncSync(descriptor); }

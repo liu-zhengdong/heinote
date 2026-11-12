@@ -1,4 +1,5 @@
 import type { AppMsg, BoundDb } from "../../core/artifact";
+import { uuid } from "../../core/ids";
 import { api, ApiError } from "../account/api";
 
 /** The guest's half of the bridge, on a public share. Same `call` message
@@ -38,7 +39,7 @@ export class PublicBridge {
    *  init is sent. */
   async start(): Promise<void> {
     if (!this.frame?.contentWindow) throw ERR("not_ready", "运行容器尚未就绪。");
-    this.instance = crypto.randomUUID();
+    this.instance = uuid();
     const base = `/api/public/${encodeURIComponent(this.shareToken)}/apps/${encodeURIComponent(this.appPageId)}`;
     const { databases } = await api<{ databases: BoundDb[] }>(base);
     this.frame.contentWindow.postMessage({ t: "init", instance: this.instance, databases, public: true } satisfies AppMsg, "*");

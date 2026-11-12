@@ -517,9 +517,12 @@ test("UC-31: settings validation, masked password round-trip, empty password kee
   const stored = await backupStatus(admin);
   assert.equal(stored.config.retention, 3);
   assert.equal(stored.config.webdav.passwordSet, true);
-  // 磁盘上的凭据文件不是普通可读权限。
-  const mode = statSync(join(f.directory, "backup-config.json")).mode & 0o777;
-  assert.equal(mode, 0o600, `config mode ${mode.toString(8)}`);
+  // 磁盘上的凭据文件不是普通可读权限。Windows 不把 chmod 位映射到文件权限，
+  // 那里由父目录继承的 ACL 限制访问，所以只断言 POSIX 系统上的模式。
+  if (process.platform !== "win32") {
+    const mode = statSync(join(f.directory, "backup-config.json")).mode & 0o777;
+    assert.equal(mode, 0o600, `config mode ${mode.toString(8)}`);
+  }
 
   // 测试连接：空密码用已存储凭据；坏凭据报凭据失效。
   const ok = status(await admin.request("/api/admin/backups/test", { method: "POST", body: { webdav: { url: f.dav.url } } }), 200);

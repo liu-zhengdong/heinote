@@ -4,6 +4,7 @@ import { useWorkspace } from "../../app/workspace-context";
 import { Button } from "../../components/Button";
 import { Modal } from "../../components/Modal";
 import { ApiError } from "../../platform/http";
+import { uuid } from "../../core/ids";
 import "./knowledge-base.css";
 
 /** Keep modal focus in visible controls and restore its visible trigger. */
@@ -51,7 +52,7 @@ export function KnowledgeBaseDialog({ onClose }: { onClose(): void }) {
   const { knowledgeBases, refreshSpaces, switchSpace } = useWorkspace();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [requestId, setRequestId] = useState(() => uuid());
   const [pending, setPending] = useState(false);
   const [unknown, setUnknown] = useState(false);
   const [error, setError] = useState("");
@@ -78,7 +79,7 @@ export function KnowledgeBaseDialog({ onClose }: { onClose(): void }) {
       } else {
         await knowledgeBases.create({ requestId, name: name.trim(), description: description.trim() });
       }
-      setRequestId(crypto.randomUUID());
+      setRequestId(uuid());
       setUnknown(false);
       onClose();
     } catch (reason) {

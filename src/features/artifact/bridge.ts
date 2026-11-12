@@ -1,5 +1,6 @@
 import type { AppBinding, AppMsg, BoundDb } from "../../core/artifact";
 import { normalizeBindings } from "../../core/artifact";
+import { uuid } from "../../core/ids";
 import { api, ApiError } from "../account/api";
 
 /** The host's half of the bridge. One instance per run. The iframe's
@@ -75,7 +76,7 @@ export class AppBridge {
    *  calls meant for an older run. */
   async start(): Promise<void> {
     if (!this.frame?.contentWindow) throw ERR("not_ready", "运行容器尚未就绪。");
-    this.instance = crypto.randomUUID();
+    this.instance = uuid();
     const { bindings } = await loadApp(this.appPageId);
     const databases: BoundDb[] = await Promise.all(bindings.map(async (binding) => ({
       ...binding,
@@ -121,7 +122,7 @@ export class AppBridge {
     if (scope !== undefined && db.scope !== undefined && db.scope !== scope) {
       throw ERR("forbidden", "数据源与应用已不在同一权限范围。");
     }
-    const requestId = str(msg.requestId) ?? str(args.requestId) ?? crypto.randomUUID();
+    const requestId = str(msg.requestId) ?? str(args.requestId) ?? uuid();
     const databaseRevision = db.revision;
     const rid = encodeURIComponent(dbId);
     switch (msg.op) {

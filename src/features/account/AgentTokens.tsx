@@ -1,6 +1,7 @@
 import { ChevronDown, Copy, ImagePlus, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AVATAR_PRESETS, AgentMark, TokenAvatar } from "../../components/AgentMark";
+import { copyText } from "../../core/clipboard";
 import type { AccountPanelProps, TokenSecret } from "./account-panel";
 import { api, ApiError, errorMessage } from "./api";
 import { ListStatus } from "./ListStatus";
@@ -184,7 +185,7 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
 
   const copy = async () => {
     if (!secret) return;
-    try { await navigator.clipboard.writeText(secret.value); setNotice("已复制令牌"); }
+    try { await copyText(secret.value); setNotice("已复制令牌"); }
     catch { setNotice("复制失败，请选中令牌复制"); }
   };
 
