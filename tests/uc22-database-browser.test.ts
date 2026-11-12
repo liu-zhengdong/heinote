@@ -7,11 +7,11 @@ import { startServer } from "../server/index.ts";
 /* UC-22 browser acceptance: an agent builds the databases over the HTTP
    API — every new property type, a two-way relation, filtered and grouped
    views, calcs — and the browser renders them. Each surface the use case
-   adds is asserted visible, then captured into docs/evidence. */
+   adds is asserted visible, then captured into .evidence. */
 let server: Awaited<ReturnType<typeof startServer>>;
 let directory: string;
 const password = "UC-22-database-browser-password-2026!";
-const evidence = resolve("docs/evidence/uc22-database");
+const evidence = resolve(".evidence/uc22-database");
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-uc22-database-browser-"));

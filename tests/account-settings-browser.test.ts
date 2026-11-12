@@ -10,7 +10,7 @@ type User = { id: string; handle: string; displayName: string; siteRole: "admin"
 type RecordRow = { id: string; value: Record<string, unknown> };
 type TokenMetadata = { id: string; name: string; access: "read" | "write" };
 const password = "Account-settings-browser-password-2026!";
-const evidence = resolve("docs/evidence/account-settings");
+const evidence = resolve(".evidence/account-settings");
 const profilePath = "**/api/account/profile";
 const tokenPath = "**/api/tokens";
 

@@ -15,5 +15,5 @@ playwright-report/
 .tmp-*
 
 # Design prototypes and test-captured evidence stay local, not in git
-docs/prototypes/
-docs/evidence/
+.prototypes/
+.evidence/

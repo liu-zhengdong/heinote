@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startServer } from "../server/index.ts";
 
-const out = process.argv[2] ?? "docs/evidence/iss06";
+const out = process.argv[2] ?? ".evidence/iss06";
 const directory = await mkdtemp(join(tmpdir(), "notes-iss06-kb-"));
 const server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1" });
 const browser = await chromium.launch();

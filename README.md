@@ -148,7 +148,7 @@ npm test           # 核心回归 + HTTP 验收
 npm run test:e2e   # Playwright 真实浏览器流程
 ```
 
-源码布局：`server/` 服务端，`src/` 前端，`schema.ts` 共享字段声明，`tests/` 验收，`docs/` 系统说明（[Atlas](docs/atlas/README.md)）。
+源码布局：`server/` 服务端，`src/` 前端，`schema.ts` 共享字段声明，`tests/` 验收，`docs/` 接口与架构说明。
 
 ## 许可证
 

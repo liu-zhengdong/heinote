@@ -11,7 +11,7 @@ import { ZipStream } from "../src/core/zip.ts";
 // real renderer — board grouped by status with the groupOrder columns.
 type App = Awaited<ReturnType<typeof startServer>>;
 const password = "Import-base-browser-password-2026!";
-const evidence = resolve("docs/evidence/data-import");
+const evidence = resolve(".evidence/data-import");
 
 const test = base.extend<{ app: App; scratch: string }>({
   app: async ({}, use) => {

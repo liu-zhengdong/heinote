@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { startServer } from "../server/index.ts";
 
 // Manual capture run: `npx playwright test admin-shots-spec.ts` (excluded from
-// playwright.config.ts testMatch). Writes PR screenshots into docs/evidence/admin-console/.
+// playwright.config.ts testMatch). Writes PR screenshots into .evidence/admin-console/.
 test("capture admin console screenshots", async () => {
   const dir = await mkdtemp(join(tmpdir(), "shots-"));
   const server = await startServer({ dataDir: dir, port: 0, host: "127.0.0.1" });
@@ -41,25 +41,25 @@ test("capture admin console screenshots", async () => {
   await page.getByRole("tab", { name: "后台管理", exact: true }).click();
   await page.getByRole("button", { name: "打开后台管理", exact: true }).click();
   await page.locator(".ac-tile").first().waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-overview@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-overview@2x.png" });
   await page.getByRole("tab", { name: "用户", exact: true }).click();
   await page.locator(".ac-item", { hasText: "刘云" }).click();
   await page.locator(".ac-ins__inner").waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-user@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-user@2x.png" });
   await page.locator(".ac-ins__inner .btn", { hasText: "调整" }).first().click();
   await page.locator(".ac-edit__row input").waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-user-edit@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-user-edit@2x.png" });
   await page.getByRole("button", { name: "取消", exact: true }).click();
   await page.getByRole("tab", { name: "团队知识库", exact: true }).click();
   await page.locator(".ac-item", { hasText: "工程知识库" }).click();
   await page.locator(".ac-ins__inner").waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-team@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-team@2x.png" });
   await page.getByRole("tab", { name: "限额设置", exact: true }).click();
   await page.locator(".ac-qrow").first().waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-quotas@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-quotas@2x.png" });
   await page.getByRole("tab", { name: "关于", exact: true }).click();
   await page.locator(".ac-about__link").waitFor();
-  await page.screenshot({ path: "docs/evidence/admin-console/admin-about@2x.png" });
+  await page.screenshot({ path: ".evidence/admin-console/admin-about@2x.png" });
   await browser.close();
   await server.close();
 });

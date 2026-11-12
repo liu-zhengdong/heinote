@@ -9,7 +9,7 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let stub: GithubStub;
 let directory: string;
 const password = "Browser-GitHub-password-2026";
-const evidence = resolve("docs/evidence/github-auth");
+const evidence = resolve(".evidence/github-auth");
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-github-browser-"));
@@ -118,7 +118,7 @@ test("existing user binds and unbinds GitHub without losing private content", as
   expect((await (await page.request.get(`${server.url}/api/auth/github/status`)).json()).identity).toBeNull();
   stub.queue.push({ id: 71001, login: "renamed-browser-octocat", name: "GitHub 笔记用户" });
   await page.getByRole("button", { name: "绑定 GitHub", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("已绑定其他小黑笔记账号");
+  await expect(page.locator(".toast")).toContainText("已绑定其他小黑笔记账号");
   expect((await session(page)).user.id).toBe(original.id);
 });
 

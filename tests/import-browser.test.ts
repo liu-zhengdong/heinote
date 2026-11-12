@@ -9,7 +9,7 @@ import { ZipStream } from "../src/core/zip.ts";
 // pick → confirm → upload wizard; a finished import creates a real page tree.
 type App = Awaited<ReturnType<typeof startServer>>;
 const password = "Import-browser-password-2026!";
-const evidence = resolve("docs/evidence/data-import");
+const evidence = resolve(".evidence/data-import");
 
 const test = base.extend<{ app: App; scratch: string }>({
   app: async ({}, use) => {

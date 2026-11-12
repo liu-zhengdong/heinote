@@ -10,7 +10,7 @@ import { startServer } from "../server/index.ts";
 let server: Awaited<ReturnType<typeof startServer>>;
 let directory: string;
 const password = "Agent-databases-browser-password-2026!";
-const evidence = resolve("docs/evidence/agent-databases");
+const evidence = resolve(".evidence/agent-databases");
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-agent-databases-browser-"));

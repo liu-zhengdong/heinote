@@ -11,7 +11,7 @@ test("AC-11: real Chromium 200 percent page zoom keeps settings operable", async
   const directory = await mkdtemp(join(tmpdir(), "notes-settings-zoom-"));
   let server: Awaited<ReturnType<typeof startServer>> | undefined;
   let context: BrowserContext | undefined;
-  const evidence = resolve("docs/evidence/account-settings");
+  const evidence = resolve(".evidence/account-settings");
   const launch = async (name: string, factor: number) => {
     const profile = join(directory, name);
     await mkdir(join(profile, "Default"), { recursive: true });
