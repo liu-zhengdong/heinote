@@ -44,6 +44,10 @@ export const MAX_TABLE_ROWS = 200;
 /** Well inside the platform's 128 KiB per record, with room for its stamps. */
 export const TABLE_BYTE_BUDGET = 96 * 1024;
 export const TABLE_COLUMN_WIDTH = { min: 48, max: 1200, fallback: 120 } as const;
+/** The page's text column (`--column`): a table made from words — imported,
+ *  pasted — spreads its columns across it rather than every column taking
+ *  the fallback, as Notion's do. */
+export const TABLE_PAGE_WIDTH = 708;
 export const ROW_ORDER_STEP = 1024;
 
 const KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -174,10 +178,13 @@ export function normalizeSimpleTable(value: unknown): SimpleTable {
   return storedTable(tableGrid(value));
 }
 
-/** A new table: `columns` wide, `rows` long, every cell empty. */
+/** A new table: `columns` wide, `rows` long, every cell empty. Empty columns
+ *  split the text column evenly, as Notion's new tables do. */
 export function newSimpleTable(columns: number, rows: number, id: (kind: "column" | "row") => string): SimpleTable {
+  const width = Math.max(1, Math.min(MAX_TABLE_COLUMNS, columns));
+  const even = Math.max(TABLE_COLUMN_WIDTH.min, Math.round(TABLE_PAGE_WIDTH / width));
   return storedTable({
-    columns: Array.from({ length: Math.max(1, Math.min(MAX_TABLE_COLUMNS, columns)) }, () => ({ id: id("column") })),
+    columns: Array.from({ length: width }, () => ({ id: id("column"), width: even })),
     rows: Array.from({ length: Math.max(1, Math.min(MAX_TABLE_ROWS, rows)) }, (_, index) => ({
       id: id("row"),
       order: (index + 1) * ROW_ORDER_STEP,
@@ -188,16 +195,59 @@ export function newSimpleTable(columns: number, rows: number, id: (kind: "column
   });
 }
 
+/** How wide a cell's longest line reads: a Latin letter about a unit, a CJK
+ *  or wider glyph (code ≥ U+0300) about two, so a Chinese column is not
+ *  squeezed half narrow. */
+function cellMeasure(content: InlineContent): number {
+  let widest = 0;
+  for (const run of content) {
+    for (const line of run.text.split("\n")) {
+      let units = 0;
+      for (const character of line) units += character.codePointAt(0)! >= 0x300 ? 2 : 1;
+      widest = Math.max(widest, units);
+    }
+  }
+  return widest;
+}
+
+/** Widths for columns that were not given one: each gets a share of the
+ *  text column proportional to its widest cell — a share below the minimum
+ *  is the minimum; a column wider than the whole column keeps the column
+ *  wide (the table scrolls, as it did). A column's own padding and border
+ *  (`24px` plus `7px` a unit) seed the weights, so an empty column still
+ *  takes a fair share. */
+export function fitColumnWidths(
+  cells: readonly (readonly InlineContent[])[],
+  width: number,
+): (number | undefined)[] {
+  const weights = Array.from({ length: width }, (_, column) =>
+    Math.max(TABLE_COLUMN_WIDTH.min, 24 + 7 * Math.max(0, ...cells.map((row) => cellMeasure(row[column] ?? [])))));
+  const total = weights.reduce((sum, weight) => sum + weight, 0);
+  // Cumulative rounding keeps the shares summing to the column exactly —
+  // independently rounded shares drift a pixel off.
+  let used = 0;
+  let granted = 0;
+  return weights.map((weight) => {
+    used += weight;
+    const share = Math.round((used * TABLE_PAGE_WIDTH) / total) - granted;
+    granted += share;
+    return Math.round(Math.min(TABLE_COLUMN_WIDTH.max, Math.max(TABLE_COLUMN_WIDTH.min, share)));
+  });
+}
+
 /** A table of these words — a paste, Markdown, a database turned into a
- *  table. Rows are made as wide as the widest. */
+ *  table. Rows are made as wide as the widest. Columns are sized by their
+ *  words so the table fills the text column; a `widths` entry is kept as
+ *  given (a converted database keeps its drawn widths). */
 export function tableFromCells(
   cells: readonly (readonly InlineContent[])[],
   id: (kind: "column" | "row") => string,
   options: { headerRow?: boolean; headerColumn?: boolean; widths?: readonly (number | undefined)[] } = {},
 ): SimpleTable {
   const width = Math.max(1, Math.min(MAX_TABLE_COLUMNS, ...cells.map((row) => row.length)));
+  const fitted = fitColumnWidths(cells, width);
   const columns: TableColumn[] = Array.from({ length: width }, (_, index) => {
-    const kept = normalizeWidth(options.widths?.[index]);
+    const kept = normalizeWidth(options.widths?.[index]) ?? fitted[index];
     return { id: id("column"), ...(kept === undefined ? {} : { width: kept }) };
   });
   const rows = cells.slice(0, MAX_TABLE_ROWS).map((row, index) => ({
