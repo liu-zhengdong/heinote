@@ -11,6 +11,11 @@
 .quickfind .menu__copy { gap:4px; }
 .quickfind .menu__description { font-size:12.5px; line-height:1.4; }
 
+/* The crumb belongs to the title line, not the row's middle: centered across
+   a two-line row it reads as sitting on the excerpt, which is what made the
+   alignment look broken. */
+.quickfind__crumb { align-self:flex-start; padding-top:3px; }
+
 /* The matched text itself: blue marks where the query won, kept to the
    characters so the row's greyscale hierarchy is untouched. */
 .quickfind mark { background:none; color:var(--blue); font-weight:600; }
