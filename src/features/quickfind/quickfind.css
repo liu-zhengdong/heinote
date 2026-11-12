@@ -1,4 +1,16 @@
-.quickfind__scope { display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--hairline); color:var(--ink); font-size:12px; }
-.quickfind__scope > span { flex-shrink:0; }
-.quickfind__scope select { min-width:0; max-width:100%; padding:4px 8px; border:1px solid var(--hairline-strong); border-radius:5px; background:var(--paper); color:var(--ink); font:inherit; }
-.quickfind__scope select:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+/* Scope as a segment in the input row — the list keeps its one-level shape:
+   input, then results. The same inset pill the app uses for grouped choices. */
+.quickfind__seg { display:flex; flex:none; gap:1px; padding:2px; border-radius:999px; background:var(--fill); }
+.quickfind__seg button { padding:2px 10px; border-radius:999px; color:var(--ink-3); font-size:12px; white-space:nowrap; }
+.quickfind__seg button:hover:not(.is-on) { color:var(--ink-2); }
+.quickfind__seg button.is-on { background:var(--elevated); box-shadow:var(--shadow-card); color:var(--ink); }
+
+/* Rows breathe: a line of title, or title + matched excerpt — both under the
+   old ceiling, but no longer pressed against the row edges. */
+.quickfind .menu__item { min-height:36px; padding:5px 8px; }
+.quickfind .menu__copy { gap:2px; }
+.quickfind .menu__description { font-size:12.5px; }
+
+/* The matched text itself: blue marks where the query won, kept to the
+   characters so the row's greyscale hierarchy is untouched. */
+.quickfind mark { background:none; color:var(--blue); font-weight:600; }

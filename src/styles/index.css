@@ -9178,8 +9178,8 @@ button.db__th:hover,
    selected shape in the app: an edge-to-edge highlight here beside a rounded
    one two presses away is the kind of drift that reads as age. */
 .quickfind .menu__item {
-  min-height: 32px;
-  padding: 4px 8px;
+  min-height: 36px;
+  padding: 5px 8px;
 }
 
 .quickfind__crumb {

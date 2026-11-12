@@ -373,7 +373,7 @@ test("UC-13 browser: a lost creation response queries its operation and does not
 
 async function searchAllSpaces(page: Page, query: string) {
   const dialog = await search(page, query);
-  await dialog.getByRole("combobox", { name: "搜索范围", exact: true }).selectOption("all");
+  await dialog.getByRole("radio", { name: "所有空间", exact: true }).click();
   return dialog;
 }
 
@@ -496,7 +496,7 @@ test("UC-13 browser: search finds table-cell-only text and voluntary leave resto
     await files(member).getByRole("button", { name: kb.name, exact: true }).click();
     await expect(member.locator(`article[data-page-id="${kb.knowledgeBase.homePageId}"]`)).toBeVisible();
     const dialog = await search(member, uniqueCell);
-    await expect(dialog.getByRole("combobox", { name: "搜索范围", exact: true })).toHaveValue("current");
+    await expect(dialog.getByRole("radio", { name: "表格检索与退出知识库", exact: true })).toHaveAttribute("aria-checked", "true");
     const hit = dialog.getByRole("listbox", { name: "Results", exact: true }).getByRole("option")
       .filter({ has: member.locator(".menu__label").filter({ hasText: /^团队表格资料$/ }) });
     await expect(hit).toHaveCount(1); await expect(hit).toContainText(uniqueCell);
@@ -540,8 +540,8 @@ test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", a
   const hit = dialog.locator(".menu__item").first();
   await expect(hit).toBeVisible();
   const itemBox = await hit.boundingBox(); expect(itemBox).toBeTruthy();
-  const scopeBox = await dialog.locator(".quickfind__scope").boundingBox(); expect(scopeBox).toBeTruthy();
-  expect(itemBox!.y).toBeGreaterThanOrEqual(scopeBox!.y + scopeBox!.height);
+  const inputBox = await dialog.locator(".quickfind__input").boundingBox(); expect(inputBox).toBeTruthy();
+  expect(itemBox!.y).toBeGreaterThanOrEqual(inputBox!.y + inputBox!.height);
 
   const crumb = hit.locator(".quickfind__crumb");
   await expect(crumb).toHaveCSS("white-space", "nowrap");

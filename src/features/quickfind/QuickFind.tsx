@@ -1,5 +1,5 @@
 import { Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Modal } from "../../components/Modal";
 import { imeComposing } from "../../core/keyboard";
 import { inlinePlainText, inlineReadableText } from "../../core/inline-content";
@@ -19,6 +19,26 @@ export interface Hit {
   page: NotePage;
   crumb: string;
   excerpt?: string;
+}
+
+/** The matched characters, marked — enough to see *where* a long title or
+ *  excerpt won without turning the row into a colored object. Plain text when
+ *  there is no query (the list is then "recent pages", not a search result). */
+function markText(content: string, query: string) {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return content;
+  const source = content.toLowerCase();
+  const out: ReactNode[] = [];
+  let cursor = 0;
+  let index = source.indexOf(needle);
+  while (index !== -1) {
+    if (index > cursor) out.push(content.slice(cursor, index));
+    out.push(<mark key={index}>{content.slice(index, index + needle.length)}</mark>);
+    cursor = index + needle.length;
+    index = source.indexOf(needle, cursor);
+  }
+  if (cursor < content.length) out.push(content.slice(cursor));
+  return out;
 }
 
 /** What ⌘K finds for `query`: names that start with it, then names that
@@ -113,7 +133,7 @@ export function QuickFind() {
         <input
           autoFocus
           value={query}
-          placeholder="Search pages…"
+          placeholder="搜索页面…"
           aria-label="Search pages"
           onChange={(event) => { setQuery(event.target.value); setActive(0); }}
           onKeyDown={(event) => {
@@ -130,15 +150,23 @@ export function QuickFind() {
             }
           }}
         />
+        {/* The scope is a two-way choice the user changes rarely — a segment
+         *  in the input row keeps it visible and one click away without
+         *  giving it a row of its own. */}
+        <div className="quickfind__seg" role="radiogroup" aria-label="搜索范围">
+          <button
+            type="button" role="radio" aria-checked={scope === "current"}
+            className={scope === "current" ? "is-on" : ""}
+            onClick={() => { setScope("current"); setActive(0); }}
+          >{activeSpace?.name ?? "个人空间"}</button>
+          <button
+            type="button" role="radio" aria-checked={scope === "all"}
+            className={scope === "all" ? "is-on" : ""}
+            onClick={() => { setScope("all"); setActive(0); }}
+          >所有空间</button>
+        </div>
       </div>
 
-      <label className="quickfind__scope">
-        <span>搜索范围</span>
-        <select aria-label="搜索范围" value={scope} onChange={(event) => { setScope(event.target.value === "all" ? "all" : "current"); setActive(0); }}>
-          <option value="current">当前空间 · {activeSpace?.name ?? "个人空间"}</option>
-          <option value="all">所有可访问空间</option>
-        </select>
-      </label>
       <div className="menu scroller" role="listbox" aria-label="Results">
         {hits.length ? hits.map((hit, index) => (
           <button
@@ -152,13 +180,13 @@ export function QuickFind() {
           >
             <span className="menu__icon" aria-hidden="true">{pageGlyph(hit.page)}</span>
             <span className="menu__copy">
-              <span className="menu__label">{pageName(hit.page)}</span>
-              {hit.excerpt ? <span className="menu__description">{hit.excerpt}</span> : null}
+              <span className="menu__label">{markText(pageName(hit.page), query)}</span>
+              {hit.excerpt ? <span className="menu__description">{markText(hit.excerpt, query)}</span> : null}
             </span>
             {hit.crumb ? <span className="quickfind__crumb">{hit.crumb}</span> : null}
           </button>
         )) : (
-          <div className="slash__empty">{query.trim() ? `No pages match “${query.trim()}”` : "No pages yet"}</div>
+          <div className="slash__empty">{query.trim() ? `没有「${query.trim()}」的页面` : "还没有页面"}</div>
         )}
       </div>
     </Modal>
