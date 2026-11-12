@@ -3,6 +3,7 @@ import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactN
 import { orderedBlocks, pageFirstLine } from "../../core/block-tree";
 import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
+import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
 import { AppSurface } from "../artifact/AppSurface";
 
@@ -144,6 +145,26 @@ function BlockChildren({ tree, parentId = null, context, ancestors = new Set<str
   return <>{children}</>;
 }
 
+/** One level of the public page list: each row, then the rows it holds,
+ *  nested so their indent says where they live. On a narrow screen the
+ *  branch box goes away and the rows read flat, in the same order. */
+function NavBranch({ pages, tree, active, token }: { pages: NotePage[]; tree: PageTree; active: string; token: string }) {
+  return <>
+    {pages.map((page) => (
+      <div key={page.id} className="public-reader__nav-item">
+        <a href={pageHref(page.id)} aria-current={page.id === active ? "page" : undefined}>
+          <PublicPageIcon page={page} token={token} size={15} /><span>{titleOf(page)}</span>
+        </a>
+        {(tree.children.get(page.id)?.length ?? 0) > 0 ? (
+          <div className="public-reader__nav-branch">
+            <NavBranch pages={tree.children.get(page.id)!} tree={tree} active={active} token={token} />
+          </div>
+        ) : null}
+      </div>
+    ))}
+  </>;
+}
+
 /** Standalone public route. It does not require a workspace or a session. */
 export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const token = tokenProp ?? tokenFromPath();
@@ -188,6 +209,13 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     return () => controller.abort();
   }, [token, revision]);
   const context = useMemo<ReaderContext>(() => ({ token, pages: new Map(document?.pages.map((page) => [page.id, page]) ?? []) }), [document, token]);
+  /* The nav mirrors the page list back in Notes: each page nested under
+   *  the page that holds it, sorted by name. A page whose parent is not
+   *  public lists at the top. */
+  const tree = useMemo<PageTree | undefined>(() => (document
+    ? buildTree(Object.fromEntries(document.pages.map((page) => [page.id, page])), "name")
+    : undefined), [document]);
+  const listedCount = tree ? tree.roots.length + [...tree.children.values()].reduce((count, pages) => count + pages.length, 0) : 0;
   const root = document?.pages.find((page) => !page.parent_id || !context.pages.has(page.parent_id)) ?? document?.pages[0];
   const active = context.pages.get(pageId) ?? root;
   useEffect(() => {
@@ -203,10 +231,9 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
       : error ? <section className="public-reader__status"><h1>{unavailable ? "无法打开此页" : "加载失败"}</h1><p className="account-error" role="alert">{error}</p>
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>
       : !active ? <p className="public-reader__status account-muted">暂无公开内容</p>
-      : <div className={`public-reader__layout${document && document.pages.length > 1 ? " public-reader__layout--with-nav" : ""}`}>
-        {document && document.pages.length > 1 ? <nav className="public-reader__nav" aria-label="公开页面">
-          {document.pages.map((page) => <a key={page.id} href={pageHref(page.id)} aria-current={page.id === active.id ? "page" : undefined}>
-            <FileText size={15} aria-hidden="true" /><span>{titleOf(page)}</span></a>)}
+      : <div className={`public-reader__layout${listedCount > 1 ? " public-reader__layout--with-nav" : ""}`}>
+        {tree && listedCount > 1 ? <nav className="public-reader__nav" aria-label="公开页面">
+          <NavBranch pages={tree.roots} tree={tree} active={active.id} token={token} />
         </nav> : null}
         <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(active)}>
           {active.cover_image ? <img className="public-reader__cover" src={fileHref(active.cover_image, token)} alt="" /> : null}
