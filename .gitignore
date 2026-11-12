@@ -13,3 +13,7 @@ playwright-report/
 # Local tool state and temp scripts
 .smyw/
 .tmp-*
+
+# Design prototypes and test-captured evidence stay local, not in git
+docs/prototypes/
+docs/evidence/
