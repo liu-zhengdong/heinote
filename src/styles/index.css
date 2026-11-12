@@ -9178,6 +9178,8 @@ button.db__th:hover,
    selected shape in the app: an edge-to-edge highlight here beside a rounded
    one two presses away is the kind of drift that reads as age. */
 .quickfind .menu__item {
+  /* Scroll the list when it fills; shrinking a two-line row eats its padding. */
+  flex-shrink: 0;
   min-height: 36px;
   padding: 6px 10px;
 }

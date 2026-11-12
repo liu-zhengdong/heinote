@@ -1,5 +1,5 @@
 import { Search } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Modal } from "../../components/Modal";
 import { imeComposing } from "../../core/keyboard";
 import { inlinePlainText, inlineReadableText } from "../../core/inline-content";
@@ -101,6 +101,7 @@ export function QuickFind() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [scope, setScope] = useState<"current" | "all">("current");
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (quickFindOpen) {
@@ -120,6 +121,12 @@ export function QuickFind() {
       return { ...hit, crumb: [name, hit.crumb].filter(Boolean).join(" / ") };
     });
   }, [allPages, query, scope, spaces, activeSpaceId]);
+
+  useEffect(() => {
+    if (!quickFindOpen) return;
+    resultsRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [active, hits, quickFindOpen]);
 
   const open = (page: NotePage) => {
     selectPage(page.id);
@@ -167,7 +174,7 @@ export function QuickFind() {
         </div>
       </div>
 
-      <div className="menu scroller" role="listbox" aria-label="Results">
+      <div ref={resultsRef} className="menu scroller" role="listbox" aria-label="Results">
         {hits.length ? hits.map((hit, index) => (
           <button
             type="button"

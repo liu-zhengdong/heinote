@@ -524,6 +524,74 @@ test("UC-13 browser: search finds table-cell-only text and voluntary leave resto
   } finally { await ownerContext.close(); }
 });
 
+// ISS-08 rework: a full result list must scroll instead of compressing rows
+// until their text spills into the padding. Check rendered bounds, not just CSS.
+test("ISS-08 browser: full result lists keep text inside each row's padding", async ({ page, app }, info) => {
+  await register(page, app, "qf_padding");
+  const root = await api(page, app, "/api/v1/pages", "POST", { title: "HTTP 接口试用 · 很长的父级目录名称与来源路径", text: "" }, 201);
+  for (let index = 0; index < 12; index += 1) {
+    await api(page, app, "/api/v1/pages", "POST", {
+      title: index < 3 ? `padding-hit 标题命中 ${index}` : `UC-HTTP-${index} 修改笔记与恢复历史版本的长标题`,
+      text: `用途：HTTP 接口试用示例。状态：待梳理。检索词 padding-hit。${"正文摘要很长。".repeat(15)}`,
+      parentId: root.id,
+    }, 201);
+  }
+  await page.reload(); await expect(switcher(page)).toBeVisible();
+  const dialog = await search(page, "padding-hit");
+  const rows = dialog.getByRole("option");
+  await expect(rows).toHaveCount(12);
+  for (const layout of [
+    { name: "desktop-dark", width: 954, height: 784, theme: "dark" },
+    { name: "narrow-light", width: 390, height: 640, theme: "light" },
+    { name: "short-dark", width: 954, height: 380, theme: "dark" },
+  ]) {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, layout.theme);
+    await rows.last().hover();
+    await expect(rows.last()).toHaveAttribute("aria-selected", "true");
+    await screenshot(page, info, `quickfind-padding-${layout.name}`);
+    const geometry = await rows.evaluateAll((items) => items.map((item) => {
+      const row = item.getBoundingClientRect();
+      const style = getComputedStyle(item);
+      const content = {
+        top: row.top + parseFloat(style.paddingTop) + parseFloat(style.borderTopWidth),
+        bottom: row.bottom - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth),
+        left: row.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth),
+        right: row.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth),
+      };
+      const children = Array.from(item.querySelectorAll(".menu__icon, .menu__label, .menu__description, .quickfind__crumb"), (child) => {
+        const box = child.getBoundingClientRect();
+        return { name: child.className, top: box.top - content.top, bottom: content.bottom - box.bottom, left: box.left - content.left, right: content.right - box.right };
+      });
+      return { height: row.height, children };
+    }));
+    await info.attach(`geometry-${layout.name}`, { body: JSON.stringify(geometry, null, 2), contentType: "application/json" });
+    for (const [index, row] of geometry.entries()) {
+      for (const child of row.children) {
+        for (const edge of ["top", "bottom", "left", "right"] as const) {
+          expect(child[edge], `${layout.name} row ${index} ${child.name} ${edge} exceeds padding`).toBeGreaterThanOrEqual(-0.5);
+        }
+      }
+    }
+    const list = dialog.getByRole("listbox", { name: "Results", exact: true });
+    const overflow = await list.evaluate((element) => ({ scroll: element.scrollHeight, client: element.clientHeight, width: element.scrollWidth - element.clientWidth }));
+    expect(overflow.scroll).toBeGreaterThan(overflow.client);
+    expect(overflow.width).toBeLessThanOrEqual(1);
+    await expect(rows.last()).toBeInViewport();
+    const input = dialog.getByRole("textbox", { name: "Search pages", exact: true });
+    await input.press("ArrowDown");
+    await expect(rows.first()).toHaveAttribute("aria-selected", "true");
+    await expect(rows.first()).toBeInViewport();
+    await input.press("ArrowUp");
+    await expect(rows.last()).toHaveAttribute("aria-selected", "true");
+    await expect(rows.last()).toBeInViewport();
+  }
+  const selectedTitle = await rows.last().locator(".menu__label").innerText();
+  await dialog.getByRole("textbox", { name: "Search pages", exact: true }).press("Enter");
+  await expect(dialog).toBeHidden();
+  await expect(title(page)).toHaveText(selectedTitle);
+});
+
 // ISS-08: a long ancestry crumb must never squeeze the title/excerpt column or
 // spill rows into the scope bar — the crumb truncates at a capped width.
 test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", async ({ page, app }) => {
