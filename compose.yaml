@@ -2,7 +2,7 @@ services:
   heinote:
     build: .
     ports:
-      - "${NOTES_PORT:-3000}:3000"
+      - "${HEINOTE_PORT:-3000}:3000"
     environment:
       REGISTRATION_OPEN: "${REGISTRATION_OPEN:-true}"
       PUBLIC_URL: "${PUBLIC_URL:-}"

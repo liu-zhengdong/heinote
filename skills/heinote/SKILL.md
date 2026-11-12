@@ -4,7 +4,7 @@ tags: notes, heinote, 小黑笔记, http-api, rest, agent-api
 description: >
   通过 HTTP REST API 读写 小黑笔记：页面、数据库条目、结构化修改、
   审核提案与版本恢复。当 Agent 需要在 小黑笔记 中创建、查询或修改
-  笔记内容，或遇到 NOTES_URL / NOTES_TOKEN / /api/v1 时使用。
+  笔记内容，或遇到 HEINOTE_URL / HEINOTE_TOKEN / /api/v1 时使用。
   触发词：笔记、notes、小黑笔记、知识库写入、数据库条目、提案。
 ---
 
@@ -17,7 +17,7 @@ description: >
 ## 前置条件
 
 1. 服务运行中，默认地址 `http://localhost:3000`。
-2. 环境变量 `NOTES_URL` 指向服务源，`NOTES_TOKEN` 为 Bearer 令牌。
+2. 环境变量 `HEINOTE_URL` 指向服务源，`HEINOTE_TOKEN` 为 Bearer 令牌。
 3. 令牌由用户在「账号 → Agent 令牌」创建。令牌只展示一次。缺失时请用户创建。
 4. 只读令牌只能执行 GET 和 `POST /databases/:id/query`。其他写操作需要读写令牌。
 5. 归档知识库只读。令牌不能管理账号、成员或其他令牌。
@@ -25,7 +25,7 @@ description: >
 连通性检查：
 
 ```sh
-curl "$NOTES_URL/api/v1/pages" -H "Authorization: Bearer $NOTES_TOKEN"
+curl "$HEINOTE_URL/api/v1/pages" -H "Authorization: Bearer $HEINOTE_TOKEN"
 ```
 
 401 表示令牌无效或已撤销。403 表示令牌或账号无权执行该操作。

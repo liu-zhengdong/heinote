@@ -57,7 +57,7 @@ podman run -d --name heinote \
 | --- | --- | --- |
 | `HOST` | `0.0.0.0` | 本地服务监听地址 |
 | `PORT` | `3000` | 本地服务端口 |
-| `NOTES_PORT` | `3000` | Compose 对外端口 |
+| `HEINOTE_PORT` | `3000` | Compose 对外端口 |
 | `DATA_DIR` | `data` | 本地数据目录；容器内固定为 `/app/data` |
 | `REGISTRATION_OPEN` | `true` | 设置 `false` 可关闭后续注册；空库仍允许建立首个账号 |
 | `PUBLIC_URL` | 空 | 完整外部源，例如 `https://notes.example.com`；启用 GitHub 登录时必须设置 |
@@ -146,14 +146,14 @@ Owner 和管理员从页头“知识库设置”修改名称与简介。编辑�
 Agent API 在浏览器关闭时仍然可用。Agent 权限是令牌权限与账号页面权限的交集。令牌不能管理账号、空间权限或其他令牌。
 
 ```sh
-export NOTES_URL=http://localhost:3000
-export NOTES_TOKEN='在账号面板创建的令牌'
+export HEINOTE_URL=http://localhost:3000
+export HEINOTE_TOKEN='在账号面板创建的令牌'
 
-curl "$NOTES_URL/api/v1/pages" \
-  -H "Authorization: Bearer $NOTES_TOKEN"
+curl "$HEINOTE_URL/api/v1/pages" \
+  -H "Authorization: Bearer $HEINOTE_TOKEN"
 
-curl "$NOTES_URL/api/v1/pages" \
-  -H "Authorization: Bearer $NOTES_TOKEN" \
+curl "$HEINOTE_URL/api/v1/pages" \
+  -H "Authorization: Bearer $HEINOTE_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"title":"Agent 笔记","text":"由 Agent 创建的正文"}'
 ```

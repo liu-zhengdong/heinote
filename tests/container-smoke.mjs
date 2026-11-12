@@ -5,7 +5,7 @@ import * as Y from "yjs";
 import WebSocket from "ws";
 
 const engine = process.env.CONTAINER_ENGINE ?? "podman";
-const image = process.env.NOTES_IMAGE ?? "localhost/heinote:latest";
+const image = process.env.HEINOTE_IMAGE ?? "localhost/heinote:latest";
 const runId = randomUUID();
 const container = `heinote-accept-${runId}`;
 const volume = `${container}-data`;

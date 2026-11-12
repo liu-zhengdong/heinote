@@ -13,7 +13,7 @@ const test = base.extend<{ app: App }>({
     const directory = await mkdtemp(join(tmpdir(), "notes-knowledge-bases-browser-"));
     let server: App | undefined;
     try {
-      server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", github: null, dev: process.env.NOTES_TEST_DEV === "1" });
+      server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", github: null, dev: process.env.HEINOTE_TEST_DEV === "1" });
       await use(server);
     } finally {
       await server?.close();
