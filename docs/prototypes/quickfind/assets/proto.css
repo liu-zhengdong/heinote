@@ -1,0 +1,165 @@
+/* ⌘K 快速查找三方向原型。Token 抄自 src/styles/index.css，不新增颜色。 */
+
+:root {
+  color-scheme: light dark;
+  --ink: #37352f;
+  --ink-2: rgba(55, 53, 47, 0.65);
+  --ink-3: rgba(55, 53, 47, 0.5);
+  --ink-4: rgba(55, 53, 47, 0.3);
+  --paper: #ffffff;
+  --elevated: #ffffff;
+  --fill: rgba(55, 53, 47, 0.04);
+  --fill-hover: rgba(55, 53, 47, 0.06);
+  --hairline: rgba(55, 53, 47, 0.09);
+  --hairline-strong: rgba(55, 53, 47, 0.16);
+  --blue: #2383e2;
+  --blue-tint: rgba(35, 131, 226, 0.1);
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 10px;
+  --shadow-pop:
+    rgba(15, 15, 15, 0.05) 0 0 0 1px,
+    rgba(15, 15, 15, 0.1) 0 3px 6px,
+    rgba(15, 15, 15, 0.2) 0 9px 24px;
+  --shadow-card: rgba(15, 15, 15, 0.1) 0 1px 2px, rgba(15, 15, 15, 0.06) 0 0 0 1px;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Noto Sans SC", Arial, sans-serif, "Apple Color Emoji";
+}
+[data-theme="dark"] {
+  --ink: #f0efed;
+  --ink-2: #bcbab6;
+  --ink-3: #ada9a3;
+  --ink-4: #7d7a75;
+  --paper: #191919;
+  --elevated: #252525;
+  --fill: rgba(255, 255, 255, 0.055);
+  --fill-hover: rgba(255, 255, 255, 0.08);
+  --hairline: rgba(255, 255, 255, 0.094);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
+  --blue-tint: rgba(35, 131, 226, 0.22);
+  --shadow-pop:
+    rgba(255, 255, 255, 0.07) 0 0 0 1px,
+    rgba(0, 0, 0, 0.4) 0 3px 6px,
+    rgba(0, 0, 0, 0.5) 0 9px 24px;
+  --shadow-card: rgba(0, 0, 0, 0.3) 0 1px 2px, rgba(255, 255, 255, 0.07) 0 0 0 1px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 13.5px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+input { font: inherit; color: inherit; background: none; border: 0; outline: 0; }
+mark { background: none; color: inherit; font-weight: 600; }
+/* 命中标记三档：a 加粗（默认）、b 蓝字、c 浅底块 */
+body[data-mark="mark-b"] mark { color: var(--blue); }
+body[data-mark="mark-c"] mark { padding: 0 1px; border-radius: 3px; background: var(--blue-tint); color: var(--ink); }
+
+/* ————— 对比外框 ————— */
+.cmp { padding: 48px 24px 8px; }
+.cmp__inner { max-width: 1060px; margin: 0 auto; }
+.cmp__title { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.cmp__sub { margin-top: 6px; color: var(--ink-2); font-size: 13px; line-height: 1.65; max-width: 760px; }
+.cmp__rec { margin-top: 8px; color: var(--ink-2); font-size: 12.5px; line-height: 1.6; max-width: 760px; }
+.cmp__rec strong { color: var(--ink); font-weight: 600; }
+.cmp__bar { max-width: 1060px; margin: 16px auto 0; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; }
+.cmp__tabs { display: flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--fill); margin-right: auto; }
+.tab-btn { padding: 3px 12px; border-radius: 999px; color: var(--ink-3); font-size: 12.5px; white-space: nowrap; }
+.tab-btn.is-on { background: var(--elevated); box-shadow: var(--shadow-card); color: var(--ink); font-weight: 500; }
+.cmp__marks { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 999px; background: var(--fill); }
+.cmp__marks-label { padding: 0 6px 0 8px; color: var(--ink-3); font-size: 12px; }
+.mark-btn { padding: 2px 10px; border-radius: 999px; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.mark-btn.is-on { background: var(--elevated); box-shadow: var(--shadow-card); color: var(--ink); }
+.theme-btn { font-size: 12px; color: var(--ink-3); border: 1px solid var(--hairline); background: transparent; padding: 4px 10px; border-radius: 999px; cursor: pointer; }
+
+.dir { max-width: 1060px; margin: 40px auto 0; }
+.dir__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 14px; padding: 0 4px; }
+.dir__name { font-size: 15px; font-weight: 600; }
+.dir__desc { color: var(--ink-2); font-size: 12.5px; line-height: 1.6; max-width: 660px; }
+.dir__foot { padding: 10px 4px 0; color: var(--ink-3); font-size: 12px; line-height: 1.6; max-width: 700px; }
+
+/* 台子：模拟 ⌘K 浮层悬在页面上的高度，不给假 scrim */
+.stage { display: flex; justify-content: center; padding: 28px 20px 44px; }
+.qf {
+  display: flex;
+  width: min(520px, 100%);
+  max-height: 460px;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+/* ————— 公共件：输入行 / 结果行 / 空态 ————— */
+.qf__input { display: flex; flex: none; align-items: center; gap: 9px; padding: 11px 13px; border-bottom: 1px solid var(--hairline); color: var(--ink-3); }
+.qf__input input { min-width: 0; flex: 1; color: var(--ink); font-size: 15px; }
+.qf__input input::placeholder { color: var(--ink-4); }
+
+.qf__list { min-height: 0; padding: 5px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+
+.qf__item {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+}
+.qf__item.is-active { background: var(--fill-hover); }
+.qf__icon { display: grid; width: 18px; flex: none; place-items: center; color: var(--ink-2); }
+.qf__copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.qf__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qf__excerpt { overflow: hidden; color: var(--ink-3); font-size: 12.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.qf__crumb { flex: none; max-width: 42%; overflow: hidden; color: var(--ink-3); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.qf__empty { padding: 26px 16px 30px; text-align: center; }
+.qf__empty p { color: var(--ink-3); font-size: 13px; }
+.qf__empty .qf__empty-act { margin-top: 8px; color: var(--blue); font-size: 12.5px; }
+.qf__empty .qf__empty-act:hover { text-decoration: underline; }
+
+kbd { font-family: var(--font-body); font-size: 10.5px; letter-spacing: 0.02em; }
+
+/* ————— 现状对照：范围独占一行 ————— */
+body[data-mark] .qf--cur mark { padding: 0; border-radius: 0; background: none; color: inherit; }
+.qf__scope-row { display: flex; flex: none; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--hairline); color: var(--ink); font-size: 12px; }
+.qf__scope-row > span { flex-shrink: 0; }
+.qf__scope-row select { min-width: 0; max-width: 100%; padding: 4px 8px; border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--elevated); color: var(--ink); font: inherit; }
+.qf--cur .qf__item { min-height: 32px; padding: 4px 8px; }
+.qf--cur .qf__copy { gap: 1px; }
+.qf--cur .qf__excerpt { font-size: 12px; }
+
+/* ————— 方向 A：范围段收进输入行 ————— */
+.qf__seg { display: flex; flex: none; gap: 1px; padding: 2px; border-radius: 999px; background: var(--fill); }
+.qf__seg button { padding: 2px 10px; border-radius: 999px; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.qf__seg button.is-on { background: var(--elevated); box-shadow: var(--shadow-card); color: var(--ink); }
+
+/* ————— 方向 B：结果两行 + 底部命令条 ————— */
+.qf__item--meta { align-items: flex-start; padding: 6px 8px; }
+.qf__item--meta .qf__icon { height: 21px; }
+.qf__meta { display: flex; min-width: 0; gap: 6px; align-items: baseline; color: var(--ink-3); font-size: 12.5px; line-height: 1.4; }
+.qf__meta .qf__meta-path { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qf__meta .qf__meta-excerpt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.qf__foot { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--hairline); }
+.qf__scope-wrap { position: relative; flex: none; }
+.qf__scope-btn { display: flex; align-items: center; gap: 5px; padding: 3px 7px; border-radius: var(--r-sm); color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.qf__scope-btn:hover { background: var(--fill-hover); color: var(--ink-2); }
+.qf__scope-pop { position: absolute; z-index: 5; bottom: calc(100% + 6px); left: 0; display: none; min-width: 216px; padding: 4px; border-radius: var(--r-md); background: var(--elevated); box-shadow: var(--shadow-pop); }
+.qf__scope-pop.is-open { display: block; }
+.qf__scope-pop button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 5px 8px; border-radius: var(--r-sm); font-size: 13px; text-align: left; white-space: nowrap; }
+.qf__scope-pop button:hover { background: var(--fill-hover); }
+.qf__scope-pop .qf__pop-check { width: 14px; flex: none; color: var(--blue); visibility: hidden; }
+.qf__scope-pop button.is-on .qf__pop-check { visibility: visible; }
+.qf__hints { display: flex; flex: none; gap: 10px; color: var(--ink-4); font-size: 11px; white-space: nowrap; }
+.qf__hints kbd { padding: 0 4px; border: 1px solid var(--hairline); border-radius: 3px; color: var(--ink-3); }
+
+/* ————— 方向 C：范围是结果末尾的动作 ————— */
+.qf__token { display: inline-flex; flex: none; align-items: center; gap: 3px; padding: 1px 4px 1px 8px; border-radius: var(--r-sm); background: var(--fill); color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+.qf__token button { display: grid; width: 16px; height: 16px; place-items: center; border-radius: 3px; color: var(--ink-3); }
+.qf__token button:hover { background: var(--fill-hover); color: var(--ink); }
+.qf__more { color: var(--ink-2); }
+.qf__more .qf__icon { color: var(--ink-3); }
+.qf__more .qf__title { font-size: 13.5px; }
+.qf__more kbd { flex: none; padding: 0 4px; border: 1px solid var(--hairline); border-radius: 3px; color: var(--ink-4); }

@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>⌘K 快速查找 · 三方向对比</title>
+<link rel="stylesheet" href="assets/proto.css">
+</head>
+<body>
+<header class="cmp">
+  <div class="cmp__inner">
+    <h1 class="cmp__title">⌘K 快速查找：命中要看得见，行要能喘气</h1>
+    <p class="cmp__sub">同一个弹层、同一份数据、同一条查询。顶栏 Tab 在「现状」与三个方向之间切换：范围机制分别是输入行段控 / 底栏命令条 / 末尾动作；行距统一放宽、摘要升 12.5px；命中标记用右侧三档开关整体对比（现状页不受开关影响，保持线上长相）。</p>
+    <p class="cmp__rec"><strong>推荐：方向 A + 命中浅底块</strong>。范围二选一本来就是段控的形状，放进输入行后弹层回到输入 + 列表两段；命中标记里「加粗」没有信息量、「蓝字」与链接色混淆，浅底块是中文全文搜索的常见记号（浏览器页内查找同款心智），一眼定位命中位置，且不占颜色语义——蓝留给动作。</p>
+  </div>
+</header>
+<div class="cmp__bar">
+  <div class="cmp__tabs" role="tablist" aria-label="方向">
+    <button class="tab-btn" role="tab" data-tab="cur">现状</button>
+    <button class="tab-btn is-on" role="tab" aria-selected="true" data-tab="a">A · 输入行段控</button>
+    <button class="tab-btn" role="tab" data-tab="b">B · 底栏命令条</button>
+    <button class="tab-btn" role="tab" data-tab="c">C · 末尾动作</button>
+  </div>
+  <div class="cmp__marks" role="radiogroup" aria-label="命中标记样式">
+    <span class="cmp__marks-label">命中标记</span>
+    <button class="mark-btn" data-mark="mark-a">加粗</button>
+    <button class="mark-btn" data-mark="mark-b">蓝字</button>
+    <button class="mark-btn is-on" data-mark="mark-c">浅底块</button>
+  </div>
+  <button class="theme-btn" id="theme">切换浅色</button>
+</div>
+
+<section class="dir" id="dir-cur" hidden>
+  <div class="dir__head"><span class="dir__name">现状 · 范围独占一行</span><span class="dir__desc">线上长相：输入行下方一整行「搜索范围 + 原生 select」，行距紧凑，命中仅加粗，文案中英混排。</span></div>
+  <div class="stage" id="stage-cur"></div>
+</section>
+
+<section class="dir" id="dir-a">
+
+  <div class="dir__head"><span class="dir__name">方向 A · 范围段收进输入行</span><span class="dir__desc">输入行右侧一段双选「当前空间 / 所有空间」，范围与查询同层，不占结果区；行保留现单行形态。</span></div>
+  <div class="stage" id="stage-a"></div>
+  <div class="dir__foot">范围仍是控件、随时可见可改；代价是输入行在窄屏略挤（本例 520px 宽余量充足）。</div>
+</section>
+
+<section class="dir" id="dir-b">
+  <div class="dir__head"><span class="dir__name">方向 B · 底栏命令条</span><span class="dir__desc">借 Spotlight 的底条：左下是范围入口（上弹小菜单），右下是键位提示；结果行改两行，面包屑与摘要同属元信息行。</span></div>
+  <div class="stage" id="stage-b"></div>
+  <div class="dir__foot">弹层有了「头中脚」的完整骨架，以后加动词不用再加行；代价是底条对当前只有两个选项的范围是重量级范式。</div>
+</section>
+
+<section class="dir" id="dir-c">
+  <div class="dir__head"><span class="dir__name">方向 C · 范围是末尾动作</span><span class="dir__desc">借 Notion 搜索筛选的行内 token：默认只查当前空间，不显示任何控件；结果末尾一行「在全部空间中搜索」展开范围，展开后范围变成输入框里的可移除 token。</span></div>
+  <div class="stage" id="stage-c"></div>
+  <div class="dir__foot">默认状态最干净——范围不存在，只有一条路；代价是「所有空间」藏得最深，且 token 语义需要用户学过这个范式。</div>
+</section>
+
+<script>
+/* ————— 共享数据：与截图同源的页面集 ————— */
+const SPACE_NOW = "个人空间";
+const PAGES = [
+  { t: "经历记忆 V2：Run 接续上下文", ex: "Run 归档后不可变；活跃 Run 不参与内…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "站在巨人的肩膀上：先继承，再探索", ex: "一个更合理的搜索顺序是：", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "主动探索型进化：没有失败也寻找…", ex: "它不是“因为不会所以搜索”，也不是“因…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "Agent 记忆的双轴分类：内容类型与…", ex: "机制 · 实现 · 作用 · Pull · Memory Searc…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "Pi experience", ex: "经历查阅：通过独立的 E / R 关键词搜索定位经历与执行，按需…", path: "项目", space: "kb" },
+  { t: "AI 披露上下文的几种方式", ex: "主动搜索某个地址，比如 rg 搜索。", path: "库", space: "kb" },
+  { t: "Run：一次完整执行的定义", ex: "Run 最多有一个直接父 Experience。尚…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "§3 读者阅读器", ex: "列表与阅读窗：无限滚动（骨架追加）、…", path: "项目 / DoramiSourceAr…", space: "kb" },
+  { t: "E_R 上下文装配与检索", ex: "E 和已收起的独立 R 展示 Overview；保…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "全能的野人｜模拟交易", ex: "盘中检索须对带发布时间的全市场异动快讯单独回扫…", path: "项目", space: "kb" },
+  { t: "Context、Session 与 Memory", ex: "但更重要的不是“14 层搜索算法”，而是检…", path: "方向 / 自主 AI 团队系统", space: "kb" },
+  { t: "浏览器里可用的本地搜索引擎", ex: "索引落在 IndexedDB，搜索框按前缀和包…", path: "前端", space: "personal" },
+  { t: "全局搜索与 @ 引用的分工", ex: "⌘K 管找页面，@ 管在正文里引用页面…", path: "", space: "personal" },
+  { t: "备份计划与云盘目录", ex: "每天 03:00 打包数据目录与附件搜索索引…", path: "运维", space: "personal" },
+];
+const KB_NAME = "团队知识库";
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const hi = (s, q) => {
+  s = esc(s);
+  if (!q) return s;
+  const m = esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return s.replace(new RegExp(`(${m})`, "gi"), "<mark>$1</mark>");
+};
+const PAGE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+const SEARCH_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>';
+const GLOBE_ICON = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18"/></svg>';
+const X_ICON = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const CHEV_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m8 9 4 4 4-4"/></svg>';
+const CHECK_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12 5 5L20 6"/></svg>';
+
+/** 与 quickFind 同型：标题前缀 → 标题包含 → 正文行包含；空查询给最近。 */
+function hits(q, scope) {
+  const pool = PAGES.filter((p) => scope === "all" || p.space === "personal");
+  const crumbs = (p) =>
+    (scope === "all" ? (p.space === "personal" ? SPACE_NOW : KB_NAME) + (p.path ? " / " : "") : "") + p.path;
+  if (!q.trim()) return pool.slice(0, 8).map((p) => ({ p, crumb: crumbs(p), ex: null }));
+  const n = q.trim().toLowerCase();
+  const rank = [];
+  for (const p of pool) {
+    const t = p.t.toLowerCase();
+    if (t.startsWith(n)) rank.push({ p, crumb: crumbs(p), ex: null, r: 0 });
+    else if (t.includes(n)) rank.push({ p, crumb: crumbs(p), ex: null, r: 1 });
+    else if (p.ex.toLowerCase().includes(n)) rank.push({ p, crumb: crumbs(p), ex: p.ex, r: 2 });
+  }
+  return rank.sort((a, b) => a.r - b.r).slice(0, 12);
+}
+
+function bindKeys(input, st, render, extraKeys) {
+  input.addEventListener("input", () => { st.q = input.value; st.active = 0; render(); });
+  input.addEventListener("keydown", (e) => {
+    const len = st.rowCount();
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      st.active = (st.active + (e.key === "ArrowDown" ? 1 : -1) + len) % Math.max(1, len);
+      render();
+    } else if (extraKeys) extraKeys(e);
+  });
+}
+
+/* ————— 现状：范围独占一行（对照组） ————— */
+const scur = { q: "搜索", scope: "current", active: 1, stage: document.getElementById("stage-cur") };
+scur.rowCount = () => hits(scur.q, scur.scope).length;
+function renderCur() {
+  const list = hits(scur.q, scur.scope);
+  scur.stage.innerHTML = `<div class="qf qf--cur">
+    <div class="qf__input">
+      ${SEARCH_ICON}
+      <input value="${esc(scur.q)}" placeholder="Search pages…" aria-label="Search pages">
+    </div>
+    <label class="qf__scope-row">
+      <span>搜索范围</span>
+      <select aria-label="搜索范围" data-cur-scope>
+        <option value="current" ${scur.scope === "current" ? "selected" : ""}>当前空间 · ${esc(SPACE_NOW)}</option>
+        <option value="all" ${scur.scope === "all" ? "selected" : ""}>所有可访问空间</option>
+      </select>
+    </label>
+    <div class="qf__list" role="listbox">
+      ${list.length ? list.map((h, i) => `<button class="qf__item ${i === scur.active ? "is-active" : ""}" role="option" data-i="${i}">
+          <span class="qf__icon">${PAGE_ICON}</span>
+          <span class="qf__copy">
+            <span class="qf__title">${hi(h.p.t, scur.q)}</span>
+            ${h.ex ? `<span class="qf__excerpt">${hi(h.ex, scur.q)}</span>` : ""}
+          </span>
+          ${h.crumb ? `<span class="qf__crumb">${esc(h.crumb)}</span>` : ""}
+        </button>`).join("") : `<div class="qf__empty"><p>${scur.q.trim() ? `No pages match “${esc(scur.q.trim())}”` : "No pages yet"}</p></div>`}
+    </div>
+  </div>`;
+  const card = scur.stage.querySelector(".qf");
+  bindKeys(card.querySelector("input"), scur, renderCur);
+  card.querySelector("[data-cur-scope]").addEventListener("change", (e) => { scur.scope = e.target.value; scur.active = 0; renderCur(); });
+  wireRows(card, scur, renderCur);
+}
+
+/* ————— 方向 A：范围段在输入行 ————— */
+const sa = { q: "搜索", scope: "current", active: 1, pop: false, stage: document.getElementById("stage-a") };
+sa.rowCount = () => hits(sa.q, sa.scope).length;
+function renderA() {
+  const list = hits(sa.q, sa.scope);
+  sa.stage.innerHTML = `<div class="qf">
+    <div class="qf__input">
+      ${SEARCH_ICON}
+      <input value="${esc(sa.q)}" placeholder="搜索页面…" aria-label="搜索页面">
+      <div class="qf__seg" role="radiogroup" aria-label="搜索范围">
+        <button class="${sa.scope === "current" ? "is-on" : ""}" data-a-scope="current">${esc(SPACE_NOW)}</button>
+        <button class="${sa.scope === "all" ? "is-on" : ""}" data-a-scope="all">所有空间</button>
+      </div>
+    </div>
+    <div class="qf__list" role="listbox">
+      ${list.length ? list.map((h, i) => `<button class="qf__item ${i === sa.active ? "is-active" : ""}" role="option" data-i="${i}">
+          <span class="qf__icon">${PAGE_ICON}</span>
+          <span class="qf__copy">
+            <span class="qf__title">${hi(h.p.t, sa.q)}</span>
+            ${h.ex ? `<span class="qf__excerpt">${hi(h.ex, sa.q)}</span>` : ""}
+          </span>
+          ${h.crumb ? `<span class="qf__crumb">${esc(h.crumb)}</span>` : ""}
+        </button>`).join("") : emptyBlock(sa, "A")}
+    </div>
+  </div>`;
+  const card = sa.stage.querySelector(".qf");
+  bindKeys(card.querySelector("input"), sa, renderA, (e) => {
+    if (e.key === "Tab" && !e.shiftKey) { /* 段控交给原生 Tab */ }
+  });
+  card.querySelectorAll("[data-a-scope]").forEach((b) => b.addEventListener("click", () => { sa.scope = b.dataset.aScope; sa.active = 0; renderA(); }));
+  wireRows(card, sa, renderA);
+}
+
+/* ————— 方向 B：底栏命令条 + 两行结果 ————— */
+const sb = { q: "搜索", scope: "current", active: 1, pop: false, stage: document.getElementById("stage-b") };
+sb.rowCount = () => hits(sb.q, sb.scope).length;
+function renderB() {
+  const list = hits(sb.q, sb.scope);
+  sb.stage.innerHTML = `<div class="qf">
+    <div class="qf__input">
+      ${SEARCH_ICON}
+      <input value="${esc(sb.q)}" placeholder="搜索页面…" aria-label="搜索页面">
+    </div>
+    <div class="qf__list" role="listbox">
+      ${list.length ? list.map((h, i) => `<button class="qf__item qf__item--meta ${i === sb.active ? "is-active" : ""}" role="option" data-i="${i}">
+          <span class="qf__icon">${PAGE_ICON}</span>
+          <span class="qf__copy">
+            <span class="qf__title">${hi(h.p.t, sb.q)}</span>
+            <span class="qf__meta">
+              ${h.crumb ? `<span class="qf__meta-path">${esc(h.crumb)}</span>` : ""}
+              ${h.ex ? `<span class="qf__meta-excerpt">${hi(h.ex, sb.q)}</span>` : ""}
+            </span>
+          </span>
+        </button>`).join("") : emptyBlock(sb, "B")}
+    </div>
+    <div class="qf__foot">
+      <div class="qf__scope-wrap">
+        <button class="qf__scope-btn" data-pop>${GLOBE_ICON}<span>${sb.scope === "current" ? esc(SPACE_NOW) : "所有空间"}</span>${CHEV_ICON}</button>
+        <div class="qf__scope-pop ${sb.pop ? "is-open" : ""}" role="menu">
+          <button data-b-scope="current" class="${sb.scope === "current" ? "is-on" : ""}"><span class="qf__pop-check">${CHECK_ICON}</span>当前空间 · ${esc(SPACE_NOW)}</button>
+          <button data-b-scope="all" class="${sb.scope === "all" ? "is-on" : ""}"><span class="qf__pop-check">${CHECK_ICON}</span>所有可访问空间</button>
+        </div>
+      </div>
+      <span class="qf__hints"><span><kbd>↑↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></span>
+    </div>
+  </div>`;
+  const card = sb.stage.querySelector(".qf");
+  bindKeys(card.querySelector("input"), sb, renderB, (e) => {
+    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); sb.scope = sb.scope === "current" ? "all" : "current"; sb.active = 0; renderB(); }
+  });
+  card.querySelector("[data-pop]").addEventListener("click", () => { sb.pop = !sb.pop; renderB(); });
+  card.querySelectorAll("[data-b-scope]").forEach((b) => b.addEventListener("click", () => {
+    sb.scope = b.dataset.bScope; sb.pop = false; sb.active = 0; renderB();
+  }));
+  wireRows(card, sb, renderB);
+}
+
+/* ————— 方向 C：范围是末尾动作 / 输入框内 token ————— */
+const sc = { q: "搜索", scope: "current", active: 1, stage: document.getElementById("stage-c") };
+sc.rowCount = () => hits(sc.q, sc.scope).length + (sc.scope === "current" ? 1 : 0); /* 末尾动作行 */
+function renderC() {
+  const list = hits(sc.q, sc.scope);
+  const moreRow = sc.scope === "current" ? `
+    <button class="qf__item qf__more ${list.length === sc.active ? "is-active" : ""}" data-more>
+      <span class="qf__icon">${GLOBE_ICON}</span>
+      <span class="qf__copy"><span class="qf__title">在全部空间中搜索「${esc(sc.q || "…")}」</span></span>
+      <kbd>↹</kbd>
+    </button>` : "";
+  sc.stage.innerHTML = `<div class="qf">
+    <div class="qf__input">
+      ${SEARCH_ICON}
+      ${sc.scope === "all" ? `<span class="qf__token">全部空间<button data-xscope aria-label="恢复当前空间">${X_ICON}</button></span>` : ""}
+      <input value="${esc(sc.q)}" placeholder="搜索页面…" aria-label="搜索页面">
+    </div>
+    <div class="qf__list" role="listbox">
+      ${list.length ? list.map((h, i) => `<button class="qf__item ${i === sc.active ? "is-active" : ""}" role="option" data-i="${i}">
+          <span class="qf__icon">${PAGE_ICON}</span>
+          <span class="qf__copy">
+            <span class="qf__title">${hi(h.p.t, sc.q)}</span>
+            ${h.ex ? `<span class="qf__excerpt">${hi(h.ex, sc.q)}</span>` : ""}
+          </span>
+          ${h.crumb ? `<span class="qf__crumb">${esc(h.crumb)}</span>` : ""}
+        </button>`).join("") : emptyBlock(sc, "C")}
+      ${moreRow}
+    </div>
+  </div>`;
+  const card = sc.stage.querySelector(".qf");
+  bindKeys(card.querySelector("input"), sc, renderC, (e) => {
+    if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); sc.scope = "all"; sc.active = 0; renderC(); }
+  });
+  const more = card.querySelector("[data-more]");
+  if (more) more.addEventListener("click", () => { sc.scope = "all"; sc.active = 0; renderC(); });
+  const x = card.querySelector("[data-xscope]");
+  if (x) x.addEventListener("click", () => { sc.scope = "current"; sc.active = 0; renderC(); });
+  wireRows(card, sc, renderC);
+}
+
+function emptyBlock(st, dir) {
+  const q = st.q.trim();
+  if (!q) return `<div class="qf__empty"><p>最近还没有页面</p></div>`;
+  if (st.scope === "current") {
+    const act = dir === "C" ? `data-more-empty` : `data-scope-all`;
+    return `<div class="qf__empty"><p>当前空间没有「${esc(q)}」的页面</p><button class="qf__empty-act" ${act}>在全部空间中搜索 ↵</button></div>`;
+  }
+  return `<div class="qf__empty"><p>没有「${esc(q)}」的页面</p></div>`;
+}
+function wireRows(card, st, render) {
+  card.querySelectorAll(".qf__item[data-i]").forEach((el) => {
+    el.addEventListener("pointermove", () => { const i = +el.dataset.i; if (st.active !== i) { st.active = i; render(); } });
+  });
+  card.querySelectorAll("[data-scope-all]").forEach((b) => b.addEventListener("click", () => { st.scope = "all"; st.active = 0; render(); }));
+  card.querySelectorAll("[data-more-empty]").forEach((b) => b.addEventListener("click", () => { sc.scope = "all"; sc.active = 0; renderC(); }));
+}
+
+document.body.dataset.mark = "mark-c";
+document.querySelectorAll(".mark-btn").forEach((b) => b.addEventListener("click", () => {
+  document.body.dataset.mark = b.dataset.mark;
+  document.querySelectorAll(".mark-btn").forEach((x) => x.classList.toggle("is-on", x === b));
+}));
+
+document.getElementById("theme").addEventListener("click", () => {
+  const el = document.documentElement;
+  const dark = el.dataset.theme !== "light";
+  el.dataset.theme = dark ? "light" : "dark";
+  document.getElementById("theme").textContent = dark ? "切换深色" : "切换浅色";
+});
+
+/* ————— Tab 切换：一次只看一款 ————— */
+document.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => {
+  document.querySelectorAll(".tab-btn").forEach((x) => {
+    const on = x === b;
+    x.classList.toggle("is-on", on);
+    x.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  document.querySelectorAll(".dir").forEach((s) => { s.hidden = s.id !== "dir-" + b.dataset.tab; });
+}));
+
+renderCur(); renderA(); renderB(); renderC();
+</script>
+</body>
+</html>
