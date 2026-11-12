@@ -523,3 +523,31 @@ test("UC-13 browser: search finds table-cell-only text and voluntary leave resto
     await expect(owner.getByRole("grid", { name: "Table", exact: true }).getByRole("textbox", { name: "Row 1, column 2", exact: true })).toHaveText(uniqueCell);
   } finally { await ownerContext.close(); }
 });
+
+// ISS-08: a long ancestry crumb must never squeeze the title/excerpt column or
+// spill rows into the scope bar — the crumb truncates at a capped width.
+test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", async ({ page, app }) => {
+  await register(page, app, "qf_layout");
+  const root = await api(page, app, "/api/v1/pages", "POST", { title: "一个很长的顶级分类名称", text: "" }, 201);
+  const mid = await api(page, app, "/api/v1/pages", "POST", { title: "第二级同样很长的目录名称", text: "", parentId: root.id }, 201);
+  const deep = await api(page, app, "/api/v1/pages", "POST", { title: "第三级深层目录名称也很长", text: "", parentId: mid.id }, 201);
+  await api(page, app, "/api/v1/pages", "POST", { title: "长路径叶子页", text: "正文检索词 unique-qf-body", parentId: deep.id }, 201);
+  await page.reload(); await expect(switcher(page)).toBeVisible();
+
+  await page.keyboard.press("Meta+k");
+  const dialog = page.getByRole("dialog", { name: "Search pages", exact: true });
+  await dialog.getByRole("textbox", { name: "Search pages", exact: true }).fill("unique-qf-body");
+  const hit = dialog.locator(".menu__item").first();
+  await expect(hit).toBeVisible();
+  const itemBox = await hit.boundingBox(); expect(itemBox).toBeTruthy();
+  const scopeBox = await dialog.locator(".quickfind__scope").boundingBox(); expect(scopeBox).toBeTruthy();
+  expect(itemBox!.y).toBeGreaterThanOrEqual(scopeBox!.y + scopeBox!.height);
+
+  const crumb = hit.locator(".quickfind__crumb");
+  await expect(crumb).toHaveCSS("white-space", "nowrap");
+  const crumbBox = await crumb.boundingBox(); const dialogBox = await dialog.boundingBox();
+  expect(crumbBox!.width).toBeLessThanOrEqual(dialogBox!.width * 0.5);
+  const excerpt = hit.locator(".menu__description");
+  await expect(excerpt).toHaveCSS("white-space", "nowrap");
+  expect(itemBox!.height).toBeLessThan(50);
+});
