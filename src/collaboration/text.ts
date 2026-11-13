@@ -138,6 +138,35 @@ export function captureText(text: Y.Text): TextBasis {
   const atoms = atomsOf(readText(text)).map((atom) => { const observed = observe(text, atom, index); index += size(atom); return observed; });
   return makeBasis({ text, atoms, empty: Y.createRelativePositionFromTypeIndex(text, 0, 0) });
 }
+function basisOf(text: Y.Text, atoms: Observed[]): TextBasis {
+  return makeBasis({ text, atoms, empty: Y.createRelativePositionFromTypeIndex(text, 0, 0) });
+}
+/** A basis naming only the shared atoms a DOM actually showed: the text's
+ *  atoms matched against `seen` in order. Atoms the DOM never drew — remote
+ *  words delivered after the last draw — stay outside the basis, so a commit
+ *  built on it cannot delete text the editor has not seen. Unmatched `seen`
+ *  atoms (words the DOM holds that are not shared yet) simply fall out of the
+ *  basis and become additions in the diff. */
+export function visibleBasis(text: Y.Text, seen: RichText): TextBasis {
+  const full = atomsOf(readText(text));
+  const offsets: number[] = [];
+  let index = 0;
+  for (const atom of full) { offsets.push(index); index += size(atom); }
+  /* For each atom the DOM showed, take the earliest shared atom after the
+     previous match; a word the shared text lacks just falls out, and every
+     shared atom it never drew stays out of the basis entirely. */
+  const wanted = atomsOf(seen);
+  const matched: Observed[] = [];
+  let pos = 0;
+  for (const want of wanted) {
+    let found = -1;
+    for (let at = pos; at < full.length; at += 1) if (sameValue(full[at], want)) { found = at; break; }
+    if (found < 0) continue;
+    matched.push(observe(text, full[found], offsets[found]));
+    pos = found + 1;
+  }
+  return basisOf(text, matched);
+}
 
 /** Apply only the intent visible between this DOM basis and its next runs.
  * The caller groups operations with doc.transact and supplies the origin. */

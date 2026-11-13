@@ -98,7 +98,11 @@ export const InlineEditor = memo(function InlineEditor({
         return false;
       }
     }
-    const updated = withTextBasis(previous, action);
+    /* `lastInput` is what the DOM last actually showed: pass it through so a
+       commit made before a basis exists (the session can arrive after mount)
+       cannot erase shared words this element never drew. */
+    const updated = withTextBasis(previous, action,
+      collaboration && lastInput.current ? { key: collaboration.key, content: storedRuns(lastInput.current) } : undefined);
     // A synchronous render may already have drawn and captured newer runs.
     if (bound.current === previous) bound.current = updated;
     return true;

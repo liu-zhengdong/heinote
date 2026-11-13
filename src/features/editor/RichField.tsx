@@ -200,7 +200,10 @@ export function RichField({
         return false;
       }
     }
-    const updated = withTextBasis(previous, action);
+    /* `lastInput` names what the DOM last showed: a commit that lands before
+       a basis exists must only touch shared words it actually saw. */
+    const updated = withTextBasis(previous, action,
+      collaboration && lastInput.current ? { key: collaboration.key, content: storedRuns(lastInput.current) } : undefined);
     if (bound.current === previous) bound.current = updated;
     return true;
   };
