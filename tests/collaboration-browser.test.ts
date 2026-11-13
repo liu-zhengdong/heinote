@@ -210,6 +210,8 @@ async function agentInsert(pair: Pair, text: string): Promise<void> {
   await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, data: { requestId: randomUUID(), generation: snapshot.generation, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text }] } });
 }
 async function downloadDraft(page: Page, contains: string): Promise<void> {
+  // Refusals are non-modal now: expand the draft marker first.
+  await page.getByRole("button", { name: "处理未保存草稿" }).click();
   const button = page.getByRole("button", { name: "下载为文件", exact: false }); await expect(button).toBeVisible();
   const downloaded = page.waitForEvent("download"); await button.click();
   const download = await downloaded; expect(download.suggestedFilename()).toBe("notes-unsaved-draft.json");
@@ -354,17 +356,20 @@ test("native Enter and Backspace retain structural undo and redo for split and m
   await expect(paragraphs(pair, pair.peer)).toHaveText(["前半后半"]);
 });
 
-test("a stale native split is refused atomically and exports its unsaved structural intent", async ({ app }) => {
+test("a stale native split replays onto the peer's edit and keeps both intents", async ({ app }) => {
   const pair = await app.pair("前半后半"); const gate = await app.gate(pair.owner, structureBatch(pair));
   await focusEdge(body(pair), "start"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("Enter");
   const held = await gate.waitFor(); expect(held.body.expectedPages?.length).toBeGreaterThan(0);
   await expect(paragraphs(pair)).toHaveText(["前半", "后半"]); await persisted(pair, "前半后半");
   await typeAt(pair, pair.peer, "乙的新增"); await persisted(pair, "前半后半乙的新增");
+  // The stale request loses once, then the rebase diff-aligns the split onto
+  // the peer's committed text: both the split and the peer's edit land.
   expect((await gate.release()).status).toBe(409); await gate.close();
-  await persisted(pair, "前半后半乙的新增");
-  await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/records/${pair.scope}/blocks`)).filter((row: Json) => row.value.page === pair.pageId).length).toBe(1);
-  await downloadDraft(pair.owner, "后半");
-  await expect(paragraphs(pair)).toHaveText(["前半后半乙的新增"]);
+  await persisted(pair, "前半乙的新增\n后半");
+  await expect(paragraphs(pair)).toHaveText(["前半乙的新增", "后半"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半乙的新增", "后半"]);
+  await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);
+  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
 });
 
 test("revocation stops document pushes, refuses pending text, and preserves a downloadable draft", async ({ app }) => {
@@ -461,31 +466,19 @@ test("contextual replacements show the actual edit and stale proposals cannot ap
   await persisted(pair, revised + "远端修改");
 });
 
-test("a refused generation can escape its halted journal into a durable private recovery page", async ({ app }) => {
+test("an in-flight edit during a peer's restore replays and merges without a draft", async ({ app }) => {
   const pair = await app.pair("私人恢复基线");
   const checkpoint = await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/checkpoint`, { method: "POST", token: pair.token, data: { summary: "私人恢复入口基线" } });
   const gate = await app.gate(pair.owner, textBatch(pair));
   await typeAt(pair, pair.owner, "仅在我的草稿"); await gate.waitFor();
   await api(pair.peerContext, pair.url, `/api/v1/pages/${pair.pageId}/restore`, { method: "POST", token: pair.peerToken, data: { versionId: checkpoint.id } });
+  // The stale request loses once, then the replay pipeline rebases it onto the
+  // new generation instead of drafting it.
   expect((await gate.release()).status).toBe(409); await gate.close();
-  await persisted(pair, "私人恢复基线"); await downloadDraft(pair.owner, "仅在我的草稿");
-  const creation = pair.owner.waitForResponse((response) => response.url().endsWith("/api/v1/pages") && response.request().method() === "POST");
-  await pair.owner.getByRole("button", { name: "存为新页面", exact: false }).first().click();
-  const response = await creation; expect(response.status()).toBe(201);
-  // Recovery deliberately reloads the page. Inspect the committed public API
-  // instead of reading an old CDP response body after that navigation.
-  const pages = await api(pair.ownerContext, pair.url, "/api/v1/pages", { token: pair.token });
-  const recovery = pages.find((page: Json) => page.title === "恢复草稿" && page.text.includes("仅在我的草稿"));
-  expect(recovery).toBeTruthy(); expect(recovery.id).not.toBe(pair.pageId);
-  await pair.owner.getByRole("button", { name: "恢复草稿", exact: true }).first().click();
-  const recovered = pair.owner.locator(`.block__editable[data-collaboration-page="${recovery.id}"]`);
-  await expect(recovered).toContainText("仅在我的草稿");
-  await pair.owner.reload();
-  await pair.owner.getByRole("button", { name: "恢复草稿", exact: true }).first().click();
-  await expect(recovered).toContainText("仅在我的草稿");
-  const persistedPage = await api(pair.ownerContext, pair.url, `/api/v1/pages/${recovery.id}`, { token: pair.token });
-  expect(persistedPage.text).toContain("仅在我的草稿");
-  expect((await pair.peerContext.request.get(`${pair.url}/api/v1/pages/${recovery.id}`, { headers: { Authorization: `Bearer ${pair.peerToken}` } })).status()).toBe(404);
+  await persisted(pair, "私人恢复基线仅在我的草稿");
+  await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);
+  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["私人恢复基线仅在我的草稿"]);
 });
 
 test("an unchanged original host can split after a peer's other-paragraph edit has visibly arrived", async ({ app }) => {
@@ -550,7 +543,9 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
     if (textBatch(pair)(payload) || payload.writes?.some((write: Json) => write.scope === pair.scope && write.collection === "blocks" && write.id.startsWith(`${pair.pageId.length}_${pair.pageId}_`))) attempted.push(payload);
   });
   await focusEdge(body(pair), "end"); await pair.owner.keyboard.press("ControlOrMeta+z");
-  // Wait for the actual local receipt decision before asserting unchanged data.
+  // Refusals surface as a non-modal draft marker; expand it for the receipt.
+  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toBeVisible();
+  await pair.owner.getByRole("button", { name: "处理未保存草稿" }).click();
   await expect(pair.owner.getByRole("alertdialog")).toContainText("协作者已修改这次结构操作涉及的内容，未执行撤销或重做。");
   expect(attempted, "A refused atomic receipt must not send part of its undo").toHaveLength(0);
   const after = await current(pair);

@@ -70,6 +70,17 @@
 .save-recovery-pill:hover { background: var(--fill-hover); }
 .save-recovery-pill svg { color: var(--yellow); }
 .save-recovery-pill--urgent svg { color: var(--danger); }
+.sync-indicator {
+  position: fixed; right: 20px; bottom: 20px; z-index: 180;
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 30px; padding: 0 12px; border-radius: 15px;
+  background: var(--paper); color: var(--ink-3);
+  box-shadow: var(--shadow-menu);
+  font-family: var(--heinote-font-body); font-size: 12px; font-weight: 500;
+  pointer-events: none;
+}
+.sync-indicator__spin { animation: sync-spin 1.2s linear infinite; }
+@keyframes sync-spin { to { transform: rotate(360deg); } }
 
 .proposal-entry {
   display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 6px;

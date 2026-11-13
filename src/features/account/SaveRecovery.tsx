@@ -52,7 +52,7 @@ export function SaveRecovery() {
   const [notice, setNotice] = useState("");
   const [privatePage, setPrivatePage] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string[]>([]);
-  const [deferred, setDeferred] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [discardArmed, setDiscardArmed] = useState(false);
   const identity = useRef(userId);
   identity.current = userId;
@@ -60,7 +60,7 @@ export function SaveRecovery() {
   useEffect(() => {
     const refresh = () => setState({ userId, entries: userId ? getRecovery(userId) : [] });
     setNotice(""); setPrivatePage(null); setDownloaded([]); setBusy(false);
-    setDeferred(false); setDiscardArmed(false); refresh();
+    setExpanded(false); setDiscardArmed(false); refresh();
     const changed = (event: Event) => {
       if ((event as CustomEvent<{ userId?: string }>).detail?.userId === userId) { refresh(); setDiscardArmed(false); }
     };
@@ -83,19 +83,21 @@ export function SaveRecovery() {
     };
   }, [userId, platformId]);
 
-  const entries = state.userId === userId ? state.entries : [];
+  const entries = (state.userId === userId ? state.entries : []).slice().sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const hasEntries = Boolean(userId && entries.length);
-  // Escape defers the dialog, same as「稍后处理」. Listeners stay light: only while open.
+  const volatile = hasEntries && entries.some((entry) => !entry.persisted);
+  // Drafts that only live in memory open the dialog immediately; everything
+  // else stays a quiet pill until the user chooses to deal with it.
+  useEffect(() => { if (volatile) setExpanded(true); }, [volatile]);
   useEffect(() => {
-    if (!hasEntries || deferred) return;
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setDeferred(true); };
+    if (!hasEntries || !expanded || volatile) return;
+    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [hasEntries, deferred]);
+  }, [hasEntries, expanded, volatile]);
 
   if (!hasEntries || !userId) return null;
   const preview = previewOf(entries);
-  const volatile = entries.some((entry) => !entry.persisted);
   const backedUp = entries.every((entry) => downloaded.includes(entry.id));
   const canDownload = !busy;
   const canSave = !busy && preview.length > 0 && !privatePage && !(volatile && !backedUp);
@@ -134,19 +136,19 @@ export function SaveRecovery() {
   };
   const discard = () => { clearRecovery(userId); setDiscardArmed(false); };
 
-  if (deferred) {
-    return <button type="button" className={`save-recovery-pill${volatile ? " save-recovery-pill--urgent" : ""}`} onClick={() => { setDeferred(false); setDiscardArmed(false); }} aria-label="处理未保存草稿">
+  if (!expanded) {
+    return <button type="button" className={`save-recovery-pill${volatile ? " save-recovery-pill--urgent" : ""}`} onClick={() => { setExpanded(true); setDiscardArmed(false); }} aria-label="处理未保存草稿">
       <RefreshCw size={15} aria-hidden />
       {entries.length === 1 ? "1 件事待处理" : `${entries.length} 件事待处理`}
     </button>;
   }
 
-  return <div className="save-recovery-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setDeferred(true); }}>
+  return <div className="save-recovery-scrim" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !volatile) setExpanded(false); }}>
     <div className="save-recovery" role="alertdialog" aria-modal="true" aria-labelledby="save-recovery-title">
       <h2 id="save-recovery-title">你写的内容已经保留</h2>
       <p className="save-recovery__lead">
-        最新输入没能存进页面，已为你完整保留。相关页面已暂停保存，处理完草稿、刷新后即可继续。
-        {entries.at(-1)?.message ? <span className="save-recovery__reason">{entries.at(-1)?.message}</span> : null}
+        部分内容没能存进页面，已为你完整保留。其余编辑不受影响。
+        {entries.map((entry) => entry.message ? <span key={entry.id} className="save-recovery__reason">{entry.message}</span> : null)}
       </p>
       <div className="save-recovery__keep" aria-label="保留的内容">
         <div className="save-recovery__keep-label">{preview.length ? `保住了 ${preview.length} 段文字` : "保留了完整修改数据"}</div>
@@ -178,7 +180,7 @@ export function SaveRecovery() {
       </div>
       <div className="save-recovery__foot">
         <p className="save-recovery__hint">现在不想处理？其他页面的编辑不受影响。</p>
-        <button type="button" className="btn" onClick={() => setDeferred(true)}>稍后处理</button>
+        <button type="button" className="btn" disabled={volatile} onClick={() => setExpanded(false)}>稍后处理</button>
       </div>
     </div>
   </div>;

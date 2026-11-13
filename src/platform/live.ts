@@ -2,10 +2,10 @@ import * as Y from "yjs";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
-import { collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, resetRefusedText, restorePendingText, settleText, type LocalTextChange } from "../collaboration/client";
+import { collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
-import { base64ToBytes, bytesToBase64, documentKey, isStructureChange, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
+import { base64ToBytes, bytesToBase64, documentKey, isObject, isStructureChange, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
 
 type Value = Record<string, unknown>;
 type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: object; patch?: object; base?: object | null };
@@ -16,7 +16,9 @@ interface AccountQueue {
   staged: Pending[];
   scheduled: boolean;
   tails: Map<string, Promise<void>>;
-  paused: Set<string>;
+  /** Scopes whose writes are permanently refused (permission lost). Batches
+   *  touching them are preserved as drafts without another request. */
+  denied: Set<string>;
   journal: Map<string, SavedBatch>;
   restoration: Promise<void> | null;
 }
@@ -26,12 +28,23 @@ let strictReplay = false;
 const collections = new Map<string, Set<LiveCollection<object>>>();
 const collectionKey = (scope: string, name: string) => JSON.stringify([scope, name]);
 const journalKey = (account: string) => `notes:pending:${account}`;
+/** Batches currently retrying or rebasing, surfaced as a quiet sync pill. */
+let syncing = 0;
+function syncState(delta: number): void {
+  syncing = Math.max(0, syncing + delta);
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("notes:sync-state", { detail: { pending: syncing } }));
+}
 const pageOf = (write: Write): string | undefined => write.collection === "pages" ? write.id : write.collection === "blocks" ? parseBlockRecordId(write.id)?.pageId : undefined;
 const isCurrent = (owner: AccountQueue): boolean => queue === owner && !!owner.account && collaborationAccount() === owner.account;
+/** Server refusal codes worth a client-side rebase against the latest state. */
+const REPLAYABLE_CODES = new Set(["conflict", "structure_conflict", "generation_conflict", "not_ready"]);
+/** Scope-level denials: the actor can no longer write anywhere in the scope. */
+const DENIED_CODES = new Set(["read_only", "archived", "forbidden", "unauthorized"]);
+const REPLAY_LIMIT = 3;
 function loadJournal(): AccountQueue {
   const account = collaborationAccount();
   if (queue?.account === account) return queue;
-  const owner: AccountQueue = { account, staged: [], scheduled: false, tails: new Map(), paused: new Set(), journal: new Map(), restoration: null };
+  const owner: AccountQueue = { account, staged: [], scheduled: false, tails: new Map(), denied: new Set(), journal: new Map(), restoration: null };
   queue = owner;
   if (!account) return owner;
   try {
@@ -67,8 +80,8 @@ function assemble(items: Pending[], requestId: string): SavedBatch {
 function scopes(batch: SavedBatch): string[] {
   return [...new Set([...batch.writes, ...batch.textUpdates, ...batch.expectedPages].map((item) => item.scope))];
 }
-function preserveBatch(owner: AccountQueue, batch: SavedBatch, error: unknown): void {
-  publishRecovery(owner.account, { message: error instanceof Error ? error.message : "保存失败。内容已保留为草稿。", writes: batch.writes, batches: [batch] });
+function preserveBatch(owner: AccountQueue, batch: SavedBatch, error: unknown, dedupe?: string): void {
+  publishRecovery(owner.account, { message: error instanceof Error ? error.message : "保存失败。内容已保留为草稿。", writes: batch.writes, batches: [batch], dedupe });
 }
 function cancelBatch(batch: SavedBatch, items: Pending[]): void {
   // Keep the journal for replay under its original account.
@@ -76,8 +89,7 @@ function cancelBatch(batch: SavedBatch, items: Pending[]): void {
   const error = new Error("账号已切换。待保存内容保留在原账号中。");
   for (const item of items) item.refuse(error);
 }
-function refuseBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[], error: unknown): void {
-  for (const scope of scopes(batch)) owner.paused.add(scope);
+function refuseBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[], error: unknown, dedupe?: string): void {
   if (navigationClosing()) {
     // The window is leaving. Keep the batch in the journal so it replays on
     // the next load instead of recording a modal draft that cannot be read.
@@ -85,10 +97,105 @@ function refuseBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[], e
     for (const item of items) item.refuse(error);
     return;
   }
-  preserveBatch(owner, batch, error);
+  preserveBatch(owner, batch, error, dedupe);
   owner.journal.delete(batch.requestId); persistJournal(owner); releasePendingCommit(batch.requestId);
+  // Settle the drafted text changes: the content stays visible in the live
+  // document but is not re-encoded into later batches (it is already kept
+  // in the draft). Pending entries from other batches keep carrying.
   for (const item of items) { if (item.change) settleText(item.change); item.refuse(error); }
-  for (const address of addresses(batch)) void resetRefusedText(address);
+}
+function equal(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((item, index) => equal(item, right[index]));
+  if (isObject(left) && isObject(right)) { const keys = new Set([...Object.keys(left), ...Object.keys(right)]); return [...keys].every((key) => equal(left[key], right[key])); }
+  return false;
+}
+/** Rebase one write against the record state it actually sees now. The
+ *  simulation map already contains earlier writes of the same batch. */
+function rebaseWrite(write: Write, current: JsonRecord | undefined): Write | null {
+  if (write.action === "put") {
+    const value = write.value as JsonRecord;
+    if (!current) return { ...write, base: null };
+    if (equal(current, value)) return { ...write, base: current };
+    // Only fields the server left at the write's base may be changed.
+    const base: JsonRecord = isObject(write.base) ? write.base : {};
+    const patch: JsonRecord = {};
+    let contested = false;
+    for (const [key, desired] of Object.entries(value)) {
+      if (equal(current[key], desired)) continue;
+      if (equal(current[key], base[key])) patch[key] = desired;
+      else contested = true;
+    }
+    for (const key of Object.keys(current)) if (!(key in value) && !equal(current[key], base[key])) contested = true;
+    if (contested) return null;
+    return { ...write, action: "patch", patch, base: current };
+  }
+  if (write.action === "patch") {
+    if (!current) return null;
+    // Per-leaf three-way: fields the server left at base still apply; fields
+    // already at the desired value are satisfied. On a same-key contest the
+    // committed value wins: the key is dropped from the patch rather than
+    // overwriting committed data or dooming the whole batch on routine
+    // concurrent stamps (updated_at and friends).
+    const base: JsonRecord = isObject(write.base) ? write.base : {};
+    const patch: JsonRecord = {};
+    for (const [key, desired] of Object.entries(write.patch ?? {})) {
+      if (equal(current[key], desired)) continue;
+      if (equal(current[key], base[key])) patch[key] = desired;
+    }
+    return { ...write, patch, base: current };
+  }
+  // delete: re-arm the base so the intent survives concurrent edits (the
+  // declared trade-off). A missing record counts as already satisfied.
+  if (!current) return { ...write, action: "patch", patch: {}, base: null };
+  return { ...write, base: current };
+}
+/** Fetch current records/snapshots and rebase the batch onto them. Returns
+ *  the rebased batch, or null when a write cannot be safely replayed. */
+async function rebaseBatch(owner: AccountQueue, batch: SavedBatch): Promise<SavedBatch | null> {
+  const collectionsNeeded = new Set(batch.writes.map((write) => collectionKey(write.scope, write.collection)));
+  const records = new Map<string, Map<string, JsonRecord>>();
+  for (const key of collectionsNeeded) {
+    const [scope, name] = JSON.parse(key) as [string, string];
+    const rows = await request<Array<{ id: string; value: JsonRecord }>>(`/api/records/${encodeURIComponent(scope)}/${name}`);
+    records.set(key, new Map(rows.map((row) => [row.id, row.value])));
+  }
+  const simulated = new Map<string, JsonRecord | undefined>();
+  const writes: Write[] = [];
+  const expected = new Map<string, ExpectedPage>();
+  for (const write of batch.writes) {
+    const recordKey = collectionKey(write.scope, write.collection);
+    const stateKey = `${recordKey}:${write.id}`;
+    const current = simulated.has(stateKey) ? simulated.get(stateKey) : records.get(recordKey)?.get(write.id);
+    const rebased = rebaseWrite(write, current);
+    if (!rebased) return null;
+    const after = rebased.action === "put" ? rebased.value as JsonRecord : rebased.action === "patch" ? merge(current ?? {}, (rebased.patch ?? {}) as Value) : undefined;
+    simulated.set(stateKey, after);
+    writes.push(rebased);
+    if (isStructureChange(write.collection, current, after)) {
+      const pageId = pageOf(write);
+      if (!pageId) return null;
+      const address = documentKey({ scope: write.scope, pageId });
+      if (!expected.has(address)) {
+        // A page without a collaboration document needs no barrier: the
+        // server skips expectedPages for documents it has not initialized.
+        const snapshot = await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(write.scope)}/${encodeURIComponent(pageId)}`).catch(() => null);
+        if (snapshot) expected.set(address, { scope: write.scope, pageId, generation: snapshot.generation, revision: snapshot.revision });
+      }
+    }
+  }
+  const textUpdates: TextUpdate[] = [];
+  for (const update of batch.textUpdates) {
+    const resync = await resyncSession(update.scope, update.pageId);
+    if (!resync) return null;
+    if (Object.keys(resync.orphanFields).length)
+      publishRecovery(owner.account, { message: "页面结构已变化。被移除段落的未保存文字已保留为草稿。", writes: [], documents: [{ scope: update.scope, pageId: update.pageId, generation: resync.snapshot.generation, fields: resync.orphanFields }] });
+    if (resync.update) textUpdates.push(resync.update);
+    // Same generation: the saved delta is still valid against the live doc.
+    else if (resync.session.snapshot.generation === update.generation) textUpdates.push(update);
+    else if (!resync.session.pendingText.length) return null; // The saved update cannot be replayed without its session.
+  }
+  return { ...batch, requestId: crypto.randomUUID(), writes, textUpdates, expectedPages: [...expected.values()] };
 }
 function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Promise<void> {
   const involved = scopes(batch);
@@ -96,11 +203,12 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
   const work = Promise.all(prior).then(async () => {
     if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
     const error = items.find((item) => item.error)?.error;
-    if (error || involved.some((scope) => owner.paused.has(scope))) { refuseBatch(owner, batch, items, error ?? new Error("保存已暂停。请保留草稿并重新加载。")); return; }
+    if (error || involved.some((scope) => owner.denied.has(scope))) { refuseBatch(owner, batch, items, error ?? new Error("此范围已不可写入。内容已保留为草稿。"), error ? undefined : `denied:${involved.find((scope) => owner.denied.has(scope))}`); return; }
     const acknowledge = () => { if (isCurrent(owner)) for (const item of items) if (item.change) settleText(item.change); };
     registerPendingCommit(batch.requestId, acknowledge);
-    let delay = 250;
-    for (;;) {
+    let delay = 250; let replays = 0; let announced = false;
+    const announce = () => { if (!announced) { announced = true; syncState(1); } };
+    try { for (;;) {
       if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
       try {
         const result = await request<Array<Value | null>>("/api/records/batch", { method: "POST", body: JSON.stringify(batch) });
@@ -114,10 +222,29 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
         return;
       } catch (error) {
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
-        if (error instanceof ApiError && error.status < 500) { refuseBatch(owner, batch, items, error); return; }
+        if (error instanceof ApiError && error.status < 500) {
+          if (error.status === 409 && REPLAYABLE_CODES.has(error.code) && replays < REPLAY_LIMIT) {
+            replays += 1; releasePendingCommit(batch.requestId); announce();
+            try {
+              const rebased = await rebaseBatch(owner, batch);
+              if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
+              if (rebased) {
+                owner.journal.delete(batch.requestId); batch = rebased; owner.journal.set(batch.requestId, batch); persistJournal(owner);
+                registerPendingCommit(batch.requestId, acknowledge); continue;
+              }
+            } catch (reason) { if (isCurrent(owner)) { await new Promise((resolve) => setTimeout(resolve, delay)); delay = Math.min(delay * 2, 10000); registerPendingCommit(batch.requestId, acknowledge); continue; } }
+            refuseBatch(owner, batch, items, error); return;
+          }
+          if (error.status === 401 || error.status === 403 && DENIED_CODES.has(error.code)) {
+            for (const scope of involved) owner.denied.add(scope);
+            refuseBatch(owner, batch, items, error, `denied:${involved.join(",")}`); return;
+          }
+          refuseBatch(owner, batch, items, error); return;
+        }
+        announce();
         await new Promise((resolve) => setTimeout(resolve, delay)); delay = Math.min(delay * 2, 10000);
       }
-    }
+    } } finally { if (announced) syncState(-1); }
   });
   // An atomic batch owns every involved scope until it finishes.
   for (const scope of involved) owner.tails.set(scope, work);
@@ -158,13 +285,18 @@ export async function restoreSavedWrites(): Promise<void> {
   if (!owner.restoration) {
     const restored: Promise<void>[] = [];
     for (const batch of owner.journal.values()) {
-      const changes = batch.textUpdates.flatMap((update) => restorePendingText(update) ? [{ update, sessionKey: documentKey(update) }] : []);
       const items: Pending[] = batch.writes.map((write) => {
         const lives = [...(collections.get(collectionKey(write.scope, write.collection)) ?? [])];
         lives.forEach((live) => live.restoreWrite(write));
         return { write, bases: batch.expectedPages, structural: false, accept: (value) => lives.forEach((live) => live.acceptWrite(write, value)), refuse: (reason) => lives.forEach((live) => live.refuseWrite(write, reason)) };
       });
-      for (const change of changes) items.push({ change, bases: [], structural: false, accept: () => {}, refuse: () => {} });
+      for (const update of batch.textUpdates) {
+        const change: LocalTextChange = { update, sessionKey: documentKey(update) };
+        if (restorePendingText(update, change) !== null) items.push({ change, bases: [], structural: false, accept: () => {}, refuse: () => {} });
+        // A saved update that no longer fits its session cannot be replayed;
+        // the whole batch falls back to a preserved draft.
+        else items.push({ bases: [], structural: false, error: new Error("待保存文字的基础已失效。内容已保留为草稿。"), accept: () => {}, refuse: () => {} });
+      }
       restored.push(runBatch(owner, batch, items));
     }
     owner.restoration = Promise.all(restored).then(() => undefined);

@@ -5,6 +5,9 @@ export interface RecoveryDraft {
   documents?: unknown[];
   batches?: unknown[];
   createdAt?: string;
+  /** Drafts with the same dedupe key merge into one entry instead of a list
+   *  that grows with every refused write (for example a denied scope). */
+  dedupe?: string;
 }
 export interface RecoveryEntry extends RecoveryDraft { id: string; createdAt: string; persisted: boolean }
 const memory = new Map<string, RecoveryEntry[]>();
@@ -32,9 +35,28 @@ export function getRecovery(userId: string): RecoveryEntry[] {
   return [...entries.values()];
 }
 export function addRecovery(userId: string, draft: RecoveryDraft): RecoveryEntry {
+  const entries = new Map(getRecovery(userId).map((entry) => [entry.id, entry]));
+  if (draft.dedupe) {
+    const existing = [...entries.values()].find((entry) => entry.dedupe === draft.dedupe);
+    if (existing) {
+      existing.message = draft.message;
+      existing.writes = [...(existing.writes ?? []), ...(draft.writes ?? [])];
+      existing.documents = [...(existing.documents ?? []), ...(draft.documents ?? [])];
+      existing.batches = [...(existing.batches ?? []), ...(draft.batches ?? [])];
+      if (!userId || closing) return existing;
+      entries.set(existing.id, existing);
+      try {
+        localStorage.setItem(key(userId), JSON.stringify([...entries.values()].map((entry) => ({ ...entry, persisted: true }))));
+        for (const saved of entries.values()) saved.persisted = true;
+      } catch { /* The recovery UI offers an immediate download. */ }
+      memory.set(userId, [...entries.values()]);
+      window.dispatchEvent(new CustomEvent("notes:recovery-changed", { detail: { userId } }));
+      return existing;
+    }
+  }
   const entry: RecoveryEntry = { ...draft, id: draft.id ?? crypto.randomUUID(), createdAt: draft.createdAt ?? new Date().toISOString(), persisted: false };
   if (!userId || closing) return entry;
-  const entries = new Map(getRecovery(userId).map((entry) => [entry.id, entry])); entries.set(entry.id, entry);
+  entries.set(entry.id, entry);
   try {
     localStorage.setItem(key(userId), JSON.stringify([...entries.values()].map((entry) => ({ ...entry, persisted: true }))));
     for (const saved of entries.values()) saved.persisted = true;
