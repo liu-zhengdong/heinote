@@ -8,7 +8,7 @@ const hooks = vi.hoisted(() => ({
   pageBasis: vi.fn<(...args: string[]) => ExpectedPage | null>(),
   localRecordText: vi.fn(),
   settleText: vi.fn(),
-  resetRefusedText: vi.fn(),
+  resyncSession: vi.fn(),
   restorePendingText: vi.fn(),
   refreshCollaborativePage: vi.fn(),
   submitUndo: null as null | ((update: TextUpdate) => Promise<unknown>),
@@ -26,7 +26,7 @@ vi.mock("../collaboration/client", () => ({
   refreshCollaborativePage: hooks.refreshCollaborativePage,
   registerPendingCommit: vi.fn(),
   releasePendingCommit: vi.fn(),
-  resetRefusedText: hooks.resetRefusedText,
+  resyncSession: hooks.resyncSession,
   restorePendingText: hooks.restorePendingText,
   settleText: hooks.settleText,
 }));
@@ -44,6 +44,8 @@ let opened: Array<{ close(): Promise<void> }>;
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 const accepted = (batch: Batch) => json(batch.writes.map((write) => write.value ?? write.patch ?? null));
 const refused = (status = 403) => json({ error: "Scope access refused", code: "scope_refused" }, status);
+const denied = () => json({ error: "此空间仅可查看。", code: "read_only" }, 403);
+const conflict = () => json({ error: "记录已修改。", code: "conflict" }, 409);
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => { resolve = done; });
@@ -67,7 +69,7 @@ function saved(requestId: string, scope: string): Batch {
 beforeEach(async () => {
   vi.resetModules(); vi.resetAllMocks();
   hooks.account = "account-one"; hooks.pageBasis.mockReturnValue(null);
-  hooks.restorePendingText.mockReturnValue(false); hooks.resetRefusedText.mockResolvedValue(undefined);
+  hooks.restorePendingText.mockReturnValue([]); hooks.resyncSession.mockResolvedValue(null);
   hooks.refreshCollaborativePage.mockResolvedValue(undefined);
   storage = new Map(); sent = []; opened = []; respond = accepted;
   vi.stubGlobal("localStorage", {
@@ -85,40 +87,51 @@ beforeEach(async () => {
 afterEach(async () => { await Promise.all(opened.map((item) => item.close())); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("record transport scope dependencies", () => {
-  it.each([403, 409])("keeps B and personal writable after A receives %s", async (status) => {
+  it("keeps B and personal writable after A refuses one batch", async () => {
     const a = await collection("A"); const b = await collection("B"); const personal = await collection("personal");
-    respond = (batch) => batch.writes.some((write) => write.scope === "A") ? refused(status) : accepted(batch);
+    respond = (batch) => batch.writes.some((write) => write.id === "denied") ? refused(400) : accepted(batch);
     expect(await outcome(a.put("denied", { text: "draft A" }))).toBe("refused");
+    // Only the refused batch becomes a draft; A itself is not paused.
+    expect(await outcome(a.put("fine", { text: "saved A" }))).toBe("accepted");
     expect(await outcome(b.put("b", { text: "saved B" }))).toBe("accepted");
     expect(await outcome(personal.put("p", { text: "saved personal" }))).toBe("accepted");
-    expect(sent.map(({ batch }) => batch.writes[0].scope)).toEqual(["A", "B", "personal"]);
+    expect(sent.map(({ batch }) => batch.writes[0].scope)).toEqual(["A", "A", "B", "personal"]);
     expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
     expect(hooks.publishRecovery.mock.calls[0][1].batches[0].writes[0].id).toBe("denied");
   });
 
-  it("refuses queued dependencies once and expands suspension across an atomic batch", async () => {
-    const a = await collection("A"); const b = await collection("B"); const personal = await collection("personal");
-    const gate = deferred<Response>(); respond = (batch) => batch.writes[0].scope === "A" ? gate.promise : accepted(batch);
-    const first = outcome(a.put("first", { text: "first draft" })); await flush();
-    let second!: Promise<string>; let linked!: Promise<string>;
-    live.withRecordTransaction(() => { second = outcome(a.put("dependent", { text: "dependent draft" })); linked = outcome(b.put("linked", { text: "linked draft" })); });
-    await flush();
-    const third = outcome(b.put("after-linked", { text: "third draft" }));
-    const independent = outcome(personal.put("ok", { text: "saved" })); await flush();
-    expect(await independent).toBe("accepted");
-    gate.resolve(refused());
-    expect(await Promise.all([first, second, linked, third])).toEqual(["refused", "refused", "refused", "refused"]);
-    expect(sent.map(({ batch }) => batch.writes.map((write) => write.id))).toEqual([["first"], ["ok"]]);
-    const drafts = hooks.publishRecovery.mock.calls.map(([account, draft]) => ({ account, ids: draft.writes.map((write: Write) => write.id), batches: draft.batches.length }));
-    expect(drafts).toEqual([
-      { account: "account-one", ids: ["first"], batches: 1 },
-      { account: "account-one", ids: ["dependent", "linked"], batches: 1 },
-      { account: "account-one", ids: ["after-linked"], batches: 1 },
-    ]);
-    expect(JSON.parse(storage.get("notes:pending:account-one")!)).toEqual([]);
+  it("denies the scope only for scope-level refusal codes", async () => {
+    const a = await collection("A"); const b = await collection("B");
+    respond = (batch) => batch.writes.some((write) => write.scope === "A" && write.id === "denied") ? denied() : accepted(batch);
+    expect(await outcome(a.put("denied", { text: "draft A" }))).toBe("refused");
+    expect(await outcome(a.put("queued", { text: "queued draft" }))).toBe("refused");
+    expect(await outcome(b.put("b", { text: "saved B" }))).toBe("accepted");
+    // The second A batch is refused locally, without another request.
+    expect(sent.map(({ batch }) => batch.writes.map((write) => write.id))).toEqual([["denied"], ["b"]]);
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(2);
+    expect(hooks.publishRecovery.mock.calls[1][1].dedupe).toBe("denied:A");
   });
 
-  it("sends an explicit nested multi-scope transaction as one refused HTTP batch", async () => {
+  it("rebases and resends a batch refused with a replayable conflict", async () => {
+    const a = await collection("A");
+    let attempts = 0;
+    respond = () => ++attempts === 1 ? conflict() : json([{ id: "record", value: { text: "saved" } }]);
+    expect(await outcome(a.put("record", { text: "saved" }))).toBe("accepted");
+    expect(attempts).toBe(2);
+    // The rebased write got a fresh request id for the retry.
+    expect(sent).toHaveLength(2);
+    expect(sent[0].batch.requestId).not.toBe(sent[1].batch.requestId);
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+  });
+
+  it("preserves the batch as a draft after the replay limit", async () => {
+    const a = await collection("A"); respond = () => conflict();
+    expect(await outcome(a.put("stuck", { text: "draft" }))).toBe("refused");
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
+    expect(hooks.publishRecovery.mock.calls[0][1].batches).toHaveLength(1);
+  });
+
+  it("keeps a refused multi-scope transaction as one draft", async () => {
     const a = await collection("A"); const personal = await collection("personal");
     respond = () => refused(); const results: Array<Promise<string>> = [];
     live.withRecordTransaction(() => {
@@ -204,7 +217,9 @@ describe("saved transport batches and account isolation", () => {
     const restoration = live.restoreSavedWrites(); await flush();
     expect(sent.map(({ batch }) => batch.requestId)).toEqual(["first-A"]);
     gate.resolve(refused()); await restoration;
-    expect(sent).toHaveLength(1); expect(hooks.publishRecovery.mock.calls.map(([, draft]) => draft.batches[0].requestId)).toEqual(["first-A", "linked-B"]);
+    // A refused batch becomes a draft but no longer suspends the scope:
+    // the linked batch still ships once the earlier scope settles.
+    expect(sent).toHaveLength(2); expect(hooks.publishRecovery.mock.calls.map(([, draft]) => draft.batches[0].requestId)).toEqual(["first-A"]);
   });
 
   it.each(["accepted", "refused"])("does not send old queued writes or clear the next journal after an old request is %s", async (response) => {

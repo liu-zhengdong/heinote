@@ -130,7 +130,7 @@ export class Store {
   user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatarUrl(String(row.id)), siteRole: row.site_role as User["siteRole"], createdAt: row.created_at == null ? null : String(row.created_at) }; }
   userById(userId: string): User | undefined { const row = this.one("SELECT * FROM users WHERE id=?", userId); return row && this.user(row); }
   scope(actor: Actor, requested: string, write = false): string {
-    if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。");
+    if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。", "read_only");
     if (requested === "personal") return `user:${actor.user.id}`;
     const role = this.role(actor, requested);
     if (write && role === "viewer") fail(403, "此空间仅可查看。", "read_only");
@@ -151,7 +151,7 @@ export class Store {
   }
   manage(actor: Actor, spaceId: string): SpaceRole {
     const role = this.role(actor, spaceId);
-    if (role !== "owner" && role !== "admin") fail(403, "需要空间管理权限。");
+    if (role !== "owner" && role !== "admin") fail(403, "需要空间管理权限。", "forbidden");
     return role;
   }
   records(scope: string, collection: string): Array<{ id: string; value: Row }> {
@@ -193,7 +193,7 @@ export class Store {
           // Recheck current permissions even for retries of committed operations.
           for (const write of requested) this.scope(actor, write.scope, true);
           for (const update of textUpdates) this.scope(actor, update.scope, true);
-          if (cached.digest !== digest) fail(409, "请求 ID 已用于其他内容。");
+          if (cached.digest !== digest) fail(409, "请求 ID 已用于其他内容。", "request_id_conflict");
           return JSON.parse(String(cached.result)) as Array<Row | null>;
         }
       }
@@ -240,10 +240,10 @@ export class Store {
               if (typeof next.share_space_id !== "string") fail(400, "空间无效。");
               if (scope.startsWith("user:") && this.knowledgeBases.get(next.share_space_id)) fail(403, "团队知识库不使用个人分享指针。", "knowledge_base_boundary");
               // Changing a tree's sharing home is the owner's operation.
-              if ((!current || current.share_space_id !== next.share_space_id) && this.role(actor, next.share_space_id) !== "owner") fail(403, "只有所有者可设置分享位置。");
+              if ((!current || current.share_space_id !== next.share_space_id) && this.role(actor, next.share_space_id) !== "owner") fail(403, "只有所有者可设置分享位置。", "owner_required");
               if (scope !== `user:${actor.user.id}` && next.share_space_id !== scope) fail(400, "分享空间不一致。");
             }
-            if (current && current.share_space_id !== next.share_space_id && scope !== `user:${actor.user.id}` && this.role(actor, scope) !== "owner") fail(403, "只有所有者可修改分享位置。");
+            if (current && current.share_space_id !== next.share_space_id && scope !== `user:${actor.user.id}` && this.role(actor, scope) !== "owner") fail(403, "只有所有者可修改分享位置。", "owner_required");
           }
           this.put(scope, write.collection, write.id, next);
         } else {
@@ -256,7 +256,7 @@ export class Store {
             this.db.prepare("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
           }
           if (write.collection === "pages" && current?.share_space_id === scope) {
-            if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。");
+            if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。", "owner_required");
             this.db.prepare("DELETE FROM members WHERE space_id=? AND role!='owner'").run(scope);
             this.db.prepare("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(scope);
             this.db.prepare("DELETE FROM shares WHERE scope=?").run(scope);
