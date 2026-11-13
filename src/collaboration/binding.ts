@@ -1,12 +1,14 @@
 import type * as Y from "yjs";
 import type { RichText } from "../platform/schema";
-import { basisText, captureText, editText, readText, type TextBasis } from "./text";
+import { basisText, captureText, editText, readText, visibleBasis, type TextBasis } from "./text";
 import { publishRecovery } from "./recovery";
 
 export interface RegisteredField { pageId: string; key: string; generation: string; text: Y.Text; canEdit: boolean; revision?: string; scope?: string; userId?: string }
 export interface BoundText { field: RegisteredField; basis: TextBasis }
+/** What the active editor last drew in a field, when it names one. */
+export interface SeenText { key: string; content: RichText }
 let lookup: (pageId: string, key: string) => RegisteredField | null = () => null;
-let active: { current: BoundText | null } | null = null;
+let active: { current: BoundText | null; seen?: SeenText } | null = null;
 export function installTextLookup(get: typeof lookup): void { lookup = get; }
 export function observedText(): BoundText | null { return active?.current ?? null; }
 /** Capture this only when the corresponding shared runs are actually drawn. */
@@ -15,13 +17,13 @@ export function renderedText(pageId: string, key: string): BoundText | null {
   return field ? { field, basis: captureText(field.text) } : null;
 }
 /** Scope native DOM intent across the existing synchronous mutation pipeline. */
-export function withTextBasis(bound: BoundText | null, action: () => void): BoundText | null {
+export function withTextBasis(bound: BoundText | null, action: () => void, seen?: SeenText): BoundText | null {
   const current = bound ? lookup(bound.field.pageId, bound.field.key) : null;
   // Unchanged hosts can retain a memoized basis while another block redraws.
   // Advance only the page revision when this observed field still agrees.
   let prepared = bound;
   if (bound && current && current.text === bound.field.text && current.generation === bound.field.generation && JSON.stringify(basisText(bound.basis)) === JSON.stringify(readText(current.text))) prepared = { ...bound, field: { ...bound.field, revision: current.revision } };
-  const previous = active; const context = { current: prepared }; active = context;
+  const previous = active; const context = { current: prepared, seen }; active = context;
   try { action(); return context.current; } finally { active = previous; }
 }
 /** Keep IME text if a reset or remote deletion unmounts its active host. */
@@ -39,7 +41,11 @@ export function editObservedField(field: RegisteredField, next: RichText): void 
     preserveTextDraft(observed, next, "页面结构或版本已变化。输入中的文字已保留为草稿。");
     throw new Error("The rendered text belongs to an earlier document generation");
   }
-  const basis = matching ? observed.basis : captureText(field.text);
+  /* Without an observed basis the caller still names what its DOM last
+     showed: match that against the shared text and diff only what it saw, so
+     remote words it never drew cannot be deleted by its commit. Other calls
+     keep the record write's whole-field semantics. */
+  const basis = matching ? observed.basis : active?.seen?.key === field.key ? visibleBasis(field.text, active.seen.content) : captureText(field.text);
   const nextBasis = editText(field.text, basis, next);
   if (active && matching) active.current = { field, basis: nextBasis };
 }
