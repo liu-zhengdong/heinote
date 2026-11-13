@@ -19,7 +19,10 @@ test("AC-11: real Chromium 200 percent page zoom keeps settings operable", async
       partition: { default_zoom_level: { x: Math.log(factor) / Math.log(1.2) } },
     }));
     return chromium.launchPersistentContext(profile, { channel: "chromium", headless: true, viewport: null, deviceScaleFactor: undefined,
-      args: ["--window-size=1440,900", "--force-device-scale-factor=1"] });
+      /* 200% zoom halves CSS width: a wide window keeps the desktop layout
+         instead of dropping to the touch drawer, so the checks below stay
+         deterministic across platforms. */
+      args: ["--window-size=2560,1440", "--force-device-scale-factor=1"] });
   };
   const metrics = async (page: Awaited<ReturnType<BrowserContext["newPage"]>>) => page.evaluate(() => ({
     width: innerWidth, height: innerHeight, outerWidth, outerHeight, dpr: devicePixelRatio,

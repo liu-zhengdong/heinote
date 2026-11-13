@@ -502,8 +502,6 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
   await expect(page.getByRole("status", { name: "All changes saved", exact: true })).toHaveCount(1);
   const [existing] = await savedPages(page);
 
-  let releaseSettings = () => {};
-  const settingsGate = new Promise<void>((resolveGate) => { releaseSettings = resolveGate; });
   let firstRead = true;
   let initialSettings: Array<{ id: string; value: { roots?: string[] } }> | undefined;
   const settingsPattern = "**/api/records/personal/workspace_settings";
@@ -512,18 +510,17 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
     firstRead = false;
     const response = await route.fetch();
     initialSettings = await response.json();
-    await settingsGate;
     await route.fulfill({ response });
   });
 
   try {
-    // Deliver the real settings response after the page snapshot changes its scope.
+    // The collaborative document only opens after the workspace is on screen
+    // (UC-38): gate the wait on the snapshot arriving, not on settings.
     const snapshot = page.waitForResponse((response) => response.url().includes("/api/collaboration/personal/") && response.ok());
     const reloading = page.reload();
     const snapshotResponse = await snapshot;
     await snapshotResponse.finished();
     await page.evaluate(() => new Promise<void>((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()))));
-    releaseSettings();
     await reloading;
     await expect(page.getByLabel("Page title", { exact: true })).toHaveText("启动前页面");
     expect(initialSettings).toContainEqual({ id: "roots", value: { roots: [existing.id] } });
@@ -545,7 +542,6 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
     expect(rows.find((row) => row.id === "roots")?.value.roots).toEqual(expect.arrayContaining([existing.id]));
     expect(rows.find((row) => row.id === "roots")?.value.roots).toHaveLength(2);
   } finally {
-    releaseSettings();
     await page.unroute(settingsPattern);
   }
 });
