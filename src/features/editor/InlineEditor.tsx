@@ -88,7 +88,7 @@ export const InlineEditor = memo(function InlineEditor({
     } }));
   };
   const readDom = (element: HTMLElement) => code ? inlineFromText(element.textContent ?? "") : inlineFromNodes(element);
-  const run = (action: () => void): boolean => {
+  const run = (action: () => void, seen = lastInput.current): boolean => {
     const previous = bound.current;
     if (previous) {
       const current = renderedText(previous.field.pageId, previous.field.key);
@@ -102,7 +102,7 @@ export const InlineEditor = memo(function InlineEditor({
        commit made before a basis exists (the session can arrive after mount)
        cannot erase shared words this element never drew. */
     const updated = withTextBasis(previous, action,
-      collaboration && lastInput.current ? { key: collaboration.key, content: storedRuns(lastInput.current) } : undefined);
+      collaboration && seen ? { key: collaboration.key, content: storedRuns(seen) } : undefined);
     // A synchronous render may already have drawn and captured newer runs.
     if (bound.current === previous) bound.current = updated;
     return true;
@@ -118,8 +118,9 @@ export const InlineEditor = memo(function InlineEditor({
       const text = element.textContent ?? "";
       const content = code ? inlineFromText(text) : inlineFromNodes(element);
       if (lastInput.current && sameInlineContent(lastInput.current, content)) return;
+      const seen = lastInput.current;
       lastInput.current = content;
-      run(() => onChange(content, text, element, false));
+      run(() => onChange(content, text, element, false), seen);
     };
   });
 
@@ -222,3 +223,4 @@ export const InlineEditor = memo(function InlineEditor({
     />
   );
 });
+

@@ -190,7 +190,7 @@ export function RichField({
       documents: [{ pageId: draft.address.pageId, fields: { [draft.address.key]: storedRuns(draft.content) } }],
     } }));
   };
-  const run = (action: () => void): boolean => {
+  const run = (action: () => void, seen = lastInput.current): boolean => {
     const previous = bound.current;
     if (previous) {
       const current = renderedText(previous.field.pageId, previous.field.key);
@@ -203,7 +203,7 @@ export function RichField({
     /* `lastInput` names what the DOM last showed: a commit that lands before
        a basis exists must only touch shared words it actually saw. */
     const updated = withTextBasis(previous, action,
-      collaboration && lastInput.current ? { key: collaboration.key, content: storedRuns(lastInput.current) } : undefined);
+      collaboration && seen ? { key: collaboration.key, content: storedRuns(seen) } : undefined);
     if (bound.current === previous) bound.current = updated;
     return true;
   };
@@ -276,8 +276,9 @@ export function RichField({
     element.innerHTML = grammar.html(next);
     element.toggleAttribute("data-blank", !element.textContent);
     focusRange(element, start, end);
+    const seen = lastInput.current;
     lastInput.current = next;
-    run(() => onChange(next));
+    run(() => onChange(next), seen);
   };
 
   /** The words selected in the field now, when there are some. */
@@ -391,8 +392,9 @@ export function RichField({
       }
       element.toggleAttribute("data-blank", !element.textContent);
       if (lastInput.current && sameInlineContent(lastInput.current, next)) return;
+      const seen = lastInput.current;
       lastInput.current = next;
-      run(() => onChange(next));
+      run(() => onChange(next), seen);
     };
   });
 
@@ -626,3 +628,5 @@ export function RichField({
     </>
   );
 }
+
+
