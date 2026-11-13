@@ -2770,16 +2770,19 @@ kbd {
 [data-color^="red"] { --tone-text: var(--text-red); --tone-bg: var(--bg-red); }
 
 .block[data-color]:not([data-color$="_background"]) > .block__content,
-.block__editable [data-color]:not([data-color$="_background"]) {
+.block__editable [data-color]:not([data-color$="_background"]),
+.stbl__text [data-color]:not([data-color$="_background"]) {
   color: var(--tone-text);
 }
 
 .block[data-color$="_background"] > .block__content,
-.block__editable [data-color$="_background"] {
+.block__editable [data-color$="_background"],
+.stbl__text [data-color$="_background"] {
   background: var(--tone-bg);
 }
 
-.block__editable [data-color$="_background"] {
+.block__editable [data-color$="_background"],
+.stbl__text [data-color$="_background"] {
   border-radius: var(--r-xs);
 }
 

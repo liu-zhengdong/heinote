@@ -230,6 +230,14 @@ test("the cell toolbar paints a text colour over the selection", async ({ page }
   await page.getByRole("menuitem", { name: "Red", exact: true }).click();
   const text = cell(0, 0).locator("[data-color='red']");
   await expect(text).toHaveCount(1);
+  // The colour must reach the painted text, in either theme — a cell's
+  // words live outside .block__editable, which is where the rule once ended.
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((t) => { document.documentElement.dataset.theme = t; }, theme);
+    const painted = await text.evaluate((el) => getComputedStyle(el).color);
+    const ink = await cell(1, 2).evaluate((el) => getComputedStyle(el).color);
+    expect(painted, `${theme}: the coloured run should differ from plain cell text`).not.toBe(ink);
+  }
   await expect(text).toHaveText("alpha one");
 });
 
