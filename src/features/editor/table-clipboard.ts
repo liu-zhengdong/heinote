@@ -1,5 +1,5 @@
 import { inlineFromText, inlinePlainText, sliceInlineContent } from "../../core/inline-content";
-import { isMarkdownTableStart, markdownTableLines, normalizeCell, tabbedRows, type CellRect } from "../../core/simple-table";
+import { fillNameOfHex, isCellColor, isMarkdownTableStart, markdownTableLines, normalizeCell, tabbedRows, type CellColor, type CellRect } from "../../core/simple-table";
 import type { InlineContent } from "../../core/types";
 import { markdownInlineToContent } from "../../core/inline-markdown";
 import { inlineFromNodes } from "./rich-text";
@@ -21,6 +21,11 @@ export interface ReadGrid {
   /** Alignments the source claims: `row:col` indexes → h/v, read from
    *  `align`/`valign` attributes or inline styles. */
   aligns: Record<string, { h?: "left" | "center" | "right"; v?: "top" | "middle" | "bottom" }>;
+  /** Cell fills the source claims: `row:col` → one of ours. `data-color`
+   *  wins — it carries the name losslessly — then `bgcolor`, then an
+   *  inline `background-color`, each mapped to a fill we draw; a colour
+   *  that is none of ours is no fill, not a guess. */
+  colors: Record<string, CellColor>;
 }
 
 /** A pasted cell's words, without the spaces its markup's indents leave at
@@ -48,6 +53,7 @@ export function gridFromHtml(html: string): ReadGrid | null {
   const spans: CellRect[] = [];
   const parked = new Set<string>();
   const aligns: ReadGrid["aligns"] = {};
+  const colors: ReadGrid["colors"] = {};
   const rows: InlineContent[][] = [];
   lines.forEach((line, r) => {
     const out: InlineContent[] = [];
@@ -71,6 +77,13 @@ export function gridFromHtml(html: string): ReadGrid | null {
       if (/middle/.test(vstyle)) align.v = "middle";
       else if (/bottom/.test(vstyle)) align.v = "bottom";
       if (align.h || align.v) aligns[`${r}:${c}`] = align;
+      const named = cell.getAttribute("data-color");
+      const raw = named?.endsWith("_background") ? named.slice(0, -"_background".length) : null;
+      const fill = (raw && isCellColor(raw)) ? raw
+        : fillNameOfHex(cell.getAttribute("bgcolor"))
+          ?? fillNameOfHex(el.style?.backgroundColor)
+          ?? fillNameOfHex(/background-color\s*:\s*([^;"}]+)/i.exec(cell.getAttribute("style") ?? "")?.[1]);
+      if (fill) colors[`${r}:${c}`] = fill;
       out[c] = cellWords(cell);
       c += colspan;
     }
@@ -79,7 +92,7 @@ export function gridFromHtml(html: string): ReadGrid | null {
   const matrix = rows.filter(Boolean).map((row) => row.map((cell) => cell ?? []));
   if (!matrix.length) return null;
   const first = lines.find((row) => cellsOf(row).length);
-  return { rows: matrix, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH"), spans, aligns };
+  return { rows: matrix, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH"), spans, aligns, colors };
 }
 
 /** A Markdown table written out, as rows of cells, or null for other text. */
@@ -102,12 +115,12 @@ export function readGrid(data: DataTransfer, anyText: boolean): ReadGrid | null 
   const text = data.getData("text/plain");
   if (!text) return anyText ? fromHtml : null;
   const fromMarkdown = gridFromMarkdown(text);
-  if (fromMarkdown) return { rows: fromMarkdown, header: true, spans: [], aligns: {} };
+  if (fromMarkdown) return { rows: fromMarkdown, header: true, spans: [], aligns: {}, colors: {} };
   const tabbed = tabbedRows(text);
-  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false, spans: [], aligns: {} };
+  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false, spans: [], aligns: {}, colors: {} };
   if (!anyText) return null;
   const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false, spans: [], aligns: {} };
+  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false, spans: [], aligns: {}, colors: {} };
 }
 
 /** The grid's rows and merges — what a paste over cells lays down. */

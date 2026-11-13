@@ -109,6 +109,42 @@ export interface TableGrid {
  *  draw from. */
 export type CellColor = (typeof COLOR_NAMES)[number];
 
+/** Whether the string names a cell fill. */
+export function isCellColor(value: unknown): value is CellColor {
+  return typeof value === "string" && (COLOR_NAMES as readonly string[]).includes(value);
+}
+
+/** The fills as hex for the outside world — a copied table keeps its
+ *  colours in a spreadsheet's paste, which reads `bgcolor` and inline
+ *  styles, never `data-color`. The light theme's values: the palette the
+ *  names were picked from, legible under any reader's default ink. */
+export const CELL_FILLS: Record<CellColor, string> = {
+  gray: "#f1f1ef",
+  brown: "#f4eeee",
+  orange: "#fbecdd",
+  yellow: "#fbf3db",
+  green: "#edf3ec",
+  blue: "#e7f3f8",
+  purple: "#f4f0f7",
+  pink: "#f9eef3",
+  red: "#fdebec",
+};
+
+/** The fill a pasted hex or rgb() colour is ours, if it is — anything else
+ *  is a colour we do not carry. */
+export function fillNameOfHex(value: unknown): CellColor | undefined {
+  if (typeof value !== "string") return undefined;
+  let hex: string | null = null;
+  const asHex = /^#([0-9a-f]{6})$/i.exec(value.trim());
+  if (asHex) hex = `#${asHex[1].toLowerCase()}`;
+  else {
+    const asRgb = /^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(value.trim());
+    if (asRgb) hex = `#${asRgb.slice(1, 4).map((n) => Math.max(0, Math.min(255, Number(n))).toString(16).padStart(2, "0")).join("")}`;
+  }
+  if (!hex) return undefined;
+  return (Object.entries(CELL_FILLS) as [CellColor, string][]).find(([, painted]) => painted === hex)?.[0];
+}
+
 /** Where a cell's words stand: h across the cell, v down the cell. */
 export interface CellAlign {
   h?: "left" | "center" | "right";
@@ -155,7 +191,7 @@ function normalizeColors(value: unknown, grid: TableGrid): Record<string, CellCo
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     const [rowId, columnId] = key.split(":");
     if (!rowIds.has(rowId) || !columnIds.has(columnId)) continue;
-    if (typeof raw === "string" && (COLOR_NAMES as readonly string[]).includes(raw)) out[key] = raw as CellColor;
+    if (isCellColor(raw)) out[key] = raw;
   }
   return out;
 }
@@ -178,7 +214,7 @@ export function setColors(grid: TableGrid, rect: CellRect, color: CellColor | un
       const row = grid.rows[r], column = grid.columns[c];
       if (!row || !column || isPhantom(grid, r, c)) continue;
       const key = `${row.id}:${column.id}`;
-      if (color && (COLOR_NAMES as readonly string[]).includes(color)) next[key] = color;
+      if (isCellColor(color)) next[key] = color;
       else delete next[key];
     }
   if (JSON.stringify(next) === JSON.stringify(grid.colors)) return [];
@@ -433,6 +469,8 @@ export function tableFromCells(
     widths?: readonly (number | undefined)[];
     spans?: readonly CellRect[];
     aligns?: Readonly<Record<string, CellAlign>>;
+    /** Cell fills the source claims, keyed `row:col` as `aligns` is. */
+    colors?: Readonly<Record<string, CellColor>>;
   } = {},
 ): SimpleTable {
   const width = Math.max(1, Math.min(MAX_TABLE_COLUMNS, ...cells.map((row) => row.length)));
@@ -461,6 +499,12 @@ export function tableFromCells(
     if (!rowIds[r] || !columns[c]) continue;
     aligns[`${rowIds[r]}:${columns[c].id}`] = { ...(align.h ? { h: align.h } : {}), ...(align.v ? { v: align.v } : {}) };
   }
+  const colors: Record<string, CellColor> = {};
+  for (const [key, color] of Object.entries(options.colors ?? {})) {
+    const [r, c] = key.split(":").map(Number);
+    if (!rowIds[r] || !columns[c] || !isCellColor(color)) continue;
+    colors[`${rowIds[r]}:${columns[c].id}`] = color;
+  }
   return storedTable({
     columns,
     rows: rows.length ? rows : [{ id: id("row"), order: ROW_ORDER_STEP, cells: {} }],
@@ -468,7 +512,7 @@ export function tableFromCells(
     header_column: options.headerColumn === true,
     spans,
     aligns,
-    colors: {},
+    colors,
   });
 }
 
@@ -954,6 +998,7 @@ export function tableToHtml(
   headerRow = false,
   spans: readonly CellRect[] = [],
   aligns?: ReadonlyArray<ReadonlyArray<CellAlign | undefined>>,
+  fills?: ReadonlyArray<ReadonlyArray<CellColor | undefined>>,
 ): string {
   const body = cells.map((row, index) => {
     const tag = headerRow && index === 0 ? "th" : "td";
@@ -966,8 +1011,16 @@ export function tableToHtml(
         ? `${anchor.columns > 1 ? ` colspan="${anchor.columns}"` : ""}${anchor.rows > 1 ? ` rowspan="${anchor.rows}"` : ""}`
         : "";
       const align = aligns?.[index]?.[c];
-      const style = align && align.h !== "left" ? ` style="text-align:${align.h}"` : "";
-      out.push(`<${tag}${attrs}${style}>${inlineToHtml(row[c])}</${tag}>`);
+      const fill = fills?.[index]?.[c];
+      /* `data-color` keeps the fill lossless on the way back in; `bgcolor`
+         and the inline style carry it to spreadsheets and browsers, which
+         read no data attribute. */
+      const fillAttr = fill ? ` data-color="${fill}_background" bgcolor="${CELL_FILLS[fill]}"` : "";
+      const styles: string[] = [];
+      if (align && align.h !== "left") styles.push(`text-align:${align.h}`);
+      if (fill) styles.push(`background-color:${CELL_FILLS[fill]}`);
+      const style = styles.length ? ` style="${styles.join(";")}"` : "";
+      out.push(`<${tag}${attrs}${fillAttr}${style}>${inlineToHtml(row[c])}</${tag}>`);
     }
     return `<tr>${out.join("")}</tr>`;
   }).join("");

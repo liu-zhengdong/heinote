@@ -945,7 +945,7 @@ export function DocumentEditor({
     const grid = incoming ? null : readGrid(data, false);
     const tableId = createId("block");
     const table = grid ? { by_id: { [tableId]: createBlock(tableId, "table", {
-      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans, aligns: grid.aligns }),
+      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans, aligns: grid.aligns, colors: grid.colors }),
     }) } } : null;
     const blocks = incoming?.tree ?? table ?? textToBlocks(data.getData("text/plain"), () => createId("block"));
     const pages = store.getState().pages;

@@ -223,6 +223,30 @@ test("a right-press on cells offers Merge and Split in a menu", async ({ page })
   await expect(table.locator("td[data-row-index='0'][data-column-index='0']")).toHaveAttribute("colspan", "2");
 });
 
+test("a pasted HTML table's cell fills land as fills", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_fill_paste");
+  // A cell selection, not a text one — a same-cell drag would stay in the
+  // words; the paste over the selection needs the cells' range.
+  await dragCells(page, cell(0, 0), cell(0, 1));
+  // `data-color` carries our names losslessly; `bgcolor` — what a
+  // spreadsheet or copied page sends — maps back by its hex.
+  const html = `<table><tr>
+    <td data-color="blue_background" bgcolor="#e7f3f8" style="background-color:#e7f3f8">x1</td>
+    <td>y2</td></tr><tr>
+    <td bgcolor="#f9eef3">z3</td>
+    <td bgcolor="#123456">w4</td></tr></table>`;
+  await page.locator(".stbl__frame").first().evaluate((frame, markup) => {
+    const data = new DataTransfer();
+    data.setData("text/html", markup);
+    frame.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  }, html);
+  await expect(table.locator("td[data-row-index='0'][data-column-index='0']")).toHaveAttribute("data-color", "blue_background");
+  await expect(table.locator("td[data-row-index='1'][data-column-index='0']")).toHaveAttribute("data-color", "pink_background");
+  // A colour that is none of ours is no fill.
+  await expect(table.locator("td[data-row-index='1'][data-column-index='1']")).not.toHaveAttribute("data-color", /./);
+  await expect(cell(0, 0)).toHaveText("x1");
+});
+
 test("the cell toolbar paints a text colour over the selection", async ({ page }) => {
   const { table, cell } = await makeTable(page, "table_color");
   await dragCells(page, cell(0, 0), cell(0, 1));

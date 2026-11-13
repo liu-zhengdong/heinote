@@ -6,6 +6,7 @@ import {
   alignOf,
   applyTableWrites,
   colorOf,
+  fillNameOfHex,
   deleteRow,
   expandRectForSpans,
   fitColumnWidths,
@@ -276,6 +277,24 @@ describe("cell fills", () => {
     expect(Object.keys(read.colors)).toHaveLength(1);
   });
 
+  it("emits data-color, bgcolor and an inline fill in copied HTML", () => {
+    const { table, grid } = gridOf([[text("a"), text("b")]]);
+    const next = after(table, setColors(grid, { row: 0, column: 0, rows: 1, columns: 1 }, "blue"));
+    const html = tableToHtml(tableCells(next), false, [], [], [["blue", undefined]]);
+    expect(html).toContain('data-color="blue_background"');
+    expect(html).toContain('bgcolor="#e7f3f8"');
+    expect(html).toContain("background-color:#e7f3f8");
+    // Only the filled cell carries it.
+    expect(html.match(/data-color/g)).toHaveLength(1);
+  });
+
+  it("a paste carrying fills builds a table that keeps them", () => {
+    const table = tableFromCells([[text("a"), text("b")]], ids, { colors: { "0:0": "red", "0:1": "not-a-colour" as never, "9:9": "blue" } });
+    const grid = tableGrid(table);
+    expect(colorOf(grid, 0, 0)).toBe("red");
+    expect(colorOf(grid, 0, 1)).toBeUndefined();
+  });
+
   it("keeps the fill with the anchor through a merge", () => {
     const { table, grid } = gridOf([
       [text("a"), text("b")],
@@ -285,6 +304,18 @@ describe("cell fills", () => {
     const merged = after(applyTableWrites(table, setColors(grid, { row: 0, column: 0, rows: 1, columns: 1 }, "red")), mergeCells(filled, { row: 0, column: 0, rows: 2, columns: 2 }));
     expect(isPhantom(merged, 1, 1)).toBe(true);
     expect(colorOf(merged, 0, 0)).toBe("red");
+  });
+});
+
+describe("fillNameOfHex", () => {
+  it("reads hex and rgb() back to our names, refusing everything else", () => {
+    expect(fillNameOfHex("#e7f3f8")).toBe("blue");
+    expect(fillNameOfHex("#E7F3F8")).toBe("blue");
+    expect(fillNameOfHex("rgb(231, 243, 248)")).toBe("blue");
+    expect(fillNameOfHex("rgba(231,243,248,1)")).toBe("blue");
+    expect(fillNameOfHex("#123456")).toBeUndefined();
+    expect(fillNameOfHex("cornflowerblue")).toBeUndefined();
+    expect(fillNameOfHex(undefined)).toBeUndefined();
   });
 });
 

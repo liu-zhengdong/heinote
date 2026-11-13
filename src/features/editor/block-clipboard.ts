@@ -14,7 +14,7 @@
 import { normalizeBlockTree, orderedBlocks } from "../../core/block-tree";
 import { normalizeEmbed } from "../../core/embeds";
 import { escapeHtml, inlinePlainText, inlineToHtml } from "../../core/inline-content";
-import { tableCells, tableGrid, tableToHtml } from "../../core/simple-table";
+import { alignOf, colorOf, spanCovering, spansInRect, tableCells, tableGrid, tableToHtml, type CellRect } from "../../core/simple-table";
 import type { Block, BlockKind, BlockTree } from "../../core/types";
 import { blockTreeToMarkdown, markdownToBlockTree, readableTree } from "./adapters";
 import { BLOCK_DEFINITIONS } from "./block-registry";
@@ -64,7 +64,18 @@ function blocksHtml(tree: BlockTree, parentId: string | null): string {
       case "divider": html += "<hr>"; break;
       case "table": {
         const grid = tableGrid(block.table);
-        html += tableToHtml(tableCells(grid), grid.header_row);
+        // The copy takes the whole grid: its merges and every cell's
+        // alignment and fill travel with it.
+        const whole: CellRect = { row: 0, column: 0, rows: grid.rows.length, columns: grid.columns.length };
+        const alignments = grid.rows.map((_, r) => grid.columns.map((_, c) => {
+          const covered = spanCovering(grid, r, c);
+          return alignOf(grid, covered?.rect.row ?? r, covered?.rect.column ?? c);
+        }));
+        const fills = grid.rows.map((_, r) => grid.columns.map((_, c) => {
+          const covered = spanCovering(grid, r, c);
+          return colorOf(grid, covered?.rect.row ?? r, covered?.rect.column ?? c);
+        }));
+        html += tableToHtml(tableCells(grid), grid.header_row, spansInRect(grid, whole), alignments, fills);
         break;
       }
       // A block is its paragraphs; outside HeiNote it has no mark of its own.

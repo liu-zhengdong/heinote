@@ -624,7 +624,11 @@ export const SimpleTable = memo(function SimpleTable({
       const covered = spanCovering(grid, rect.row + r, rect.column + c);
       return alignOf(grid, covered?.rect.row ?? rect.row + r, covered?.rect.column ?? rect.column + c);
     }));
-    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied, false, spansInRect(grid, rect), alignMatrix)}`);
+    const fillMatrix = copied.map((row, r) => row.map((_, c) => {
+      const covered = spanCovering(grid, rect.row + r, rect.column + c);
+      return colorOf(grid, covered?.rect.row ?? rect.row + r, covered?.rect.column ?? rect.column + c);
+    }));
+    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied, false, spansInRect(grid, rect), alignMatrix, fillMatrix)}`);
     if (cut && !readOnly) clearSelected();
   };
 
@@ -644,6 +648,18 @@ export const SimpleTable = memo(function SimpleTable({
         if (trow && tcol) aligns[`${trow.id}:${tcol.id}`] = align;
       }
       laid.writes.push({ kind: "aligns", aligns });
+    }
+    // …and its fills the same way.
+    if (Object.keys(pasted.colors).length) {
+      const colors = { ...laid.grid.colors };
+      for (const [key, color] of Object.entries(pasted.colors)) {
+        const [r, c] = key.split(":").map(Number);
+        const covered = spanCovering(laid.grid, at.row + r, at.column + c);
+        const trow = laid.grid.rows[covered?.rect.row ?? at.row + r];
+        const tcol = laid.grid.columns[covered?.rect.column ?? at.column + c];
+        if (trow && tcol) colors[`${trow.id}:${tcol.id}`] = color;
+      }
+      laid.writes.push({ kind: "colors", colors });
     }
     write(laid.writes);
     setRange({ anchor: at, focus: {
