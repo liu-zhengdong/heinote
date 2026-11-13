@@ -60,7 +60,7 @@ import { ApiError, request } from "../platform/http";
 import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
-import { collaborationAccount } from "../collaboration/client";
+import { collaborationAccount, openCollaborativePage } from "../collaboration/client";
 
 /** What changes rarely — the actions, the selection, the member's spaces
  *  and preferences — so a view reading it is not redrawn by every keystroke.
@@ -264,7 +264,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     let active = true;
     let opened: WorkspaceDocument | null = null;
     let unsubscribe = () => {};
-    void createPlatformClient()
+    void createPlatformClient(sessionUser)
       .then(async (client) => {
         const initialSpaces = await client.spaces.installations().catch(async (reason: unknown) => { await client.close(); throw reason; });
         const next = await WorkspaceDocument.open(client, initialSpaces).catch(async (reason: unknown) => { await client.close(); throw reason; });
@@ -395,7 +395,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const selectPage = useCallback((pageId: string) => {
     const pages = store.getState().pages;
-    if (pages[pageId]) setEmptySpaceId(navigationSpaceOf(pages, spacesRef.current, pageId));
+    if (pages[pageId]) {
+      setEmptySpaceId(navigationSpaceOf(pages, spacesRef.current, pageId));
+      /* Open the page's collaborative document now that it is on screen;
+         startup no longer opens one for every page. */
+      const scope = spaceOfPage(pages, pageId) ?? "personal";
+      void openCollaborativePage(scope, pageId).catch(() => undefined);
+    }
     setSelectedPageId(pageId);
     setGraphFor(null);
   }, [store]);

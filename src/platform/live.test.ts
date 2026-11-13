@@ -14,6 +14,7 @@ const hooks = vi.hoisted(() => ({
   submitUndo: null as null | ((update: TextUpdate) => Promise<unknown>),
 }));
 vi.mock("../collaboration/client", () => ({
+  awaitCollaborativeBasis: vi.fn().mockResolvedValue(undefined),
   collaborationAccount: () => hooks.account,
   installRecordReader: vi.fn(),
   installSnapshotConsumer: vi.fn(),

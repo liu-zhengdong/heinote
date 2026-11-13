@@ -40,8 +40,10 @@ export interface PlatformClient {
   close(): Promise<void>;
 }
 
-export async function createPlatformClient(): Promise<PlatformClient> {
-  const { user } = await request<{ user: Person | null }>("/api/session");
+export async function createPlatformClient(knownUser?: Person | null): Promise<PlatformClient> {
+  // The AuthGate already answered /api/session for this load; reuse it
+  // rather than spend another round-trip asking the same question.
+  const user = knownUser ?? (await request<{ user: Person | null }>("/api/session")).user;
   if (!user) throw new Error("请先登录小黑笔记。");
   configureCollaboration(user.id);
   const stops = new Set<() => void>();
