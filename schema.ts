@@ -162,6 +162,7 @@ const paragraphFields = {
     rows: object().describe("Its rows by id: each { order, cells }, its cells' words by column id."),
     header_row: t.bool().optional(),
     header_column: t.bool().optional(),
+    spans: t.list(t.object({ row: t.string(), column: t.string(), rows: t.number(), columns: t.number() })).optional().describe("Merged cells: each { row, column, rows, columns } — the anchor cell named by ids covering that many rows and columns."),
   }).optional(),
   embed: object().optional().describe("A card: the YouTube video or the post on X its address names."),
 };

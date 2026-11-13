@@ -30,11 +30,21 @@
    7. More than MAX_TABLE_COLUMNS columns or MAX_TABLE_ROWS rows: the first
       that many are read.
    8. header_row and header_column are on only when stored as true.
+   9. A span — a cell merged over others — names its anchor cell by row and
+      column id and counts the rows and columns it covers. One spanning
+      nothing (1×1), one reaching past the grid, one overlapping another,
+      or one whose anchor another covers is not read. The cells a span
+      covers but does not name — its phantom cells — are not drawn.
    And writing:
    9. A change that would take the table past TABLE_BYTE_BUDGET is refused,
       the reader told: a record too large to save would fail at saving.
    10. Deleting a column writes the column list alone, so ⌘Z brings it back
-       with its cells; a row written later keeps only the columns it has. */
+       with its cells; a row written later keeps only the columns it has.
+   11. The span list is one field (`table/spans`), as the columns' list is:
+       two people merging different cells at once keep the later list — as
+       two reordering columns would. Inserting a row or column inside a
+       span grows it; deleting one inside shrinks it; deleting the row or
+       column its anchor stands on lets it go entirely. */
 
 import { inlinePlainText, inlineToHtml, normalizeInlineContent } from "./inline-content";
 import type { InlineContent, SimpleTable, TableColumn, TableRow } from "./types";
@@ -65,13 +75,31 @@ export interface GridRow {
   cells: Record<string, InlineContent>;
 }
 
-/** A table as it is drawn: its columns in order, its rows in order, and its
- *  headers. */
+/** A cell merged over others: the anchor cell (named by row and column id)
+ *  covers `rows` x `columns` cells; the covered ones draw nothing. */
+export interface TableSpan {
+  row: string;
+  column: string;
+  rows: number;
+  columns: number;
+}
+
+/** A table as it is drawn: its columns in order, its rows in order, its
+ *  headers, and its merged cells. */
 export interface TableGrid {
   columns: TableColumn[];
   rows: GridRow[];
   header_row: boolean;
   header_column: boolean;
+  spans: TableSpan[];
+}
+
+/** A rectangle of cells: top-left index + how many rows/columns it covers. */
+export interface CellRect {
+  row: number;
+  column: number;
+  rows: number;
+  columns: number;
 }
 
 /** A cell's words: marks and safe links, never a mention (6). */
@@ -155,12 +183,49 @@ export function tableGrid(value: unknown): TableGrid {
   }
   if (!columns.length) columns = [{ id: "column" }];
   const kept = rows.slice(0, MAX_TABLE_ROWS);
-  return {
+  const grid: TableGrid = {
     columns,
     rows: kept.length ? kept : [{ id: "row", order: ROW_ORDER_STEP, cells: {} }],
     header_row: candidate.header_row === true,
     header_column: candidate.header_column === true,
+    spans: [],
   };
+  grid.spans = normalizeSpans(candidate.spans, grid);
+  return grid;
+}
+
+/** Spans as stored, kept to the sane ones (9): real merges, inside the grid,
+ *  never overlapping each other. */
+function normalizeSpans(value: unknown, grid: TableGrid): TableSpan[] {
+  if (!Array.isArray(value)) return [];
+  const rowIndex = new Map(grid.rows.map((row, index) => [row.id, index]));
+  const columnIndex = new Map(grid.columns.map((column, index) => [column.id, index]));
+  const covered = new Set<string>();
+  const spans: TableSpan[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const { row, column, rows, columns } = candidate as Record<string, unknown>;
+    if (!plainKey(row) || !plainKey(column)) continue;
+    const r = rowIndex.get(row);
+    const c = columnIndex.get(column);
+    const rh = typeof rows === "number" && Number.isInteger(rows) ? rows : 0;
+    const ch = typeof columns === "number" && Number.isInteger(columns) ? columns : 0;
+    if (r === undefined || c === undefined) continue;
+    if (rh < 1 || ch < 1 || rh * ch < 2) continue;
+    if (r + rh > grid.rows.length || c + ch > grid.columns.length) continue;
+    let overlaps = false;
+    const mine: string[] = [];
+    for (let i = r; i < r + rh && !overlaps; i++)
+      for (let j = c; j < c + ch && !overlaps; j++) {
+        const key = `${i}:${j}`;
+        if (covered.has(key)) overlaps = true;
+        else mine.push(key);
+      }
+    if (overlaps) continue;
+    for (const key of mine) covered.add(key);
+    spans.push({ row, column, rows: rh, columns: ch });
+  }
+  return spans;
 }
 
 /** The grid as it is stored — a table normalised for a block's record. */
@@ -170,6 +235,7 @@ export function storedTable(grid: TableGrid): SimpleTable {
     rows: Object.fromEntries(grid.rows.map((row) => [row.id, { order: row.order, cells: structuredClone(row.cells) }])),
     ...(grid.header_row ? { header_row: true } : {}),
     ...(grid.header_column ? { header_column: true } : {}),
+    ...(grid.spans.length ? { spans: grid.spans.map((span) => ({ ...span })) } : {}),
   };
 }
 
@@ -192,6 +258,7 @@ export function newSimpleTable(columns: number, rows: number, id: (kind: "column
     })),
     header_row: false,
     header_column: false,
+    spans: [],
   });
 }
 
@@ -238,11 +305,12 @@ export function fitColumnWidths(
 /** A table of these words — a paste, Markdown, a database turned into a
  *  table. Rows are made as wide as the widest. Columns are sized by their
  *  words so the table fills the text column; a `widths` entry is kept as
- *  given (a converted database keeps its drawn widths). */
+ *  given (a converted database keeps its drawn widths). `spans` are cell
+ *  rects (index-based) for merged cells, as an HTML paste carries them. */
 export function tableFromCells(
   cells: readonly (readonly InlineContent[])[],
   id: (kind: "column" | "row") => string,
-  options: { headerRow?: boolean; headerColumn?: boolean; widths?: readonly (number | undefined)[] } = {},
+  options: { headerRow?: boolean; headerColumn?: boolean; widths?: readonly (number | undefined)[]; spans?: readonly CellRect[] } = {},
 ): SimpleTable {
   const width = Math.max(1, Math.min(MAX_TABLE_COLUMNS, ...cells.map((row) => row.length)));
   const fitted = fitColumnWidths(cells, width);
@@ -250,24 +318,222 @@ export function tableFromCells(
     const kept = normalizeWidth(options.widths?.[index]) ?? fitted[index];
     return { id: id("column"), ...(kept === undefined ? {} : { width: kept }) };
   });
+  const rowIds = cells.slice(0, MAX_TABLE_ROWS).map(() => id("row"));
   const rows = cells.slice(0, MAX_TABLE_ROWS).map((row, index) => ({
-    id: id("row"),
+    id: rowIds[index],
     order: (index + 1) * ROW_ORDER_STEP,
     cells: Object.fromEntries(columns
       .map((column, at) => [column.id, normalizeCell(row[at] ?? [])] as const)
       .filter(([, content]) => content.length)),
   }));
+  const spans: TableSpan[] = (options.spans ?? [])
+    .filter((span) => span.rows * span.columns > 1
+      && span.row >= 0 && span.column >= 0
+      && span.row + span.rows <= rows.length
+      && span.column + span.columns <= width)
+    .map((span) => ({ row: rowIds[span.row], column: columns[span.column].id, rows: span.rows, columns: span.columns }));
   return storedTable({
     columns,
     rows: rows.length ? rows : [{ id: id("row"), order: ROW_ORDER_STEP, cells: {} }],
     header_row: options.headerRow === true,
     header_column: options.headerColumn === true,
+    spans,
   });
 }
 
 /** The words of every cell, row by row, column by column. */
 export function tableCells(grid: TableGrid): InlineContent[][] {
   return grid.rows.map((row) => grid.columns.map((column) => row.cells[column.id] ?? []));
+}
+
+/* ── Merged cells ─────────────────────────────────────────────────────── */
+
+/** The rectangle a span covers, in cell indexes — or null when the span's
+ *  anchor row or column is gone (its ids are the truth, not its position). */
+export function spanRect(grid: TableGrid, span: TableSpan): CellRect | null {
+  const row = grid.rows.findIndex((item) => item.id === span.row);
+  const column = grid.columns.findIndex((item) => item.id === span.column);
+  if (row < 0 || column < 0) return null;
+  return { row, column, rows: span.rows, columns: span.columns };
+}
+
+function rectsOverlap(a: CellRect, b: CellRect): boolean {
+  return a.row < b.row + b.rows && b.row < a.row + a.rows
+    && a.column < b.column + b.columns && b.column < a.column + a.columns;
+}
+
+function pointInRect(rect: CellRect, row: number, column: number): boolean {
+  return row >= rect.row && row < rect.row + rect.rows && column >= rect.column && column < rect.column + rect.columns;
+}
+
+/** The span covering a cell, anchor or phantom, if one does. */
+export function spanCovering(grid: TableGrid, rowIndex: number, columnIndex: number): { span: TableSpan; rect: CellRect } | null {
+  for (const span of grid.spans) {
+    const rect = spanRect(grid, span);
+    if (rect && pointInRect(rect, rowIndex, columnIndex)) return { span, rect };
+  }
+  return null;
+}
+
+/** The span anchored exactly on a cell, if one is. */
+export function spanAnchorAt(grid: TableGrid, rowIndex: number, columnIndex: number): { span: TableSpan; rect: CellRect } | null {
+  for (const span of grid.spans) {
+    const rect = spanRect(grid, span);
+    if (rect && rect.row === rowIndex && rect.column === columnIndex) return { span, rect };
+  }
+  return null;
+}
+
+/** A cell the table does not draw on its own — inside a span, not its anchor. */
+export function isPhantom(grid: TableGrid, rowIndex: number, columnIndex: number): boolean {
+  const covered = spanCovering(grid, rowIndex, columnIndex);
+  return !!covered && (covered.rect.row !== rowIndex || covered.rect.column !== columnIndex);
+}
+
+/** A rectangle grown until no span sticks halfway out of it — so a
+ *  selection that touches a merged cell always takes it whole. */
+export function expandRectForSpans(grid: TableGrid, rect: CellRect): CellRect {
+  let grown = { ...rect };
+  let again = true;
+  while (again) {
+    again = false;
+    for (const span of grid.spans) {
+      const sr = spanRect(grid, span);
+      if (!sr || !rectsOverlap(grown, sr)) continue;
+      const row = Math.min(grown.row, sr.row);
+      const column = Math.min(grown.column, sr.column);
+      const bottom = Math.max(grown.row + grown.rows, sr.row + sr.rows);
+      const right = Math.max(grown.column + grown.columns, sr.column + sr.columns);
+      if (row !== grown.row || column !== grown.column || bottom - row !== grown.rows || right - column !== grown.columns) {
+        grown = { row, column, rows: bottom - row, columns: right - column };
+        again = true;
+      }
+    }
+  }
+  return grown;
+}
+
+/** Merge a rectangle of cells into one: the top-left cell becomes the
+ *  anchor and inherits every cell's words (row by row, joined as lines);
+ *  spans inside let go, the covered cells clear. The span itself is a
+ *  single `spans` write. */
+export function mergeCells(grid: TableGrid, rect: CellRect): TableWrite[] {
+  const target = expandRectForSpans(grid, rect);
+  if (target.rows * target.columns < 2) return [];
+  const cells = tableCells(grid);
+  const kept: TableSpan[] = grid.spans.filter((span) => {
+    const sr = spanRect(grid, span);
+    return !sr || !rectsOverlap(sr, target);
+  });
+  // First pass: gather every covered cell's words in reading order — the
+  // anchor's own first, then the rest row by row, so the merged cell reads
+  // like the cells it swallowed.
+  const parts: InlineContent[] = [];
+  for (let r = target.row; r < target.row + target.rows; r++)
+    for (let c = target.column; c < target.column + target.columns; c++) {
+      const content = cells[r]?.[c] ?? [];
+      if (content.length) parts.push(content);
+    }
+  const anchorColumnId = grid.columns[target.column].id;
+  const writes: TableWrite[] = [];
+  for (let r = target.row; r < target.row + target.rows; r++) {
+    const row = grid.rows[r];
+    const next = { ...row.cells };
+    for (let c = target.column; c < target.column + target.columns; c++)
+      delete next[grid.columns[c].id];
+    if (r === target.row) next[anchorColumnId] = mergeCellContent(parts);
+    const written = rowValue(grid, row, next);
+    // A row whose cells did not change needs no write.
+    if (JSON.stringify(written.cells) !== JSON.stringify(rowValue(grid, row).cells))
+      writes.push({ kind: "row", rowId: row.id, row: written });
+  }
+  kept.push({ row: grid.rows[target.row].id, column: anchorColumnId, rows: target.rows, columns: target.columns });
+  writes.push({ kind: "spans", spans: kept });
+  return writes;
+}
+
+/** Words of several cells poured into one — each cell's words stay their
+ *  own line so a merged cell reads like the cells it swallowed. */
+function mergeCellContent(cells: readonly InlineContent[]): InlineContent {
+  const parts = cells.filter((cell) => inlinePlainText(cell).trim().length);
+  if (!parts.length) return [];
+  return normalizeInlineContent(parts.flatMap((cell, index) => {
+    const runs = structuredClone(cell);
+    if (index > 0 && runs.length) runs[0] = { ...runs[0], text: "\n" + runs[0].text };
+    return runs;
+  }));
+}
+
+/** Split: every span covering the rectangle lets go — the anchor keeps its
+ *  words, the freed cells come back empty. No content is dealt back out. */
+export function splitCells(grid: TableGrid, rect: CellRect): TableWrite[] {
+  const kept = grid.spans.filter((span) => {
+    const sr = spanRect(grid, span);
+    return !sr || !rectsOverlap(sr, rect);
+  });
+  return kept.length === grid.spans.length ? [] : [{ kind: "spans", spans: kept }];
+}
+
+/** How the spans react to a row or column arriving at index `at` —
+ *  landing inside a span stretches it over the newcomer; landing at or
+ *  before its edge leaves it (the anchor keeps its own id, so the span
+ *  follows it to its new index for free). */
+function spansAfterInsert(grid: TableGrid, axis: "row" | "column", at: number): TableSpan[] {
+  let changed = false;
+  const next = grid.spans.map((span) => {
+    const rect = spanRect(grid, span);
+    if (!rect) return span;
+    const start = axis === "row" ? rect.row : rect.column;
+    const size = axis === "row" ? rect.rows : rect.columns;
+    if (at > start && at < start + size) {
+      changed = true;
+      return axis === "row" ? { ...span, rows: span.rows + 1 } : { ...span, columns: span.columns + 1 };
+    }
+    return span;
+  });
+  return changed ? next : grid.spans;
+}
+
+/** …and to one leaving at index `at`: inside a span it shrinks by one,
+ *  and the span whose anchor row or column left lets go entirely — its
+ *  freed cells come back plain. */
+function spansAfterDelete(grid: TableGrid, axis: "row" | "column", at: number): TableSpan[] {
+  let changed = false;
+  const next: TableSpan[] = [];
+  for (const span of grid.spans) {
+    const rect = spanRect(grid, span);
+    if (!rect) continue;
+    const start = axis === "row" ? rect.row : rect.column;
+    const size = axis === "row" ? rect.rows : rect.columns;
+    if (at === start) { changed = true; continue; }
+    if (at > start && at < start + size) {
+      changed = true;
+      next.push(axis === "row" ? { ...span, rows: span.rows - 1 } : { ...span, columns: span.columns - 1 });
+    } else next.push(span);
+  }
+  return changed ? next : grid.spans;
+}
+
+/** A spans write, only if the list actually changed. */
+function spansWrite(grid: TableGrid, spans: TableSpan[]): TableWrite | null {
+  return spans === grid.spans ? null : { kind: "spans", spans };
+}
+
+/** The spans inside a cell rectangle, rebased to its top-left — for
+ *  carrying a copied selection's merges into its HTML. Spans sticking
+ *  outside the rectangle are left behind. */
+export function spansInRect(grid: TableGrid, rect: CellRect): CellRect[] {
+  const out: CellRect[] = [];
+  for (const span of grid.spans) {
+    const sr = spanRect(grid, span);
+    if (!sr) continue;
+    if (sr.row >= rect.row && sr.column >= rect.column
+      && sr.row + sr.rows <= rect.row + rect.rows
+      && sr.column + sr.columns <= rect.column + rect.columns) {
+      out.push({ row: sr.row - rect.row, column: sr.column - rect.column, rows: sr.rows, columns: sr.columns });
+    }
+  }
+  return out;
 }
 
 /** How many bytes the table takes in its record, as JSON. */
@@ -277,11 +543,13 @@ export function tableBytes(table: SimpleTable): number {
 
 /* ── Changes, as the writes that make them ────────────────────────────── */
 
-/** One write to a table: a row set or taken out, the column list, or a
- *  header switched. Each has a path of its own, so each merges on its own. */
+/** One write to a table: a row set or taken out, the column list, the span
+ *  list, or a header switched. Each has a path of its own, so each merges
+ *  on its own. */
 export type TableWrite =
   | { kind: "row"; rowId: string; row: TableRow | null }
   | { kind: "columns"; columns: TableColumn[] }
+  | { kind: "spans"; spans: TableSpan[] }
   | { kind: "header"; which: "header_row" | "header_column"; on: boolean };
 
 /** The table after `writes` — to measure it, or to draw it at once. */
@@ -289,6 +557,10 @@ export function applyTableWrites(table: SimpleTable, writes: readonly TableWrite
   const next: SimpleTable = { ...table, columns: [...table.columns], rows: { ...table.rows } };
   for (const write of writes) {
     if (write.kind === "columns") next.columns = write.columns;
+    else if (write.kind === "spans") {
+      if (write.spans.length) next.spans = write.spans;
+      else delete next.spans;
+    }
     else if (write.kind === "header") {
       if (write.on) next[write.which] = true;
       else delete next[write.which];
@@ -324,16 +596,23 @@ function orderAt(grid: TableGrid, index: number): number {
   return (before?.order ?? 0) + ROW_ORDER_STEP;
 }
 
-export function insertRow(grid: TableGrid, index: number, rowId: string, cells: Record<string, InlineContent> = {}): TableWrite | null {
-  if (grid.rows.length >= MAX_TABLE_ROWS) return null;
+export function insertRow(grid: TableGrid, index: number, rowId: string, cells: Record<string, InlineContent> = {}): TableWrite[] {
+  if (grid.rows.length >= MAX_TABLE_ROWS) return [];
   const at = Math.max(0, Math.min(grid.rows.length, index));
-  return { kind: "row", rowId, row: rowValue(grid, { id: rowId, order: orderAt(grid, at), cells }) };
+  const writes: TableWrite[] = [{ kind: "row", rowId, row: rowValue(grid, { id: rowId, order: orderAt(grid, at), cells }) }];
+  const spans = spansWrite(grid, spansAfterInsert(grid, "row", at));
+  if (spans) writes.push(spans);
+  return writes;
 }
 
-export function deleteRow(grid: TableGrid, rowId: string): TableWrite | null {
+export function deleteRow(grid: TableGrid, rowId: string): TableWrite[] {
   // A table always has a row to click into.
-  if (grid.rows.length <= 1 || !grid.rows.some((row) => row.id === rowId)) return null;
-  return { kind: "row", rowId, row: null };
+  const at = grid.rows.findIndex((row) => row.id === rowId);
+  if (grid.rows.length <= 1 || at < 0) return [];
+  const writes: TableWrite[] = [{ kind: "row", rowId, row: null }];
+  const spans = spansWrite(grid, spansAfterDelete(grid, "row", at));
+  if (spans) writes.push(spans);
+  return writes;
 }
 
 /** The row with `rowId` moved to stand before the row at `index` of the rows
@@ -346,9 +625,9 @@ export function moveRow(grid: TableGrid, rowId: string, index: number): TableWri
   return { kind: "row", rowId, row: rowValue(grid, { ...grid.rows[from], order: orderAt(rest, at) }) };
 }
 
-export function duplicateRow(grid: TableGrid, rowId: string, copyId: string): TableWrite | null {
+export function duplicateRow(grid: TableGrid, rowId: string, copyId: string): TableWrite[] {
   const from = grid.rows.findIndex((row) => row.id === rowId);
-  if (from < 0) return null;
+  if (from < 0) return [];
   return insertRow(grid, from + 1, copyId, structuredClone(grid.rows[from].cells));
 }
 
@@ -363,16 +642,24 @@ export function clearRows(grid: TableGrid, rowIds: readonly string[], columnIds?
     }));
 }
 
-export function insertColumn(grid: TableGrid, index: number, columnId: string): TableWrite | null {
-  if (grid.columns.length >= MAX_TABLE_COLUMNS) return null;
+export function insertColumn(grid: TableGrid, index: number, columnId: string): TableWrite[] {
+  if (grid.columns.length >= MAX_TABLE_COLUMNS) return [];
+  const at = Math.max(0, Math.min(grid.columns.length, index));
   const columns = [...grid.columns];
-  columns.splice(Math.max(0, Math.min(columns.length, index)), 0, { id: columnId });
-  return { kind: "columns", columns };
+  columns.splice(at, 0, { id: columnId });
+  const writes: TableWrite[] = [{ kind: "columns", columns }];
+  const spans = spansWrite(grid, spansAfterInsert(grid, "column", at));
+  if (spans) writes.push(spans);
+  return writes;
 }
 
-export function deleteColumn(grid: TableGrid, columnId: string): TableWrite | null {
-  if (grid.columns.length <= 1 || !grid.columns.some((column) => column.id === columnId)) return null;
-  return { kind: "columns", columns: grid.columns.filter((column) => column.id !== columnId) };
+export function deleteColumn(grid: TableGrid, columnId: string): TableWrite[] {
+  const at = grid.columns.findIndex((column) => column.id === columnId);
+  if (grid.columns.length <= 1 || at < 0) return [];
+  const writes: TableWrite[] = [{ kind: "columns", columns: grid.columns.filter((column) => column.id !== columnId) }];
+  const spans = spansWrite(grid, spansAfterDelete(grid, "column", at));
+  if (spans) writes.push(spans);
+  return writes;
 }
 
 /** The column with `columnId` moved to stand before the column at `index`
@@ -394,12 +681,15 @@ export function duplicateColumn(grid: TableGrid, columnId: string, copyId: strin
   const columns = [...grid.columns];
   columns.splice(from + 1, 0, { ...grid.columns[from], id: copyId });
   const wider = { ...grid, columns };
-  return [
+  const writes: TableWrite[] = [
     { kind: "columns", columns },
     ...grid.rows
       .filter((row) => row.cells[columnId]?.length)
       .map((row) => ({ kind: "row" as const, rowId: row.id, row: rowValue(wider, row, { ...row.cells, [copyId]: structuredClone(row.cells[columnId]) }) })),
   ];
+  const spans = spansWrite(grid, spansAfterInsert(grid, "column", from + 1));
+  if (spans) writes.push(spans);
+  return writes;
 }
 
 export function setColumnWidth(grid: TableGrid, columnId: string, width: number | undefined): TableWrite | null {
@@ -417,13 +707,17 @@ export function setColumnWidth(grid: TableGrid, columnId: string, width: number 
 
 /** Words pasted into the table from a cell: a grid of them laid over the
  *  cells from `rowIndex`, `columnIndex` on, the table growing rows and
- *  columns for what does not fit — as far as it may. */
+ *  columns for what does not fit — as far as it may. A span sitting where
+ *  the paste lands lets go (a spreadsheet does the same); `spans` are cell
+ *  rects the pasted grid itself brings — merged cells copied from an HTML
+ *  table — and they land only when their whole rectangle fits the paste. */
 export function pasteCells(
   grid: TableGrid,
   rowIndex: number,
   columnIndex: number,
   cells: readonly (readonly InlineContent[])[],
   id: (kind: "column" | "row") => string,
+  spans: readonly CellRect[] = [],
 ): { writes: TableWrite[]; clipped: boolean } {
   const writes: TableWrite[] = [];
   let clipped = false;
@@ -452,6 +746,32 @@ export function pasteCells(
     });
     writes.push({ kind: "row", rowId: row.id, row: rowValue(wide, row, next) });
   });
+  /* Merges: the ones the paste overwrites let go; the ones the paste
+     itself carries come along when they fit inside it. */
+  const target: CellRect = {
+    row: rowIndex,
+    column: columnIndex,
+    rows: Math.min(cells.length, grid.rows.length - rowIndex),
+    columns: Math.min(Math.max(0, ...cells.map((row) => row.length)), grid.columns.length - columnIndex),
+  };
+  let nextSpans = grid.spans.filter((span) => {
+    const sr = spanRect(grid, span);
+    return !sr || !rectsOverlap(sr, target);
+  });
+  const newRowIds = rows.map((row) => row.id);
+  const wideGrid: TableGrid = { ...wide, rows, spans: nextSpans };
+  for (const span of spans) {
+    const r = rowIndex + span.row;
+    const c = columnIndex + span.column;
+    if (span.rows * span.columns < 2) continue;
+    if (r < 0 || c < 0 || r + span.rows > newRowIds.length || c + span.columns > columns.length) continue;
+    const rect: CellRect = { row: r, column: c, rows: span.rows, columns: span.columns };
+    if (nextSpans.some((existing) => { const sr = spanRect(wideGrid, existing); return sr && rectsOverlap(sr, rect); })) continue;
+    nextSpans.push({ row: newRowIds[r], column: columns[c].id, rows: span.rows, columns: span.columns });
+    wideGrid.spans = nextSpans;
+  }
+  const spansWriteOut = JSON.stringify(nextSpans) === JSON.stringify(grid.spans) ? null : { kind: "spans" as const, spans: nextSpans };
+  if (spansWriteOut) writes.push(spansWriteOut);
   return { writes, clipped };
 }
 
@@ -476,11 +796,28 @@ export function tableToTabs(cells: readonly (readonly InlineContent[])[]): strin
   return cells.map((row) => row.map((cell) => inlinePlainText(cell).replace(/[\t\r\n]+/g, " ")).join("\t")).join("\n");
 }
 
-/** The table as HTML, marks and links kept. */
-export function tableToHtml(cells: readonly (readonly InlineContent[])[], headerRow = false): string {
+/** The table as HTML, marks and links kept. `spans` are cell rects over
+ *  the given matrix: an anchor cell gets colspan/rowspan, the cells it
+ *  covers are skipped — so a copied merged selection stays merged when it
+ *  is pasted back. */
+export function tableToHtml(
+  cells: readonly (readonly InlineContent[])[],
+  headerRow = false,
+  spans: readonly CellRect[] = [],
+): string {
   const body = cells.map((row, index) => {
     const tag = headerRow && index === 0 ? "th" : "td";
-    return `<tr>${row.map((cell) => `<${tag}>${inlineToHtml(cell)}</${tag}>`).join("")}</tr>`;
+    const out: string[] = [];
+    for (let c = 0; c < row.length; c++) {
+      const anchor = spans.find((span) => span.row === index && span.column === c);
+      const covered = spans.some((span) => pointInRect(span, index, c));
+      if (covered && !anchor) continue;
+      const attrs = anchor
+        ? `${anchor.columns > 1 ? ` colspan="${anchor.columns}"` : ""}${anchor.rows > 1 ? ` rowspan="${anchor.rows}"` : ""}`
+        : "";
+      out.push(`<${tag}${attrs}>${inlineToHtml(row[c])}</${tag}>`);
+    }
+    return `<tr>${out.join("")}</tr>`;
   }).join("");
   return `<table>${body}</table>`;
 }

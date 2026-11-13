@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { inlineFromText } from "./inline-content";
+import { inlineFromText, inlinePlainText } from "./inline-content";
 import {
   TABLE_COLUMN_WIDTH,
   TABLE_PAGE_WIDTH,
+  applyTableWrites,
+  deleteRow,
+  expandRectForSpans,
   fitColumnWidths,
+  insertRow,
+  isPhantom,
+  mergeCells,
   newSimpleTable,
+  splitCells,
+  tableCells,
   tableFromCells,
   tableGrid,
+  tableToHtml,
 } from "./simple-table";
-import type { InlineContent } from "./types";
+import type { InlineContent, SimpleTable } from "./types";
+import type { TableGrid, TableWrite } from "./simple-table";
 
 const text = (value: string): InlineContent => inlineFromText(value);
 
@@ -83,5 +93,142 @@ describe("newSimpleTable", () => {
     const table = newSimpleTable(3, 2, ids);
     const widths = tableGrid(table).columns.map((column) => column.width!);
     expect(widths).toEqual([236, 236, 236]);
+  });
+});
+
+/* ── Merged cells ─────────────────────────────────────────────────────── */
+
+/** The grid of a stored table after writes — what the page would draw. */
+const after = (table: SimpleTable, writes: readonly TableWrite[]): TableGrid => tableGrid(applyTableWrites(table, writes));
+
+const gridOf = (rows: InlineContent[][]): { table: SimpleTable; grid: TableGrid } => {
+  const table = tableFromCells(rows, ids);
+  return { table, grid: tableGrid(table) };
+};
+
+describe("mergeCells", () => {
+  it("merges a rectangle into one cell, joining the cells' words line by line", () => {
+    const { table, grid } = gridOf([
+      [text("a1"), text("a2"), text("a3")],
+      [text("b1"), text("b2"), text("b3")],
+    ]);
+    const writes = mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 });
+    const next = after(table, writes);
+    expect(next.spans).toHaveLength(1);
+    expect(next.spans[0]).toMatchObject({ rows: 2, columns: 2 });
+    const cells = tableCells(next);
+    expect(inlinePlainText(cells[0][0])).toBe("a1\na2\nb1\nb2");
+    // Phantom cells keep nothing of their own.
+    expect(cells[0][1]).toEqual([]);
+    expect(cells[1][0]).toEqual([]);
+    expect(cells[1][1]).toEqual([]);
+    expect(isPhantom(next, 0, 1)).toBe(true);
+    expect(isPhantom(next, 0, 0)).toBe(false);
+    // Untouched cells survive.
+    expect(inlinePlainText(cells[0][2])).toBe("a3");
+    expect(inlinePlainText(cells[1][2])).toBe("b3");
+  });
+
+  it("writes only the rows the merge actually changed", () => {
+    const { grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+      [text("e"), text("f")],
+    ]);
+    const writes = mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 });
+    const touched = writes.filter((w): w is Extract<TableWrite, { kind: "row" }> => w.kind === "row").map((w) => w.rowId);
+    expect(touched).not.toContain(grid.rows[2].id);
+    expect(touched.length).toBeGreaterThan(0);
+    // A merge over empty cells alone needs no row write at all — just the span.
+    const { grid: empty } = gridOf([[text(""), text("")], [text(""), text("")]]);
+    const writes2 = mergeCells(empty, { row: 0, column: 0, rows: 2, columns: 2 });
+    expect(writes2.filter((w) => w.kind === "row")).toHaveLength(0);
+    expect(writes2.some((w) => w.kind === "spans")).toBe(true);
+  });
+
+  it("swallows a span that sticks halfway into the rectangle", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b"), text("c")],
+      [text("d"), text("e"), text("f")],
+      [text("g"), text("h"), text("i")],
+    ]);
+    const stored = applyTableWrites(table, mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 }));
+    const one = tableGrid(stored);
+    // Selecting a rectangle that overlaps the existing merge swallows it whole.
+    const grown = expandRectForSpans(one, { row: 1, column: 1, rows: 2, columns: 2 });
+    expect(grown).toEqual({ row: 0, column: 0, rows: 3, columns: 3 });
+    const merged = after(stored, mergeCells(one, { row: 1, column: 1, rows: 2, columns: 2 }));
+    expect(merged.spans).toHaveLength(1);
+    expect(merged.spans[0]).toMatchObject({ rows: 3, columns: 3 });
+    expect(inlinePlainText(tableCells(merged)[0][0])).toBe("a\nb\nd\ne\nc\nf\ng\nh\ni");
+  });
+});
+
+describe("splitCells", () => {
+  it("lets a merged cell go — the anchor keeps its words, the rest come back empty", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+    ]);
+    const merged = after(table, mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 }));
+    const writes = splitCells(merged, { row: 0, column: 0, rows: 2, columns: 2 });
+    const split = after(applyTableWrites(table, mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 })), writes);
+    expect(split.spans).toHaveLength(0);
+    expect(inlinePlainText(tableCells(split)[0][0])).toBe("a\nb\nc\nd");
+    expect(tableCells(split)[1][1]).toEqual([]);
+    expect(isPhantom(split, 0, 1)).toBe(false);
+  });
+
+  it("writes nothing when the rectangle holds no merge", () => {
+    const { grid } = gridOf([[text("a"), text("b")]]);
+    expect(splitCells(grid, { row: 0, column: 0, rows: 1, columns: 2 })).toEqual([]);
+  });
+});
+
+describe("rows and columns through a span", () => {
+  const mergeMiddle = () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b"), text("c")],
+      [text("d"), text("e"), text("f")],
+      [text("g"), text("h"), text("i")],
+    ]);
+    const stored = applyTableWrites(table, mergeCells(grid, { row: 0, column: 0, rows: 2, columns: 2 }));
+    return { stored, merged: tableGrid(stored) };
+  };
+
+  it("a row inserted inside a span stretches it; at its edge it stays", () => {
+    const { stored, merged } = mergeMiddle();
+    const grown = after(stored, insertRow(merged, 1, "new-row"));
+    expect(grown.spans[0]).toMatchObject({ rows: 3, columns: 2 });
+    const same = after(stored, insertRow(merged, 2, "new-row2"));
+    expect(same.spans[0]).toMatchObject({ rows: 2, columns: 2 });
+  });
+
+  it("a row deleted inside a span shrinks it; deleting its anchor row lets it go", () => {
+    const { stored, merged } = mergeMiddle();
+    const shrunk = after(stored, deleteRow(merged, merged.rows[1].id));
+    expect(shrunk.spans[0]).toMatchObject({ rows: 1, columns: 2 });
+    // A 1×2 span is still a merge.
+    expect(isPhantom(shrunk, 0, 1)).toBe(true);
+    const gone = after(stored, deleteRow(merged, merged.rows[0].id));
+    expect(gone.spans).toHaveLength(0);
+  });
+
+  it("stores spans in the record and reads them back", () => {
+    const { stored } = mergeMiddle();
+    expect(stored.spans).toHaveLength(1);
+    expect(stored.spans![0]).toMatchObject({ rows: 2, columns: 2 });
+  });
+
+  it("round-trips a merged selection through copied HTML", () => {
+    const { stored, merged } = mergeMiddle();
+    const html = tableToHtml(tableCells(merged), false, [
+      { row: 0, column: 0, rows: 2, columns: 2 },
+    ]);
+    expect(html).toContain('colspan="2"');
+    expect(html).toContain('rowspan="2"');
+    // 9 cells less 3 the merge covers: 6 tds, not 9.
+    expect(html.match(/<td/g)).toHaveLength(6);
+    void stored;
   });
 });

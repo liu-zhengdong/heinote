@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Copy, Eraser, GripHorizontal, GripVertical, Plus, Rows3, Columns3, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Baseline, ChevronDown, Combine, Copy, Eraser, GripHorizontal, GripVertical, Plus, Rows3, Columns3, Trash2, Ungroup } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -22,30 +22,40 @@ import {
   deleteRow,
   duplicateColumn,
   duplicateRow,
+  expandRectForSpans,
   insertColumn,
   insertRow,
+  isPhantom,
   MAX_TABLE_COLUMNS,
   MAX_TABLE_ROWS,
+  mergeCells,
   moveColumn,
   moveRow,
   pasteCells,
   setColumnWidth,
+  spanAnchorAt,
+  spansInRect,
+  splitCells,
   TABLE_COLUMN_WIDTH,
   tableCells,
   tableGrid,
   tableToHtml,
   tableToTabs,
   writeCell,
+  type CellRect,
   type TableWrite,
 } from "../../core/simple-table";
 import type { Block, InlineContent } from "../../core/types";
 import { cellField } from "../../collaboration/protocol";
 import { blockRecordId } from "../../platform/record-ids";
-import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { CELL_GRAMMAR, RichField } from "./RichField";
 import { focusRange, caretOnFirstLine, caretOnLastLine, caretOffset, placeCaretNear, selectionOffsets } from "./selection";
-import { gridFromClipboard } from "./table-clipboard";
-import { markForKey } from "./marks";
+import { gridFromClipboard, type ReadGrid } from "./table-clipboard";
+import { markForKey, MARKS } from "./marks";
+import { ColorMenu } from "./ColorMenu";
+import { rangeColor } from "../../core/inline-content";
+import type { ContentColor } from "../../core/types";
 
 /* A simple table — Notion's: a grid of cells in a page, drawn and edited in
    place (the model, and every way reading one can go wrong, head
@@ -102,7 +112,16 @@ interface CellRange {
 
 type TableMenu =
   | { kind: "row"; rowId: string; anchor: AnchorRect }
-  | { kind: "column"; columnId: string; anchor: AnchorRect };
+  | { kind: "column"; columnId: string; anchor: AnchorRect }
+  | { kind: "cells"; anchor: AnchorRect };
+
+/** A cell range as a rectangle of indexes. */
+const rectOfRange = (range: CellRange): CellRect => ({
+  row: Math.min(range.anchor.row, range.focus.row),
+  column: Math.min(range.anchor.column, range.focus.column),
+  rows: Math.abs(range.focus.row - range.anchor.row) + 1,
+  columns: Math.abs(range.focus.column - range.anchor.column) + 1,
+});
 
 /** A row or a column being moved by its grip: where the pointer was pressed
  *  (clientY for a row, clientX for a column), how far it has gone, and where
@@ -156,10 +175,6 @@ export function tableEntryCell(row: Element, direction: -1 | 1, x: number): HTML
   return under?.querySelector<HTMLElement>(".stbl__text") ?? null;
 }
 
-const inRange = (range: CellRange | null, row: number, column: number) => Boolean(range)
-  && row >= Math.min(range!.anchor.row, range!.focus.row) && row <= Math.max(range!.anchor.row, range!.focus.row)
-  && column >= Math.min(range!.anchor.column, range!.focus.column) && column <= Math.max(range!.anchor.column, range!.focus.column);
-
 const widthOf = (width: number | undefined) => width ?? TABLE_COLUMN_WIDTH.fallback;
 
 const newId = (kind: "column" | "row") => createId(kind === "column" ? "col" : "row");
@@ -194,6 +209,13 @@ export const SimpleTable = memo(function SimpleTable({
   const pending = useRef<{ row: string; column: string; at: "start" | "end" } | null>(null);
   const pointer = useRef<{ start: CellAt; moved: boolean } | null>(null);
   const lastPress = useRef<{ x: number; y: number; when: number } | null>(null);
+  // The colour picker hanging off the cell toolbar.
+  const [colorOpen, setColorOpen] = useState(false);
+  const colorBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Where the table itself sits — the toolbar anchors over the selection box.
+  const [tableBox, setTableBox] = useState({ top: 0, left: 0 });
+  const tableAbsTop = tableBox.top;
+  const tableAbsLeft = tableBox.left;
 
   const cellKey = (rowId: string, columnId: string) => `${rowId}:${columnId}`;
   const cellElement = (at: CellAt) => {
@@ -240,7 +262,7 @@ export const SimpleTable = memo(function SimpleTable({
   const addRow = (at: number, column = 0, cellsOf: Record<string, InlineContent> = {}) => {
     const rowId = newId("row");
     if (grid.rows.length >= MAX_TABLE_ROWS) return false;
-    const made = write([insertRow(grid, at, rowId, cellsOf)]);
+    const made = write(insertRow(grid, at, rowId, cellsOf));
     if (made) pending.current = { row: rowId, column: grid.columns[Math.min(column, lastColumn)].id, at: "start" };
     return made;
   };
@@ -336,10 +358,14 @@ export const SimpleTable = memo(function SimpleTable({
     frameRef.current?.focus({ preventScroll: true });
   };
 
+  /* The selection always swallows whole spans — a merged cell is one cell. */
+  const expandedRect = (): CellRect | null => range ? expandRectForSpans(grid, rectOfRange(range)) : null;
+
   const selectedCells = (): { rows: number[]; columns: number[] } => {
-    if (!range) return { rows: [], columns: [] };
-    const span = (from: number, to: number) => Array.from({ length: Math.abs(to - from) + 1 }, (_, index) => Math.min(from, to) + index);
-    return { rows: span(range.anchor.row, range.focus.row), columns: span(range.anchor.column, range.focus.column) };
+    const rect = expandedRect();
+    if (!rect) return { rows: [], columns: [] };
+    const span = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, index) => from + index);
+    return { rows: span(rect.row, rect.row + rect.rows - 1), columns: span(rect.column, rect.column + rect.columns - 1) };
   };
 
   const clearSelected = () => {
@@ -368,6 +394,83 @@ export const SimpleTable = memo(function SimpleTable({
       return { kind: "row" as const, rowId: grid.rows[row].id, row: { order: grid.rows[row].order, cells: next } };
     });
     write(writes);
+  };
+
+  /** Every visible (non-phantom) cell the expanded selection covers, with
+   *  its row — for marks and colours, which write whole rows. */
+  const selectedVisibleCells = (): Array<{ row: number; column: number; content: InlineContent }> => {
+    const rect = expandedRect();
+    if (!rect) return [];
+    const all = tableCells(grid);
+    const out: Array<{ row: number; column: number; content: InlineContent }> = [];
+    for (let r = rect.row; r < rect.row + rect.rows; r++)
+      for (let c = rect.column; c < rect.column + rect.columns; c++) {
+        if (isPhantom(grid, r, c)) continue;
+        out.push({ row: r, column: c, content: all[r]?.[c] ?? [] });
+      }
+    return out;
+  };
+
+  /** A colour over the visible cells' words — same mark the format bar
+   *  paints on a text selection. */
+  const applyColorToSelected = (color: ContentColor | undefined) => {
+    const touched = selectedVisibleCells();
+    const byRow = new Map<number, Record<string, InlineContent>>();
+    for (const cell of touched) {
+      if (!inlinePlainText(cell.content)) continue;
+      const columnId = grid.columns[cell.column].id;
+      const rowCells = byRow.get(cell.row) ?? { ...grid.rows[cell.row].cells };
+      rowCells[columnId] = applyMarkToRange(cell.content, 0, inlinePlainText(cell.content).length, "color", color);
+      byRow.set(cell.row, rowCells);
+    }
+    write([...byRow.entries()].map(([r, cells]) => ({
+      kind: "row" as const, rowId: grid.rows[r].id, row: { order: grid.rows[r].order, cells },
+    })));
+  };
+
+  /** Every selected cell's words wear the mark (so the button shows on). */
+  const markShared = (mark: ToggleableMark): boolean => {
+    const touched = selectedVisibleCells().filter((cell) => inlinePlainText(cell.content));
+    return touched.length > 0 && touched.every((cell) => rangeHasMark(cell.content, 0, inlinePlainText(cell.content).length, mark));
+  };
+
+  /** The colour every selected cell shares, if they share one. */
+  const selectedColor = (): ContentColor | undefined => {
+    const touched = selectedVisibleCells().filter((cell) => inlinePlainText(cell.content));
+    if (!touched.length) return undefined;
+    const shared = rangeColor(touched[0].content, 0, inlinePlainText(touched[0].content).length);
+    return touched.every((cell) => rangeColor(cell.content, 0, inlinePlainText(cell.content).length) === shared) ? shared : undefined;
+  };
+
+  /** The whole selection becomes one cell — top-left keeps every word. */
+  const mergeSelected = () => {
+    const rect = expandedRect();
+    if (!rect) return;
+    const writes = mergeCells(grid, rect);
+    if (!writes.length || !write(writes)) return;
+    setRange({ anchor: { row: rect.row, column: rect.column }, focus: { row: rect.row + rect.rows - 1, column: rect.column + rect.columns - 1 } });
+  };
+
+  /** Merged cells in the selection let go and come back plain. */
+  const splitSelected = () => {
+    const rect = expandedRect();
+    if (!rect) return;
+    write(splitCells(grid, rect));
+  };
+
+  /** What the selection can do: a 2+ cell rectangle can Merge, a rectangle
+   *  holding a merged cell can Split. */
+  const selectionOps = () => {
+    const rect = expandedRect();
+    if (!rect) return { mergeable: false, splittable: false };
+    const touched = grid.spans.some((span) => {
+      const anchor = grid.rows.findIndex((row) => row.id === span.row);
+      const column = grid.columns.findIndex((item) => item.id === span.column);
+      if (anchor < 0 || column < 0) return false;
+      return anchor < rect.row + rect.rows && rect.row < anchor + span.rows
+        && column < rect.column + rect.columns && rect.column < column + span.columns;
+    });
+    return { mergeable: rect.rows * rect.columns > 1, splittable: touched };
   };
 
   const onFrameKey = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -422,19 +525,20 @@ export const SimpleTable = memo(function SimpleTable({
     if (!range || event.target !== frameRef.current) return;
     event.preventDefault();
     const copied = selectedGrid();
+    const rect = expandRectForSpans(grid, rectOfRange(range));
     event.clipboardData.setData("text/plain", tableToTabs(copied));
-    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied)}`);
+    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied, false, spansInRect(grid, rect))}`);
     if (cut && !readOnly) clearSelected();
   };
 
   /** A grid pasted at a cell: laid over the cells from there, the table
-   *  growing for what does not fit. */
-  const pasteAt = (at: CellAt, pasted: InlineContent[][]) => {
-    const laid = pasteCells(grid, at.row, at.column, pasted, newId);
+   *  growing for what does not fit — its merges coming along. */
+  const pasteAt = (at: CellAt, pasted: ReadGrid) => {
+    const laid = pasteCells(grid, at.row, at.column, pasted.rows, newId, pasted.spans);
     write(laid.writes);
     setRange({ anchor: at, focus: {
-      row: Math.min(at.row + pasted.length - 1, MAX_TABLE_ROWS - 1),
-      column: Math.min(at.column + Math.max(...pasted.map((row) => row.length)) - 1, MAX_TABLE_COLUMNS - 1),
+      row: Math.min(at.row + pasted.rows.length - 1, MAX_TABLE_ROWS - 1),
+      column: Math.min(at.column + Math.max(...pasted.rows.map((row) => row.length)) - 1, MAX_TABLE_COLUMNS - 1),
     } });
     frameRef.current?.focus({ preventScroll: true });
   };
@@ -448,7 +552,14 @@ export const SimpleTable = memo(function SimpleTable({
 
   /* A drag from one cell across others selects them as cells. */
   const onPointerDown = (event: ReactPointerEvent<HTMLTableElement>) => {
-    if (event.button !== 0) return;
+    /* A press of another button (right, middle) takes no caret either: its
+       preventDefault keeps the cell from focusing, so a right-press on the
+       cell selection does not dissolve it before its menu opens — the
+       contextmenu event itself still arrives. */
+    if (event.button !== 0) {
+      event.preventDefault();
+      return;
+    }
     const cell = (event.target as Element).closest<HTMLElement>("td[data-row-index]");
     if (!cell || cell.closest(".stbl__table") !== event.currentTarget) return;
     const at = { row: Number(cell.dataset.rowIndex), column: Number(cell.dataset.columnIndex) };
@@ -673,7 +784,9 @@ export const SimpleTable = memo(function SimpleTable({
     const table = frameRef.current?.querySelector(".stbl__table");
     if (!table) return;
     const measure = () => {
-      const top = table.getBoundingClientRect().top;
+      const box0 = table.getBoundingClientRect();
+      setTableBox({ top: box0.top, left: box0.left });
+      const top = box0.top;
       setRowBoxes([...table.querySelectorAll(":scope > tbody > tr")].map((tr) => {
         const box = tr.getBoundingClientRect();
         return { top: box.top - top, height: box.height };
@@ -714,10 +827,10 @@ export const SimpleTable = memo(function SimpleTable({
         ) : null}
         <MenuItem icon={<ArrowUp size={16} />} label="Insert above" disabled={grid.rows.length >= MAX_TABLE_ROWS} onSelect={() => { closeMenu(); addRow(index, 0); }} />
         <MenuItem icon={<ArrowDown size={16} />} label="Insert below" disabled={grid.rows.length >= MAX_TABLE_ROWS} onSelect={() => { closeMenu(); addRow(index + 1, 0); }} />
-        <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={grid.rows.length >= MAX_TABLE_ROWS} onSelect={() => run([duplicateRow(grid, row.id, newId("row"))])} />
+        <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={grid.rows.length >= MAX_TABLE_ROWS} onSelect={() => run(duplicateRow(grid, row.id, newId("row")))} />
         <MenuItem icon={<Eraser size={16} />} label="Clear contents" onSelect={() => run(clearRows(grid, [row.id]))} />
         <MenuDivider />
-        <MenuItem icon={<Trash2 size={16} />} label="Delete" tone="danger" disabled={grid.rows.length <= 1} onSelect={() => run([deleteRow(grid, row.id)])} />
+        <MenuItem icon={<Trash2 size={16} />} label="Delete" tone="danger" disabled={grid.rows.length <= 1} onSelect={() => run(deleteRow(grid, row.id))} />
       </MenuList>
     );
   };
@@ -743,12 +856,12 @@ export const SimpleTable = memo(function SimpleTable({
             <MenuDivider />
           </>
         ) : null}
-        <MenuItem icon={<ArrowLeft size={16} />} label="Insert left" disabled={full} onSelect={() => run([insertColumn(grid, index, newId("column"))])} />
-        <MenuItem icon={<ArrowRight size={16} />} label="Insert right" disabled={full} onSelect={() => run([insertColumn(grid, index + 1, newId("column"))])} />
+        <MenuItem icon={<ArrowLeft size={16} />} label="Insert left" disabled={full} onSelect={() => run(insertColumn(grid, index, newId("column")))} />
+        <MenuItem icon={<ArrowRight size={16} />} label="Insert right" disabled={full} onSelect={() => run(insertColumn(grid, index + 1, newId("column")))} />
         <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={full} onSelect={() => run(duplicateColumn(grid, column.id, newId("column")))} />
         <MenuItem icon={<Eraser size={16} />} label="Clear contents" onSelect={() => run(clearRows(grid, grid.rows.map((row) => row.id), [column.id]))} />
         <MenuDivider />
-        <MenuItem icon={<Trash2 size={16} />} label="Delete" tone="danger" disabled={grid.columns.length <= 1} onSelect={() => run([deleteColumn(grid, column.id)])} />
+        <MenuItem icon={<Trash2 size={16} />} label="Delete" tone="danger" disabled={grid.columns.length <= 1} onSelect={() => run(deleteColumn(grid, column.id))} />
       </MenuList>
     );
   };
@@ -773,14 +886,18 @@ export const SimpleTable = memo(function SimpleTable({
   // While a row is moved, the table draws it where it would land.
   const shownRows = lifted?.kind === "row" ? reordered(grid.rows, lifted.from, lifted.to) : grid.rows;
   const shownColumns = lifted?.kind === "column" ? reordered(grid.columns, lifted.from, lifted.to) : grid.columns;
+  /* The selection always swallows whole merged cells — paint and maths
+     both read the expanded rectangle. */
+  const selRect = expandedRect();
+  const inSelected = (r: number, c: number) => Boolean(selRect)
+    && r >= selRect!.row && r < selRect!.row + selRect!.rows
+    && c >= selRect!.column && c < selRect!.column + selRect!.columns;
   const rangeBox = (() => {
-    if (!range || lifted) return null;
-    const first = rowBoxes[Math.min(range.anchor.row, range.focus.row)];
-    const last = rowBoxes[Math.max(range.anchor.row, range.focus.row)];
-    const left = Math.min(range.anchor.column, range.focus.column);
-    const right = Math.max(range.anchor.column, range.focus.column);
+    if (!selRect || lifted) return null;
+    const first = rowBoxes[selRect.row];
+    const last = rowBoxes[selRect.row + selRect.rows - 1];
     if (!first || !last) return null;
-    return { top: first.top, left: lefts[left], width: lefts[right + 1] - lefts[left], height: last.top + last.height - first.top };
+    return { top: first.top, left: lefts[selRect.column], width: lefts[selRect.column + selRect.columns] - lefts[selRect.column], height: last.top + last.height - first.top };
   })();
 
   return (
@@ -811,7 +928,22 @@ export const SimpleTable = memo(function SimpleTable({
             if (next.row !== hover?.row || next.column !== hover?.column) setHover(next);
           }}
         >
-          <table className="stbl__table" style={{ width: total }} onPointerDown={onPointerDown}>
+          <table
+            className="stbl__table"
+            style={{ width: total }}
+            onPointerDown={onPointerDown}
+            onContextMenu={(event) => {
+              const cell = (event.target as Element).closest<HTMLElement>("td[data-row-index]");
+              if (!cell || cell.closest(".stbl__table") !== event.currentTarget) return;
+              event.preventDefault();
+              const at = { row: Number(cell.dataset.rowIndex), column: Number(cell.dataset.columnIndex) };
+              // Right-press on an unselected cell selects it; on the
+              // selection it keeps it and just opens the menu.
+              if (!inSelected(at.row, at.column)) selectCells({ anchor: at, focus: at });
+              else frameRef.current?.focus({ preventScroll: true });
+              setMenu({ kind: "cells", anchor: pointRect(event.clientX, event.clientY) });
+            }}
+          >
             <colgroup>
               {shownColumns.map((column) => <col key={column.id} style={{ width: widthOf(sizing?.columnId === column.id ? sizing.width : column.width) }} />)}
             </colgroup>
@@ -821,15 +953,23 @@ export const SimpleTable = memo(function SimpleTable({
                   key={row.id}
                   className={lifted?.kind === "row" && lifted.id === row.id ? "is-moving" : undefined}
                 >
-                  {shownColumns.map((column, columnIndex) => (
+                  {shownColumns.map((column, columnIndex) => {
+                    // A cell a span swallowed draws nothing — its anchor
+                    // grows over it instead (HTML's own colspan/rowspan).
+                    if (isPhantom(grid, rowIndex, columnIndex)) return null;
+                    const anchored = spanAnchorAt(grid, rowIndex, columnIndex);
+                    return (
                     <td
                       key={column.id}
                       data-row-index={rowIndex}
                       data-column-index={columnIndex}
+                      colSpan={anchored && anchored.span.columns > 1 ? anchored.span.columns : undefined}
+                      rowSpan={anchored && anchored.span.rows > 1 ? anchored.span.rows : undefined}
                       className={[
                         "stbl__cell",
                         head(rowIndex, columnIndex) ? "is-head" : "",
-                        inRange(range, rowIndex, columnIndex) ? "is-selected" : "",
+                        anchored ? "is-merged" : "",
+                        inSelected(rowIndex, columnIndex) ? "is-selected" : "",
                         lifted?.kind === "column" && lifted.id === column.id ? "is-moving" : "",
                       ].filter(Boolean).join(" ")}
                     >
@@ -860,7 +1000,8 @@ export const SimpleTable = memo(function SimpleTable({
                         onFocus={() => { if (range) setRange(null); }}
                       />
                     </td>
-                  ))}
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -983,7 +1124,7 @@ export const SimpleTable = memo(function SimpleTable({
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
                     const columnId = newId("column");
-                    if (write([insertColumn(grid, grid.columns.length, columnId)])) {
+                    if (write(insertColumn(grid, grid.columns.length, columnId))) {
                       pending.current = { row: grid.rows[0].id, column: columnId, at: "start" };
                     }
                   }}
@@ -1013,6 +1154,109 @@ export const SimpleTable = memo(function SimpleTable({
         onDismiss={closeMenu}
       >
         {menuColumnIndex >= 0 ? columnMenuItems(menuColumnIndex) : <div />}
+      </Popover>
+
+      {/* The cell menu — a right-press on cells selected as cells. */}
+      <Popover
+        open={menu?.kind === "cells"}
+        anchor={menu?.kind === "cells" ? menu.anchor : null}
+        placement="right-start"
+        label="Cells"
+        group="cells"
+        onDismiss={closeMenu}
+      >
+        {menu?.kind === "cells" ? (
+          <MenuList label="Cells" autoFocus>
+            <MenuItem
+              icon={<Combine size={16} />}
+              label={selRect && selRect.rows * selRect.columns > 1 ? `Merge ${selRect.columns}×${selRect.rows} cells` : "Merge cells"}
+              disabled={!selectionOps().mergeable}
+              onSelect={() => { closeMenu(); mergeSelected(); }}
+            />
+            <MenuItem
+              icon={<Ungroup size={16} />}
+              label="Split cells"
+              disabled={!selectionOps().splittable}
+              onSelect={() => { closeMenu(); splitSelected(); }}
+            />
+            <MenuDivider />
+            <MenuItem
+              icon={<Eraser size={16} />}
+              label="Clear contents"
+              onSelect={() => { closeMenu(); clearSelected(); }}
+            />
+          </MenuList>
+        ) : <div />}
+      </Popover>
+
+      {/* Cells selected as cells get their own little format bar — the same
+          marks a text selection gets, plus colour, plus merge/split. It
+          floats over the selection's top edge and never takes focus, so the
+          blue range stays the selection. */}
+      <Popover
+        open={Boolean(range) && !readOnly && !menu && !lifted}
+        anchor={rangeBox ? { top: tableAbsTop + rangeBox.top, left: tableAbsLeft + rangeBox.left, bottom: tableAbsTop + rangeBox.top + rangeBox.height, right: tableAbsLeft + rangeBox.left + rangeBox.width, width: rangeBox.width, height: rangeBox.height } : null}
+        placement="top-start"
+        role="toolbar"
+        label="Cell format"
+        group="cells"
+        closeOnScroll={false}
+        onDismiss={(reason) => { if (reason === "escape") setColorOpen(false); }}
+      >
+        <div className="format-bar" onPointerDown={(event) => event.preventDefault()}>
+          <div className="format-bar__group">
+            <Tooltip label="Merge cells">
+              <button type="button" className="icon-btn" aria-label="Merge cells" disabled={!selectionOps().mergeable} onClick={mergeSelected}>
+                <Combine size={16} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Split cells">
+              <button type="button" className="icon-btn" aria-label="Split cells" disabled={!selectionOps().splittable} onClick={splitSelected}>
+                <Ungroup size={16} />
+              </button>
+            </Tooltip>
+          </div>
+          <div className="format-bar__group">
+            {MARKS.map((item) => (
+              <Tooltip key={item.mark} label={item.label} hint={`⌘${item.shift ? "⇧" : ""}${item.key.toUpperCase()}`}>
+                <button
+                  type="button"
+                  className={`icon-btn ${markShared(item.mark) ? "is-on" : ""}`}
+                  aria-label={item.label}
+                  onClick={() => toggleSelectedMark(item.mark)}
+                >
+                  <item.icon size={16} />
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+          <div className="format-bar__group">
+            <Tooltip label="Color">
+              <button
+                type="button"
+                ref={colorBtnRef}
+                className="format-bar__turn format-bar__color"
+                data-color={selectedColor()}
+                aria-label="Text color"
+                onClick={() => setColorOpen((open) => !open)}
+              >
+                <Baseline size={16} />
+                <ChevronDown size={12} />
+              </button>
+            </Tooltip>
+          </div>
+        </div>
+      </Popover>
+      <Popover
+        open={colorOpen && Boolean(range)}
+        anchor={colorBtnRef.current ? rectOf(colorBtnRef.current) : null}
+        placement="bottom-start"
+        label="Color"
+        group="cells"
+        closeOnScroll={false}
+        onDismiss={() => setColorOpen(false)}
+      >
+        <ColorMenu current={selectedColor()} autoFocus={false} onPick={(color) => { applyColorToSelected(color); setColorOpen(false); }} />
       </Popover>
     </div>
   );

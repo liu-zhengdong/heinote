@@ -1,5 +1,5 @@
 import { inlineFromText, inlinePlainText, sliceInlineContent } from "../../core/inline-content";
-import { isMarkdownTableStart, markdownTableLines, normalizeCell, tabbedRows } from "../../core/simple-table";
+import { isMarkdownTableStart, markdownTableLines, normalizeCell, tabbedRows, type CellRect } from "../../core/simple-table";
 import type { InlineContent } from "../../core/types";
 import { markdownInlineToContent } from "../../core/inline-markdown";
 import { inlineFromNodes } from "./rich-text";
@@ -10,12 +10,14 @@ import { inlineFromNodes } from "./rich-text";
    through a cell's own checks (`normalizeCell`), and HTML is read as a
    paragraph's words are: its marks and its words, nothing else. */
 
-/** A grid read off the clipboard: its rows, and whether its first row is a
+/** A grid read off the clipboard: its rows, whether its first row is a
  *  header (a Markdown table's always is; an HTML table's when its cells are
- *  <th>; tab-separated lines never say). */
+ *  <th>; tab-separated lines never say), and the merged cells it carries —
+ *  an HTML table's colspan/rowspan as cell rects. */
 export interface ReadGrid {
   rows: InlineContent[][];
   header: boolean;
+  spans: CellRect[];
 }
 
 /** A pasted cell's words, without the spaces its markup's indents leave at
@@ -38,12 +40,33 @@ export function gridFromHtml(html: string): ReadGrid | null {
   if (outside) return null;
   const lines = [...table.querySelectorAll("tr")].filter((row) => row.closest("table") === table);
   const cellsOf = (row: Element) => [...row.children].filter((cell) => cell.tagName === "TD" || cell.tagName === "TH");
-  const rows = lines
-    .map((row) => cellsOf(row).map(cellWords))
-    .filter((row) => row.length);
-  if (!rows.length) return null;
+  /* colspan/rowspan open the matrix up: every <td> claims the next free
+     slot in its row — the ones a rowspan parked there get skipped. */
+  const spans: CellRect[] = [];
+  const parked = new Set<string>();
+  const rows: InlineContent[][] = [];
+  lines.forEach((line, r) => {
+    const out: InlineContent[] = [];
+    let c = 0;
+    for (const cell of cellsOf(line)) {
+      while (parked.has(`${r}:${c}`)) c++;
+      const colspan = Math.max(1, Math.min(20, parseInt(cell.getAttribute("colspan") ?? "1", 10) || 1));
+      const rowspan = Math.max(1, Math.min(200, parseInt(cell.getAttribute("rowspan") ?? "1", 10) || 1));
+      if (colspan * rowspan > 1) {
+        spans.push({ row: r, column: c, rows: rowspan, columns: colspan });
+        for (let i = r; i < r + rowspan; i++)
+          for (let j = c; j < c + colspan; j++)
+            if (i !== r || j !== c) parked.add(`${i}:${j}`);
+      }
+      out[c] = cellWords(cell);
+      c += colspan;
+    }
+    if (out.length) rows[r] = out;
+  });
+  const matrix = rows.filter(Boolean).map((row) => row.map((cell) => cell ?? []));
+  if (!matrix.length) return null;
   const first = lines.find((row) => cellsOf(row).length);
-  return { rows, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH") };
+  return { rows: matrix, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH"), spans };
 }
 
 /** A Markdown table written out, as rows of cells, or null for other text. */
@@ -66,15 +89,15 @@ export function readGrid(data: DataTransfer, anyText: boolean): ReadGrid | null 
   const text = data.getData("text/plain");
   if (!text) return anyText ? fromHtml : null;
   const fromMarkdown = gridFromMarkdown(text);
-  if (fromMarkdown) return { rows: fromMarkdown, header: true };
+  if (fromMarkdown) return { rows: fromMarkdown, header: true, spans: [] };
   const tabbed = tabbedRows(text);
-  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false };
+  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false, spans: [] };
   if (!anyText) return null;
   const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false };
+  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false, spans: [] };
 }
 
-/** The grid's rows alone — what a paste over cells lays down. */
-export function gridFromClipboard(data: DataTransfer, anyText: boolean): InlineContent[][] | null {
-  return readGrid(data, anyText)?.rows ?? null;
+/** The grid's rows and merges — what a paste over cells lays down. */
+export function gridFromClipboard(data: DataTransfer, anyText: boolean): ReadGrid | null {
+  return readGrid(data, anyText);
 }

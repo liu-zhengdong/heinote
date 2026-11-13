@@ -945,7 +945,7 @@ export function DocumentEditor({
     const grid = incoming ? null : readGrid(data, false);
     const tableId = createId("block");
     const table = grid ? { by_id: { [tableId]: createBlock(tableId, "table", {
-      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header }),
+      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans }),
     }) } } : null;
     const blocks = incoming?.tree ?? table ?? textToBlocks(data.getData("text/plain"), () => createId("block"));
     const pages = store.getState().pages;
@@ -1573,6 +1573,7 @@ export function DocumentEditor({
         return item.row ? { type: "set", path: [...base, "rows", item.rowId], value: item.row } : { type: "delete", path: [...base, "rows", item.rowId] };
       }
       if (item.kind === "columns") return { type: "set", path: [...base, "columns"], value: item.columns };
+      if (item.kind === "spans") return item.spans.length ? { type: "set", path: [...base, "spans"], value: item.spans } : { type: "delete", path: [...base, "spans"] };
       return item.on ? { type: "set", path: [...base, item.which], value: true } : { type: "delete", path: [...base, item.which] };
     });
     commitWrites([
