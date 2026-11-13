@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, BookMarked, CloudUpload, Code2, DatabaseBackup, ExternalLink, HardDrive, Info, Search, Settings2, Users } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowUpCircle, BookMarked, CheckCircle2, CloudUpload, Code2, DatabaseBackup, ExternalLink, HardDrive, Info, RefreshCw, Search, Settings2, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Select } from "../../components/Select";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
@@ -774,9 +774,9 @@ function AboutPanel() {
         <dt>服务启动于</dt>
         <dd><span className="ac-muted">{formatDateTime(data.startedAt)}</span></dd>
       </div>
+      <UpdateCard data={data} />
     </dl>
     <p className="ac-muted ac-about__foot">包标识 {data.name} · 反馈问题请前往仓库提交 Issue。</p>
-    <UpdateCard current={data.version} />
   </div>;
 }
 
@@ -784,8 +784,9 @@ const STEP_LABEL: Record<UpdateStep, string> = {
   download: "下载产物", verify: "校验完整性", unpack: "解包", install: "安装依赖",
   switch: "切换版本", restart: "重启服务", check: "健康检查",
 };
+const STEP_ORDER = Object.keys(STEP_LABEL) as UpdateStep[];
 
-function UpdateCard({ current }: { current: string }) {
+function UpdateCard({ data }: { data: About }) {
   const [check, setCheck] = useState<UpdateCheck | null>(null);
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [error, setError] = useState("");
@@ -814,7 +815,7 @@ function UpdateCard({ current }: { current: string }) {
   const doCheck = useCallback(async () => {
     setChecking(true); setError("");
     try { setCheck(await api<UpdateCheck>("/api/admin/update-check")); }
-    catch (reason) { setError(errorMessage(reason)); }
+    catch (reason) { setCheck(null); setError(errorMessage(reason)); }
     finally { setChecking(false); }
   }, []);
 
@@ -827,23 +828,38 @@ function UpdateCard({ current }: { current: string }) {
   }, [toast]);
 
   const running = status?.status === "running";
-  return <section className="ac-update">
-    <h4 className="ac-update__title">版本更新</h4>
-    {running ? <p className="ac-muted">正在更新到 {status?.version}：{status?.step ? STEP_LABEL[status.step] : "准备中"}… 服务会短暂不可用。</p> : null}
-    {status?.status === "failed" ? <p className="ac-update__error">上次更新失败（{status?.step ? STEP_LABEL[status.step] : "未知阶段"}）：{status?.error}</p> : null}
-    {status?.status === "applied" ? <p className="ac-muted">已更新到 {status?.version}。</p> : null}
-    {check && !running ? (
-      check.newer ? (
-        <div className="ac-update__release">
-          <p>发现新版本 <strong>{check.tag}</strong>{check.notes ? `：${check.notes.split("\n")[0].slice(0, 120)}` : ""}</p>
-          {check.asset
-            ? <button type="button" className="btn" onClick={() => void apply()}>更新到 {check.tag}</button>
-            : <p className="ac-muted">该版本未提供自动更新产物，请手动升级。</p>}
-        </div>
-      ) : <p className="ac-muted">当前 v{current} 已是最新版本（{check.tag}）。</p>
-    ) : null}
-    {error ? <p className="ac-update__error">{error} <button type="button" className="btn" onClick={() => void doCheck()}>重试</button></p> : null}
-    {!running && !check && !error ? <button type="button" className="btn" disabled={checking} onClick={() => void doCheck()}>{checking ? "检查中…" : "检查更新"}</button> : null}
-    {!running && check ? <button type="button" className="btn btn--outline" onClick={() => void doCheck()}>{checking ? "检查中…" : "重新检查"}</button> : null}
-  </section>;
+  const stepIndex = status?.step ? STEP_ORDER.indexOf(status.step) : -1;
+  const progress = running ? Math.round(((stepIndex >= 0 ? stepIndex + 1 : 1) / STEP_ORDER.length) * 100) : 0;
+  const releaseUrl = check?.tag ? `${data.repository}/releases/tag/${check.tag}` : null;
+
+  return <div className="ac-field ac-update">
+    <dt>版本更新</dt>
+    <dd className="ac-update__body">
+      {running ? <>
+        <p className="ac-update__line"><span className="spinner" aria-hidden="true" />正在更新到 {status?.version} · {status?.step ? STEP_LABEL[status.step] : "准备中"}，服务会短暂不可用。</p>
+        <div className="ac-update__bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress}><span style={{ width: `${Math.max(8, progress)}%` }} /></div>
+      </> : null}
+      {!running && status?.status === "failed" ? <p className="ac-update__line ac-update__line--error"><AlertTriangle size={15} aria-hidden="true" />上次更新在「{status?.step ? STEP_LABEL[status.step] : "未知阶段"}」阶段失败：{status?.error || "原因未知"}</p> : null}
+      {!running && status?.status === "applied" ? <p className="ac-update__line ac-update__line--ok"><CheckCircle2 size={15} aria-hidden="true" />已更新到 {status?.version}。</p> : null}
+      {!running && check ? (
+        check.newer ? (
+          <p className="ac-update__line ac-update__line--release">
+            <ArrowUpCircle size={15} aria-hidden="true" />
+            <span className="ac-update__text">发现新版本 <strong className="ac-about__value">{check.tag}</strong>{check.notes ? ` · ${check.notes.split("\n")[0].slice(0, 120)}` : ""}</span>
+          </p>
+        ) : <p className="ac-update__line ac-update__line--ok"><CheckCircle2 size={15} aria-hidden="true" />已是最新版本（{check.tag}）</p>
+      ) : null}
+      {!running && error ? <p className="ac-update__line ac-update__line--error"><AlertTriangle size={15} aria-hidden="true" />{error}</p> : null}
+      {!running ? <div className="ac-update__actions">
+        {check?.newer ? (
+          check.asset
+            ? <button type="button" className="btn btn--primary" onClick={() => void apply()}>更新到 {check.tag}</button>
+            : <a className="ac-about__link ac-update__manual" href={releaseUrl ?? data.repository} target="_blank" rel="noreferrer">手动升级 <ExternalLink size={13} /></a>
+        ) : null}
+        <button type="button" className="btn" disabled={checking} onClick={() => void doCheck()}>
+          <RefreshCw size={14} aria-hidden="true" className={checking ? "spin" : undefined} />{checking ? "检查中…" : check || error ? "重新检查" : "检查更新"}
+        </button>
+      </div> : null}
+    </dd>
+  </div>;
 }
