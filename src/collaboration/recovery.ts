@@ -9,6 +9,17 @@ export interface RecoveryDraft {
 export interface RecoveryEntry extends RecoveryDraft { id: string; createdAt: string; persisted: boolean }
 const memory = new Map<string, RecoveryEntry[]>();
 const key = (userId: string) => `notes:recovery:${userId}`;
+/** True once the document starts navigating away (reload, close). Requests
+ *  still in flight abort with "Failed to fetch" on the way out; none of that
+ *  is a save failure worth a modal draft. Real batch payloads stay in the
+ *  journal and replay after the reload. A bfcache restore clears the flag. */
+let closing = false;
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => { closing = true; });
+  window.addEventListener("unload", () => { closing = true; });
+  window.addEventListener("pageshow", (event) => { if (event.persisted) closing = false; });
+}
+export function navigationClosing(): boolean { return closing; }
 export function getRecovery(userId: string): RecoveryEntry[] {
   if (!userId) return [];
   let saved: RecoveryEntry[] = [];
@@ -22,7 +33,7 @@ export function getRecovery(userId: string): RecoveryEntry[] {
 }
 export function addRecovery(userId: string, draft: RecoveryDraft): RecoveryEntry {
   const entry: RecoveryEntry = { ...draft, id: draft.id ?? crypto.randomUUID(), createdAt: draft.createdAt ?? new Date().toISOString(), persisted: false };
-  if (!userId) return entry;
+  if (!userId || closing) return entry;
   const entries = new Map(getRecovery(userId).map((entry) => [entry.id, entry])); entries.set(entry.id, entry);
   try {
     localStorage.setItem(key(userId), JSON.stringify([...entries.values()].map((entry) => ({ ...entry, persisted: true }))));

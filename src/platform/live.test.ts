@@ -31,7 +31,7 @@ vi.mock("../collaboration/client", () => ({
   settleText: hooks.settleText,
 }));
 vi.mock("../collaboration/binding", () => ({ observedText: () => null }));
-vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery }));
+vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery, navigationClosing: () => false }));
 
 type Write = { scope: string; collection: string; id: string; action: string; value?: object; patch?: object; base?: object | null };
 type Batch = { requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[] };

@@ -4,7 +4,7 @@ import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
 import { collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, resetRefusedText, restorePendingText, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
-import { publishRecovery } from "../collaboration/recovery";
+import { navigationClosing, publishRecovery } from "../collaboration/recovery";
 import { base64ToBytes, bytesToBase64, documentKey, isStructureChange, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
 
 type Value = Record<string, unknown>;
@@ -78,6 +78,13 @@ function cancelBatch(batch: SavedBatch, items: Pending[]): void {
 }
 function refuseBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[], error: unknown): void {
   for (const scope of scopes(batch)) owner.paused.add(scope);
+  if (navigationClosing()) {
+    // The window is leaving. Keep the batch in the journal so it replays on
+    // the next load instead of recording a modal draft that cannot be read.
+    releasePendingCommit(batch.requestId);
+    for (const item of items) item.refuse(error);
+    return;
+  }
   preserveBatch(owner, batch, error);
   owner.journal.delete(batch.requestId); persistJournal(owner); releasePendingCommit(batch.requestId);
   for (const item of items) { if (item.change) settleText(item.change); item.refuse(error); }

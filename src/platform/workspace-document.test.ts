@@ -18,7 +18,7 @@ vi.mock("../collaboration/client", () => ({
   withStructureText: (action: () => void) => action(),
 }));
 vi.mock("../collaboration/binding", () => ({ observedText: () => null }));
-vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery }));
+vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery, navigationClosing: () => false }));
 
 type Value = Record<string, unknown>;
 type Row = { id: string; value: Value };
