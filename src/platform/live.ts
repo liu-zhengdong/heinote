@@ -2,7 +2,7 @@ import * as Y from "yjs";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
-import { collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
 import { base64ToBytes, bytesToBase64, documentKey, isObject, isStructureChange, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
@@ -204,6 +204,17 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
     if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
     const error = items.find((item) => item.error)?.error;
     if (error || involved.some((scope) => owner.denied.has(scope))) { refuseBatch(owner, batch, items, error ?? new Error("此范围已不可写入。内容已保留为草稿。"), error ? undefined : `denied:${involved.find((scope) => owner.denied.has(scope))}`); return; }
+    /* A structural write needs the page's live collaborative basis, which
+       the server refuses without — and the session that names it only opens
+       on demand now. Open it and attach the basis before the write goes. */
+    const addressed = new Set(batch.expectedPages.map((basis) => documentKey(basis)));
+    for (const item of items) {
+      const pageId = item.write ? pageOf(item.write) : undefined;
+      if (!item.structural || !item.write || !pageId || addressed.has(documentKey({ scope: item.write.scope, pageId }))) continue;
+      await awaitCollaborativeBasis(item.write.scope, pageId);
+      const basis = pageBasis(item.write.scope, pageId);
+      if (basis) { batch.expectedPages.push(basis); addressed.add(documentKey(basis)); }
+    }
     const acknowledge = () => { if (isCurrent(owner)) for (const item of items) if (item.change) settleText(item.change); };
     registerPendingCommit(batch.requestId, acknowledge);
     let delay = 250; let replays = 0; let announced = false;
@@ -279,10 +290,21 @@ export function withStrictRecordReplay(action: () => void): void {
   const previous = strictReplay; strictReplay = true;
   try { withRecordTransaction(action); } finally { strictReplay = previous; }
 }
+/** Sessions the journaled text updates need, opened lazily: a saved update
+ *  can only replay into a live document, so the pages it names get theirs
+ *  before restoreSavedWrites decides. A page that cannot supply one keeps
+ *  its draft path. */
+async function ensureRestoreSessions(owner: AccountQueue): Promise<void> {
+  const pages = new Set<string>();
+  for (const batch of owner.journal.values()) for (const update of batch.textUpdates) {
+    if (pages.add(documentKey(update))) await awaitCollaborativeBasis(update.scope, update.pageId);
+  }
+}
 export async function restoreSavedWrites(): Promise<void> {
   const owner = loadJournal();
   if (!owner.account) return;
   if (!owner.restoration) {
+    await ensureRestoreSessions(owner);
     const restored: Promise<void>[] = [];
     for (const batch of owner.journal.values()) {
       const items: Pending[] = batch.writes.map((write) => {
@@ -345,7 +367,6 @@ export class LiveCollection<R extends object> {
     if (this.closed || epoch !== this.epoch) return;
     const incoming = new Map(rows.map((row) => [row.id, row.value]));
     if (JSON.stringify([...incoming]) !== JSON.stringify([...this.remote])) { this.remote = incoming; this.emit(); }
-    if (this.name === "pages") await Promise.all(rows.filter(({ value }) => !(this.scope === "personal" && typeof (value as Value).share_space_id === "string")).map(({ id }) => openCollaborativePage(this.scope, id).catch(() => undefined)));
   }
   private schedule(): void { if (!this.closed) this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200); }
   private values(): Map<string, R> {
@@ -386,6 +407,10 @@ export class LiveCollection<R extends object> {
     const write: Write = { ...input, scope: this.scope, collection: this.name, base: before ? { ...before, ...richBase } : null };
     const after = input.action === "delete" ? undefined : input.action === "put" ? input.value as Value : merge(before ?? {}, input.patch as Value);
     const pageId = pageOf(write); const basis = pageId ? pageBasis(this.scope, pageId) : null;
+    /* A write on a page with no collaborative document yet opens it: pages
+       not on screen were never opened at startup, and a just-made page can
+       outrun its session. */
+    if (pageId && !basis) void openCollaborativePage(this.scope, pageId).catch(() => undefined);
     const observed = observedText();
     if (basis && observed && observed.field.pageId === pageId && observed.field.scope === this.scope && observed.field.revision) { basis.generation = observed.field.generation; basis.revision = observed.field.revision; }
     let change: LocalTextChange | undefined; let error: unknown;
