@@ -79,13 +79,15 @@ test("dragging across cells selects them without a flickering text selection", a
   const from = await cell(0, 0).boundingBox();
   const to = await cell(1, 1).boundingBox();
   expect(from && to).toBeTruthy();
-  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+  // Press in the cell's padding: the drag is a cell selection from its
+  // first pixel, so no text selection may paint along the way.
+  await page.mouse.move(from!.x + 4, from!.y + from!.height - 2);
   await page.mouse.down();
   const steps = 8;
   for (let i = 1; i <= steps; i += 1) {
     await page.mouse.move(
-      from!.x + (to!.x - from!.x) * (i / steps) + to!.width / 2,
-      from!.y + (to!.y - from!.y) * (i / steps) + to!.height / 2,
+      from!.x + 4 + (to!.x - from!.x) * (i / steps) + to!.width / 2,
+      from!.y + from!.height - 2 + (to!.y - from!.y) * (i / steps) + to!.height / 2,
     );
   }
   // While the drag runs, the browser's text selection stays out of it.
@@ -94,6 +96,50 @@ test("dragging across cells selects them without a flickering text selection", a
   await page.mouse.up();
   await expect(table.locator("td.is-selected")).toHaveCount(4);
   expect((await paintedSelections(page)).join("")).toBe("");
+});
+
+test("a drag on a cell's words selects them as text", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_words");
+  const box = await cell(0, 0).boundingBox();
+  const y = box!.y + box!.height / 2;
+  await page.mouse.move(box!.x + 10, y);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + 42, y, { steps: 4 });
+  await page.mouse.up();
+  const selected = await page.evaluate(() => window.getSelection()?.toString() ?? "");
+  expect(selected.length).toBeGreaterThan(0);
+  expect("alpha one").toContain(selected);
+  // A text selection, not a cell selection.
+  await expect(table.locator("td.is-selected")).toHaveCount(0);
+});
+
+test("a drag from a cell's padding selects the cell itself", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_pad");
+  const box = await cell(0, 0).boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height - 2);
+  await page.mouse.down();
+  // A short drag that stays inside the cell still selects the cell: the
+  // press began on the padding, not on the words.
+  await page.mouse.move(box!.x + box!.width / 2 + 10, box!.y + box!.height - 2, { steps: 2 });
+  await expect(table.locator("td.is-selected")).toHaveCount(1);
+  await page.mouse.up();
+  await expect(table.locator("td.is-selected")).toHaveCount(1);
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
+});
+
+test("a drag that leaves its starting cell clears the text selection", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_cross");
+  const from = await cell(0, 0).boundingBox();
+  const to = await cell(0, 1).boundingBox();
+  const y = from!.y + from!.height / 2;
+  await page.mouse.move(from!.x + 10, y);
+  await page.mouse.down();
+  // The first steps stay on the word: a text selection stands.
+  await page.mouse.move(from!.x + 40, y, { steps: 4 });
+  await page.mouse.move(to!.x + to!.width / 2, to!.y + to!.height / 2, { steps: 4 });
+  await expect(table.locator("td.is-selected")).toHaveCount(2);
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
 });
 
 test("double-clicking a word in a cell selects it as text", async ({ page }) => {

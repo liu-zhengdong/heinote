@@ -72,8 +72,10 @@ import type { ContentColor } from "../../core/types";
    the page's lines take the caret back. Escape selects the cell; with cells
    selected, the arrows move the selection (Shift grows it), Delete clears
    it, ⌘C and ⌘X copy it as a spreadsheet's rows, typing replaces the cell,
-   and a second Escape selects the table itself, as a block. A drag across
-   cells selects them too.
+   and a second Escape selects the table itself, as a block. A drag on a
+   cell's words selects text inside it; a drag from its padding — or one
+   crossing cell borders — selects the cells, and a drag out and back
+   selects a single cell.
 
    Shape, as Notion's (Winston, round 59: "I want to drag and change rows"):
    the row under the pointer shows a grip on its left edge and the column a
@@ -179,6 +181,42 @@ export function tableEntryCell(row: Element, direction: -1 | 1, x: number): HTML
   return under?.querySelector<HTMLElement>(".stbl__text") ?? null;
 }
 
+/** Whether `node` — a text node or an element-level hit — lies inside
+ *  `element` for a Range endpoint. */
+function posInside(element: HTMLElement, node: Node): boolean {
+  return element === node || element.contains(node);
+}
+
+interface CellHit {
+  node: Node;
+  offset: number;
+  /** "text" when the point is on the cell's words (a drag through it selects
+   *  them); "pad" when it is on the cell's padding (a drag selects cells). */
+  zone: "text" | "pad";
+}
+
+/** The DOM point under (x, y) inside a cell's text, and whether the press
+ *  landed on the words themselves or on the padding around them —
+ *  `caretPositionFromPoint` answers for the left padding too, so the strip
+ *  it returns is "pad" only when it stands apart from the caret's own box. */
+function caretHit(text: HTMLElement, x: number, y: number): CellHit | null {
+  const caret = document.caretPositionFromPoint?.(x, y)
+    ?? (document as Document & { caretRangeFromPoint?(x: number, y: number): Range | null }).caretRangeFromPoint?.(x, y);
+  if (!caret) return null;
+  const isRange = !("offsetNode" in caret);
+  const node = isRange ? caret.startContainer : caret.offsetNode;
+  const offset = isRange ? caret.startOffset : caret.offset;
+  const rect = isRange ? caret.getClientRects()[0] ?? caret.getBoundingClientRect() : caret.getClientRect();
+  const box = text.getBoundingClientRect();
+  let zone: CellHit["zone"] = "text";
+  if (!posInside(text, node)) zone = "pad";
+  else if (rect && (rect.width || rect.height)) {
+    if (y < rect.top - 4 || y > rect.bottom + 4 || x < rect.left - 1
+      || y < box.top + 5 || y > box.bottom - 5 || x < box.left + 5 || x > box.right - 5) zone = "pad";
+  }
+  return node ? { node, offset, zone } : null;
+}
+
 const widthOf = (width: number | undefined) => width ?? TABLE_COLUMN_WIDTH.fallback;
 
 const newId = (kind: "column" | "row") => createId(kind === "column" ? "col" : "row");
@@ -211,7 +249,18 @@ export const SimpleTable = memo(function SimpleTable({
   const [sizing, setSizing] = useState<{ columnId: string; width: number } | null>(null);
   // A cell to take the caret once the change that makes it is drawn.
   const pending = useRef<{ row: string; column: string; at: "start" | "end" } | null>(null);
-  const pointer = useRef<{ start: CellAt; moved: boolean } | null>(null);
+  /* A press on a cell, tracked for the drag it may turn into: `zone` is
+     where it landed — on the words it may become a text selection (whose
+     `anchor` is where it began), on the padding it may become a cell
+     selection. `moved` once it has become a cell selection. */
+  const pointer = useRef<{
+    start: CellAt;
+    x: number;
+    y: number;
+    zone: "text" | "pad";
+    anchor: { node: Node; offset: number } | null;
+    moved: boolean;
+  } | null>(null);
   const lastPress = useRef<{ x: number; y: number; when: number } | null>(null);
   // The colour picker hanging off the cell toolbar.
   const [colorOpen, setColorOpen] = useState(false);
@@ -616,30 +665,31 @@ export const SimpleTable = memo(function SimpleTable({
     }
     /* A second press of a double click keeps its own word selection: it is
        the press that stays out of this table's. pointerdown carries no
-       click count, so the pair is recognized by time and place. */
+       click count, so the pair is recognized by time and place. Nothing is
+       armed — the browser runs the whole gesture natively. */
     const previous = lastPress.current;
     lastPress.current = { x: event.clientX, y: event.clientY, when: event.timeStamp };
-    if (previous && event.timeStamp - previous.when < 500 && Math.abs(event.clientX - previous.x) <= 6 && Math.abs(event.clientY - previous.y) <= 6) return;
-    pointer.current = { start: at, moved: false };
+    if (previous && event.timeStamp - previous.when < 500 && Math.abs(event.clientX - previous.x) <= 6 && Math.abs(event.clientY - previous.y) <= 6) {
+      pointer.current = null;
+      return;
+    }
+    const text = cell.querySelector<HTMLElement>(".stbl__text");
+    const hit = text ? caretHit(text, event.clientX, event.clientY) : null;
+    pointer.current = { start: at, x: event.clientX, y: event.clientY, zone: hit?.zone ?? "pad", anchor: hit?.zone === "text" ? { node: hit.node, offset: hit.offset } : null, moved: false };
     if (range) setRange(null);
     /* The press is taken over whole: preventing its pointerdown keeps the
-       browser's text drag from starting at all (the drag paints the cells'
-       own selection instead — nothing else reached it: a mousemove's
-       preventDefault is too late, and user-select set mid-gesture does not
-       call a running selection back). The caret the press would have placed
-       is set here instead. */
+       browser's selection gesture from starting at all — once running it
+       cannot be called back, so a drag inside the cell's words draws its
+       text selection by hand on pointermoves, and a drag that leaves the
+       cell draws the cells' own. The caret the press would have placed is
+       set here instead. */
     event.preventDefault();
-    const text = cell.querySelector<HTMLElement>(".stbl__text");
     if (text && !readOnly) {
       text.focus({ preventScroll: true });
-      const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY)
-        ?? (document as Document & { caretRangeFromPoint?(x: number, y: number): Range | null }).caretRangeFromPoint?.(event.clientX, event.clientY);
-      const node = caret && "offsetNode" in caret ? caret.offsetNode : caret?.startContainer;
-      const offset = caret && "offsetNode" in caret ? caret.offset : caret?.startOffset;
       const selection = window.getSelection();
-      if (node && offset !== undefined && text.contains(node) && selection) {
+      if (hit?.node && hit.offset !== undefined && posInside(text, hit.node) && selection) {
         const caretRange = document.createRange();
-        caretRange.setStart(node, offset);
+        caretRange.setStart(hit.node, hit.offset);
         caretRange.collapse(true);
         selection.removeAllRanges();
         selection.addRange(caretRange);
@@ -667,7 +717,30 @@ export const SimpleTable = memo(function SimpleTable({
       const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("td[data-row-index]");
       if (!cell || !frameRef.current?.contains(cell)) return;
       const at = { row: Number(cell.dataset.rowIndex), column: Number(cell.dataset.columnIndex) };
-      if (!drag.moved && at.row === drag.start.row && at.column === drag.start.column) return;
+      if (at.row === drag.start.row && at.column === drag.start.column && !drag.moved) {
+        /* Still on the cell the press landed in: a drag on its words paints
+           a text selection by hand (the press's preventDefault kept the
+           browser's own gesture from starting); a drag that began on the
+           cell's padding becomes a cell selection once it has gone far
+           enough — that is the one-cell selection. */
+        if (drag.zone === "text") {
+          const text = cell.querySelector<HTMLElement>(".stbl__text");
+          const hit = text ? caretHit(text, event.clientX, event.clientY) : null;
+          if (hit?.node && hit.offset !== undefined && drag.anchor && posInside(text!, hit.node) && drag.anchor.node.isConnected) {
+            // A collaborator's edit may redraw the field under the drag and
+            // shrink its nodes past the anchor's offset — a dead end is no
+            // selection, not a thrown drag.
+            try {
+              window.getSelection()?.setBaseAndExtent(drag.anchor.node, drag.anchor.offset, hit.node, hit.offset);
+            } catch { /* the words went away mid-drag */ }
+          }
+        } else if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) >= LIFT_DISTANCE) {
+          drag.moved = true;
+          event.preventDefault();
+          selectCells({ anchor: drag.start, focus: drag.start });
+        }
+        return;
+      }
       drag.moved = true;
       event.preventDefault();
       selectCells({ anchor: drag.start, focus: at });

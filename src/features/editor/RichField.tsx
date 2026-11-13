@@ -522,7 +522,10 @@ export function RichField({
         onKeyUp={(event) => {
           if (event.shiftKey || event.key === "Shift" || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a")) offerBar();
         }}
-        onMouseUp={offerBar}
+        /* pointerup, not mouseup: a cell's press is prevented at pointerdown
+           (SimpleTable), which swallows the whole compat-mouse stream —
+           mouseup never arrives there, pointerup still does. */
+        onPointerUp={offerBar}
         onPaste={(event) => { if (!composing.current && !run(() => onPaste(event))) event.preventDefault(); }}
         onDrop={onDrop}
         onDragStart={(event) => event.preventDefault()}
