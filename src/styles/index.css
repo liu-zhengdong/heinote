@@ -4594,6 +4594,12 @@ pre.block__editable {
   background: var(--fill);
 }
 
+/* A cell's own fill — the colours the words' marks draw from — over the
+   whole cell, as a spreadsheet's, not just behind its words. */
+.stbl__cell[data-color$="_background"] {
+  background: var(--tone-bg);
+}
+
 .stbl__cell.is-head .stbl__text {
   font-weight: 600;
 }

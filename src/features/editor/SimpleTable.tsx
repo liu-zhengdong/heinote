@@ -19,6 +19,7 @@ import { imeComposing } from "../../core/keyboard";
 import {
   alignOf,
   clearRows,
+  colorOf,
   deleteColumn,
   deleteRow,
   duplicateColumn,
@@ -37,10 +38,12 @@ import {
   setColumnWidth,
   spanAnchorAt,
   spanCovering,
+  setColors,
   spansInRect,
   splitCells,
   TABLE_COLUMN_WIDTH,
   type CellAlign,
+  type CellColor,
   tableCells,
   tableGrid,
   tableToHtml,
@@ -261,7 +264,7 @@ export const SimpleTable = memo(function SimpleTable({
     anchor: { node: Node; offset: number } | null;
     moved: boolean;
   } | null>(null);
-  const lastPress = useRef<{ x: number; y: number; when: number } | null>(null);
+  const lastPress = useRef<{ x: number; y: number; when: number; moved: boolean } | null>(null);
   // The colour picker hanging off the cell toolbar.
   const [colorOpen, setColorOpen] = useState(false);
   const colorBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -467,9 +470,16 @@ export const SimpleTable = memo(function SimpleTable({
     return out;
   };
 
-  /** A colour over the visible cells' words — same mark the format bar
-   *  paints on a text selection. */
-  const applyColorToSelected = (color: ContentColor | undefined) => {
+  /** A colour over the selection: a text colour marks the visible cells'
+   *  words (the mark the format bar paints), a background fills the cells
+   *  themselves. */
+  const applyColorToSelected = (color: ContentColor | undefined, where: "text" | "background") => {
+    const rect = expandedRect();
+    if (where === "background") {
+      if (!rect) return;
+      write(setColors(grid, rect, color?.endsWith("_background") ? color.slice(0, -"_background".length) as CellColor : undefined));
+      return;
+    }
     const touched = selectedVisibleCells();
     const byRow = new Map<number, Record<string, InlineContent>>();
     for (const cell of touched) {
@@ -496,6 +506,14 @@ export const SimpleTable = memo(function SimpleTable({
     if (!touched.length) return undefined;
     const shared = rangeColor(touched[0].content, 0, inlinePlainText(touched[0].content).length);
     return touched.every((cell) => rangeColor(cell.content, 0, inlinePlainText(cell.content).length) === shared) ? shared : undefined;
+  };
+
+  /** The fill every selected cell shares, if they share one. */
+  const selectedFill = (): ContentColor | undefined => {
+    const touched = selectedVisibleCells();
+    if (!touched.length) return undefined;
+    const shared = colorOf(grid, touched[0].row, touched[0].column);
+    return shared && touched.every((cell) => colorOf(grid, cell.row, cell.column) === shared) ? `${shared}_background` : undefined;
   };
 
   /** The whole selection becomes one cell — top-left keeps every word. */
@@ -665,11 +683,13 @@ export const SimpleTable = memo(function SimpleTable({
     }
     /* A second press of a double click keeps its own word selection: it is
        the press that stays out of this table's. pointerdown carries no
-       click count, so the pair is recognized by time and place. Nothing is
-       armed — the browser runs the whole gesture natively. */
+       click count, so the pair is recognized by time and place — and by the
+       first press standing still: a drag ending at a spot and a new press
+       landing there is no double click. Nothing is armed — the browser
+       runs the whole gesture natively. */
     const previous = lastPress.current;
-    lastPress.current = { x: event.clientX, y: event.clientY, when: event.timeStamp };
-    if (previous && event.timeStamp - previous.when < 500 && Math.abs(event.clientX - previous.x) <= 6 && Math.abs(event.clientY - previous.y) <= 6) {
+    lastPress.current = { x: event.clientX, y: event.clientY, when: event.timeStamp, moved: false };
+    if (previous && !previous.moved && event.timeStamp - previous.when < 500 && Math.abs(event.clientX - previous.x) <= 6 && Math.abs(event.clientY - previous.y) <= 6) {
       pointer.current = null;
       return;
     }
@@ -736,12 +756,14 @@ export const SimpleTable = memo(function SimpleTable({
           }
         } else if (Math.hypot(event.clientX - drag.x, event.clientY - drag.y) >= LIFT_DISTANCE) {
           drag.moved = true;
+          if (lastPress.current) lastPress.current.moved = true;
           event.preventDefault();
           selectCells({ anchor: drag.start, focus: drag.start });
         }
         return;
       }
       drag.moved = true;
+      if (lastPress.current) lastPress.current.moved = true;
       event.preventDefault();
       selectCells({ anchor: drag.start, focus: at });
     };
@@ -1075,9 +1097,13 @@ export const SimpleTable = memo(function SimpleTable({
                     if (isPhantom(grid, rowIndex, columnIndex)) return null;
                     const anchored = spanAnchorAt(grid, rowIndex, columnIndex);
                     const align = alignOf(grid, rowIndex, columnIndex);
+                    // A merged cell reads its anchor's key — its own is the
+                    // anchor's, the phantom cells it covers are not drawn.
+                    const fill = colorOf(grid, rowIndex, columnIndex);
                     return (
                     <td
                       key={column.id}
+                      data-color={fill ? `${fill}_background` : undefined}
                       data-row-index={rowIndex}
                       data-column-index={columnIndex}
                       colSpan={anchored && anchored.span.columns > 1 ? anchored.span.columns : undefined}
@@ -1369,7 +1395,7 @@ export const SimpleTable = memo(function SimpleTable({
                 ref={colorBtnRef}
                 className="format-bar__turn format-bar__color"
                 data-color={selectedColor()}
-                aria-label="Text color"
+                aria-label="Color"
                 onClick={() => setColorOpen((open) => !open)}
               >
                 <Baseline size={16} />
@@ -1422,7 +1448,7 @@ export const SimpleTable = memo(function SimpleTable({
         closeOnScroll={false}
         onDismiss={() => setColorOpen(false)}
       >
-        <ColorMenu current={selectedColor()} autoFocus={false} onPick={(color) => { applyColorToSelected(color); setColorOpen(false); }} />
+        <ColorMenu current={selectedColor()} currentBackground={selectedFill()} backgroundLabel="Cell background" autoFocus={false} onPick={(color, where) => { applyColorToSelected(color, where); setColorOpen(false); }} />
       </Popover>
     </div>
   );

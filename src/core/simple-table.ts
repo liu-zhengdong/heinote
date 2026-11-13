@@ -44,8 +44,12 @@
        two people merging different cells at once keep the later list — as
        two reordering columns would. Inserting a row or column inside a
        span grows it; deleting one inside shrinks it; deleting the row or
-       column its anchor stands on lets it go entirely. */
+       column its anchor stands on lets it go entirely.
+   12. Alignments and cell fills are maps keyed `rowId:columnId`: a key
+       naming a row or column the table does not have, or a value outside
+       the known ones, is dropped. */
 
+import { COLOR_NAMES } from "../../schema";
 import { inlinePlainText, inlineToHtml, normalizeInlineContent } from "./inline-content";
 import type { InlineContent, SimpleTable, TableColumn, TableRow } from "./types";
 
@@ -95,7 +99,15 @@ export interface TableGrid {
   /** Alignment per cell: key `rowId:columnId` → horizontal + vertical.
    *  Not present = the table's default (left/top). */
   aligns: Record<string, CellAlign>;
+  /** Background fill per cell: key `rowId:columnId` → a colour name.
+   *  Not present = no fill. A phantom cell paints its anchor's, as it
+   *  paints its words. */
+  colors: Record<string, CellColor>;
 }
+
+/** A fill a whole cell may wear: one of the colour names the text colours
+ *  draw from. */
+export type CellColor = (typeof COLOR_NAMES)[number];
 
 /** Where a cell's words stand: h across the cell, v down the cell. */
 export interface CellAlign {
@@ -131,6 +143,46 @@ export function alignOf(grid: TableGrid, rowIndex: number, columnIndex: number):
   const column = grid.columns[columnIndex];
   if (!row || !column) return {};
   return grid.aligns[`${row.id}:${column.id}`] ?? {};
+}
+
+/** Cell fills as stored, kept to the sane ones: real row/column ids and a
+ *  colour the table draws. */
+function normalizeColors(value: unknown, grid: TableGrid): Record<string, CellColor> {
+  const out: Record<string, CellColor> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  const rowIds = new Set(grid.rows.map((row) => row.id));
+  const columnIds = new Set(grid.columns.map((column) => column.id));
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const [rowId, columnId] = key.split(":");
+    if (!rowIds.has(rowId) || !columnIds.has(columnId)) continue;
+    if (typeof raw === "string" && (COLOR_NAMES as readonly string[]).includes(raw)) out[key] = raw as CellColor;
+  }
+  return out;
+}
+
+/** A cell's fill — none when it sets nothing. */
+export function colorOf(grid: TableGrid, rowIndex: number, columnIndex: number): CellColor | undefined {
+  const row = grid.rows[rowIndex];
+  const column = grid.columns[columnIndex];
+  if (!row || !column) return undefined;
+  return grid.colors[`${row.id}:${column.id}`];
+}
+
+/** Fill (or clear) the background of every cell a rectangle covers —
+ *  phantoms keep their anchor's fill. One `colors` write carries the whole
+ *  map, last-write-wins like `aligns`. */
+export function setColors(grid: TableGrid, rect: CellRect, color: CellColor | undefined): TableWrite[] {
+  const next = { ...grid.colors };
+  for (let r = rect.row; r < rect.row + rect.rows; r++)
+    for (let c = rect.column; c < rect.column + rect.columns; c++) {
+      const row = grid.rows[r], column = grid.columns[c];
+      if (!row || !column || isPhantom(grid, r, c)) continue;
+      const key = `${row.id}:${column.id}`;
+      if (color && (COLOR_NAMES as readonly string[]).includes(color)) next[key] = color;
+      else delete next[key];
+    }
+  if (JSON.stringify(next) === JSON.stringify(grid.colors)) return [];
+  return [{ kind: "colors", colors: next }];
 }
 
 /** Set (or clear) the alignment of every cell a rectangle covers —
@@ -246,9 +298,11 @@ export function tableGrid(value: unknown): TableGrid {
     header_column: candidate.header_column === true,
     spans: [],
     aligns: {},
+    colors: {},
   };
   grid.spans = normalizeSpans(candidate.spans, grid);
   grid.aligns = normalizeAligns(candidate.aligns, grid);
+  grid.colors = normalizeColors(candidate.colors, grid);
   return grid;
 }
 
@@ -295,6 +349,7 @@ export function storedTable(grid: TableGrid): SimpleTable {
     ...(grid.header_column ? { header_column: true } : {}),
     ...(grid.spans.length ? { spans: grid.spans.map((span) => ({ ...span })) } : {}),
     ...(Object.keys(grid.aligns).length ? { aligns: { ...grid.aligns } } : {}),
+    ...(Object.keys(grid.colors).length ? { colors: { ...grid.colors } } : {}),
   };
 }
 
@@ -319,6 +374,7 @@ export function newSimpleTable(columns: number, rows: number, id: (kind: "column
     header_column: false,
     spans: [],
     aligns: {},
+    colors: {},
   });
 }
 
@@ -412,6 +468,7 @@ export function tableFromCells(
     header_column: options.headerColumn === true,
     spans,
     aligns,
+    colors: {},
   });
 }
 
@@ -625,6 +682,7 @@ export type TableWrite =
   | { kind: "columns"; columns: TableColumn[] }
   | { kind: "spans"; spans: TableSpan[] }
   | { kind: "aligns"; aligns: Record<string, CellAlign> }
+  | { kind: "colors"; colors: Record<string, CellColor> }
   | { kind: "header"; which: "header_row" | "header_column"; on: boolean };
 
 /** The table after `writes` — to measure it, or to draw it at once. */
@@ -639,6 +697,10 @@ export function applyTableWrites(table: SimpleTable, writes: readonly TableWrite
     else if (write.kind === "aligns") {
       if (Object.keys(write.aligns).length) next.aligns = { ...write.aligns } as SimpleTable["aligns"];
       else delete next.aligns;
+    }
+    else if (write.kind === "colors") {
+      if (Object.keys(write.colors).length) next.colors = { ...write.colors } as SimpleTable["colors"];
+      else delete next.colors;
     }
     else if (write.kind === "header") {
       if (write.on) next[write.which] = true;

@@ -5,6 +5,7 @@ import {
   TABLE_PAGE_WIDTH,
   alignOf,
   applyTableWrites,
+  colorOf,
   deleteRow,
   expandRectForSpans,
   fitColumnWidths,
@@ -13,6 +14,7 @@ import {
   mergeCells,
   newSimpleTable,
   setAligns,
+  setColors,
   splitCells,
   tableCells,
   tableFromCells,
@@ -232,6 +234,57 @@ describe("rows and columns through a span", () => {
     // 9 cells less 3 the merge covers: 6 tds, not 9.
     expect(html.match(/<td/g)).toHaveLength(6);
     void stored;
+  });
+});
+
+describe("cell fills", () => {
+  it("paints a rect's cells and reads them back, clearing on unset", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+    ]);
+    const writes = setColors(grid, { row: 0, column: 0, rows: 2, columns: 2 }, "blue");
+    expect(writes).toHaveLength(1);
+    expect(writes[0].kind).toBe("colors");
+    const next = after(table, writes);
+    expect(colorOf(next, 0, 0)).toBe("blue");
+    expect(colorOf(next, 1, 1)).toBe("blue");
+    const cleared = after(applyTableWrites(table, writes), setColors(next, { row: 0, column: 0, rows: 1, columns: 1 }, undefined));
+    expect(colorOf(cleared, 0, 0)).toBeUndefined();
+    expect(colorOf(cleared, 1, 1)).toBe("blue");
+    // An emptied map drops the field, like `aligns`.
+    const bareTable = applyTableWrites(applyTableWrites(table, writes), setColors(next, { row: 0, column: 0, rows: 2, columns: 2 }, undefined));
+    expect("colors" in bareTable).toBe(false);
+    expect(tableGrid(bareTable).colors).toEqual({});
+  });
+
+  it("drops stale keys and unknown names on read", () => {
+    const { table } = gridOf([[text("a")]]);
+    const real = tableGrid(table);
+    const key = `${real.rows[0].id}:${real.columns[0].id}`;
+    const mixed = {
+      ...table,
+      colors: {
+        "nobody:col-9": "red",
+        "row-9:nobody": "blue",
+        [key + "-x"]: "cerulean",
+        [key]: "green",
+      },
+    } as SimpleTable;
+    const read = tableGrid(mixed);
+    expect(read.colors[key]).toBe("green");
+    expect(Object.keys(read.colors)).toHaveLength(1);
+  });
+
+  it("keeps the fill with the anchor through a merge", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+    ]);
+    const filled = after(table, setColors(grid, { row: 0, column: 0, rows: 1, columns: 1 }, "red"));
+    const merged = after(applyTableWrites(table, setColors(grid, { row: 0, column: 0, rows: 1, columns: 1 }, "red")), mergeCells(filled, { row: 0, column: 0, rows: 2, columns: 2 }));
+    expect(isPhantom(merged, 1, 1)).toBe(true);
+    expect(colorOf(merged, 0, 0)).toBe("red");
   });
 });
 

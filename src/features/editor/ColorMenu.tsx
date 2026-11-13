@@ -10,32 +10,42 @@ function Swatch({ color }: { color?: ContentColor | "background" }) {
 
 /** The colours Notion offers a block or a stretch of text: nine text colours
  *  and nine backgrounds, each with a way back to none. `autoFocus` is off for
- *  a menu that hangs off a text selection, which must keep its selection. */
+ *  a menu that hangs off a text selection, which must keep its selection.
+ *  A menu that paints two things at once — a cell's words and the cell
+ *  itself — names them in `backgroundLabel` and reports which section the
+ *  pick came from. */
 export function ColorMenu({
   current,
+  currentBackground,
+  backgroundLabel = "Background color",
   autoFocus = true,
   onPick,
 }: {
   current?: ContentColor;
+  currentBackground?: ContentColor;
+  /** What the background section paints, where "cell" reads better than
+   *  "background" — the words' highlight otherwise. */
+  backgroundLabel?: string;
   autoFocus?: boolean;
-  onPick(color: ContentColor | undefined): void;
+  onPick(color: ContentColor | undefined, where: "text" | "background"): void;
 }) {
+  const background = currentBackground === undefined ? current : currentBackground;
   return (
     <MenuList label="Color" autoFocus={autoFocus}>
       <div className="menu__section-title">Text color</div>
-      <MenuItem icon={<Swatch />} label="Default" selected={!current} onSelect={() => onPick(undefined)} />
+      <MenuItem icon={<Swatch />} label="Default" selected={!current} onSelect={() => onPick(undefined, "text")} />
       {COLOR_NAMES.map((name) => (
-        <MenuItem key={name} icon={<Swatch color={name} />} label={capitalized(name)} selected={current === name} onSelect={() => onPick(name)} />
+        <MenuItem key={name} icon={<Swatch color={name} />} label={capitalized(name)} selected={current === name} onSelect={() => onPick(name, "text")} />
       ))}
-      <div className="menu__section-title">Background color</div>
-      <MenuItem icon={<Swatch color="background" />} label="Default background" onSelect={() => onPick(undefined)} />
+      <div className="menu__section-title">{backgroundLabel}</div>
+      <MenuItem icon={<Swatch color="background" />} label="Default background" selected={!background} onSelect={() => onPick(undefined, "background")} />
       {COLOR_NAMES.map((name) => (
         <MenuItem
           key={`${name}_background`}
           icon={<Swatch color={`${name}_background`} />}
           label={`${capitalized(name)} background`}
-          selected={current === `${name}_background`}
-          onSelect={() => onPick(`${name}_background`)}
+          selected={background === `${name}_background`}
+          onSelect={() => onPick(`${name}_background`, "background")}
         />
       ))}
     </MenuList>

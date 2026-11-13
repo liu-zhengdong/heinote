@@ -1575,6 +1575,7 @@ export function DocumentEditor({
       if (item.kind === "columns") return { type: "set", path: [...base, "columns"], value: item.columns };
       if (item.kind === "spans") return item.spans.length ? { type: "set", path: [...base, "spans"], value: item.spans } : { type: "delete", path: [...base, "spans"] };
       if (item.kind === "aligns") return Object.keys(item.aligns).length ? { type: "set", path: [...base, "aligns"], value: item.aligns } : { type: "delete", path: [...base, "aligns"] };
+      if (item.kind === "colors") return Object.keys(item.colors).length ? { type: "set", path: [...base, "colors"], value: item.colors } : { type: "delete", path: [...base, "colors"] };
       return item.on ? { type: "set", path: [...base, item.which], value: true } : { type: "delete", path: [...base, item.which] };
     });
     commitWrites([

@@ -226,7 +226,7 @@ test("a right-press on cells offers Merge and Split in a menu", async ({ page })
 test("the cell toolbar paints a text colour over the selection", async ({ page }) => {
   const { table, cell } = await makeTable(page, "table_color");
   await dragCells(page, cell(0, 0), cell(0, 1));
-  await page.getByRole("button", { name: "Text color", exact: true }).click();
+  await page.getByRole("button", { name: "Color", exact: true }).click();
   await page.getByRole("menuitem", { name: "Red", exact: true }).click();
   const text = cell(0, 0).locator("[data-color='red']");
   await expect(text).toHaveCount(1);
@@ -239,6 +239,35 @@ test("the cell toolbar paints a text colour over the selection", async ({ page }
     expect(painted, `${theme}: the coloured run should differ from plain cell text`).not.toBe(ink);
   }
   await expect(text).toHaveText("alpha one");
+});
+
+test("a cell background fills the whole cell, in either theme", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_fill");
+  await dragCells(page, cell(0, 0), cell(0, 1));
+  await page.getByRole("button", { name: "Color", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Blue background", exact: true }).click();
+  const filled = table.locator("td[data-row-index='0'][data-column-index='0']");
+  const neighbour = table.locator("td[data-row-index='0'][data-column-index='1']");
+  const plain = table.locator("td[data-row-index='1'][data-column-index='0']");
+  // The fill sits on the cell itself — a whole painted cell, the selection
+  // had two — not a highlight behind its words.
+  for (const theme of ["light", "dark"] as const) {
+    await page.evaluate((t) => { document.documentElement.dataset.theme = t; }, theme);
+    const painted = await filled.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const also = await neighbour.evaluate((el) => getComputedStyle(el).backgroundColor);
+    const rest = await plain.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(painted).toBe(also);
+    expect(painted, `${theme}: the fill should differ from an untouched cell`).not.toBe(rest);
+  }
+  // The words keep their ink — the fill is the cell's, not a mark on them.
+  expect(await cell(0, 0).locator("[data-color]").count()).toBe(0);
+  // …and the choice clears from the same menu. The press lands where the
+  // last drag's press did, quickly — that pair is a drag and a press, not
+  // a double click, so the cell selection must still form.
+  await dragCells(page, cell(0, 0), cell(0, 1));
+  await page.getByRole("button", { name: "Color", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Default background", exact: true }).click();
+  await expect(table.locator("td[data-color]")).toHaveCount(0);
 });
 
 test("the alignment picker centers and lowers a cell's words", async ({ page }) => {
