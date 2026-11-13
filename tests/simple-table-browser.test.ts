@@ -187,6 +187,19 @@ test("the cell toolbar paints a text colour over the selection", async ({ page }
   await expect(text).toHaveText("alpha one");
 });
 
+test("the alignment picker centers and lowers a cell's words", async ({ page }) => {
+  const { table, cell } = await makeTable(page, "table_align");
+  await dragCells(page, cell(0, 0), cell(1, 1));
+  await page.getByRole("button", { name: "Cell alignment", exact: true }).click();
+  await page.getByRole("radio", { name: "middle center", exact: true }).click();
+  const first = table.locator("td[data-row-index='0'][data-column-index='0']");
+  await expect(first).toHaveCSS("text-align", "center");
+  await expect(first).toHaveCSS("vertical-align", "middle");
+  // The whole selection took it; a neighbour the drag left out did not.
+  await expect(table.locator("td[data-row-index='1'][data-column-index='1']")).toHaveCSS("text-align", "center");
+  await expect(table.locator("td[data-row-index='0'][data-column-index='2']")).not.toHaveCSS("text-align", "center");
+});
+
 test("a row added inside a merge stretches it; deleting its anchor row lets it go", async ({ page }) => {
   const { table, cell } = await makeTable(page, "table_spans_grow");
   // Merge the 2×2 at the top-left.

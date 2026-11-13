@@ -4643,6 +4643,48 @@ pre.block__editable {
   pointer-events: none;
 }
 
+/* The 3×3 alignment picker in the cell toolbar: rows are vertical
+   position (top/middle/bottom), columns horizontal (left/center/right). */
+.align-picker {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 2px;
+  padding: 6px;
+}
+
+.align-picker__cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.align-picker__cell:hover { background: var(--fill-hover); }
+
+.align-picker__cell.is-on { background: var(--blue-tint); color: var(--blue); }
+
+/* The little bar that says where vertically the words stand: on the
+   button's top edge for top, its middle for middle, its bottom for bottom. */
+.align-picker__pin {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  opacity: 0.55;
+}
+
+.align-picker__pin[data-v="top"] { top: 4px; }
+.align-picker__pin[data-v="middle"] { top: 50%; transform: translateY(-50%); }
+.align-picker__pin[data-v="bottom"] { bottom: 4px; }
+
 /* A row or column being moved: drawn faint where it would land (the table
    makes way for it as the pointer goes), and a copy of it, lifted and
    outlined in blue, under the pointer. */

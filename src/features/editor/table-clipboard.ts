@@ -18,6 +18,9 @@ export interface ReadGrid {
   rows: InlineContent[][];
   header: boolean;
   spans: CellRect[];
+  /** Alignments the source claims: `row:col` indexes → h/v, read from
+   *  `align`/`valign` attributes or inline styles. */
+  aligns: Record<string, { h?: "left" | "center" | "right"; v?: "top" | "middle" | "bottom" }>;
 }
 
 /** A pasted cell's words, without the spaces its markup's indents leave at
@@ -44,6 +47,7 @@ export function gridFromHtml(html: string): ReadGrid | null {
      slot in its row — the ones a rowspan parked there get skipped. */
   const spans: CellRect[] = [];
   const parked = new Set<string>();
+  const aligns: ReadGrid["aligns"] = {};
   const rows: InlineContent[][] = [];
   lines.forEach((line, r) => {
     const out: InlineContent[] = [];
@@ -58,6 +62,15 @@ export function gridFromHtml(html: string): ReadGrid | null {
           for (let j = c; j < c + colspan; j++)
             if (i !== r || j !== c) parked.add(`${i}:${j}`);
       }
+      const el = cell as HTMLElement;
+      const style = `${cell.getAttribute("align") ?? ""} ${el.style?.textAlign ?? ""} ${cell.getAttribute("style") ?? ""}`.toLowerCase();
+      const vstyle = `${cell.getAttribute("valign") ?? ""} ${el.style?.verticalAlign ?? ""}`.toLowerCase();
+      const align: { h?: "left" | "center" | "right"; v?: "top" | "middle" | "bottom" } = {};
+      if (/text-align:\s*center|align="center"|^center$|\scenter\b/.test(style)) align.h = "center";
+      else if (/text-align:\s*right|align="right"|^right$|\sright\b/.test(style)) align.h = "right";
+      if (/middle/.test(vstyle)) align.v = "middle";
+      else if (/bottom/.test(vstyle)) align.v = "bottom";
+      if (align.h || align.v) aligns[`${r}:${c}`] = align;
       out[c] = cellWords(cell);
       c += colspan;
     }
@@ -66,7 +79,7 @@ export function gridFromHtml(html: string): ReadGrid | null {
   const matrix = rows.filter(Boolean).map((row) => row.map((cell) => cell ?? []));
   if (!matrix.length) return null;
   const first = lines.find((row) => cellsOf(row).length);
-  return { rows: matrix, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH"), spans };
+  return { rows: matrix, header: Boolean(first) && cellsOf(first as Element).every((cell) => cell.tagName === "TH"), spans, aligns };
 }
 
 /** A Markdown table written out, as rows of cells, or null for other text. */
@@ -89,12 +102,12 @@ export function readGrid(data: DataTransfer, anyText: boolean): ReadGrid | null 
   const text = data.getData("text/plain");
   if (!text) return anyText ? fromHtml : null;
   const fromMarkdown = gridFromMarkdown(text);
-  if (fromMarkdown) return { rows: fromMarkdown, header: true, spans: [] };
+  if (fromMarkdown) return { rows: fromMarkdown, header: true, spans: [], aligns: {} };
   const tabbed = tabbedRows(text);
-  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false, spans: [] };
+  if (tabbed) return { rows: tabbed.map((row) => row.map((cell) => normalizeCell(inlineFromText(cell)))), header: false, spans: [], aligns: {} };
   if (!anyText) return null;
   const lines = text.replace(/\r\n?/g, "\n").replace(/\n+$/, "").split("\n");
-  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false, spans: [] };
+  return { rows: lines.map((line) => [normalizeCell(inlineFromText(line))]), header: false, spans: [], aligns: {} };
 }
 
 /** The grid's rows and merges — what a paste over cells lays down. */

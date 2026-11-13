@@ -945,7 +945,7 @@ export function DocumentEditor({
     const grid = incoming ? null : readGrid(data, false);
     const tableId = createId("block");
     const table = grid ? { by_id: { [tableId]: createBlock(tableId, "table", {
-      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans }),
+      table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans, aligns: grid.aligns }),
     }) } } : null;
     const blocks = incoming?.tree ?? table ?? textToBlocks(data.getData("text/plain"), () => createId("block"));
     const pages = store.getState().pages;
@@ -1574,6 +1574,7 @@ export function DocumentEditor({
       }
       if (item.kind === "columns") return { type: "set", path: [...base, "columns"], value: item.columns };
       if (item.kind === "spans") return item.spans.length ? { type: "set", path: [...base, "spans"], value: item.spans } : { type: "delete", path: [...base, "spans"] };
+      if (item.kind === "aligns") return Object.keys(item.aligns).length ? { type: "set", path: [...base, "aligns"], value: item.aligns } : { type: "delete", path: [...base, "aligns"] };
       return item.on ? { type: "set", path: [...base, item.which], value: true } : { type: "delete", path: [...base, item.which] };
     });
     commitWrites([

@@ -85,13 +85,69 @@ export interface TableSpan {
 }
 
 /** A table as it is drawn: its columns in order, its rows in order, its
- *  headers, and its merged cells. */
+ *  headers, its merged cells and its cell alignment map. */
 export interface TableGrid {
   columns: TableColumn[];
   rows: GridRow[];
   header_row: boolean;
   header_column: boolean;
   spans: TableSpan[];
+  /** Alignment per cell: key `rowId:columnId` → horizontal + vertical.
+   *  Not present = the table's default (left/top). */
+  aligns: Record<string, CellAlign>;
+}
+
+/** Where a cell's words stand: h across the cell, v down the cell. */
+export interface CellAlign {
+  h?: "left" | "center" | "right";
+  v?: "top" | "middle" | "bottom";
+}
+
+const ALIGN_H = new Set(["left", "center", "right"]);
+const ALIGN_V = new Set(["top", "middle", "bottom"]);
+
+/** Alignments as stored, kept to the sane ones: real row/column ids and
+ *  known values (10). */
+function normalizeAligns(value: unknown, grid: TableGrid): Record<string, CellAlign> {
+  const out: Record<string, CellAlign> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return out;
+  const rowIds = new Set(grid.rows.map((row) => row.id));
+  const columnIds = new Set(grid.columns.map((column) => column.id));
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const [rowId, columnId] = key.split(":");
+    if (!rowIds.has(rowId) || !columnIds.has(columnId) || !raw || typeof raw !== "object") continue;
+    const { h, v } = raw as Record<string, unknown>;
+    const align: CellAlign = {};
+    if (typeof h === "string" && ALIGN_H.has(h)) align.h = h as CellAlign["h"];
+    if (typeof v === "string" && ALIGN_V.has(v)) align.v = v as CellAlign["v"];
+    if (align.h || align.v) out[key] = align;
+  }
+  return out;
+}
+
+/** A cell's alignment — the table default when it sets nothing. */
+export function alignOf(grid: TableGrid, rowIndex: number, columnIndex: number): CellAlign {
+  const row = grid.rows[rowIndex];
+  const column = grid.columns[columnIndex];
+  if (!row || !column) return {};
+  return grid.aligns[`${row.id}:${column.id}`] ?? {};
+}
+
+/** Set (or clear) the alignment of every cell a rectangle covers —
+ *  phantoms keep their anchor's alignment. One `aligns` write carries the
+ *  whole map, last-write-wins like `spans`/`columns`. */
+export function setAligns(grid: TableGrid, rect: CellRect, align: CellAlign): TableWrite[] {
+  const next = { ...grid.aligns };
+  for (let r = rect.row; r < rect.row + rect.rows; r++)
+    for (let c = rect.column; c < rect.column + rect.columns; c++) {
+      const row = grid.rows[r], column = grid.columns[c];
+      if (!row || !column || isPhantom(grid, r, c)) continue;
+      const key = `${row.id}:${column.id}`;
+      if (align.h || align.v) next[key] = { ...(align.h ? { h: align.h } : {}), ...(align.v ? { v: align.v } : {}) };
+      else delete next[key];
+    }
+  if (JSON.stringify(next) === JSON.stringify(grid.aligns)) return [];
+  return [{ kind: "aligns", aligns: next }];
 }
 
 /** A rectangle of cells: top-left index + how many rows/columns it covers. */
@@ -189,8 +245,10 @@ export function tableGrid(value: unknown): TableGrid {
     header_row: candidate.header_row === true,
     header_column: candidate.header_column === true,
     spans: [],
+    aligns: {},
   };
   grid.spans = normalizeSpans(candidate.spans, grid);
+  grid.aligns = normalizeAligns(candidate.aligns, grid);
   return grid;
 }
 
@@ -236,6 +294,7 @@ export function storedTable(grid: TableGrid): SimpleTable {
     ...(grid.header_row ? { header_row: true } : {}),
     ...(grid.header_column ? { header_column: true } : {}),
     ...(grid.spans.length ? { spans: grid.spans.map((span) => ({ ...span })) } : {}),
+    ...(Object.keys(grid.aligns).length ? { aligns: { ...grid.aligns } } : {}),
   };
 }
 
@@ -259,6 +318,7 @@ export function newSimpleTable(columns: number, rows: number, id: (kind: "column
     header_row: false,
     header_column: false,
     spans: [],
+    aligns: {},
   });
 }
 
@@ -306,11 +366,18 @@ export function fitColumnWidths(
  *  table. Rows are made as wide as the widest. Columns are sized by their
  *  words so the table fills the text column; a `widths` entry is kept as
  *  given (a converted database keeps its drawn widths). `spans` are cell
- *  rects (index-based) for merged cells, as an HTML paste carries them. */
+ *  rects (index-based) for merged cells and `aligns` the source's cell
+ *  alignments keyed `row:col`, both as an HTML paste carries them. */
 export function tableFromCells(
   cells: readonly (readonly InlineContent[])[],
   id: (kind: "column" | "row") => string,
-  options: { headerRow?: boolean; headerColumn?: boolean; widths?: readonly (number | undefined)[]; spans?: readonly CellRect[] } = {},
+  options: {
+    headerRow?: boolean;
+    headerColumn?: boolean;
+    widths?: readonly (number | undefined)[];
+    spans?: readonly CellRect[];
+    aligns?: Readonly<Record<string, CellAlign>>;
+  } = {},
 ): SimpleTable {
   const width = Math.max(1, Math.min(MAX_TABLE_COLUMNS, ...cells.map((row) => row.length)));
   const fitted = fitColumnWidths(cells, width);
@@ -332,12 +399,19 @@ export function tableFromCells(
       && span.row + span.rows <= rows.length
       && span.column + span.columns <= width)
     .map((span) => ({ row: rowIds[span.row], column: columns[span.column].id, rows: span.rows, columns: span.columns }));
+  const aligns: Record<string, CellAlign> = {};
+  for (const [key, align] of Object.entries(options.aligns ?? {})) {
+    const [r, c] = key.split(":").map(Number);
+    if (!rowIds[r] || !columns[c]) continue;
+    aligns[`${rowIds[r]}:${columns[c].id}`] = { ...(align.h ? { h: align.h } : {}), ...(align.v ? { v: align.v } : {}) };
+  }
   return storedTable({
     columns,
     rows: rows.length ? rows : [{ id: id("row"), order: ROW_ORDER_STEP, cells: {} }],
     header_row: options.headerRow === true,
     header_column: options.headerColumn === true,
     spans,
+    aligns,
   });
 }
 
@@ -550,6 +624,7 @@ export type TableWrite =
   | { kind: "row"; rowId: string; row: TableRow | null }
   | { kind: "columns"; columns: TableColumn[] }
   | { kind: "spans"; spans: TableSpan[] }
+  | { kind: "aligns"; aligns: Record<string, CellAlign> }
   | { kind: "header"; which: "header_row" | "header_column"; on: boolean };
 
 /** The table after `writes` — to measure it, or to draw it at once. */
@@ -560,6 +635,10 @@ export function applyTableWrites(table: SimpleTable, writes: readonly TableWrite
     else if (write.kind === "spans") {
       if (write.spans.length) next.spans = write.spans;
       else delete next.spans;
+    }
+    else if (write.kind === "aligns") {
+      if (Object.keys(write.aligns).length) next.aligns = { ...write.aligns } as SimpleTable["aligns"];
+      else delete next.aligns;
     }
     else if (write.kind === "header") {
       if (write.on) next[write.which] = true;
@@ -718,7 +797,7 @@ export function pasteCells(
   cells: readonly (readonly InlineContent[])[],
   id: (kind: "column" | "row") => string,
   spans: readonly CellRect[] = [],
-): { writes: TableWrite[]; clipped: boolean } {
+): { writes: TableWrite[]; clipped: boolean; grid: TableGrid } {
   const writes: TableWrite[] = [];
   let clipped = false;
   const wanted = columnIndex + Math.max(0, ...cells.map((row) => row.length));
@@ -772,7 +851,15 @@ export function pasteCells(
   }
   const spansWriteOut = JSON.stringify(nextSpans) === JSON.stringify(grid.spans) ? null : { kind: "spans" as const, spans: nextSpans };
   if (spansWriteOut) writes.push(spansWriteOut);
-  return { writes, clipped };
+  const nextGrid: TableGrid = {
+    ...wide,
+    rows: rows.map((row) => {
+      const write = writes.find((w) => w.kind === "row" && w.rowId === row.id);
+      return write && write.kind === "row" && write.row ? { ...row, ...write.row } : row;
+    }),
+    spans: nextSpans,
+  };
+  return { writes, clipped, grid: nextGrid };
 }
 
 /* ── Outside HeiNote: Markdown, tab-separated text, HTML ────────────────── */
@@ -804,6 +891,7 @@ export function tableToHtml(
   cells: readonly (readonly InlineContent[])[],
   headerRow = false,
   spans: readonly CellRect[] = [],
+  aligns?: ReadonlyArray<ReadonlyArray<CellAlign | undefined>>,
 ): string {
   const body = cells.map((row, index) => {
     const tag = headerRow && index === 0 ? "th" : "td";
@@ -815,7 +903,9 @@ export function tableToHtml(
       const attrs = anchor
         ? `${anchor.columns > 1 ? ` colspan="${anchor.columns}"` : ""}${anchor.rows > 1 ? ` rowspan="${anchor.rows}"` : ""}`
         : "";
-      out.push(`<${tag}${attrs}>${inlineToHtml(row[c])}</${tag}>`);
+      const align = aligns?.[index]?.[c];
+      const style = align && align.h !== "left" ? ` style="text-align:${align.h}"` : "";
+      out.push(`<${tag}${attrs}${style}>${inlineToHtml(row[c])}</${tag}>`);
     }
     return `<tr>${out.join("")}</tr>`;
   }).join("");

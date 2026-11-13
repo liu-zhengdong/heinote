@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Baseline, ChevronDown, Combine, Copy, Eraser, GripHorizontal, GripVertical, Plus, Rows3, Columns3, Trash2, Ungroup } from "lucide-react";
+import { AlignHorizontalJustifyCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignLeft, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Baseline, ChevronDown, Combine, Copy, Eraser, GripHorizontal, GripVertical, Plus, Rows3, Columns3, Trash2, Ungroup } from "lucide-react";
 import {
   memo,
   useEffect,
@@ -17,6 +17,7 @@ import { createId } from "../../core/ids";
 import { applyMarkToRange, inlinePlainText, rangeHasMark, type ToggleableMark } from "../../core/inline-content";
 import { imeComposing } from "../../core/keyboard";
 import {
+  alignOf,
   clearRows,
   deleteColumn,
   deleteRow,
@@ -32,11 +33,14 @@ import {
   moveColumn,
   moveRow,
   pasteCells,
+  setAligns,
   setColumnWidth,
   spanAnchorAt,
+  spanCovering,
   spansInRect,
   splitCells,
   TABLE_COLUMN_WIDTH,
+  type CellAlign,
   tableCells,
   tableGrid,
   tableToHtml,
@@ -212,6 +216,9 @@ export const SimpleTable = memo(function SimpleTable({
   // The colour picker hanging off the cell toolbar.
   const [colorOpen, setColorOpen] = useState(false);
   const colorBtnRef = useRef<HTMLButtonElement | null>(null);
+  // …and the 3×3 align picker.
+  const [alignOpen, setAlignOpen] = useState(false);
+  const alignBtnRef = useRef<HTMLButtonElement | null>(null);
   // Where the table itself sits — the toolbar anchors over the selection box.
   const [tableBox, setTableBox] = useState({ top: 0, left: 0 });
   const tableAbsTop = tableBox.top;
@@ -458,6 +465,25 @@ export const SimpleTable = memo(function SimpleTable({
     write(splitCells(grid, rect));
   };
 
+  /** Alignment every selected cell shares (undefined when they differ). */
+  const selectionAlign = (): CellAlign => {
+    const touched = selectedVisibleCells();
+    if (!touched.length) return {};
+    const first = alignOf(grid, touched[0].row, touched[0].column);
+    return touched.every((cell) => {
+      const a = alignOf(grid, cell.row, cell.column);
+      return a.h === first.h && a.v === first.v;
+    }) ? first : {};
+  };
+
+  /** Paint an alignment over the selection — both axes at once, like the
+   *  Docs' 3×3 picker; { h: undefined, v: undefined } = back to default. */
+  const applyAlign = (align: CellAlign) => {
+    const rect = expandedRect();
+    if (!rect) return;
+    write(setAligns(grid, rect, align));
+  };
+
   /** What the selection can do: a 2+ cell rectangle can Merge, a rectangle
    *  holding a merged cell can Split. */
   const selectionOps = () => {
@@ -527,7 +553,11 @@ export const SimpleTable = memo(function SimpleTable({
     const copied = selectedGrid();
     const rect = expandRectForSpans(grid, rectOfRange(range));
     event.clipboardData.setData("text/plain", tableToTabs(copied));
-    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied, false, spansInRect(grid, rect))}`);
+    const alignMatrix = copied.map((row, r) => row.map((_, c) => {
+      const covered = spanCovering(grid, rect.row + r, rect.column + c);
+      return alignOf(grid, covered?.rect.row ?? rect.row + r, covered?.rect.column ?? rect.column + c);
+    }));
+    event.clipboardData.setData("text/html", `<meta charset="utf-8">${tableToHtml(copied, false, spansInRect(grid, rect), alignMatrix)}`);
     if (cut && !readOnly) clearSelected();
   };
 
@@ -535,6 +565,19 @@ export const SimpleTable = memo(function SimpleTable({
    *  growing for what does not fit — its merges coming along. */
   const pasteAt = (at: CellAt, pasted: ReadGrid) => {
     const laid = pasteCells(grid, at.row, at.column, pasted.rows, newId, pasted.spans);
+    // The source's alignments land on the cells its words landed on —
+    // a phantom target (under a span) gives it to the span's anchor.
+    if (Object.keys(pasted.aligns).length) {
+      const aligns = { ...laid.grid.aligns };
+      for (const [key, align] of Object.entries(pasted.aligns)) {
+        const [r, c] = key.split(":").map(Number);
+        const covered = spanCovering(laid.grid, at.row + r, at.column + c);
+        const trow = laid.grid.rows[covered?.rect.row ?? at.row + r];
+        const tcol = laid.grid.columns[covered?.rect.column ?? at.column + c];
+        if (trow && tcol) aligns[`${trow.id}:${tcol.id}`] = align;
+      }
+      laid.writes.push({ kind: "aligns", aligns });
+    }
     write(laid.writes);
     setRange({ anchor: at, focus: {
       row: Math.min(at.row + pasted.rows.length - 1, MAX_TABLE_ROWS - 1),
@@ -958,6 +1001,7 @@ export const SimpleTable = memo(function SimpleTable({
                     // grows over it instead (HTML's own colspan/rowspan).
                     if (isPhantom(grid, rowIndex, columnIndex)) return null;
                     const anchored = spanAnchorAt(grid, rowIndex, columnIndex);
+                    const align = alignOf(grid, rowIndex, columnIndex);
                     return (
                     <td
                       key={column.id}
@@ -965,6 +1009,7 @@ export const SimpleTable = memo(function SimpleTable({
                       data-column-index={columnIndex}
                       colSpan={anchored && anchored.span.columns > 1 ? anchored.span.columns : undefined}
                       rowSpan={anchored && anchored.span.rows > 1 ? anchored.span.rows : undefined}
+                      style={align.h || align.v ? { textAlign: align.h ?? "left", verticalAlign: align.v === "middle" ? "middle" : align.v ?? "top" } : undefined}
                       className={[
                         "stbl__cell",
                         head(rowIndex, columnIndex) ? "is-head" : "",
@@ -1231,6 +1276,20 @@ export const SimpleTable = memo(function SimpleTable({
             ))}
           </div>
           <div className="format-bar__group">
+            <Tooltip label="Alignment">
+              <button
+                type="button"
+                ref={alignBtnRef}
+                className="format-bar__turn"
+                aria-label="Cell alignment"
+                onClick={() => setAlignOpen((open) => !open)}
+              >
+                <AlignLeft size={16} />
+                <ChevronDown size={12} />
+              </button>
+            </Tooltip>
+          </div>
+          <div className="format-bar__group">
             <Tooltip label="Color">
               <button
                 type="button"
@@ -1245,6 +1304,40 @@ export const SimpleTable = memo(function SimpleTable({
               </button>
             </Tooltip>
           </div>
+        </div>
+      </Popover>
+      {/* Align: a 3×3 — horizontal across, vertical down, like Docs. */}
+      <Popover
+        open={alignOpen && Boolean(range)}
+        anchor={alignBtnRef.current ? rectOf(alignBtnRef.current) : null}
+        placement="bottom-start"
+        label="Alignment"
+        group="cells"
+        closeOnScroll={false}
+        onDismiss={() => setAlignOpen(false)}
+      >
+        <div className="align-picker" role="radiogroup" aria-label="Cell alignment">
+          {(["top", "middle", "bottom"] as const).map((v) =>
+            (["left", "center", "right"] as const).map((h) => {
+              const shared = selectionAlign();
+              const on = (shared.h ?? "left") === h && (shared.v ?? "top") === v;
+              const Icon = h === "left" ? AlignHorizontalJustifyStart : h === "center" ? AlignHorizontalJustifyCenter : AlignHorizontalJustifyEnd;
+              return (
+                <button
+                  key={`${v}-${h}`}
+                  type="button"
+                  className={`align-picker__cell ${on ? "is-on" : ""}`}
+                  role="radio"
+                  aria-checked={on}
+                  aria-label={`${v} ${h}`}
+                  onClick={() => { applyAlign({ h, v }); setAlignOpen(false); }}
+                >
+                  <Icon size={14} />
+                  <i className="align-picker__pin" data-v={v} aria-hidden="true" />
+                </button>
+              );
+            })
+          )}
         </div>
       </Popover>
       <Popover

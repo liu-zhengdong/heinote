@@ -3,6 +3,7 @@ import { inlineFromText, inlinePlainText } from "./inline-content";
 import {
   TABLE_COLUMN_WIDTH,
   TABLE_PAGE_WIDTH,
+  alignOf,
   applyTableWrites,
   deleteRow,
   expandRectForSpans,
@@ -11,6 +12,7 @@ import {
   isPhantom,
   mergeCells,
   newSimpleTable,
+  setAligns,
   splitCells,
   tableCells,
   tableFromCells,
@@ -230,5 +232,67 @@ describe("rows and columns through a span", () => {
     // 9 cells less 3 the merge covers: 6 tds, not 9.
     expect(html.match(/<td/g)).toHaveLength(6);
     void stored;
+  });
+});
+
+describe("cell alignment", () => {
+  it("paints a rect's cells and reads them back, clearing on unset", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+    ]);
+    const writes = setAligns(grid, { row: 0, column: 0, rows: 2, columns: 2 }, { h: "center", v: "middle" });
+    const next = after(table, writes);
+    expect(alignOf(next, 0, 0)).toEqual({ h: "center", v: "middle" });
+    expect(alignOf(next, 1, 1)).toEqual({ h: "center", v: "middle" });
+    // One `aligns` write carries the whole map.
+    expect(writes).toHaveLength(1);
+    expect(writes[0].kind).toBe("aligns");
+    const cleared = after(applyTableWrites(table, writes), setAligns(next, { row: 0, column: 0, rows: 1, columns: 1 }, {}));
+    expect(alignOf(cleared, 0, 0)).toEqual({});
+    expect(alignOf(cleared, 1, 1)).toEqual({ h: "center", v: "middle" });
+  });
+
+  it("drops stale keys and unknown values on read, keeping the sane ones", () => {
+    const { table } = gridOf([[text("a")]]);
+    const doctored = {
+      ...table,
+      aligns: {
+        "row-3:column-3": { h: "center", v: "middle" },
+        "nobody:column-3": { h: "center" },
+        "row-3:nobody": { v: "bottom" },
+        "row-3:column-4": { h: "sideways" },
+      },
+    } as SimpleTable;
+    // The real ids depend on `ids` counters — just use the grid's own.
+    const real = tableGrid(table);
+    const key = `${real.rows[0].id}:${real.columns[0].id}`;
+    const mixed = { ...table, aligns: { ...doctored.aligns, [key]: { h: "right" } } } as SimpleTable;
+    const read = tableGrid(mixed);
+    expect(read.aligns[key]).toEqual({ h: "right" });
+    expect(Object.keys(read.aligns)).toHaveLength(1);
+  });
+
+  it("emits text-align in copied HTML only where the cell asks for it", () => {
+    const { table, grid } = gridOf([[text("a"), text("b")]]);
+    const writes = setAligns(grid, { row: 0, column: 1, rows: 1, columns: 1 }, { h: "right" });
+    const next = after(table, writes);
+    const html = tableToHtml(tableCells(next), false, [], [[undefined, alignOf(next, 0, 1)]]);
+    expect(html).toContain('<td style="text-align:right"');
+    expect(html.match(/style=/g)).toHaveLength(1);
+  });
+
+  it("alignments survive merge (phantom keeps the anchor's)", () => {
+    const { table, grid } = gridOf([
+      [text("a"), text("b")],
+      [text("c"), text("d")],
+    ]);
+    const aligned = after(table, setAligns(grid, { row: 0, column: 1, rows: 1, columns: 1 }, { h: "center" }));
+    const merged = after(applyTableWrites(table, aligned ? [] : []), mergeCells(aligned, { row: 0, column: 0, rows: 2, columns: 2 }));
+    // setAligns over a rect containing the merge touches the anchor only.
+    const writes = setAligns(merged, { row: 0, column: 0, rows: 2, columns: 2 }, { h: "right" });
+    const done = after(applyTableWrites(table, []), writes);
+    expect(alignOf(done, 0, 0)).toEqual({ h: "right" });
+    expect(done.aligns[`${done.rows[1].id}:${done.columns[1].id}`]).toBeUndefined();
   });
 });

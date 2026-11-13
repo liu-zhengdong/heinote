@@ -163,6 +163,7 @@ const paragraphFields = {
     header_row: t.bool().optional(),
     header_column: t.bool().optional(),
     spans: t.list(t.object({ row: t.string(), column: t.string(), rows: t.number(), columns: t.number() })).optional().describe("Merged cells: each { row, column, rows, columns } — the anchor cell named by ids covering that many rows and columns."),
+    aligns: object().optional().describe("Cell alignment by 'rowId:columnId': each { h: 'left'|'center'|'right', v: 'top'|'middle'|'bottom' } — unset means left/top."),
   }).optional(),
   embed: object().optional().describe("A card: the YouTube video or the post on X its address names."),
 };
