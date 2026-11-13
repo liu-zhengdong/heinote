@@ -193,6 +193,7 @@ export const SimpleTable = memo(function SimpleTable({
   // A cell to take the caret once the change that makes it is drawn.
   const pending = useRef<{ row: string; column: string; at: "start" | "end" } | null>(null);
   const pointer = useRef<{ start: CellAt; moved: boolean } | null>(null);
+  const lastPress = useRef<{ x: number; y: number; when: number } | null>(null);
 
   const cellKey = (rowId: string, columnId: string) => `${rowId}:${columnId}`;
   const cellElement = (at: CellAt) => {
@@ -459,8 +460,40 @@ export const SimpleTable = memo(function SimpleTable({
         return;
       }
     }
+    /* A second press of a double click keeps its own word selection: it is
+       the press that stays out of this table's. pointerdown carries no
+       click count, so the pair is recognized by time and place. */
+    const previous = lastPress.current;
+    lastPress.current = { x: event.clientX, y: event.clientY, when: event.timeStamp };
+    if (previous && event.timeStamp - previous.when < 500 && Math.abs(event.clientX - previous.x) <= 6 && Math.abs(event.clientY - previous.y) <= 6) return;
     pointer.current = { start: at, moved: false };
     if (range) setRange(null);
+    /* The press is taken over whole: preventing its pointerdown keeps the
+       browser's text drag from starting at all (the drag paints the cells'
+       own selection instead — nothing else reached it: a mousemove's
+       preventDefault is too late, and user-select set mid-gesture does not
+       call a running selection back). The caret the press would have placed
+       is set here instead. */
+    event.preventDefault();
+    const text = cell.querySelector<HTMLElement>(".stbl__text");
+    if (text && !readOnly) {
+      text.focus({ preventScroll: true });
+      const caret = document.caretPositionFromPoint?.(event.clientX, event.clientY)
+        ?? (document as Document & { caretRangeFromPoint?(x: number, y: number): Range | null }).caretRangeFromPoint?.(event.clientX, event.clientY);
+      const node = caret && "offsetNode" in caret ? caret.offsetNode : caret?.startContainer;
+      const offset = caret && "offsetNode" in caret ? caret.offset : caret?.startOffset;
+      const selection = window.getSelection();
+      if (node && offset !== undefined && text.contains(node) && selection) {
+        const caretRange = document.createRange();
+        caretRange.setStart(node, offset);
+        caretRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(caretRange);
+      } else {
+        const words = tableCells(grid)[at.row]?.[at.column] ?? [];
+        focusRange(text, inlinePlainText(words).length);
+      }
+    }
   };
 
   const currentCell = (): CellAt | null => {
@@ -469,8 +502,12 @@ export const SimpleTable = memo(function SimpleTable({
     return cell && frameRef.current?.contains(cell) ? { row: Number(cell.dataset.rowIndex), column: Number(cell.dataset.columnIndex) } : null;
   };
 
+  /* The drag runs on pointermoves, not mousemoves: onPointerDown prevents
+     each cell press's pointerdown, and a prevented pointerdown stops the
+     WHOLE compatibility-mouse-event stream — mousedown, mousemove, all of
+     it — so a mousemove listener would never hear the drag at all. */
   useEffect(() => {
-    const onMove = (event: MouseEvent) => {
+    const onMove = (event: PointerEvent) => {
       const drag = pointer.current;
       if (!drag || !(event.buttons & 1)) return;
       const cell = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("td[data-row-index]");
@@ -482,11 +519,13 @@ export const SimpleTable = memo(function SimpleTable({
       selectCells({ anchor: drag.start, focus: at });
     };
     const onUp = () => { pointer.current = null; };
-    document.addEventListener("mousemove", onMove, { passive: false });
+    document.addEventListener("pointermove", onMove, { passive: false });
     document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
     return () => {
-      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
     };
     // The handlers read the table through refs and the latest render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -765,7 +804,9 @@ export const SimpleTable = memo(function SimpleTable({
           onPaste={onFramePaste}
           onMouseMove={(event) => {
             const cell = (event.target as Element).closest<HTMLElement>("td[data-row-index]");
-            if (!cell || menu || movingRef.current) return;
+            // A drag selecting cells keeps no grips: following the pointer's
+            // row, they would strobe along its edges as it went.
+            if (!cell || menu || movingRef.current || pointer.current) return;
             const next = { row: Number(cell.dataset.rowIndex), column: Number(cell.dataset.columnIndex) };
             if (next.row !== hover?.row || next.column !== hover?.column) setHover(next);
           }}
