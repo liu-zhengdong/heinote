@@ -230,7 +230,16 @@ export async function awaitCollaborativeBasis(scope: string, pageId: string): Pr
   const deadline = Date.now() + 3000;
   let delay = 100;
   while (Date.now() < deadline) {
-    await openCollaborativePage(scope, pageId).catch(() => undefined);
+    try { await openCollaborativePage(scope, pageId); }
+    catch (error) {
+      /* The server stores a page and its document in one transaction, so a
+         404 means the page itself is not on the server yet — most often the
+         write that creates it is queued behind this basis wait. There is no
+         document to wait for and holding the batch only delays that write,
+         so proceed without a basis. A 409 keeps waiting: the page exists and
+         its document is still being initialized. */
+      if (error instanceof ApiError && error.status === 404) return;
+    }
     if (sessionFor(scope, pageId)) return;
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 800);
