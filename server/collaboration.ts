@@ -42,7 +42,9 @@ export class CollaborationStore {
       DROP TRIGGER IF EXISTS collaboration_update;
       DROP TRIGGER IF EXISTS collaboration_delete;
       ${CollaborationStore.DIRTY_TRIGGERS}
-      INSERT OR IGNORE INTO collaboration_dirty SELECT scope,id FROM records WHERE collection='pages';
+      -- Only pages with no stored document need rebuilding. Re-marking every
+      -- page dirty costs a full-vault Y.Doc rebuild at every cold boot.
+      INSERT OR IGNORE INTO collaboration_dirty SELECT scope,id FROM records WHERE collection='pages' AND NOT EXISTS(SELECT 1 FROM collaboration_documents WHERE collaboration_documents.scope=records.scope AND collaboration_documents.page_id=records.id);
     `);
     this.store.transaction(() => {});
   }
