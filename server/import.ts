@@ -92,6 +92,8 @@ export interface ImportJob {
   result?: ImportReport;
   error?: string;
   created: number;
+  /** Position among waiting jobs (1 = next to run), only while queued. */
+  queuePosition?: number;
 }
 
 export interface ImportReport {
@@ -105,27 +107,151 @@ export interface ImportReport {
 }
 
 const jobs = new Map<string, ImportJob>();
+let persistence: Store | undefined;
+
+/** Persisted job envelopes (terminal states only). Progress lives in
+    memory: writing rows mid-import would contend with the worker's lock. */
+const JOB_TABLE = `CREATE TABLE IF NOT EXISTS import_jobs(
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, source TEXT NOT NULL,
+  status TEXT NOT NULL, error TEXT, result TEXT,
+  done INTEGER NOT NULL, total INTEGER NOT NULL, created INTEGER NOT NULL)`;
+
+function persist(job: ImportJob): void {
+  if (!persistence) return;
+  try {
+    persistence.db.prepare(`INSERT INTO import_jobs(id,user_id,source,status,error,result,done,total,created)
+      VALUES(?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,result=excluded.result,done=excluded.done,total=excluded.total`)
+      .run(job.id, job.userId, job.source, job.status, job.error ?? null,
+        job.result ? JSON.stringify(job.result) : null, job.done, job.total, job.created);
+  } catch {
+    // A busy database means a running import; terminal rows are re-persisted
+    // when the lock frees in pump(), so a skipped write here is safe.
+  }
+}
+
+/** Called once at boot: create the envelope table and mark jobs that the
+    previous process left mid-flight as failed (their transactions already
+    rolled back with the process). */
+export function initializeImports(store: Store): void {
+  persistence = store;
+  store.db.exec(JOB_TABLE);
+  store.db.exec(`UPDATE import_jobs SET status='failed', error='服务重启，导入中止。'
+    WHERE status IN ('queued','scanning','importing')`);
+  store.db.prepare("DELETE FROM import_jobs WHERE created < ?").run(Date.now() - 7 * 86400_000);
+}
+
+/** Server shutdown: terminate live workers (transactions roll back) and
+    mark in-flight jobs failed so the envelope table stays honest. */
+export function shutdownImports(): void {
+  queue.length = 0;
+  for (const [id, worker] of workers) {
+    void worker.terminate();
+    const job = jobs.get(id);
+    if (job && !["done", "failed"].includes(job.status)) {
+      job.status = "failed";
+      job.error = "服务关闭，导入中止。";
+      persist(job);
+    }
+  }
+  workers.clear();
+  currentJobId = undefined;
+}
 
 export function importJob(userId: string, id: string): ImportJob | undefined {
   const job = jobs.get(id);
-  return job?.userId === userId ? job : undefined;
+  if (job) return job.userId === userId ? job : undefined;
+  const row = persistence?.db.prepare("SELECT * FROM import_jobs WHERE id=?").get(id) as Row | undefined;
+  if (!row || row.user_id !== userId) return undefined;
+  return {
+    id: String(row.id), userId: String(row.user_id), source: row.source as ImportJob["source"],
+    status: row.status as ImportJob["status"], phase: "", done: Number(row.done), total: Number(row.total),
+    error: row.error === null ? undefined : String(row.error),
+    result: row.result ? JSON.parse(String(row.result)) as ImportReport : undefined,
+    created: Number(row.created),
+  };
 }
 
 const MAX_ZIP_BYTES = 1024 * 1024 * 1024;
 const MAX_ATTACHMENT = 7.5 * 1024 * 1024;
 
-/** Start an import: the zip is already read, work runs async. */
+/** Pending submission waiting for a worker slot. */
+interface PendingJob {
+  job: ImportJob;
+  actor: Actor;
+  zip: Buffer;
+  store: Store;
+}
+
+const queue: PendingJob[] = [];
+const workers = new Map<string, Worker>();
+let currentJobId: string | undefined;
+
+const ACTIVE_STATUSES = ["queued", "scanning", "importing"];
+
+function renumber(): void {
+  // Position counts the running job too: queued head-of-line shows 2.
+  let position = currentJobId ? 2 : 1;
+  for (const entry of queue) {
+    entry.job.queuePosition = position;
+    position += 1;
+  }
+}
+
+/** Write envelopes for jobs submitted while a worker held the lock; called
+    only in the unlocked gap between runs. */
+function persistQueued(): void {
+  for (const entry of queue) persist(entry.job);
+}
+
+/** Take the head of the queue into a worker if nothing is running. */
+function pump(): void {
+  if (currentJobId) return;
+  const next = queue.shift();
+  if (!next) return;
+  persistQueued();
+  renumber();
+  const { job, actor, zip, store } = next;
+  currentJobId = job.id;
+  persist(job);
+  const zipBuffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer;
+  const worker = new Worker(new URL("./import-worker.ts", import.meta.url), {
+    workerData: { dataDir: store.dataDir, actor, source: job.source, jobId: job.id, zip: zipBuffer },
+    transferList: [zipBuffer],
+  });
+  workers.set(job.id, worker);
+  worker.on("message", (message: { kind: string; job: ImportJob }) => {
+    if (message.kind !== "job") return;
+    Object.assign(job, message.job, { userId: job.userId, created: job.created, id: job.id });
+    delete job.queuePosition;
+  });
+  const finish = (error?: unknown) => {
+    workers.delete(job.id);
+    if (currentJobId === job.id) currentJobId = undefined;
+    if (!["done", "failed"].includes(job.status)) {
+      job.status = "failed";
+      job.error = error instanceof Error ? error.message : error ? String(error) : "导入异常终止。";
+    }
+    persist(job);
+    setImmediate(pump);
+  };
+  worker.on("error", (error) => finish(error));
+  worker.on("exit", () => finish());
+}
+
+/** Start an import: the zip is already read, work runs async in FIFO order. */
 export function startImport(store: Store, actor: Actor, source: "obsidian" | "notion", zip: Buffer): ImportJob {
   if (zip.length > MAX_ZIP_BYTES) throw new Error("导入文件超过 1 GiB 上限。");
   for (const other of jobs.values()) {
-    if (["queued", "scanning", "importing"].includes(other.status)) fail(409, "已有导入任务进行中。", "conflict");
+    if (other.userId === actor.user.id && ACTIVE_STATUSES.includes(other.status))
+      fail(409, "你已有导入任务进行中。", "conflict");
   }
   const job: ImportJob = {
     id: `import_${createId("x")}`,
     userId: actor.user.id,
     status: "queued",
     source,
-    phase: "读取文件…",
+    phase: "等待队列…",
     done: 0,
     total: 0,
     created: Date.now(),
@@ -134,46 +260,41 @@ export function startImport(store: Store, actor: Actor, source: "obsidian" | "no
   for (const [id, other] of jobs) {
     if ((other.status === "done" || other.status === "failed") && Date.now() - other.created > 3600_000) jobs.delete(id);
   }
-  // The whole pipeline (zip → attachments → bulk transaction) runs off the
-  // event loop in its own SQLite connection; progress arrives as messages.
-  const zipBuffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer;
-  const worker = new Worker(new URL("./import-worker.ts", import.meta.url), {
-    workerData: { dataDir: store.dataDir, actor, source, jobId: job.id, zip: zipBuffer },
-    transferList: [zipBuffer],
-  });
-  workers.set(job.id, worker);
-  worker.on("message", (message: { kind: string; job: ImportJob }) => {
-    if (message.kind !== "job") return;
-    Object.assign(job, message.job, { userId: job.userId, created: job.created, id: job.id });
-  });
-  worker.on("error", (error) => {
-    if (["done", "failed"].includes(job.status)) return;
-    job.status = "failed";
-    job.error = error instanceof Error ? error.message : String(error);
-  });
-  worker.on("exit", () => workers.delete(job.id));
+  queue.push({ job, actor, zip, store });
+  // Persist now while the lock is almost surely free; jobs queued behind a
+  // running import get persisted when their turn comes up in pump().
+  if (!currentJobId) persist(job);
+  renumber();
+  setImmediate(pump);
   return job;
 }
 
-const workers = new Map<string, Worker>();
-
 /** Any job holding the site's write pipeline? Writes should stay out of
-    its way while it runs. */
+    its way while it runs. Queued jobs only hold a buffer, not the lock. */
 export function importActive(): boolean {
-  for (const job of jobs.values()) {
-    if (["queued", "scanning", "importing"].includes(job.status)) return true;
-  }
-  return false;
+  return currentJobId !== undefined;
 }
 
-/** Terminate a running job's worker; the import's transaction rolls back. */
+/** Terminate a running job's worker (transaction rolls back) or drop a
+    queued job before it starts. */
 export function cancelImport(userId: string, id: string): boolean {
   const job = importJob(userId, id);
+  if (!job || ["done", "failed"].includes(job.status)) return false;
+  const queuedAt = queue.findIndex((entry) => entry.job.id === id);
+  if (queuedAt >= 0) {
+    queue.splice(queuedAt, 1);
+    renumber();
+    job.status = "failed";
+    job.error = "已取消。";
+    persist(job);
+    return true;
+  }
   const worker = workers.get(id);
-  if (!job || !worker || ["done", "failed"].includes(job.status)) return false;
+  if (!worker) return false;
   void worker.terminate();
   job.status = "failed";
   job.error = "已取消。";
+  persist(job);
   return true;
 }
 

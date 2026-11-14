@@ -25,7 +25,7 @@ import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvatarRef, tokenAvatarScope, tokenAvatarUrl, tokenDto } from "./token-identity.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
-import { cancelImport, importActive, importJob, startImport } from "./import.ts";
+import { cancelImport, importActive, importJob, initializeImports, shutdownImports, startImport } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
 import { applyUpdate, checkUpdate, updateStatus, type UpdateConfig } from "./update.ts";
 import { attachAdminBackupRoutes, Backups } from "./backups.ts";
@@ -78,6 +78,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   const dataDir = resolve(options.dataDir ?? process.env.DATA_DIR ?? "data");
   await migrateDatabase(dataDir);
   const store = new Store(dataDir);
+  initializeImports(store);
   const updateConfig: UpdateConfig = {
     repository: packageMeta.repository, version: packageMeta.version || "0.0.0",
     dataDir, apiBase: options.update?.apiBase, runnerPath: options.update?.runnerPath,
@@ -806,7 +807,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

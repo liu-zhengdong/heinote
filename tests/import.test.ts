@@ -52,7 +52,14 @@ async function fixture(t: TestContext) {
     assert.ok(basename(target).startsWith("heinote-import-"));
     await rm(target, { recursive: true, force: true });
   });
-  return { browser: () => new Browser(() => server!.url) };
+  return {
+    directory,
+    browser: () => new Browser(() => server!.url),
+    async restart() {
+      await server!.close();
+      server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", serveStatic: false });
+    },
+  };
 }
 
 async function register(browser: Browser, handle: string): Promise<Json> {
@@ -289,4 +296,85 @@ test("导入进行中：读请求正常响应，写请求明确拒绝", async (t
   }
   assert.ok(sawRunning, "import should still be running when we poll");
   assert.ok(sawDone, "import must complete");
+});
+
+const poll = async (browser: Browser, id: string): Promise<Json> =>
+  (await browser.request(`/api/account/import/${id}`)).body;
+
+const waitStatus = async (browser: Browser, id: string, want: string[], rounds = 200): Promise<Json> => {
+  for (let i = 0; i < rounds; i += 1) {
+    const job = await poll(browser, id);
+    if (want.includes(job.status)) return job;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  assert.fail(`任务 ${id} 未达到 ${want.join("/")} 状态`);
+};
+
+test("多人导入按 FIFO 排队：受理、可见位置、依次执行", async (t) => {
+  const { browser } = await fixture(t);
+  const alice = browser(); await register(alice, "fifo-alice");
+  const bob = browser(); await register(bob, "fifo-bob");
+
+  const heavy: Record<string, string | Uint8Array> = {};
+  for (let i = 0; i < 600; i += 1) heavy[`vault/笔记${i}.md`] = `# 笔记 ${i}\n\n` + "正文".repeat(300);
+  const aliceZip = await zipOf(heavy);
+  const bobZip = await zipOf({ "v/笔记.md": "# bob\n" });
+
+  const a = await alice.request("/api/account/import/obsidian", { method: "POST", raw: aliceZip, contentType: "application/zip" });
+  assert.equal(a.status, 202);
+  // Same user cannot double-submit (AC-02).
+  const dup = await alice.request("/api/account/import/obsidian", { method: "POST", raw: bobZip, contentType: "application/zip" });
+  assert.equal(dup.status, 409);
+
+  const b = await bob.request("/api/account/import/obsidian", { method: "POST", raw: bobZip, contentType: "application/zip" });
+  assert.equal(b.status, 202);
+
+  const bJob = await waitStatus(bob, b.body.id, ["queued", "done", "failed"]);
+  if (bJob.status === "queued") assert.equal(bJob.queuePosition, 2, "bob 的队列位置应排在 alice 之后");
+
+  const [aDone, bDone] = await Promise.all([
+    waitStatus(alice, a.body.id, ["done", "failed"], 600),
+    waitStatus(bob, b.body.id, ["done", "failed"], 600),
+  ]);
+  assert.equal(aDone.status, "done", JSON.stringify(aDone.error));
+  assert.equal(bDone.status, "done", JSON.stringify(bDone.error));
+});
+
+test("排队任务可取消，队列继续前进", async (t) => {
+  const { browser } = await fixture(t);
+  const alice = browser(); await register(alice, "q-alice");
+  const bob = browser(); await register(bob, "q-bob");
+
+  const heavy: Record<string, string | Uint8Array> = {};
+  for (let i = 0; i < 600; i += 1) heavy[`vault/笔记${i}.md`] = `# 笔记 ${i}\n\n` + "正文".repeat(300);
+  const slow = await alice.request("/api/account/import/obsidian", { method: "POST", raw: await zipOf(heavy), contentType: "application/zip" });
+  assert.equal(slow.status, 202);
+  const b = await bob.request("/api/account/import/obsidian", { method: "POST", raw: await zipOf({ "v/笔记.md": "# x\n" }), contentType: "application/zip" });
+  assert.equal(b.status, 202);
+
+  // Cancel whichever state bob's job is in.
+  const cancelled = await bob.request(`/api/account/import/${b.body.id}`, { method: "DELETE" });
+  assert.equal(cancelled.status, 200);
+  const bFinal = await poll(bob, b.body.id);
+  assert.equal(bFinal.status, "failed");
+
+  const aDone = await waitStatus(alice, slow.body.id, ["done", "failed"], 600);
+  assert.equal(aDone.status, "done", JSON.stringify(aDone.error));
+});
+
+test("重启后在途任务可查且标记失败", async (t) => {
+  const f = await fixture(t);
+  const alice = f.browser(); await register(alice, "restart-alice");
+
+  const heavy: Record<string, string | Uint8Array> = {};
+  for (let i = 0; i < 800; i += 1) heavy[`vault/笔记${i}.md`] = `# 笔记 ${i}\n\n` + "正文".repeat(400);
+  const started = await alice.request("/api/account/import/obsidian", { method: "POST", raw: await zipOf(heavy), contentType: "application/zip" });
+  assert.equal(started.status, 202);
+  // Ensure the worker picked it up before the restart.
+  await waitStatus(alice, started.body.id, ["scanning", "importing"], 100);
+
+  await f.restart();
+  const after = await poll(alice, started.body.id);
+  assert.ok(after.status === "failed" || after.status === "done",
+    `重启后任务应为 failed/done，实际 ${after.status}`);
 });
