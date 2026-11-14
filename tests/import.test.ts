@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { deflateRawSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { startServer } from "../server/index.ts";
-import { ZipStream } from "../src/core/zip.ts";
+import { crc32, ZipStream } from "../src/core/zip.ts";
 
 /* 导入的 HTTP 验收：POST /api/account/import/:source 收 zip 起任务，
    GET 轮询到 done 后页面树与附件已写入：Obsidian 库（含 .obsidian、
@@ -170,6 +172,74 @@ test("Notion：命名、[id] 链接、<page>、表格与任务", async (t) => {
   assert.ok(kinds.includes("todo") && kinds.includes("table") && kinds.includes("callout"), JSON.stringify(kinds));
   const todos = subBlocks.filter((x) => x.kind === "todo");
   assert.deepEqual(todos.map((x) => x.checked), [false, true]);
+});
+
+test("Obsidian：deflate 压缩条目按压缩大小读取", async (t) => {
+  const { browser } = await fixture(t);
+  const b = browser();
+  await register(b, "deflater");
+
+  // A payload that inflates under deflate: incompressible random bytes.
+  // The reader must honor the central directory's compressed size, or the
+  // slice cuts the stream short and inflate fails (Obsidian vault PNGs hit
+  // exactly this shape).
+  const pngBytes = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), randomBytes(64 * 1024)]);
+  const deflated = deflateRawSync(pngBytes);
+  assert.ok(deflated.length > pngBytes.length, `payload must expand under deflate: ${deflated.length} > ${pngBytes.length}`);
+
+  const note = Buffer.from("![[膨胀.png]]", "utf8");
+  const noteDeflated = deflateRawSync(note);
+  const parts: Buffer[] = [];
+  const meta: Array<{ name: Buffer; crc: number; csize: number; usize: number; offset: number; method: number; body: Buffer }> = [];
+  let written = 0;
+  const write = (buf: Buffer) => { parts.push(buf); written += buf.length; };
+  const push = (name: string, body: Buffer, compressed: Buffer) => {
+    const nameBytes = Buffer.from(name, "utf8");
+    const head = Buffer.alloc(30);
+    head.writeUInt32LE(0x04034b50, 0);
+    head.writeUInt16LE(20, 4);
+    head.writeUInt16LE(0x0800, 6); // UTF-8 names
+    head.writeUInt16LE(8, 8); // deflate
+    head.writeUInt32LE(crc32(body), 14);
+    head.writeUInt32LE(compressed.length, 18);
+    head.writeUInt32LE(body.length, 22);
+    head.writeUInt16LE(nameBytes.length, 26);
+    const offset = written;
+    write(head); write(nameBytes); write(compressed);
+    meta.push({ name: nameBytes, crc: crc32(body), csize: compressed.length, usize: body.length, offset, method: 8, body });
+  };
+  push("vault/.obsidian/app.json", Buffer.from("{}"), deflateRawSync(Buffer.from("{}")));
+  push("vault/注.md", note, noteDeflated);
+  push("vault/膨胀.png", pngBytes, deflated);
+
+  const centralAt = written;
+  for (const m of meta) {
+    const head = Buffer.alloc(46);
+    head.writeUInt32LE(0x02014b50, 0);
+    head.writeUInt16LE(20, 4); head.writeUInt16LE(20, 6);
+    head.writeUInt16LE(0x0800, 8); head.writeUInt16LE(m.method, 10);
+    head.writeUInt32LE(m.crc, 16); head.writeUInt32LE(m.csize, 20); head.writeUInt32LE(m.usize, 24);
+    head.writeUInt16LE(m.name.length, 28);
+    head.writeUInt32LE(m.offset, 42);
+    write(head); write(m.name);
+  }
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6); // single disk
+  end.writeUInt16LE(meta.length, 8); end.writeUInt16LE(meta.length, 10);
+  end.writeUInt32LE(written - centralAt, 12); end.writeUInt32LE(centralAt, 16);
+  write(end);
+
+  const job = await runImport(b, "obsidian", Buffer.concat(parts));
+  assert.equal(job.status, "done", JSON.stringify(job));
+  assert.equal(job.result.attachments, 1, JSON.stringify(job.result));
+
+  const all = await pages(b);
+  const imported = all.find((p) => titleOf(p) === "注");
+  assert.ok(imported);
+  const imageRun = (await blocks(b)).filter((x) => x.page === imported.id)
+    .flatMap((x) => x.content ?? []).find((r: Json) => r.embed?.mention?.kind === "image");
+  assert.ok(imageRun, "图片 mention 应指向已存储附件");
 });
 
 test("无效 zip 与未知来源被拒绝", async (t) => {

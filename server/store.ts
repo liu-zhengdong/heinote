@@ -73,6 +73,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS invitations(id TEXT PRIMARY KEY, space_id TEXT NOT NULL REFERENCES spaces(id), user_id TEXT NOT NULL REFERENCES users(id), inviter_id TEXT NOT NULL REFERENCES users(id), role TEXT NOT NULL, status TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS invitations_user ON invitations(user_id,status);
       CREATE TABLE IF NOT EXISTS records(scope TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(scope,collection,id));
+      CREATE INDEX IF NOT EXISTS records_page ON records(scope,collection,json_extract(value,'$.page'));
       CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, display_name TEXT, avatar TEXT, access TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT);
       CREATE TABLE IF NOT EXISTS token_events(id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES tokens(id), action TEXT NOT NULL, page_id TEXT NOT NULL, page_title TEXT NOT NULL, version_id TEXT, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS token_events_token ON token_events(token_id,created_at);
@@ -157,6 +158,10 @@ export class Store {
   records(scope: string, collection: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection=? ORDER BY id", scope, collection).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
+  /** One page's paragraphs. Uses the page-key expression index; records(scope,"blocks") would scan the whole plane per page. */
+  blocksOf(scope: string, pageId: string): Array<{ id: string; value: Row }> {
+    return this.all("SELECT id,value FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=? ORDER BY id", scope, pageId).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+  }
   record(scope: string, collection: string, recordId: string): Row | undefined {
     const row = this.one("SELECT value FROM records WHERE scope=? AND collection=? AND id=?", scope, collection, recordId);
     return row ? JSON.parse(String(row.value)) : undefined;
@@ -186,7 +191,9 @@ export class Store {
   apply(actor: Actor, requested: Write[], requestId?: string, textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = [], maxWrites = 10000): Array<Row | null> {
     if ((!requested.length && !textUpdates.length) || requested.length > maxWrites || textUpdates.length > 1000) fail(400, "写入数量无效。");
     return this.transaction(() => {
-      const digest = hash(JSON.stringify({ requested, textUpdates, expectedPages }));
+      // The digest exists for replay detection; bulk calls without a
+      // requestId (imports) never cache, so skip the JSON pass entirely.
+      const digest = requestId ? hash(JSON.stringify({ requested, textUpdates, expectedPages })) : "";
       if (requestId) {
         const cached = this.one("SELECT * FROM requests WHERE user_id=? AND request_id=?", actor.user.id, requestId);
         if (cached) {
@@ -346,7 +353,7 @@ export class Store {
     this.pruneHistory(scope); return version;
   }
   revision(scope: string, pageId: string): string {
-    return pageRevision(this.record(scope, "pages", pageId), this.records(scope, "blocks").filter((row) => row.value.page === pageId));
+    return pageRevision(this.record(scope, "pages", pageId), this.blocksOf(scope, pageId));
   }
   pageDto(actor: Actor, pageId: string) {
     const { page, scope } = this.page(actor, pageId);
@@ -363,7 +370,7 @@ export class Store {
       if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
       const { block_tree, title, title_content, parent_id, ...fields } = page;
       this.put(scope, "pages", page.id, { ...fields, title_content: title_content ?? [{ text: title }], ...(parent_id ? { parent_id } : {}) });
-      for (const row of this.records(scope, "blocks")) if (row.value.page === page.id) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
+      for (const row of this.blocksOf(scope, page.id)) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
       for (const block of Object.values(block_tree.by_id)) {
         const { parent_id: parent, ...rest } = block;
         this.put(scope, "blocks", blockRecordId(page.id, block.id), { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) });

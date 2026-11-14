@@ -57,7 +57,7 @@ export class CollaborationStore {
   private pageData(scope: string, pageId: string) {
     const page = this.store.record(scope, "pages", pageId);
     if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
-    const blocks = this.store.records(scope, "blocks").filter(({ value }) => value.page === pageId);
+    const blocks = this.store.blocksOf(scope, pageId);
     return { page, blocks, fields: fieldsInPage(pageId, page, blocks), structure: hash(JSON.stringify(structureOf(page, blocks))) };
   }
   private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean): void {

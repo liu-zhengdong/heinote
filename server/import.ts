@@ -42,6 +42,9 @@ export function readZip(file: Buffer): ZipEntryRead[] {
     const flags = file.readUInt16LE(at + 8);
     const method = file.readUInt16LE(at + 10);
     const size = file.readUInt32LE(at + 24);
+    // Deflate can leave the payload larger than the input; slice the entry
+    // by its compressed size or inflate reads a truncated stream.
+    const compressedSize = file.readUInt32LE(at + 20);
     const nameLength = file.readUInt16LE(at + 28);
     const extraLength = file.readUInt16LE(at + 30);
     const commentLength = file.readUInt16LE(at + 32);
@@ -65,7 +68,7 @@ export function readZip(file: Buffer): ZipEntryRead[] {
         const headName = file.readUInt16LE(offset + 26);
         const headExtra = file.readUInt16LE(offset + 28);
         const start = offset + 30 + headName + headExtra;
-        const body = file.subarray(start, start + size);
+        const body = file.subarray(start, start + compressedSize);
         if (method === 0) return Buffer.from(body);
         if (method === 8) return inflateRawSync(body);
         throw new Error(`zip 条目使用了不支持的压缩方式（${method}）：${name}`);
@@ -184,7 +187,7 @@ interface PageBuild {
 }
 
 /** Write pages + their blocks in one transaction. Nothing lands on failure. */
-function commit(store: Store, actor: Actor, _scope: string, job: ImportJob, built: PageBuild[]): void {
+function commit(store: Store, actor: Actor, _scope: string, _job: ImportJob, built: PageBuild[]): void {
   const writes: Write[] = [];
   const stamp = now();
   const who = actor.user.displayName;
@@ -223,7 +226,10 @@ function commit(store: Store, actor: Actor, _scope: string, job: ImportJob, buil
       });
     }
   }
-  store.apply(actor, writes, job.id, [], [], 100000);
+  // No requestId: job ids never repeat, so caching a giant digest buys
+  // nothing. The limit covers whole-vault imports — a real library is far
+  // above the interactive 10k cap but must still land in one transaction.
+  store.apply(actor, writes, undefined, [], [], 50_000_000);
 }
 
 /** Per-import helpers: page ids, attachment writing, unresolved links. */
