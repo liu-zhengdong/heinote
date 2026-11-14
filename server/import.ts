@@ -1,4 +1,5 @@
 import { inflateRawSync } from "node:zlib";
+import { Worker } from "node:worker_threads";
 import { createId } from "../src/core/ids.ts";
 import { analyzeBase, evalFormulas, parseFrontmatter, rowFacts, scanInlineTags, type BaseRow, type RowFacts } from "../src/core/base.ts";
 import { indexVault, noteToBlocks, planVault } from "../src/core/obsidian.ts";
@@ -6,7 +7,7 @@ import { indexNotion, notionPageToBlocks, notionTitle } from "../src/core/notion
 import { storedRuns } from "../src/core/stored-runs.ts";
 import type { Block } from "../src/core/types.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
-import type { Actor, Row, Store, Write } from "./store.ts";
+import { fail, type Actor, type Row, type Store, type Write } from "./store.ts";
 
 /* Notes from elsewhere: an Obsidian vault (its folder zipped in the browser,
    or a zip the user made) or the Notion export zip. Everything lands under
@@ -116,6 +117,9 @@ const MAX_ATTACHMENT = 7.5 * 1024 * 1024;
 /** Start an import: the zip is already read, work runs async. */
 export function startImport(store: Store, actor: Actor, source: "obsidian" | "notion", zip: Buffer): ImportJob {
   if (zip.length > MAX_ZIP_BYTES) throw new Error("导入文件超过 1 GiB 上限。");
+  for (const other of jobs.values()) {
+    if (["queued", "scanning", "importing"].includes(other.status)) fail(409, "已有导入任务进行中。", "conflict");
+  }
   const job: ImportJob = {
     id: `import_${createId("x")}`,
     userId: actor.user.id,
@@ -130,15 +134,47 @@ export function startImport(store: Store, actor: Actor, source: "obsidian" | "no
   for (const [id, other] of jobs) {
     if ((other.status === "done" || other.status === "failed") && Date.now() - other.created > 3600_000) jobs.delete(id);
   }
-  setImmediate(() => {
-    try {
-      runImport(store, actor, job, zip);
-    } catch (error) {
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : String(error);
-    }
+  // The whole pipeline (zip → attachments → bulk transaction) runs off the
+  // event loop in its own SQLite connection; progress arrives as messages.
+  const zipBuffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer;
+  const worker = new Worker(new URL("./import-worker.ts", import.meta.url), {
+    workerData: { dataDir: store.dataDir, actor, source, jobId: job.id, zip: zipBuffer },
+    transferList: [zipBuffer],
   });
+  workers.set(job.id, worker);
+  worker.on("message", (message: { kind: string; job: ImportJob }) => {
+    if (message.kind !== "job") return;
+    Object.assign(job, message.job, { userId: job.userId, created: job.created, id: job.id });
+  });
+  worker.on("error", (error) => {
+    if (["done", "failed"].includes(job.status)) return;
+    job.status = "failed";
+    job.error = error instanceof Error ? error.message : String(error);
+  });
+  worker.on("exit", () => workers.delete(job.id));
   return job;
+}
+
+const workers = new Map<string, Worker>();
+
+/** Any job holding the site's write pipeline? Writes should stay out of
+    its way while it runs. */
+export function importActive(): boolean {
+  for (const job of jobs.values()) {
+    if (["queued", "scanning", "importing"].includes(job.status)) return true;
+  }
+  return false;
+}
+
+/** Terminate a running job's worker; the import's transaction rolls back. */
+export function cancelImport(userId: string, id: string): boolean {
+  const job = importJob(userId, id);
+  const worker = workers.get(id);
+  if (!job || !worker || ["done", "failed"].includes(job.status)) return false;
+  void worker.terminate();
+  job.status = "failed";
+  job.error = "已取消。";
+  return true;
 }
 
 /* ── Shared pipeline parts ──────────────────────────────────────────────── */
@@ -162,19 +198,20 @@ const guessType = (name: string): string => {
   return map[name.split(".").at(-1)?.toLowerCase() ?? ""] ?? "application/octet-stream";
 };
 
-function runImport(store: Store, actor: Actor, job: ImportJob, zip: Buffer): void {
+export function runImportBody(store: Store, actor: Actor, job: ImportJob, zip: Buffer): void {
   job.status = "scanning";
   job.phase = "扫描文件…";
   const entries: ScannedEntry[] = readZip(zip).map((entry) => ({ path: entry.name, size: entry.size, mtime: entry.mtime, read: entry.bytes }));
   job.total = entries.length;
-  // Attachments defer directory fsyncs and index rows to endBatch; the
-  // deferred work still lands before the records transaction reads the index.
+  // Attachment index rows commit inside the records transaction, so a
+  // failed import leaves neither index rows nor unreferenced bytes.
   store.files.beginBatch();
   try {
     if (job.source === "obsidian") importObsidian(store, actor, job, entries);
     else importNotion(store, actor, job, entries);
-  } finally {
-    store.files.endBatch();
+  } catch (error) {
+    store.files.abortBatch();
+    throw error;
   }
 }
 
@@ -237,7 +274,12 @@ function commit(store: Store, actor: Actor, _scope: string, _job: ImportJob, bui
   // nothing. The limit covers whole-vault imports — a real library is far
   // above the interactive 10k cap but must still land in one transaction.
   // Bulk mode trims the per-write lookups that make cold-cache commits crawl.
-  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], [], 50_000_000));
+  store.bulkTransaction(() => {
+    // The deferred attachment index lands in this transaction too, so the
+    // import's files index rows can never outlive its content.
+    store.files.commitBatch();
+    store.apply(actor, writes, undefined, [], [], 50_000_000);
+  });
 }
 
 /** Per-import helpers: page ids, attachment writing, unresolved links. */

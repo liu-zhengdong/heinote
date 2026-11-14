@@ -25,7 +25,7 @@ import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvatarRef, tokenAvatarScope, tokenAvatarUrl, tokenDto } from "./token-identity.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { writeExport } from "./export.ts";
-import { importJob, startImport } from "./import.ts";
+import { cancelImport, importActive, importJob, startImport } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
 import { applyUpdate, checkUpdate, updateStatus, type UpdateConfig } from "./update.ts";
 import { attachAdminBackupRoutes, Backups } from "./backups.ts";
@@ -105,6 +105,14 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   const jsonParser = express.json({ limit: "16mb" });
   app.use((req, res, next) => req.path.startsWith("/api/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
+  // A running import holds the site's write path; let writes fail fast with
+  // a readable 503 instead of hanging on SQLite's busy timeout.
+  app.use("/api", (req, _res, next) => {
+    if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
+    if (req.path.startsWith("/account/import") || req.path.startsWith("/admin/update-apply") || req.path.startsWith("/auth/")) return next();
+    if (importActive()) return fail(503, "导入进行中，请稍后再试。", "import_running");
+    next();
+  });
 
   const cookie = (req: Request) => /(?:^|;\s*)notes_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
   const sessionUser = (req: Request): User | undefined => {
@@ -532,6 +540,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (!job) fail(404, "导入任务不存在。", "not_found");
     const { userId: _user, created: _created, ...dto } = job;
     res.json(dto);
+  });
+  app.delete("/api/account/import/:id", (req, res) => {
+    const who = actor(req);
+    if (!cancelImport(who.user.id, req.params.id)) fail(404, "没有进行中的导入任务。", "not_found");
+    res.json({ ok: true });
   });
   app.get("/api/tokens/presets", (_req, res) => res.json(AVATAR_PRESETS.map((preset) => ({ id: preset }))));
   app.get("/api/tokens", (req, res) => { const who = actor(req); res.json(store.all("SELECT * FROM tokens WHERE user_id=? ORDER BY created_at", who.user.id).map(tokenDto)); });

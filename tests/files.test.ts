@@ -503,3 +503,28 @@ test("backup writes a self-contained directory that restores accounts, pages, an
   assert.equal(rows.length, 2);
   assert.ok(rows.every((row) => typeof row.hash === "string" && String(row.hash).length === 64));
 });
+
+test("startup reclaims attachment bytes no index row names", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  await register(browser, "orphanowner");
+  const bytes = png();
+  status(await putFile(browser, "personal", "files/kept.png", bytes), 200);
+  const kept = sha256(bytes);
+
+  // Simulate the crash window: bytes fsynced, index row never committed.
+  const stray = Buffer.from("receipt-less bytes");
+  const strayHash = sha256(stray);
+  const strayPath = blobPath(f.directory, strayHash);
+  mkdirSync(join(f.directory, "attachments", strayHash.slice(0, 2)), { recursive: true });
+  writeFileSync(strayPath, stray);
+  // And an interrupted temporary upload beside the stray blob.
+  writeFileSync(join(f.directory, "attachments", strayHash.slice(0, 2), `.${"0".repeat(8)}.tmp`), Buffer.from("partial"));
+
+  await f.restart();
+  assert.deepEqual(attachmentFiles(f.directory), [strayHash.slice(0, 2) + "/" === kept.slice(0, 2) + "/" ? "" : "", `${kept.slice(0, 2)}/${kept}`].filter(Boolean),
+    "only the indexed blob may survive restart");
+  const read = await getFile(browser, "personal", "files/kept.png");
+  assert.equal(read.status, 200);
+  assert.ok(read.bytes.equals(bytes));
+});

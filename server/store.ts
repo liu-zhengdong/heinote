@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import schema, { HISTORY_BUDGET_BYTES } from "../schema.ts";
@@ -58,11 +58,13 @@ export class Store {
   readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
   readonly quotas!: Quotas;
+  readonly dataDir: string;
   private transactionDepth = 0;
   /** The one-time collaboration rebuild at startup is not a user commit. */
   quotaSuspended = false;
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    this.dataDir = resolve(dataDir);
     this.db = new DatabaseSync(join(dataDir, "notes.sqlite"));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;`);
     // -2MB default leaves bulk commits walking btree pages from cold disk;

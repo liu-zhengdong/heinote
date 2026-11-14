@@ -248,8 +248,45 @@ test("无效 zip 与未知来源被拒绝", async (t) => {
   await register(b, "badimporter");
   const reply = await b.request("/api/account/import/obsidian", { method: "POST", raw: Buffer.from("not a zip"), contentType: "application/zip" });
   assert.equal(reply.status, 202); // 任务受理，失败体现在轮询
-  const job = await b.request(`/api/account/import/${reply.body.id}`);
+  let job = { body: { status: "queued" } };
+  for (let i = 0; i < 50 && job.body.status !== "failed"; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    job = await b.request(`/api/account/import/${reply.body.id}`);
+  }
   assert.equal(job.body.status, "failed");
   const other = await b.request("/api/account/import/wordpress", { method: "POST", raw: Buffer.from("x"), contentType: "application/zip" });
   assert.equal(other.status, 404);
+});
+
+test("导入进行中：读请求正常响应，写请求明确拒绝", async (t) => {
+  const { browser } = await fixture(t);
+  const b = browser();
+  await register(b, "busyvault");
+  // Enough notes that the worker holds the write pipeline for a while.
+  const entries: Record<string, string | Uint8Array> = {};
+  for (let i = 0; i < 400; i += 1) entries[`vault/笔记${i}.md`] = `# 笔记 ${i}\n\n` + "正文内容。".repeat(200);
+  const zip = await zipOf(entries);
+
+  const started = await b.request("/api/account/import/obsidian", { method: "POST", raw: zip, contentType: "application/zip" });
+  assert.equal(started.status, 202);
+
+  // While it runs: reads keep working, including the job's own progress.
+  let sawRunning = false;
+  let saw503 = false;
+  let sawDone = false;
+  for (let i = 0; i < 600; i += 1) {
+    const job = await b.request(`/api/account/import/${started.body.id}`);
+    assert.equal(job.status, 200, "progress endpoint must answer during import");
+    if (job.body.status === "done") { sawDone = true; break; }
+    if (job.body.status === "failed") assert.fail(JSON.stringify(job.body));
+    sawRunning = true;
+    const probe = await b.request("/api/session");
+    assert.equal(probe.status, 200, "session endpoint must answer during import");
+    const write = await b.request("/api/spaces", { method: "POST", body: { name: "x" } });
+    if (write.status === 503) saw503 = true;
+    else assert.equal(write.status, 200, `unexpected write status ${write.status}`);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  assert.ok(sawRunning, "import should still be running when we poll");
+  assert.ok(sawDone, "import must complete");
 });
