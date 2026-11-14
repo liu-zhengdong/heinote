@@ -167,8 +167,15 @@ function runImport(store: Store, actor: Actor, job: ImportJob, zip: Buffer): voi
   job.phase = "扫描文件…";
   const entries: ScannedEntry[] = readZip(zip).map((entry) => ({ path: entry.name, size: entry.size, mtime: entry.mtime, read: entry.bytes }));
   job.total = entries.length;
-  if (job.source === "obsidian") importObsidian(store, actor, job, entries);
-  else importNotion(store, actor, job, entries);
+  // Attachments defer directory fsyncs and index rows to endBatch; the
+  // deferred work still lands before the records transaction reads the index.
+  store.files.beginBatch();
+  try {
+    if (job.source === "obsidian") importObsidian(store, actor, job, entries);
+    else importNotion(store, actor, job, entries);
+  } finally {
+    store.files.endBatch();
+  }
 }
 
 interface PageBuild {
@@ -229,7 +236,8 @@ function commit(store: Store, actor: Actor, _scope: string, _job: ImportJob, bui
   // No requestId: job ids never repeat, so caching a giant digest buys
   // nothing. The limit covers whole-vault imports — a real library is far
   // above the interactive 10k cap but must still land in one transaction.
-  store.apply(actor, writes, undefined, [], [], 50_000_000);
+  // Bulk mode trims the per-write lookups that make cold-cache commits crawl.
+  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], [], 50_000_000));
 }
 
 /** Per-import helpers: page ids, attachment writing, unresolved links. */

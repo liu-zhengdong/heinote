@@ -16,7 +16,7 @@ import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
 import { Quotas } from "./quotas.ts";
 import { LATEST_VERSION } from "./migrations/index.ts";
-import { pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
+import { documentKey, pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
   constructor(readonly status: number, message: string, readonly code = "request_failed") { super(message); }
@@ -98,7 +98,24 @@ export class Store {
     try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
   }
   all(sql: string, ...params: Array<string | number>): Row[] { return this.db.prepare(sql).all(...params) as Row[]; }
+  private readonly prepared = new Map<string, ReturnType<DatabaseSync["prepare"]>>();
+  private stmt(sql: string): ReturnType<DatabaseSync["prepare"]> {
+    let stmt = this.prepared.get(sql);
+    if (!stmt) { stmt = this.db.prepare(sql); this.prepared.set(sql, stmt); }
+    return stmt;
+  }
+  private select(sql: string, ...params: Array<string | number>): Row[] { return this.stmt(sql).all(...params) as Row[]; }
+  private selectOne(sql: string, ...params: Array<string | number>): Row | undefined { return this.select(sql, ...params)[0]; }
   one(sql: string, ...params: Array<string | number>): Row | undefined { return this.all(sql, ...params)[0]; }
+  /** Mark a whole-vault-scale commit: per-write lookups and dirty triggers
+      switch to bulk forms. The single transaction and its quotas are kept. */
+  private bulk = false;
+  bulkTransaction<T>(work: () => T): T {
+    const previous = this.bulk;
+    this.bulk = true;
+    try { return this.transaction(work); }
+    finally { this.bulk = previous; }
+  }
   transaction<T>(work: () => T): T {
     if (this.transactionDepth) return work();
     this.db.exec("BEGIN IMMEDIATE");
@@ -163,11 +180,11 @@ export class Store {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=? ORDER BY id", scope, pageId).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
   record(scope: string, collection: string, recordId: string): Row | undefined {
-    const row = this.one("SELECT value FROM records WHERE scope=? AND collection=? AND id=?", scope, collection, recordId);
+    const row = this.selectOne("SELECT value FROM records WHERE scope=? AND collection=? AND id=?", scope, collection, recordId);
     return row ? JSON.parse(String(row.value)) : undefined;
   }
   put(scope: string, collection: string, recordId: string, value: Row): void {
-    this.db.prepare("INSERT INTO records(scope,collection,id,value) VALUES(?,?,?,?) ON CONFLICT(scope,collection,id) DO UPDATE SET value=excluded.value").run(scope, collection, recordId, JSON.stringify(value));
+    this.stmt("INSERT INTO records(scope,collection,id,value) VALUES(?,?,?,?) ON CONFLICT(scope,collection,id) DO UPDATE SET value=excluded.value").run(scope, collection, recordId, JSON.stringify(value));
   }
   plane(scope: string): PlaneRecords {
     return Object.fromEntries(Object.keys(emptyPlane()).map((collection) => [collection, new Map(this.records(scope, collection).map((row) => [row.id, row.value as RecordValue]))])) as unknown as PlaneRecords;
@@ -216,11 +233,42 @@ export class Store {
       const approved = this.collaboration.applyUpdates(actor, textUpdates);
       const result: Array<Row | null> = [];
       const scopes = new Set<string>(textUpdates.map((update) => this.scope(actor, update.scope)));
+      // Bulk path: permission checks, conflict lookups and dirty tracking
+      // repeat per write otherwise — a whole-vault import is ~10^5 writes,
+      // which turns every cold index page into a random disk read.
+      const scoped = new Map<string, string>();
+      const scopeFor = (name: string): string => {
+        if (!this.bulk) return this.scope(actor, name, true);
+        const cached = scoped.get(name);
+        if (cached) return cached;
+        const resolved = this.scope(actor, name, true);
+        scoped.set(name, resolved);
+        return resolved;
+      };
+      // Pages that the transaction itself dirtied: bulk commits suspend the
+      // per-write trigger and mark them in one indexed insert at the end.
+      const dirtyPages = new Set<string>();
+      if (this.bulk) this.collaboration.suspendDirtyTracking();
+      try {
       for (const original of requested) {
-        const scope = this.scope(actor, original.scope, true);
+        const scope = scopeFor(original.scope);
         const write = this.collaboration.stripProjected(original, scope, approved);
         if (scope !== `user:${actor.user.id}` && write.collection === "workspace_settings") fail(403, "设置仅属于个人。");
-        const current = this.record(scope, write.collection, write.id);
+        // Bulk fast path: a brand-new put needs no existence read. Try the
+        // insert; a primary-key hit falls back to the full conflict check.
+        let current: Row | undefined;
+        let fastInserted = false;
+        if (this.bulk && write.action === "put" && write.value && write.base == null) {
+          try {
+            this.stmt("INSERT INTO records(scope,collection,id,value) VALUES(?,?,?,?)").run(scope, write.collection, write.id, JSON.stringify(write.value));
+            fastInserted = true;
+          } catch (error) {
+            if ((error as { errcode?: number }).errcode !== 1555) throw error;
+          }
+        }
+        if (!fastInserted) current = this.record(scope, write.collection, write.id);
+        if (write.collection === "pages") dirtyPages.add(documentKey({ scope, pageId: write.id }));
+        else if (write.collection === "blocks") dirtyPages.add(documentKey({ scope, pageId: String(current?.page ?? write.value?.page ?? "") }));
         const library = this.knowledgeBases.get(scope);
         if (library && write.collection === "pages" && write.action === "delete") {
           if (write.id === library.homePageId) fail(403, "知识库首页不能删除。", "knowledge_base_home");
@@ -252,24 +300,36 @@ export class Store {
             }
             if (current && current.share_space_id !== next.share_space_id && scope !== `user:${actor.user.id}` && this.role(actor, scope) !== "owner") fail(403, "只有所有者可修改分享位置。", "owner_required");
           }
-          this.put(scope, write.collection, write.id, next);
+          if (!fastInserted) this.put(scope, write.collection, write.id, next);
         } else {
-          this.db.prepare("DELETE FROM records WHERE scope=? AND collection=? AND id=?").run(scope, write.collection, write.id);
+          this.stmt("DELETE FROM records WHERE scope=? AND collection=? AND id=?").run(scope, write.collection, write.id);
           if (write.collection === "pages" && current) {
             // Gone for good means all of it: the record sweep below still
             // holds this write, so paragraphs and history leave with the
             // page or the whole batch is refused.
-            this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
-            this.db.prepare("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
+            this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
+            this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
           }
           if (write.collection === "pages" && current?.share_space_id === scope) {
             if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。", "owner_required");
-            this.db.prepare("DELETE FROM members WHERE space_id=? AND role!='owner'").run(scope);
-            this.db.prepare("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(scope);
-            this.db.prepare("DELETE FROM shares WHERE scope=?").run(scope);
+            this.stmt("DELETE FROM members WHERE space_id=? AND role!='owner'").run(scope);
+            this.stmt("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(scope);
+            this.stmt("DELETE FROM shares WHERE scope=?").run(scope);
           }
         }
         result.push(next ?? null); scopes.add(scope);
+      }
+      } finally {
+        if (this.bulk) this.collaboration.resumeDirtyTracking();
+      }
+      if (this.bulk && dirtyPages.size) {
+        // flush() reads collaboration_dirty, so the marks must exist before
+        // the transaction's commit-time projection sweep.
+        const mark = this.stmt("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)");
+        for (const entry of dirtyPages) {
+          const [scope, pageId] = JSON.parse(entry) as [string, string];
+          mark.run(scope, pageId);
+        }
       }
       // Validate the complete transaction, after sharing has moved all records.
       for (const scope of scopes) this.validatePlane(actor, scope);

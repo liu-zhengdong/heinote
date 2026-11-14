@@ -20,14 +20,9 @@ export class CollaborationStore {
   markRequest(requestId?: string): void { this.requestId = requestId; }
   constructor(private readonly store: Store) {}
 
-  initialize(): void {
-    this.store.db.exec(`
-      CREATE TABLE IF NOT EXISTS collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, structure TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY(scope,page_id));
-      CREATE TABLE IF NOT EXISTS collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
-      CREATE TABLE IF NOT EXISTS collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(scope,page_id));
-      DROP TRIGGER IF EXISTS collaboration_insert;
-      DROP TRIGGER IF EXISTS collaboration_update;
-      DROP TRIGGER IF EXISTS collaboration_delete;
+  /** Dirty-page triggers: one lookup per write is fine for edits, deadly for
+      bulk commits. suspend/resume swap them out inside a transaction. */
+  private static readonly DIRTY_TRIGGERS = `
       CREATE TRIGGER collaboration_insert AFTER INSERT ON records WHEN NEW.collection IN ('pages','blocks') BEGIN
         INSERT INTO collaboration_dirty SELECT NEW.scope,CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END WHERE NOT EXISTS(SELECT 1 FROM collaboration_dirty WHERE scope=NEW.scope AND page_id=CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END);
       END;
@@ -36,11 +31,29 @@ export class CollaborationStore {
       END;
       CREATE TRIGGER collaboration_delete AFTER DELETE ON records WHEN OLD.collection IN ('pages','blocks') BEGIN
         INSERT INTO collaboration_dirty SELECT OLD.scope,CASE WHEN OLD.collection='pages' THEN OLD.id ELSE json_extract(OLD.value,'$.page') END WHERE NOT EXISTS(SELECT 1 FROM collaboration_dirty WHERE scope=OLD.scope AND page_id=CASE WHEN OLD.collection='pages' THEN OLD.id ELSE json_extract(OLD.value,'$.page') END);
-      END;
+      END;`;
+
+  initialize(): void {
+    this.store.db.exec(`
+      CREATE TABLE IF NOT EXISTS collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, structure TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY(scope,page_id));
+      CREATE TABLE IF NOT EXISTS collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
+      CREATE TABLE IF NOT EXISTS collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(scope,page_id));
+      DROP TRIGGER IF EXISTS collaboration_insert;
+      DROP TRIGGER IF EXISTS collaboration_update;
+      DROP TRIGGER IF EXISTS collaboration_delete;
+      ${CollaborationStore.DIRTY_TRIGGERS}
       INSERT OR IGNORE INTO collaboration_dirty SELECT scope,id FROM records WHERE collection='pages';
     `);
     this.store.transaction(() => {});
   }
+  suspendDirtyTracking(): void {
+    this.store.db.exec(`
+      DROP TRIGGER IF EXISTS collaboration_insert;
+      DROP TRIGGER IF EXISTS collaboration_update;
+      DROP TRIGGER IF EXISTS collaboration_delete;
+    `);
+  }
+  resumeDirtyTracking(): void { this.store.db.exec(CollaborationStore.DIRTY_TRIGGERS); }
   begin(): void { this.events.clear(); this.forced.clear(); this.initial.clear(); this.requestId = undefined; }
   rollback(): void { this.events.clear(); this.forced.clear(); this.initial.clear(); this.requestId = undefined; }
   onCommit(listener: (events: DocumentEvent[]) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
@@ -133,6 +146,9 @@ export class CollaborationStore {
     }
   }
   checkBarriers(actor: Actor, writes: Write[], expected: ExpectedPage[]): void {
+    // Whole-vault imports land in scopes with no documents yet; those writes
+    // can't collide with existing generations, so skip the per-write lookup.
+    const scopesWithDocs = new Set(this.store.all("SELECT DISTINCT scope FROM collaboration_documents").map((row) => String(row.scope)));
     const merge = (value: Row, patch: Row): Row => {
       const result = { ...value };
       for (const [key, entry] of Object.entries(patch)) {
@@ -141,9 +157,18 @@ export class CollaborationStore {
       }
       return result;
     };
-    const addressed = new Map(expected.map((item) => [documentKey({ scope: this.store.scope(actor, item.scope), pageId: item.pageId }), item]));
+    const scoped = new Map<string, string>();
+    const scopeFor = (name: string): string => {
+      const cached = scoped.get(name);
+      if (cached) return cached;
+      const resolved = this.store.scope(actor, name, true);
+      scoped.set(name, resolved);
+      return resolved;
+    };
+    const addressed = new Map(expected.map((item) => [documentKey({ scope: scopeFor(item.scope), pageId: item.pageId }), item]));
     for (const write of writes) {
-      const scope = this.store.scope(actor, write.scope, true);
+      const scope = scopeFor(write.scope);
+      if (!scopesWithDocs.has(scope)) continue;
       const current = this.store.record(scope, write.collection, write.id);
       const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? String(current?.page ?? write.value?.page ?? "") : "";
       if (!pageId || !this.stored(scope, pageId)) continue;
