@@ -807,7 +807,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

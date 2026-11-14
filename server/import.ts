@@ -142,10 +142,12 @@ export function initializeImports(store: Store): void {
 }
 
 /** Server shutdown: terminate live workers (transactions roll back) and
-    mark in-flight jobs failed so the envelope table stays honest. */
-export function shutdownImports(): void {
+    mark in-flight jobs failed so the envelope table stays honest. Waits
+    for each worker to actually exit so a restart does not race a lock. */
+export async function shutdownImports(): Promise<void> {
   queue.length = 0;
-  for (const [id, worker] of workers) {
+  const terminations = [...workers.entries()].map(([id, worker]) => {
+    const exited = new Promise<number>((resolve) => worker.once("exit", resolve));
     void worker.terminate();
     const job = jobs.get(id);
     if (job && !["done", "failed"].includes(job.status)) {
@@ -153,7 +155,9 @@ export function shutdownImports(): void {
       job.error = "服务关闭，导入中止。";
       persist(job);
     }
-  }
+    return exited;
+  });
+  await Promise.all(terminations);
   workers.clear();
   currentJobId = undefined;
 }
