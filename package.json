@@ -5,7 +5,7 @@
     "node": ">=24"
   },
   "name": "heinote",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "repository": "https://github.com/liu-zhengdong/heinote",
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env server/index.ts --dev",
