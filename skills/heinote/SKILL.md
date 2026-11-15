@@ -19,13 +19,38 @@ description: >
 ## 前置条件
 
 1. 服务运行中，默认地址 `http://localhost:3000`。
-2. 用户提供 Agent 令牌（账号 → Agent 令牌创建，只展示一次）。或走授权请求：`POST /api/v1/auth/requests` 拿到 `verificationUrl`，用户在浏览器打开并批准，`GET /api/v1/auth/requests/:id` 轮询一次性拿到 `token`。
+2. 用户提供 Agent 令牌（账号 → Agent 令牌创建，只展示一次）。或走授权请求
+   （见下「没有令牌时的自举」，一条 HTTP 请求即可完成，不需要预置凭据）。
 3. 配置二选一（环境变量优先）：
    - `export HEINOTE_URL=... HEINOTE_TOKEN=...`
    - 写入 `~/.config/heinote/env`（建议 `chmod 600`），每行 `KEY=VALUE`。
 4. 只读令牌只能 GET 和 `POST /databases/:id/query`；归档知识库只读。
 
 连通性检查：`heinote pages` 能列出页面即正常。401 为令牌无效，403 为无权。
+
+## 没有令牌时的自举（授权请求）
+
+Agent 未持凭据也能自己申请一条令牌，由用户在网页上点一次批准：
+
+```bash
+# 1. 发起申请（name 是会出现在用户批准页上的自称；access 可省，默认 write）
+curl -s -X POST "$HEINOTE_URL/api/v1/auth/requests" \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"<你的 Agent 名>","access":"write"}'
+# → {"id":"...","verificationUrl":".../?auth_request=<id>","expiresAt":"..."}
+
+# 2. 把 verificationUrl 交给用户：本机环境直接 `open <url>`，让用户看到
+#    「授权 <name> 写权限？」确认卡；远程部署把链接贴给用户点。
+
+# 3. 轮询状态直到不再 pending（请求 10 分钟过期，被打开那一刻绑定打开者账号）
+curl -s "$HEINOTE_URL/api/v1/auth/requests/<id>"
+# pending → 等 2–3 秒重试
+# approved → 仅本次响应带 "token":"notes_…"，立刻写 ~/.config/heinote/env 保存
+# denied / expired → 结束，让用户重新发起或手动建令牌
+```
+
+令牌只完整返回一次，丢 response 就只能让用户在设置里重建或再来一次申请。
+`verificationUrl` 本身即批准凭据——把它发给别人等于把批准权让渡出去。
 
 ## 脚本用法
 
