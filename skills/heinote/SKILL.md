@@ -33,24 +33,16 @@ description: >
 Agent 未持凭据也能自己申请一条令牌，由用户在网页上点一次批准：
 
 ```bash
-# 1. 发起申请（name 是会出现在用户批准页上的自称；access 可省，默认 write）
-curl -s -X POST "$HEINOTE_URL/api/v1/auth/requests" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"<你的 Agent 名>","access":"write"}'
-# → {"id":"...","verificationUrl":".../?auth_request=<id>","expiresAt":"..."}
-
-# 2. 把 verificationUrl 交给用户：本机环境直接 `open <url>`，让用户看到
-#    「授权 <name> 写权限？」确认卡；远程部署把链接贴给用户点。
-
-# 3. 轮询状态直到不再 pending（请求 10 分钟过期，被打开那一刻绑定打开者账号）
-curl -s "$HEINOTE_URL/api/v1/auth/requests/<id>"
-# pending → 等 2–3 秒重试
-# approved → 仅本次响应带 "token":"notes_…"，立刻写 ~/.config/heinote/env 保存
-# denied / expired → 结束，让用户重新发起或手动建令牌
+heinote auth-request --name "<你的 Agent 名>"          # write 令牌，默认
+heinote auth-request --name "<你的 Agent 名>" --access read
 ```
 
-令牌只完整返回一次，丢 response 就只能让用户在设置里重建或再来一次申请。
-`verificationUrl` 本身即批准凭据——把它发给别人等于把批准权让渡出去。
+命令一次完成三步：发 `POST /api/v1/auth/requests` → 默认自动 `open` 授权页
+（`--no-open` 只打印链接给用户）→ 轮询到 `approved` 并把一次性 `token`
+写入 `~/.config/heinote/env`（600）。`denied`/`expired` 直接退出。
+
+令牌只完整返回一次；命令里还没保存就被打断的，让用户在设置里重建或再来
+一次申请。`verificationUrl` 本身即批准凭据——发给别人等于让渡批准权。
 
 ## 脚本用法
 
