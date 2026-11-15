@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { Clock, Lock, PencilLine } from "lucide-react";
+import { useEffect, useState } from "react";
 import { AgentMark } from "../../components/AgentMark";
 import { api, errorMessage } from "./api";
 import { useSession } from "./AuthGate";
@@ -34,10 +33,8 @@ export function AgentAuthRequest({ requestId, leave }: { requestId: string; leav
   const { user, logout } = useSession();
   const [view, setView] = useState<View>({ kind: "loading" });
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
-  const claimed = useRef(false);
 
   useEffect(() => {
-    claimed.current = true;
     api<{ request: PendingRequest; status: string }>(`/api/auth/requests/${encodeURIComponent(requestId)}/claim`, { method: "POST" })
       .then(({ request, status }) => setView(status === "pending" ? { kind: "pending", request } : { kind: "gone", message: "这个链接已被处理。" }))
       .catch((reason) => setView({ kind: "gone", message: errorMessage(reason) }));
@@ -57,33 +54,34 @@ export function AgentAuthRequest({ requestId, leave }: { requestId: string; leav
   const req = view.kind === "pending" ? view.request : null;
   const access = req?.access === "read" ? "读" : "写";
   return (
-    <main className="account-gate agent-auth">
-      <section className="account-gate__card" aria-label={req ? `授权 ${req.name} 访问` : "授权请求"}>
-        <div className="account-gate__brand">
-          <span className="account-gate__mark"><img src="/brand/heinote-icon.png" width="34" height="34" alt="" /></span>小黑笔记
-        </div>
+    <main className="agent-auth">
+      <section className="agent-auth__card" aria-label={req ? `授权 ${req.name} 访问` : "授权请求"}>
+        <div className="agent-auth__brand"><img src="/brand/heinote-icon.png" width="16" height="16" alt="" />小黑笔记</div>
 
-        {view.kind === "loading" ? <p className="account-muted">正在核对链接…</p> : null}
+        {view.kind === "loading" ? <p className="agent-auth__muted">正在核对链接…</p> : null}
 
         {req ? (
           <>
-            <AgentMark id={presetFor(req.name)} name={req.name} size={44} />
-            <h1 className="agent-auth__title">授权 {req.name} 访问</h1>
-            <p className="account-notice">一个自称 {req.name} 的 Agent 正在请求<b>{access}权限</b>。</p>
             <div className="agent-auth__who">
-              <div className="agent-auth__src">来源 {req.ip} · {expiresIn(req.expiresAt)} · 身份自称未验证</div>
-              <span className={`agent-auth__pill${req.access === "read" ? " is-read" : ""}`}>{access}权限</span>
+              <AgentMark id={presetFor(req.name)} name={req.name} size={32} />
+              <div>
+                <div className="agent-auth__name">{req.name}</div>
+                <div className="agent-auth__meta">来源 {req.ip} · {expiresIn(req.expiresAt)}</div>
+              </div>
             </div>
-            <ul className="agent-auth__perms">
-              <li><PencilLine size={15} aria-hidden="true" /><span><b>{access}权限</b>：{req.access === "read" ? "读取你的页面" : "读取、创建和修改你的页面"}</span></li>
-              <li><Clock size={15} aria-hidden="true" /><span>批准后可在「设置 · 令牌」里随时撤销</span></li>
-              <li><Lock size={15} aria-hidden="true" /><span>令牌只经它的下一次轮询下发一次，页面上不再显示</span></li>
+            <h3 className="agent-auth__title">授权 {req.name} {access}权限？</h3>
+            <p className="agent-auth__body">
+              它可以<b>{req.access === "read" ? "读取你的页面" : "读取、创建和修改你的页面"}</b>。身份自称未验证。
+            </p>
+            <ul className="agent-auth__hint">
+              <li>批准后可在「设置 · 令牌」里撤销</li>
+              <li>令牌只经它的下一次轮询下发一次</li>
             </ul>
             <div className="agent-auth__act">
-              <button type="button" className="agent-auth__deny" disabled={Boolean(busy)} onClick={() => void resolve(false)}>
+              <button type="button" className="btn btn--danger" disabled={Boolean(busy)} onClick={() => void resolve(false)}>
                 {busy === "deny" ? "拒绝中…" : "拒绝"}
               </button>
-              <button type="button" className="account-gate__submit agent-auth__approve" disabled={Boolean(busy)} onClick={() => void resolve(true)}>
+              <button type="button" className="btn btn--primary agent-auth__approve" disabled={Boolean(busy)} onClick={() => void resolve(true)}>
                 {busy === "approve" ? "批准中…" : "批准访问"}
               </button>
             </div>
@@ -92,21 +90,27 @@ export function AgentAuthRequest({ requestId, leave }: { requestId: string; leav
 
         {view.kind === "done" ? (
           <div className="agent-auth__state">
-            <h2>{view.approved ? "已授权" : "已拒绝"}</h2>
-            <p>{view.name} 的下一次轮询{view.approved ? "会收到它的令牌" : "只会看到被拒绝"}，<br />这页可以关了。</p>
-            <button type="button" className="account-gate__switch" onClick={leave}>回到小黑笔记</button>
+            <h3>{view.approved ? "已授权" : "已拒绝"}</h3>
+            <p>{view.name} 的下一次轮询{view.approved ? "会收到它的令牌" : "只会看到被拒绝"}，这页可以关了。</p>
+            <button type="button" className="agent-auth__link" onClick={leave}>回到小黑笔记</button>
           </div>
         ) : null}
 
         {view.kind === "gone" ? (
           <div className="agent-auth__state">
-            <h2>这个链接已失效</h2>
-            <p>{view.message}<br />回到终端，让 Agent 重新发起。</p>
-            <button type="button" className="account-gate__switch" onClick={leave}>回到小黑笔记</button>
+            <h3>这个链接已失效</h3>
+            <p>{view.message}回到终端，让 Agent 重新发起。</p>
+            <button type="button" className="agent-auth__link" onClick={leave}>回到小黑笔记</button>
           </div>
         ) : null}
+
+        {req ? (
+          <footer className="agent-auth__foot">
+            <span>以 {user?.displayName ?? user?.handle} 签发</span>
+            <button type="button" className="agent-auth__link" onClick={() => void logout()}>切换账号</button>
+          </footer>
+        ) : null}
       </section>
-      {req ? <div className="account-gate__footer"><span>以 <b>{user?.displayName ?? user?.handle}</b> 签发</span><span>·</span><button type="button" className="account-gate__switch" onClick={() => void logout()}>不是这个账号？切换</button></div> : null}
     </main>
   );
 }
