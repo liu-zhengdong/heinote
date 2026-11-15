@@ -461,3 +461,19 @@ Content-Type: application/json
 - `DELETE /api/tokens/:id`：撤销。令牌立即 401，事件与头像删除。
 
 会话接口的 `actor` 仍要求账号角色与空间权限。令牌的 `access: read` 只追加只读约束，不扩展权限。
+
+## 授权请求（免手动令牌）
+
+Agent 可以向站点申请一次授权。未持凭据的 Agent 也能发起，由网页端已登录用户在独立授权页批准。
+
+- `POST /api/v1/auth/requests`：发起申请。`name`（自称）、`access`（`read` 或 `write`，默认 `write`）。返回 `id`、`status: pending`、`verificationUrl`、`expiresAt`（10 分钟）。匿名可访问，按来源 IP 与全局 pending 上限限流。
+- `GET /api/v1/auth/requests/:id`：轮询状态。`pending` / `approved` / `denied` / `expired`。批准后的首次读取附带 `token`（`notes_` 前缀）一次，此后只回 `status`；令牌不在浏览器可见。
+
+浏览器侧流程（`verificationUrl` → `?auth_request=<id>`）：
+
+- `POST /api/auth/requests/:id/claim`：打开链接的用户认领请求，绑定其账号，返回 pending 详情（`name`、`access`、`ip`、`expiresAt`）。已绑定他人时 404。
+- `POST /api/auth/requests/:id/approve`：批准。签发一条与请求 `access` 一致的令牌，记录 `user_id`/`token_id`。409 表示已被处理，410 表示过期。
+- `POST /api/auth/requests/:id/deny`：拒绝。同样含认领语义。
+- `GET /api/auth/requests`：当前用户自己的 pending 列表（已绑定且未过期）。
+
+批准后令牌立即生效。请求不过期时同一 Agent 可重复申请，不会拿到已有令牌；用户随时在设置里撤销。`verificationUrl` 即批准凭据，转发等于让渡批准权。

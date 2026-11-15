@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import type { Person } from "../../core/types";
 import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { api, errorMessage } from "./api";
+import { AgentAuthRequest } from "./AgentAuthRequest";
 import { GithubMark, GithubSignupChoice } from "./Github";
 
 export type SessionUser = Person & { siteRole: "admin" | "user" };
@@ -37,6 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const fieldId = useId();
   const [githubOutcome, setGithubOutcome] = useState<GithubResult | null>(null);
   const [signupTicket, setSignupTicket] = useState<string | null>(null);
+  const [authRequest, setAuthRequest] = useState<string | null>(null);
   const parsedQuery = useRef(false);
 
   // AuthGate is the only consumer of the OAuth callback query. The ticket is
@@ -45,6 +47,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
     if (parsedQuery.current) return;
     parsedQuery.current = true;
     const params = new URLSearchParams(window.location.search);
+    const request = params.get("auth_request");
+    if (/^[\w-]{8,40}$/.test(request ?? "")) setAuthRequest(request);
     const code = params.get("github");
     if (code && Object.hasOwn(githubMessages, code)) setGithubOutcome(code as GithubResult);
     const ticket = params.get("github_signup");
@@ -122,7 +126,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
     finally { setBusy(false); }
   };
 
-  if (session?.user) return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  const leaveAuthRequest = useCallback(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("auth_request");
+    window.history.replaceState(null, "", url);
+    setAuthRequest(null);
+  }, []);
+
+  if (session?.user) return (
+    <SessionContext.Provider value={value}>
+      {authRequest ? <AgentAuthRequest requestId={authRequest} leave={leaveAuthRequest} /> : children}
+    </SessionContext.Provider>
+  );
 
   // The signup ticket confirms a new account, then refreshes the session.
   // onCreate resolves with an empty result so the choice keeps its busy state
@@ -184,7 +199,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
               </button>
             </form>
             {session.githubEnabled ? (
-              <a className="btn account-gate__github" href="/api/auth/github" aria-disabled={busy} tabIndex={busy ? -1 : undefined}
+              <a className="btn account-gate__github" href={authRequest ? `/api/auth/github?auth_request=${encodeURIComponent(authRequest)}` : "/api/auth/github"} aria-disabled={busy} tabIndex={busy ? -1 : undefined}
                 onClick={(event) => { if (busy) event.preventDefault(); }}><GithubMark />使用 GitHub 登录</a>
             ) : null}
             </>

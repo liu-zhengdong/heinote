@@ -19,7 +19,7 @@ description: >
 ## 前置条件
 
 1. 服务运行中，默认地址 `http://localhost:3000`。
-2. 用户提供 Agent 令牌（账号 → Agent 令牌创建，只展示一次）。
+2. 用户提供 Agent 令牌（账号 → Agent 令牌创建，只展示一次）。或走授权请求：`POST /api/v1/auth/requests` 拿到 `verificationUrl`，用户在浏览器打开并批准，`GET /api/v1/auth/requests/:id` 轮询一次性拿到 `token`。
 3. 配置二选一（环境变量优先）：
    - `export HEINOTE_URL=... HEINOTE_TOKEN=...`
    - 写入 `~/.config/heinote/env`（建议 `chmod 600`），每行 `KEY=VALUE`。

@@ -29,8 +29,8 @@ interface BoundRequest {
   expires: number;
 }
 type Flow = BoundRequest & (
-  { stage: "authorize"; purpose: "login" | "bind"; verifier: string; redirectUri: string }
-  | { stage: "signup"; profile: Profile }
+  { stage: "authorize"; purpose: "login" | "bind"; verifier: string; redirectUri: string; authRequest?: string }
+  | { stage: "signup"; profile: Profile; authRequest?: string }
 );
 
 class GithubFailure extends HttpError {
@@ -118,7 +118,8 @@ export function attachGithubAuth(app: Express, ctx: Context) {
     const browser = cookieValue(req) ?? secret();
     const verifier = secret();
     const redirectUri = new URL("/api/auth/github/callback", origin(req)).href;
-    const state = remember({ stage: "authorize", purpose, verifier, redirectUri, browserHash: hash(browser), sessionKey: session.key, userId: session.user?.id, expires: now() + lifetime });
+    const authRequest = /^[\w-]{8,40}$/.test(String(req.query.auth_request ?? "")) ? String(req.query.auth_request) : undefined;
+    const state = remember({ stage: "authorize", purpose, verifier, redirectUri, authRequest, browserHash: hash(browser), sessionKey: session.key, userId: session.user?.id, expires: now() + lifetime });
     res.cookie(browserCookie, browser, { httpOnly: true, sameSite: "lax", secure: ctx.secure, maxAge: lifetime, path: "/api/auth/github" });
     const url = new URL(urls.authorize);
     url.search = new URLSearchParams({ client_id: settings.clientId, redirect_uri: redirectUri, state,
@@ -207,10 +208,10 @@ export function attachGithubAuth(app: Express, ctx: Context) {
       if (flow.purpose === "bind") { link(flow.userId!, user); res.redirect("/?github=linked"); return; }
       const account = loginAccount(user, false);
       if (!account) {
-        const ticket = remember({ stage: "signup", profile: user, browserHash: flow.browserHash, sessionKey: flow.sessionKey, userId: flow.userId, expires: now() + lifetime });
+        const ticket = remember({ stage: "signup", profile: user, authRequest: flow.authRequest, browserHash: flow.browserHash, sessionKey: flow.sessionKey, userId: flow.userId, expires: now() + lifetime });
         res.redirect(`/?github_signup=${ticket}`); return;
       }
-      ctx.establish(req, res, account.userId); res.redirect("/");
+      ctx.establish(req, res, account.userId); res.redirect(flow.authRequest ? `/?auth_request=${encodeURIComponent(flow.authRequest)}` : "/");
     } catch (error) {
       if (!(error instanceof GithubFailure)) console.error("GitHub authentication failed:", error instanceof Error ? error.message : "unknown");
       res.redirect(`/?github=${error instanceof GithubFailure ? error.result : "unavailable"}`);

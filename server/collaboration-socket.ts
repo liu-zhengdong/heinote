@@ -5,8 +5,11 @@ import { documentKey, type DocumentSnapshot } from "../src/collaboration/protoco
 import type { Actor, Store } from "./store.ts";
 
 interface Subscription { scope: string; pageId: string; canEdit: boolean }
-interface Client { socket: WebSocket; request: IncomingMessage; subscriptions: Map<string, Subscription> }
-const subscribeSchema = z.object({ type: z.literal("subscribe"), scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256) });
+interface Client { socket: WebSocket; request: IncomingMessage; subscriptions: Map<string, Subscription>; authRequestsUser?: string }
+const subscribeSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("subscribe"), scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256) }),
+  z.object({ type: z.literal("subscribe_auth_requests") }).strict(),
+]);
 
 export function attachCollaborationSocket(server: Server, store: Store, authorize: (request: IncomingMessage) => Actor) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 16384 });
@@ -61,6 +64,13 @@ export function attachCollaborationSocket(server: Server, store: Store, authoriz
     socket.on("message", (raw) => {
       try {
         const input = subscribeSchema.parse(JSON.parse(raw.toString()));
+        if (input.type === "subscribe_auth_requests") {
+          // UC-41: opting in to auth-request pushes, bound to this socket's
+          // logged-in user — only their own requests ever arrive.
+          client.authRequestsUser = authorize(request).user.id;
+          send(client, { type: "auth_requests_subscribed" });
+          return;
+        }
         const current = store.collaboration.snapshot(authorize(request), input.scope, input.pageId);
         client.subscriptions.set(documentKey(input), { scope: input.scope, pageId: input.pageId, canEdit: current.canEdit });
         send(client, { type: "document", snapshot: current });
@@ -73,6 +83,11 @@ export function attachCollaborationSocket(server: Server, store: Store, authoriz
   });
   return {
     revalidate,
+    /** UC-41: push the current pending list to one user's opted-in sockets.
+     *  The caller computes the list; this only routes it. */
+    notifyAuthRequests(userId: string, pending: unknown[]) {
+      for (const client of clients) if (client.authRequestsUser === userId) send(client, { type: "auth_requests", pending });
+    },
     close() { clearInterval(timer); stop(); for (const client of clients) client.socket.terminate(); sockets.close(); clients.clear(); },
   };
 }

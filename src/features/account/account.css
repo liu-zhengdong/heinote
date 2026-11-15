@@ -368,3 +368,24 @@
 .create-block__name { flex: 1; min-width: 160px; }
 .create-block__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .account-field__label { color: var(--ink-2); font-size: 13px; }
+
+/* UC-41: standalone agent authorization page. Same chrome as the login gate;
+   the card carries the request's identity, access scope, and the decision. */
+.agent-auth .agent-mark { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 10px; margin-bottom: 18px; }
+.agent-auth .agent-mark svg { width: 60%; height: 60%; }
+.agent-auth__title { margin: 0 0 10px; font-size: 22px; font-weight: 600; letter-spacing: -.03em; }
+.agent-auth__who { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding: 12px; border-radius: var(--r-md); background: var(--fill); }
+.agent-auth__src { flex: 1; min-width: 0; font-size: 12px; color: var(--ink-3); line-height: 1.7; }
+.agent-auth__pill { flex: none; padding: 2px 8px; border-radius: 9px; background: var(--fill-strong); color: var(--ink); font-size: 11px; font-weight: 600; }
+.agent-auth__pill.is-read { background: var(--blue-tint); color: var(--blue); }
+.agent-auth__perms { display: grid; gap: 10px; margin: 16px 0 0; padding: 0; list-style: none; }
+.agent-auth__perms li { display: flex; align-items: flex-start; gap: 10px; color: var(--ink-2); font-size: 13px; line-height: 1.6; }
+.agent-auth__perms li svg { flex: none; margin-top: 2px; color: var(--ink-3); }
+.agent-auth__perms li b { font-weight: 600; color: var(--ink); }
+.agent-auth__act { display: flex; gap: 8px; margin-top: 24px; }
+.agent-auth__deny { flex: none; min-height: 42px; padding: 0 16px; border-radius: 8px; color: var(--ink-2); font-size: 14px; font-weight: 550; transition: background 140ms ease, color var(--t-fast) var(--e-out); }
+.agent-auth__deny:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger); }
+.agent-auth__approve { flex: 1; margin-top: 0 !important; }
+.agent-auth__state { text-align: center; padding: 4px 0 2px; }
+.agent-auth__state h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
+.agent-auth__state p { margin: 0 0 14px; color: var(--ink-2); font-size: 13px; line-height: 1.65; }

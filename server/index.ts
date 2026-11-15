@@ -16,6 +16,7 @@ import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
+import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-requests.ts";
 import { attachPublicApp } from "./public-app.ts";
 import { activePage, mutation } from "./mutation.ts";
 import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact.ts";
@@ -71,7 +72,7 @@ const parse = <T extends z.ZodType>(schema: T, input: unknown): z.infer<T> => sc
 const text = (value: unknown) => typeof value === "string" ? value : "";
 const currentTime = () => new Date().toISOString();
 
-export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean; update?: Pick<UpdateConfig, "apiBase" | "runnerPath">; backupRetryDelays?: number[] } = {}) {
+export async function startServer(options: { dataDir?: string; host?: string; port?: number; serveStatic?: boolean; dev?: boolean; github?: GithubConfig | null; registrationOpen?: boolean; update?: Pick<UpdateConfig, "apiBase" | "runnerPath">; backupRetryDelays?: number[]; authRequestTtlMs?: number } = {}) {
   const githubConfig = options.github === undefined ? githubConfigFromEnvironment() : options.github;
   const publicUrl = githubConfig?.publicUrl ?? process.env.PUBLIC_URL;
   const startedAt = new Date();
@@ -762,6 +763,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
 
   attachAgentDatabases(app, store, actor);
   attachAgentSearch(app, store, actor);
+  attachAgentAuthRequests(app, store, actor, (userId) => {
+    collaborationSocket?.notifyAuthRequests(userId, pendingAuthRequests(store, userId));
+  }, options.authRequestTtlMs);
   attachAgentOperations(app, store, actor);
   attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
