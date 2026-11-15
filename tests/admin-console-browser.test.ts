@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname, basename } from "node:path";
@@ -8,14 +10,29 @@ import { startServer } from "../server/index.ts";
 // inspect users and teams, adjust a limit, and read the account quota line.
 let server: Awaited<ReturnType<typeof startServer>>;
 let directory: string;
+let updateStub: Server;
 const password = "Browser-test-password-2026";
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-admin-console-"));
-  server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1" });
+  // The console's update check must not depend on live GitHub: rate limits
+  // answered 403 and left this suite red. Serve a canned release instead.
+  updateStub = createServer((req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    if (req.url?.endsWith("/releases/latest")) {
+      res.end(JSON.stringify({ tag_name: "v0.1.14", name: "Stub release", body: "", assets: [] }));
+      return;
+    }
+    res.statusCode = 404;
+    res.end("{}");
+  });
+  await new Promise<void>((done) => updateStub.listen(0, "127.0.0.1", done));
+  const apiBase = `http://127.0.0.1:${(updateStub.address() as AddressInfo).port}`;
+  server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", update: { apiBase } });
 });
 test.afterAll(async () => {
   await server?.close();
+  updateStub?.close();
   if (directory) {
     const target = resolve(directory);
     expect(dirname(target)).toBe(resolve(tmpdir())); expect(basename(target)).toMatch(/^notes-admin-console-/);

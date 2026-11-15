@@ -219,9 +219,19 @@ function pump(): void {
   currentJobId = job.id;
   persist(job);
   const zipBuffer = zip.buffer.slice(zip.byteOffset, zip.byteOffset + zip.byteLength) as ArrayBuffer;
+  /* The worker runs .ts server code: it inherits the parent's execArgv, so
+   * under `npm start`/`tsx --test` it gets tsx for free — and passing that
+   * argv back explicitly trips Node's worker flag validation, so leave the
+   * option unset in that case. A parent without tsx (Playwright spawning
+   * the server, plain `node dist`) falls back to Node's strip-types, which
+   * rejects parameter properties — give it the loader explicitly then. */
+  const execArgv = process.execArgv.some((arg) => arg.includes("tsx"))
+    ? undefined
+    : [...process.execArgv, "--import", "tsx"];
   const worker = new Worker(new URL("./import-worker.ts", import.meta.url), {
     workerData: { dataDir: store.dataDir, actor, source: job.source, jobId: job.id, zip: zipBuffer },
     transferList: [zipBuffer],
+    execArgv,
   });
   workers.set(job.id, worker);
   worker.on("message", (message: { kind: string; job: ImportJob }) => {
