@@ -23,7 +23,10 @@ description: >
    （见下「没有令牌时的自举」，一条 HTTP 请求即可完成，不需要预置凭据）。
 3. 配置二选一（环境变量优先）：
    - `export HEINOTE_URL=... HEINOTE_TOKEN=...`
-   - 写入 `~/.config/heinote/env`（建议 `chmod 600`），每行 `KEY=VALUE`。
+   - `heinote config --url http://...`（可加 `--token notes_...`）写入
+     `~/.config/heinote/env`（600）；`heinote config --show` 看当前生效值。
+   - 服务不在本机时必须先给 `HEINOTE_URL`——不配置时只默认
+     `http://localhost:3000`，不做任何探测。
 4. 只读令牌只能 GET 和 `POST /databases/:id/query`；归档知识库只读。
 
 连通性检查：`heinote pages` 能列出页面即正常。401 为令牌无效，403 为无权。
@@ -40,6 +43,7 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 命令一次完成三步：发 `POST /api/v1/auth/requests` → 默认自动 `open` 授权页
 （`--no-open` 只打印链接给用户）→ 轮询到 `approved` 并把一次性 `token`
 写入 `~/.config/heinote/env`（600）。`denied`/`expired` 直接退出。
+服务地址取自 `HEINOTE_URL`/env 文件；不在本机先 `heinote config --url`。
 
 令牌只完整返回一次；命令里还没保存就被打断的，让用户在设置里重建或再来
 一次申请。`verificationUrl` 本身即批准凭据——发给别人等于让渡批准权。

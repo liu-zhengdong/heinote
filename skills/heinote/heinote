@@ -345,11 +345,23 @@ def anon_request(url, method, path, body=None):
         return status, text
 
 
-def save_token(url, token):
-    """把申请到的令牌写入 ~/.config/heinote/env（600）。"""
+def save_config(url=None, token=None):
+    """把 HEINOTE_URL / HEINOTE_TOKEN 写入 ~/.config/heinote/env（600）。
+    只更新给出的项；其余键读旧文件保留。"""
+    cfg = {}
+    if os.path.exists(ENV_FILE):
+        for line in open(ENV_FILE, encoding="utf-8"):
+            if "=" in line:
+                key, value = line.rstrip("\n").split("=", 1)
+                cfg[key.strip()] = value
+    if url is not None:
+        cfg["HEINOTE_URL"] = url.rstrip("/")
+    if token is not None:
+        cfg["HEINOTE_TOKEN"] = token
     os.makedirs(os.path.dirname(ENV_FILE), exist_ok=True)
     with open(ENV_FILE, "w", encoding="utf-8") as f:
-        f.write(f"HEINOTE_URL={url}\nHEINOTE_TOKEN={token}\n")
+        for key in sorted(cfg):
+            f.write(f"{key}={cfg[key]}\n")
     try:
         os.chmod(ENV_FILE, 0o600)
     except OSError:
@@ -389,12 +401,26 @@ def cmd_auth_request(client, a):
             if not token:
                 die("请求已批准但令牌未下发（token 只在首次轮询返回一次）。"
                     "若你之前已拿过，直接用它；否则请用户在设置里重建。")
-            save_token(url, token)
+            save_config(url=url, token=token)
             print(f"# 令牌已保存到 {ENV_FILE}", file=sys.stderr)
             emit(status, {"status": "approved", "savedTo": ENV_FILE})
         emit(status, polled)  # denied / expired / 其他
 
     die(f"超时未获处理（{a.timeout} 秒）。用户未及时打开链接，或请求已过期。", 1)
+
+
+def cmd_config(client, a):
+    if a.show:
+        cfg = load_config()
+        emit(200, {"HEINOTE_URL": cfg.get("HEINOTE_URL") or DEFAULT_URL,
+                   "HEINOTE_TOKEN": "已设置" if cfg.get("HEINOTE_TOKEN") else "未设置",
+                   "envFile": ENV_FILE})
+        return
+    if not (a.url or a.token):
+        die("config 需要 --url / --token，或 --show 查看当前生效值。")
+    save_config(url=a.url, token=a.token)
+    print(f"# 已写入 {ENV_FILE}", file=sys.stderr)
+    emit(200, {"saved": [k for k, v in (("HEINOTE_URL", a.url), ("HEINOTE_TOKEN", a.token)) if v]})
 
 
 def cmd_req(client, a):
@@ -530,6 +556,12 @@ def build_parser():
     rid(sp)
     sp.set_defaults(fn=cmd_db_view)
 
+    sp = sub.add_parser("config", help="把 HEINOTE_URL / HEINOTE_TOKEN 写入 ~/.config/heinote/env")
+    sp.add_argument("--url", help="服务地址，如 http://localhost:3000")
+    sp.add_argument("--token", help="notes_ 开头的令牌")
+    sp.add_argument("--show", action="store_true", help="查看当前生效值")
+    sp.set_defaults(fn=cmd_config)
+
     sp = sub.add_parser("auth-request", help="申请一条 Agent 令牌（未持凭据时的自举）")
     sp.add_argument("--name", required=True, help="显示在用户批准页上的 Agent 自称")
     sp.add_argument("--access", choices=["read", "write"], default="write")
@@ -551,7 +583,7 @@ def build_parser():
 
 def main():
     args = build_parser().parse_args()
-    args.fn(Client(require_token=args.cmd != "auth-request"), args)
+    args.fn(Client(require_token=args.cmd not in ("auth-request", "config")), args)
 
 
 if __name__ == "__main__":
