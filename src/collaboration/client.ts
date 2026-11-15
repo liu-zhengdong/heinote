@@ -230,8 +230,14 @@ export async function awaitCollaborativeBasis(scope: string, pageId: string): Pr
   const deadline = Date.now() + 3000;
   let delay = 100;
   while (Date.now() < deadline) {
-    await openCollaborativePage(scope, pageId).catch(() => undefined);
+    const error = await openCollaborativePage(scope, pageId).then(() => undefined, (reason: unknown) => reason);
     if (sessionFor(scope, pageId)) return;
+    /* A definitive 404 means the server has no record of the page at all —
+       a just-created one only gets its document from this write's own
+       commit, so waiting its full deadline would stall the queue 3s for
+       nothing. Transient errors (and 409 not_ready) can still yield a
+       document, so they keep retrying. */
+    if (error instanceof ApiError && error.status === 404) return;
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 800);
   }
