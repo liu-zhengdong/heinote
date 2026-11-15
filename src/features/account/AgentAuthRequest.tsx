@@ -29,10 +29,36 @@ const expiresIn = (iso: string) => {
   return m ? `${m}:${String(s).padStart(2, "0")} 后过期` : `${s} 秒后过期`;
 };
 
+/** This page mounts inside AuthGate, outside UiProvider — nothing else writes
+ *  data-theme for it. Resolve the member's saved preference the same way
+ *  useThemeAttribute does: "system" follows the desk's prefers-color-scheme. */
+function useStandaloneTheme(): void {
+  useEffect(() => {
+    const root = document.documentElement;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    let mode = "system";
+    const apply = () => {
+      root.dataset.theme = mode === "light" || mode === "dark" ? mode : (query.matches ? "dark" : "light");
+    };
+    query.addEventListener("change", apply);
+    let alive = true;
+    api<{ id: string; value: { theme?: string } }[]>("/api/records/personal/workspace_settings")
+      .then((rows) => {
+        const saved = rows.find((row) => row.id === "preferences")?.value.theme;
+        if (alive && (saved === "light" || saved === "dark" || saved === "system")) { mode = saved; apply(); }
+      })
+      .catch(() => undefined);
+    apply();
+    return () => { alive = false; query.removeEventListener("change", apply); };
+  }, []);
+}
+
 export function AgentAuthRequest({ requestId, leave }: { requestId: string; leave: () => void }) {
   const { user, logout } = useSession();
   const [view, setView] = useState<View>({ kind: "loading" });
   const [busy, setBusy] = useState<"approve" | "deny" | null>(null);
+
+  useStandaloneTheme();
 
   useEffect(() => {
     api<{ request: PendingRequest; status: string }>(`/api/auth/requests/${encodeURIComponent(requestId)}/claim`, { method: "POST" })
