@@ -517,12 +517,16 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
   });
 
   try {
-    // Deliver the real settings response after the page snapshot changes its scope.
+    // Startup waits for every collection's first read, so holding the
+    // settings response also holds selection — no selectPage, no snapshot
+    // fetch. Ask for the snapshot ourselves while the read is still held:
+    // that is the overlap this test exists to cover.
     const snapshot = page.waitForResponse((response) => response.url().includes("/api/collaboration/personal/") && response.ok());
     const reloading = page.reload();
+    await expect.poll(() => initialSettings !== undefined, { timeout: 10000 }).toBe(true);
+    await page.evaluate((pageId) => fetch(`/api/collaboration/personal/${encodeURIComponent(pageId)}`).then((r) => r.text()), existing.id);
     const snapshotResponse = await snapshot;
     await snapshotResponse.finished();
-    await page.evaluate(() => new Promise<void>((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()))));
     releaseSettings();
     await reloading;
     await expect(page.getByLabel("Page title", { exact: true })).toHaveText("启动前页面");

@@ -88,6 +88,17 @@ export const InlineEditor = memo(function InlineEditor({
     } }));
   };
   const readDom = (element: HTMLElement) => code ? inlineFromText(element.textContent ?? "") : inlineFromNodes(element);
+  /* A field can draw before its collaborative session exists, and nothing
+     re-runs sync when the session arrives — the first commit then has no
+     shown basis at all. Adopt one only while the shared words still equal
+     what the DOM drew; when they do not, the DOM is stale and a naive diff
+     would bury words it never showed. */
+  const adoptBound = (): BoundText | null => {
+    if (bound.current || !collaboration) return bound.current;
+    const live = renderedText(collaboration.pageId, collaboration.key);
+    if (live && lastInput.current && sameInlineContent(contentOfRuns(readText(live.field.text)), lastInput.current)) bound.current = live;
+    return bound.current;
+  };
   const run = (action: () => void): boolean => {
     const previous = bound.current;
     if (previous) {
@@ -114,6 +125,15 @@ export const InlineEditor = memo(function InlineEditor({
       const text = element.textContent ?? "";
       const content = code ? inlineFromText(text) : inlineFromNodes(element);
       if (lastInput.current && sameInlineContent(lastInput.current, content)) return;
+      if (!adoptBound() && collaboration) {
+        const live = renderedText(collaboration.pageId, collaboration.key);
+        if (live && !sameInlineContent(content, contentOfRuns(readText(live.field.text)))) {
+          saveDraft({ bound: live, content, address: collaboration });
+          lastInput.current = content;
+          sync.current(true);
+          return;
+        }
+      }
       lastInput.current = content;
       run(() => onChange(content, text, element, false));
     };
@@ -195,7 +215,7 @@ export const InlineEditor = memo(function InlineEditor({
           commit.current(event.currentTarget);
         }
         composing.current = true;
-        compositionDraft.current = { bound: bound.current, content: readDom(event.currentTarget), address: collaboration };
+        compositionDraft.current = { bound: bound.current ?? adoptBound(), content: readDom(event.currentTarget), address: collaboration };
       }}
       onCompositionEnd={(event: CompositionEvent<HTMLElement>) => {
         const element = event.currentTarget;

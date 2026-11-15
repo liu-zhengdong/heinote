@@ -190,6 +190,17 @@ export function RichField({
       documents: [{ pageId: draft.address.pageId, fields: { [draft.address.key]: storedRuns(draft.content) } }],
     } }));
   };
+  /* A field can draw before its collaborative session exists, and nothing
+     re-runs sync when the session arrives — the first commit then has no
+     shown basis at all. Adopt one only while the shared words still equal
+     what the DOM drew; when they do not, the DOM is stale and a naive diff
+     would bury words it never showed. */
+  const adoptBound = (): BoundText | null => {
+    if (bound.current || !collaboration) return bound.current;
+    const live = renderedText(collaboration.pageId, collaboration.key);
+    if (live && lastInput.current && sameInlineContent(grammar.normalize(contentOfRuns(readText(live.field.text))), lastInput.current)) bound.current = live;
+    return bound.current;
+  };
   const run = (action: () => void): boolean => {
     const previous = bound.current;
     if (previous) {
@@ -388,6 +399,15 @@ export function RichField({
       }
       element.toggleAttribute("data-blank", !element.textContent);
       if (lastInput.current && sameInlineContent(lastInput.current, next)) return;
+      if (!adoptBound() && collaboration) {
+        const live = renderedText(collaboration.pageId, collaboration.key);
+        if (live && !sameInlineContent(next, grammar.normalize(contentOfRuns(readText(live.field.text))))) {
+          saveDraft({ bound: live, content: next, address: collaboration });
+          lastInput.current = next;
+          sync.current();
+          return;
+        }
+      }
       lastInput.current = next;
       run(() => onChange(next));
     };
@@ -540,7 +560,7 @@ export function RichField({
             commit.current();
           }
           composing.current = true;
-          if (ref.current) compositionDraft.current = { bound: bound.current, content: shownWords(ref.current, grammar), address: collaboration };
+          if (ref.current) compositionDraft.current = { bound: bound.current ?? adoptBound(), content: shownWords(ref.current, grammar), address: collaboration };
         }}
         onCompositionEnd={() => {
           if (ref.current) compositionDraft.current = { bound: bound.current, content: shownWords(ref.current, grammar), address: collaboration };
