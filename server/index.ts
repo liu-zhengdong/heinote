@@ -610,6 +610,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const who = actor(req); const tokenId = text(req.params.id); ownedToken(who, tokenId);
     store.transaction(() => {
       store.db.prepare("DELETE FROM token_events WHERE token_id=?").run(tokenId);
+      // UC-41 rows keep an FK pointer to the token they minted. Detach it so
+      // the audit row survives the revoke while the token itself goes away.
+      store.db.prepare("UPDATE agent_auth_requests SET token_id=NULL, granted_token=NULL WHERE token_id=?").run(tokenId);
       store.db.prepare("DELETE FROM tokens WHERE id=?").run(tokenId);
     });
     res.json({ ok: true });
