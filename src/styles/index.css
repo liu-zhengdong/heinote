@@ -3455,17 +3455,23 @@ pre.block__editable {
 
 /* A Mermaid block's diagram above its source. Pele takes its colours and
    fonts from --pele-* variables; here they take the page's, so a diagram
-   follows the theme and needs no re-draw when the theme flips. */
+   follows the theme and needs no re-draw when the theme flips.
+
+   Grey-surface shell (style trial 040): nodes are drawn as soft fill,
+   never outlined — the same "surface, not border" language the page's
+   own selections and cards use. Colour stays in the source: a diagram
+   that wants a coloured node says so with classDef. */
 .mermaid {
-  --pele-bg: var(--fill);
+  --pele-bg: transparent;
   --pele-fg: var(--ink);
   --pele-muted: var(--ink-3);
-  --pele-line: var(--ink-2);
-  --pele-surface: var(--paper);
+  --pele-line: var(--ink-3);
+  --pele-surface: var(--fill-strong);
   --pele-surface-alt: var(--fill);
-  --pele-border: var(--hairline);
+  --pele-border: transparent;
   --pele-accent: var(--blue);
   --pele-error: var(--danger);
+  --pele-radius: 8px;
   --pele-font: var(--heinote-font-body);
   --pele-font-mono: var(--heinote-font-code);
   padding: 8px 4px 10px;

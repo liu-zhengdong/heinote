@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mermaid 图面样式 · 方向对比</title>
+<style>
+  :root {
+    --ink: #37352f;
+    --ink-2: rgba(55,53,47,.65);
+    --ink-3: rgba(55,53,47,.5);
+    --ink-4: rgba(55,53,47,.3);
+    --paper: #fff;
+    --fill: rgba(55,53,47,.04);
+    --fill-hover: rgba(55,53,47,.06);
+    --fill-active: rgba(55,53,47,.08);
+    --fill-strong: rgba(55,53,47,.12);
+    --hairline: rgba(55,53,47,.09);
+    --hairline-strong: rgba(55,53,47,.16);
+    --blue: #2383e2;
+    --blue-ink: #0b6bcb;
+    --blue-tint: rgba(35,131,226,.1);
+    --green: #2e8b57;
+    --green-tint: rgba(46,139,87,.12);
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, "PingFang SC", "Noto Sans SC", Arial, sans-serif;
+  }
+  [data-theme="dark"] {
+    --ink: #f0efed;
+    --ink-2: #bcbab6;
+    --ink-3: #ada9a3;
+    --ink-4: #7d7a75;
+    --paper: #191919;
+    --fill: rgba(255,255,255,.03);
+    --fill-hover: rgba(255,255,255,.055);
+    --fill-active: rgba(255,255,255,.08);
+    --fill-strong: rgba(255,255,255,.13);
+    --hairline: rgba(255,255,255,.094);
+    --hairline-strong: rgba(255,255,255,.18);
+    --blue: #529aea;
+    --blue-ink: #8ab8f0;
+    --blue-tint: rgba(82,154,234,.16);
+    --green: #58b98a;
+    --green-tint: rgba(88,185,138,.16);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 var(--font); color: var(--ink); background: var(--paper); }
+
+  header { padding: 20px 24px 0; }
+  h1 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .sub { margin: 0 0 14px; max-width: 720px; font-size: 13px; color: var(--ink-2); }
+
+  .bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 24px 12px; border-bottom: 1px solid var(--hairline); }
+  .seg { display: inline-flex; padding: 2px; gap: 1px; background: var(--fill-active); border-radius: 8px; }
+  .seg button { border: 0; background: transparent; padding: 4px 14px; border-radius: 6px; font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+  .seg button[aria-selected="true"] { background: var(--paper); color: var(--ink); font-weight: 500; box-shadow: 0 0 0 .5px var(--hairline-strong); }
+  .toggles { display: flex; gap: 12px; font-size: 13px; color: var(--ink-2); }
+  .toggles label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
+  main { padding: 16px 24px 40px; }
+  .note { display: none; margin: 0 0 18px; max-width: 720px; font-size: 12.5px; color: var(--ink-3); }
+  .note b { color: var(--ink-2); font-weight: 500; }
+  .tab[data-active] .note { display: block; }
+
+  .panel { display: none; }
+  .tab[data-active] .panel { display: block; }
+  .card { border: 1px solid var(--hairline); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+  .card h2 { margin: 0; padding: 8px 12px; font-size: 11.5px; font-weight: 500; letter-spacing: .02em; color: var(--ink-3); background: var(--fill); border-bottom: 1px solid var(--hairline); }
+  .stage { padding: 18px 16px; display: flex; justify-content: center; overflow-x: auto; }
+  .stage svg { display: block; max-width: 100%; }
+  .stage.err { font-size: 12.5px; color: var(--ink-3); justify-content: flex-start; }
+
+  /* ---------- 变体主题：只改 --pele-* ---------- */
+
+  /* 现状（对照组）：映射当前 .mermaid 的项目 token */
+  .v0 {
+    --pele-bg: var(--fill); --pele-fg: var(--ink); --pele-muted: var(--ink-3);
+    --pele-line: var(--ink-2); --pele-surface: var(--paper); --pele-surface-alt: var(--fill);
+    --pele-border: var(--hairline); --pele-accent: var(--blue); --pele-critical: #eb5757;
+    --pele-radius: 4px;
+  }
+
+  /* A · 描线留白：节点透明底 + 细描边，线条更轻，留白多 */
+  .vA {
+    --pele-bg: transparent; --pele-fg: var(--ink); --pele-muted: var(--ink-3);
+    --pele-line: var(--ink-3); --pele-surface: var(--paper); --pele-surface-alt: var(--fill);
+    --pele-border: var(--hairline-strong); --pele-accent: var(--ink-2); --pele-critical: #eb5757;
+    --pele-radius: 10px;
+  }
+
+  /* B · 灰阶岛面：去描边感，节点靠浅灰面成形（政东忌描边） */
+  .vB {
+    --pele-bg: transparent; --pele-fg: var(--ink); --pele-muted: var(--ink-3);
+    --pele-line: var(--ink-3); --pele-surface: var(--fill-strong); --pele-surface-alt: var(--fill);
+    --pele-border: transparent; --pele-accent: var(--ink-2); --pele-critical: #eb5757;
+    --pele-radius: 8px;
+  }
+
+  /* C · 灰阶面 + 语义色：壳与 B 相同，颜色由源码 classDef 承担 */
+  .vC {
+    --pele-bg: transparent; --pele-fg: var(--ink); --pele-muted: var(--ink-3);
+    --pele-line: var(--ink-3); --pele-surface: var(--fill-strong); --pele-surface-alt: var(--fill);
+    --pele-border: transparent; --pele-accent: var(--blue); --pele-critical: #eb5757;
+    --pele-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mermaid 图面样式：四个方向</h1>
+  <p class="sub">同一组图、同一字号 14px。差异在「图和正文怎么相处」：现状是默认映射；A 把节点画成细描边；B 去掉描边、靠浅灰面成形；C 在 B 上让源码 classDef 带小面积语义色。推荐 B——黑笔记忌描边感，灰阶面最贴页面气质；语义色留给内容，不给壳。</p>
+</header>
+
+<div class="bar">
+  <div class="seg" role="tablist">
+    <button role="tab" data-tab="v0" aria-selected="true">现状</button>
+    <button role="tab" data-tab="vA">A 描线</button>
+    <button role="tab" data-tab="vB">B 灰阶面</button>
+    <button role="tab" data-tab="vC">C 语义色</button>
+  </div>
+  <div class="toggles">
+    <label><input type="checkbox" id="dark"> 深色</label>
+  </div>
+</div>
+
+<main>
+  <section class="tab v0" data-tab="v0" data-active>
+    <p class="note"><b>现状</b> · 现状映射，白底细边。代价：节点边框在浅底上读出「描边感」，图和正文像两种东西。</p>
+    <div class="panel" data-render></div>
+  </section>
+  <section class="tab vA" data-tab="vA">
+    <p class="note"><b>A · 描线留白</b> · 节点透明、hairline 描边、圆角 10px、连接线和标签降成 ink-3。代价：还是靠描边成形，弱字多时图面发飘。</p>
+    <div class="panel" data-render></div>
+  </section>
+  <section class="tab vB" data-tab="vB">
+    <p class="note"><b>B · 灰阶岛面</b> · 描边取到透明，节点靠浅灰面成形，圆角 8px——同一套「面不描边」语言，最贴近黑笔记的选中与卡片习惯。代价：图面没有强调色，靠形状区分角色。</p>
+    <div class="panel" data-render></div>
+  </section>
+  <section class="tab vC" data-tab="vC">
+    <p class="note"><b>C · 灰阶面 + 语义色</b> · 壳同 B；流程图源码里 classDef 给决策点蓝、终点绿。颜色是内容的一部分，不污染所有图。代价：要用户会写 classDef，默认图仍是无色的。</p>
+    <div class="panel" data-render></div>
+  </section>
+</main>
+
+<script src="/node_modules/pele/dist/pele.global.js"></script>
+<script>
+const FLOW_PLAIN = `flowchart TD
+  A[收到需求] --> B{值得做吗?}
+  B -->|做| C[写 UC 卡]
+  B -->|不做| D[记下来]
+  C --> E[实现 + 测试]
+  E --> F[合入主干]`;
+const FLOW_CLASSED = `flowchart TD
+  A[收到需求] --> B{值得做吗?}
+  B -->|做| C[写 UC 卡]
+  B -->|不做| D[记下来]
+  C --> E[实现 + 测试]
+  E --> F[合入主干]
+  classDef decision fill:#d6e9fb,stroke:transparent,color:#0b6bcb
+  classDef done fill:#e0f0e5,stroke:transparent,color:#2e7a52
+  class B decision
+  class F done`;
+const SEQ = `sequenceDiagram
+  participant U as 用户
+  participant E as 编辑器
+  participant P as Pele
+  U->>E: 输入 mermaid 源码
+  E->>P: mountAsync(el, text)
+  P-->>E: SVG 渲染结果
+  E->>U: 显示图`;
+const GANTT = `gantt
+  title 本周计划
+  dateFormat YYYY-MM-DD
+  section 笔记
+  Mermaid 渲染    :a1, 2026-11-15, 1d
+  回归修复        :a2, 2026-11-15, 1d
+  section 其他
+  文档整理        :2026-11-16, 2d`;
+const CLASS = `classDiagram
+  class Block {
+    +string id
+    +string kind
+    +RichText content
+  }
+  class Page {
+    +string id
+    +string title
+  }
+  Page "1" o-- "*" Block`;
+
+const OPTIONS = { fontSize: 14, links: false, images: false, zoom: false };
+const TABS = {
+  v0: [["流程图", FLOW_PLAIN], ["时序图", SEQ], ["甘特图", GANTT], ["类图", CLASS]],
+  vA: [["流程图", FLOW_PLAIN], ["时序图", SEQ], ["甘特图", GANTT], ["类图", CLASS]],
+  vB: [["流程图", FLOW_PLAIN], ["时序图", SEQ], ["甘特图", GANTT], ["类图", CLASS]],
+  vC: [["流程图", FLOW_CLASSED], ["时序图", SEQ], ["甘特图", GANTT], ["类图", CLASS]],
+};
+const rendered = new Set();
+
+async function renderTab(tabId) {
+  if (rendered.has(tabId)) return;
+  rendered.add(tabId);
+  const panel = document.querySelector(`.tab[data-tab="${tabId}"] .panel`);
+  for (const [title, src] of TABS[tabId]) {
+    const card = document.createElement("div"); card.className = "card";
+    card.innerHTML = `<h2>${title}</h2><div class="stage"></div>`;
+    const stage = card.querySelector(".stage");
+    try {
+      pele.mount(stage, src, OPTIONS);
+    } catch (e) {
+      stage.className = "stage err"; stage.textContent = String(e && e.message || e);
+    }
+    panel.appendChild(card);
+  }
+}
+renderTab("v0");
+
+document.querySelectorAll(".seg button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
+    document.querySelectorAll(".tab").forEach(t => t.toggleAttribute("data-active", t.dataset.tab === btn.dataset.tab));
+    renderTab(btn.dataset.tab);
+  });
+});
+document.getElementById("dark").addEventListener("change", e => {
+  document.documentElement.dataset.theme = e.target.checked ? "dark" : "light";
+});
+</script>
+</body>
+</html>

@@ -38,7 +38,9 @@ function peleModule(): Promise<PeleLazy | null> {
   return loading;
 }
 
-const OPTIONS = { links: false, images: false, zoom: false } as const;
+/* Diagram text a step under the page's 16px body: labels read as captions,
+   not as competing text. Pele derives every other size from this one. */
+const OPTIONS = { links: false, images: false, zoom: false, fontSize: 14 } as const;
 
 export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: string }) {
   const host = useRef<HTMLDivElement>(null);
