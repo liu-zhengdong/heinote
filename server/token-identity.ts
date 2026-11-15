@@ -44,6 +44,16 @@ export function tokenAvatarUrl(tokenId: string, avatar: string): string | null {
 
 export const AVATAR_PRESETS = [...PRESET_IDS];
 
+/** 从 Agent 自报名推断品牌预设。授权页与批准 mint 共用同一映射：
+ *  认不出的名字退回首字母头像。 */
+const NAME_PRESETS: Array<[RegExp, string]> = [
+  [/deepseek/i, "deepseek"], [/claude|anthropic/i, "claude"],
+  [/codex|openai|chatgpt|gpt/i, "gpt"], [/gemini|google/i, "gemini"], [/cursor/i, "cursor"],
+];
+export function presetForName(name: string): string | undefined {
+  return NAME_PRESETS.find(([re]) => re.test(name))?.[1];
+}
+
 /** 令牌行的对外形状。avatar 只给 `preset`/`upload` 引用，不给密钥。 */
 export function tokenDto(row: Row) {
   return {

@@ -84,8 +84,30 @@ test("UC-41: 申请 → 认领 → 批准，令牌只下发一次且可用", asy
   const page = status(await agent.request("/api/v1/pages", { method: "POST", token: first.token, body: { title: "Agent 写入" } }), 201);
   assert.equal(page.title, "Agent 写入");
 
+  // The minted token carries the brand avatar inferred from the requester's
+  // name — the same preset the confirm page showed.
+  const mine2 = status(await alice.request("/api/tokens"), 200) as unknown as Json[];
+  const minted = mine2.find((item) => item.name === "DeepSeek");
+  assert.ok(minted);
+  assert.equal(minted.avatar, "preset:deepseek");
+
   // Double approve conflicts.
   status(await alice.request(`/api/auth/requests/${created.id}/approve`, { method: "POST" }), 409);
+});
+
+test("UC-41: 认不出的自报名退回首字母头像", async (t) => {
+  const f = await fixture(t);
+  const agent = f.browser();
+  const alice = f.browser();
+  await register(alice, "alice");
+
+  const created = await ask(agent, { name: "我家小助手" });
+  await alice.request(`/api/auth/requests/${created.id}/claim`, { method: "POST" });
+  status(await alice.request(`/api/auth/requests/${created.id}/approve`, { method: "POST" }), 200);
+  const mine = status(await alice.request("/api/tokens"), 200) as unknown as Json[];
+  const minted = mine.find((item) => item.name === "我家小助手");
+  assert.ok(minted);
+  assert.equal(minted.avatar, "initial");
 });
 
 test("UC-41: 拒绝后轮询只见 denied，过期链接不可再处理", async (t) => {

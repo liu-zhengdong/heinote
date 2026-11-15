@@ -2,6 +2,7 @@ import type { Express, Request } from "express";
 import { z } from "zod";
 import type { Actor, Row, Store } from "./store.ts";
 import { fail, hash, id, secret } from "./store.ts";
+import { presetForName } from "./token-identity.ts";
 
 /** UC-41: an anonymous agent asks for a token. The site's logged-in user sees
  *  the request in the app and approves or denies it; the agent polls its own
@@ -166,8 +167,9 @@ export function attachAgentAuthRequests(
       if (!again || again.status !== "pending") fail(409, "请求已被处理。", "conflict");
       const tokenId = id();
       const token = `notes_${secret()}`;
-      store.db.prepare("INSERT INTO tokens(id,hash,user_id,name,display_name,access,created_at) VALUES(?,?,?,?,?,?,?)")
-        .run(tokenId, hash(token), who.user.id, row.name, row.name, row.access, now());
+      const avatar = presetForName(row.name) ? `preset:${presetForName(row.name)}` : "initial";
+      store.db.prepare("INSERT INTO tokens(id,hash,user_id,name,display_name,avatar,access,created_at) VALUES(?,?,?,?,?,?,?,?)")
+        .run(tokenId, hash(token), who.user.id, row.name, row.name, avatar, row.access, now());
       store.db.prepare("UPDATE agent_auth_requests SET status='approved',user_id=?,token_id=?,granted_token=?,resolved_at=? WHERE id=?")
         .run(who.user.id, tokenId, token, now(), row.id);
       return { status: "approved", tokenId };
