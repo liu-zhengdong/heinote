@@ -26,6 +26,7 @@
     "highlight.js": "11.12.0",
     "lib0": "^0.2.119",
     "lucide-react": "1.31.0",
+    "pele": "1.13.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "sharp": "^0.35.5",

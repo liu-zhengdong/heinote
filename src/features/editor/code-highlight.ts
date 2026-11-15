@@ -32,6 +32,9 @@ export const CODE_LANGUAGES: readonly CodeLanguage[] = [
   { id: "json", label: "JSON", grammar: "json" },
   { id: "kotlin", label: "Kotlin", grammar: "kotlin" },
   { id: "markdown", label: "Markdown", grammar: "markdown" },
+  /* Mermaid blocks draw their diagram; the source itself has no highlight
+     grammar, same as plain text. */
+  { id: "mermaid", label: "Mermaid" },
   { id: "php", label: "PHP", grammar: "php" },
   { id: "python", label: "Python", grammar: "python" },
   { id: "ruby", label: "Ruby", grammar: "ruby" },

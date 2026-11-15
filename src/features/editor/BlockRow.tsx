@@ -11,6 +11,7 @@ import { blockField } from "../../collaboration/protocol";
 import { blockRecordId } from "../../platform/record-ids";
 import { blockDefinition } from "./block-registry";
 import { CODE_LANGUAGES, codeLanguage } from "./code-highlight";
+import { MermaidDiagram } from "./MermaidDiagram";
 import { InlineEditor } from "./InlineEditor";
 import { EmbedBlock, type EmbedActions } from "./EmbedBlock";
 import { FileBlock, type MediaActions, type UploadState } from "./MediaBlocks";
@@ -352,6 +353,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
                 <Copy size={14} />
               </button>
             </div>
+            {codeLanguage(block.language).id === "mermaid" ? (
+              <MermaidDiagram text={inlinePlainText(block.content)} />
+            ) : null}
             {editable}
           </div>
         ) : definition.editable ? editable : null}

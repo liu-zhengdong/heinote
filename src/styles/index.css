@@ -3453,6 +3453,36 @@ pre.block__editable {
   opacity: 1;
 }
 
+/* A Mermaid block's diagram above its source. Pele takes its colours and
+   fonts from --pele-* variables; here they take the page's, so a diagram
+   follows the theme and needs no re-draw when the theme flips. */
+.mermaid {
+  --pele-bg: var(--fill);
+  --pele-fg: var(--ink);
+  --pele-muted: var(--ink-3);
+  --pele-line: var(--ink-2);
+  --pele-surface: var(--paper);
+  --pele-surface-alt: var(--fill);
+  --pele-border: var(--hairline);
+  --pele-accent: var(--blue);
+  --pele-error: var(--danger);
+  --pele-font: var(--heinote-font-body);
+  --pele-font-mono: var(--heinote-font-code);
+  padding: 8px 4px 10px;
+}
+
+.mermaid__host svg {
+  display: block;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.mermaid__hint {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
 /* A page's line — a line holding nothing but its link — is marked as a
    block is: its icon at the start of the line, the triangle under the
    pointer, its count on the icon's corner; its name after it, where a shown
