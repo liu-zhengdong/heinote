@@ -14,6 +14,7 @@ import { restoredPage } from "../src/core/versions.ts";
 import type { NotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
+import { attachAgentFiles } from "./agent-files.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
@@ -107,7 +108,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     next();
   });
   const jsonParser = express.json({ limit: "16mb" });
-  app.use((req, res, next) => req.path.startsWith("/api/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
+  app.use((req, res, next) => req.path.startsWith("/api/files/") || req.path.startsWith("/api/v1/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
   // A running import holds the site's write path; let writes fail fast with
   // a readable 503 instead of hanging on SQLite's busy timeout.
   app.use("/api", (req, _res, next) => {
@@ -786,6 +787,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     collaborationSocket?.notifyAuthRequests(userId, pendingAuthRequests(store, userId));
   }, options.authRequestTtlMs);
   attachAgentOperations(app, store, actor);
+  attachAgentFiles(app, store, actor);
   attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
   let vite: { close(): Promise<void> } | undefined;

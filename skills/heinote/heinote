@@ -441,6 +441,69 @@ def cmd_config(client, a):
     emit(200, {"saved": [k for k, v in (("HEINOTE_URL", a.url), ("HEINOTE_TOKEN", a.token)) if v]})
 
 
+def cmd_upload(client, a):
+    import mimetypes
+    import urllib.parse
+    path = os.path.expanduser(a.file)
+    if not os.path.isfile(path):
+        die(f"文件不存在: {path}")
+    with open(path, "rb") as f:
+        data = f.read()
+    query = {}
+    if a.path:
+        query["path"] = a.path
+    if a.name:
+        query["name"] = a.name
+    media = (a.type or mimetypes.guess_type(path)[0] or "application/octet-stream").lower()
+    url = f"{client.url}/api/v1/files/{a.scope}"
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    req = urllib.request.Request(url, data=data, method="PUT",
+                                 headers={"Authorization": f"Bearer {client.token}",
+                                          "Content-Type": media})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as res:
+            status, text = res.status, res.read().decode()
+    except urllib.error.HTTPError as e:
+        status, text = e.code, e.read().decode()
+    except urllib.error.URLError as e:
+        die(f"无法连接 {client.url}: {e.reason}")
+    print(f"# PUT /api/v1/files/{a.scope} -> {status}", file=sys.stderr)
+    try:
+        emit(status, json.loads(text) if text else None)
+    except json.JSONDecodeError:
+        emit(status, text)
+
+
+def cmd_download(client, a):
+    import urllib.parse
+    url = f"{client.url}/api/v1/files/{a.scope}?path={urllib.parse.quote(a.path, safe='')}"
+    req = urllib.request.Request(url, method="GET",
+                                 headers={"Authorization": f"Bearer {client.token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as res:
+            data = res.read()
+            status = res.status
+    except urllib.error.HTTPError as e:
+        status, data = e.code, e.read()
+    except urllib.error.URLError as e:
+        die(f"无法连接 {client.url}: {e.reason}")
+    print(f"# GET /api/v1/files/{a.scope} -> {status}", file=sys.stderr)
+    if status != 200:
+        try:
+            emit(status, json.loads(data.decode()))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            emit(status, None)
+        return
+    if a.out:
+        target = os.path.expanduser(a.out)
+        with open(target, "wb") as f:
+            f.write(data)
+        emit(200, {"saved": target, "bytes": len(data)})
+    else:
+        sys.stdout.buffer.write(data)
+
+
 def cmd_req(client, a):
     path = a.path if a.path.startswith("/api/v1") else "/api/v1" + (a.path if a.path.startswith("/") else "/" + a.path)
     body = read_json(a.data) if a.data else None
@@ -591,6 +654,20 @@ def build_parser():
     sp.add_argument("--open", action="store_true", default=True, help="自动在浏览器打开授权页（默认）")
     sp.add_argument("--no-open", dest="open", action="store_false", help="不自动打开，只打印链接")
     sp.set_defaults(fn=cmd_auth_request)
+
+    sp = sub.add_parser("upload", help="上传附件字节，返回可引用的 StoredFile JSON")
+    sp.add_argument("file", help="本地文件路径")
+    sp.add_argument("--scope", default="personal", help="目标空间：personal 或空间 ID，默认 personal")
+    sp.add_argument("--path", help="附件路径（files/ 前缀）；省略时服务端生成")
+    sp.add_argument("--name", help="显示名；默认取本地文件名")
+    sp.add_argument("--type", help="Content-Type；默认按扩展名猜测")
+    sp.set_defaults(fn=cmd_upload)
+
+    sp = sub.add_parser("download", help="下载附件字节（--out 写文件，否则输出到 stdout）")
+    sp.add_argument("--scope", default="personal", help="空间：personal 或空间 ID，默认 personal")
+    sp.add_argument("--path", required=True, help="附件路径（files/...）")
+    sp.add_argument("--out", help="输出文件路径；省略时写 stdout")
+    sp.set_defaults(fn=cmd_download)
 
     sp = sub.add_parser("req", help="透传任意 /api/v1 请求")
     sp.add_argument("method")
