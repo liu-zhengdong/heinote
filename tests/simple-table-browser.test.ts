@@ -146,7 +146,9 @@ test("double-clicking a word in a cell selects it as text", async ({ page }) => 
   const { cell } = await makeTable(page, "table_dblclick");
   const word = await cell(0, 0).boundingBox();
   await page.mouse.dblclick(word!.x + 8, word!.y + word!.height / 2);
-  await expect.poll(async () => page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("alpha");
+  // Windows' word-selection bounds can include the trailing space; the word
+  // itself is the assertion, not the platform's exact boundary.
+  await expect.poll(async () => (await page.evaluate(() => window.getSelection()?.toString() ?? "")).trim()).toBe("alpha");
 });
 
 test("clicking a cell still takes the caret and typing lands there", async ({ page }) => {
