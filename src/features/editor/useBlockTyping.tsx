@@ -198,7 +198,15 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
       if (!created) return;
       target = { kind: "page", page_id: created };
     }
-    const end = mention.from + mention.trigger.length + mention.query.length;
+    let end = mention.from + mention.trigger.length + mention.query.length;
+    /* An input method that auto-closes 【 to 【】 (or a pasted [[) leaves the
+       closing bracket standing right after the query — it goes with the
+       brackets, or the mention would be followed by a stray 】. Real words
+       right after the query are never taken. */
+    if (mention.trigger === "[[") {
+      const text = inlinePlainText(current.content);
+      while (text[end] === "]" || text[end] === "】") end += 1;
+    }
     const inserted = insertMention(current.content, mention.from, end, target);
     setMention(null);
     checkpointHistory(caretAt(page.id, block.id, end));

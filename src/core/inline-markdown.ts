@@ -174,10 +174,14 @@ export type MentionTrigger = "@" | "[[";
 export function mentionQueryAt(text: string, caret: number): { from: number; query: string; trigger: MentionTrigger } | null {
   const head = text.slice(0, caret);
   const at = head.lastIndexOf("@");
-  const brackets = head.lastIndexOf("[[");
+  /* `【【` counts as `[[`: a Chinese keyboard's 【 is auto-closed to 【】, so
+     two presses leave 【【】 with the caret between them — the same trigger a
+     typist means to make. It reports as "[[" so everything downstream sees
+     one kind. */
+  const brackets = Math.max(head.lastIndexOf("[["), head.lastIndexOf("【【"));
   if (brackets >= 0 && brackets + 1 > at) {
     const query = head.slice(brackets + 2);
-    return menuQuery(query, 60) && !query.includes("]") ? { from: brackets, query, trigger: "[[" } : null;
+    return menuQuery(query, 60) && !/[\]】]/.test(query) ? { from: brackets, query, trigger: "[[" } : null;
   }
   if (at < 0 || (at > 0 && !/[\s\u00a0]/.test(head[at - 1]))) return null;
   const query = head.slice(at + 1);

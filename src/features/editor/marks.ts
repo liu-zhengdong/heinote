@@ -56,5 +56,5 @@ export function mentionOpener(char: string): boolean {
  *  characters) plus the mention's own "no `]`". Words that fail are replaced
  *  by the typed bracket like anything else selected. */
 export function wordsCanQueryMention(words: string): boolean {
-  return words.length > 0 && words.length <= 60 && !words.includes("]") && !/[\s\u00a0]{2}|\n|\u2063/.test(words) && !/^[\s\u00a0]/.test(words);
+  return words.length > 0 && words.length <= 60 && !words.includes("]") && !words.includes("】") && !/[\s\u00a0]{2}|\n|\u2063/.test(words) && !/^[\s\u00a0]/.test(words);
 }

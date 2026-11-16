@@ -77,6 +77,21 @@ export function blockKeys(editor: Editor & BlockTyping) {
    *  is set directly; `chooseMention` then replaces `[[words` with the picked
    *  page as usual. */
   const delimitSelection = (block: Block, element: HTMLElement, char: string): boolean => {
+    /* An input method can commit an auto-paired 【】 as one event — count it
+       as its 【; the closer a typist never meant to type. */
+    const ch = char === "【】" ? "【" : char;
+
+    /* A closing bracket right at the end of an open [[ query is almost
+       always the one an input method auto-paired with its 【 or [ — swallow
+       it and the menu stays. A [[ keeps its own until Escape either way, so
+       even a deliberate closer loses nothing. Anywhere else — mid-query, or
+       no menu — it is the character it is. */
+    if ((ch === "]" || ch === "】") && mention?.trigger === "[[" && mention.blockId === block.id) {
+      const end = mention.from + mention.trigger.length + mention.query.length;
+      const caret = selectionOffsets(element);
+      if (caret && caret.start === end && caret.end === end) return true;
+    }
+
     const across = blocksRef.current ? selectedBlockRanges(blocksRef.current) : [];
     const within = across.length ? null : selectionOffsets(element);
     const spans: BlockTextRange[] | null = across.length
@@ -84,7 +99,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
       : within && within.start !== within.end
         ? [{ blockId: block.id, start: Math.min(within.start, within.end), end: Math.max(within.start, within.end) }]
         : null;
-    const mark = delimiterMark(char);
+    const mark = delimiterMark(ch);
     if (mark && spans
       && spans.every((span) => tree.by_id[span.blockId] && tree.by_id[span.blockId].kind !== "code")
       && spans.some((span) => inlinePlainText(tree.by_id[span.blockId]?.content ?? []).slice(span.start, span.end).trim().length > 0)) {
@@ -92,7 +107,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
       applyMarkToBlocks(spans, mark, !enabled);
       return true;
     }
-    if (mentionOpener(char) && block.kind !== "code" && spans?.length === 1 && spans[0].blockId === block.id) {
+    if (mentionOpener(ch) && block.kind !== "code" && spans?.length === 1 && spans[0].blockId === block.id) {
       const words = inlinePlainText(block.content).slice(spans[0].start, spans[0].end);
       if (wordsCanQueryMention(words)) {
         const anchor = caretRect(element);
@@ -115,7 +130,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
    *  mid-word; by the commit that ends it the selection is already replaced,
    *  so only the direct `insertText` is checked. */
   const onBlockBeforeInput = (block: Block, element: HTMLElement, data: string | null): boolean =>
-    data !== null && data.length === 1 && delimitSelection(block, element, data);
+    data !== null && data.length <= 2 && delimitSelection(block, element, data);
 
   const onBlockKeyDown = (block: Block, event: KeyboardEvent<HTMLElement>) => {
     // Keys the input method owns are the input method's: the Enter that picks
