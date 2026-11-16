@@ -17,7 +17,8 @@ import {
   stageFile,
   type StagedFile,
 } from "../editor/file-store";
-import { ImageViewer, useFileUrl } from "../editor/MediaBlocks";
+import { useFileUrl } from "../editor/MediaBlocks";
+import { ImageViewer } from "../editor/ImageViewer";
 import { MAX_ROW_IMAGES, propertyName, rowImages } from "./database-model";
 
 /* An Image property's pictures — Notion's Files & media, for pictures. Their
