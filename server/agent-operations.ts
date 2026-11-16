@@ -4,6 +4,9 @@ import { z } from "zod";
 import schema, { BLOCK_KINDS, CONTENT_COLORS } from "../schema.ts";
 import { blockField, fieldAddress, setAt, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 import { fieldOf, readFields, readText } from "../src/collaboration/text.ts";
+import { captureText, editText } from "../src/collaboration/text.ts";
+import { markdownInlineToContent } from "../src/core/inline-markdown.ts";
+import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { isKeptLink } from "../src/core/inline-content.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
 import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
@@ -17,11 +20,13 @@ const marks = z.object({
   link: z.string().max(4096).refine(isKeptLink, "链接必须使用 http、https 或页面引用。").nullable().optional(),
   color: z.enum(CONTENT_COLORS).nullable().optional(),
 }).strict();
+const inlineFormat = z.enum(["markdown"]).optional();
 const operationSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("insert_text"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), text: z.string().max(100000) }).strict(),
+  z.object({ type: z.literal("insert_text"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), text: z.string().max(100000), format: inlineFormat }).strict(),
   z.object({ type: z.literal("delete_text"), blockId: identifier, index: position, length: position }).strict(),
   z.object({ type: z.literal("format_text"), blockId: identifier, index: position, length: position, marks }).strict(),
-  z.object({ type: z.literal("insert_block"), afterId: identifier.optional(), text: z.string().max(100000), kind: z.enum(BLOCK_KINDS).optional() }).strict(),
+  z.object({ type: z.literal("insert_block"), afterId: identifier.optional(), text: z.string().max(100000), kind: z.enum(BLOCK_KINDS).optional(), format: inlineFormat }).strict(),
+  z.object({ type: z.literal("insert_blocks"), afterId: identifier.optional(), markdown: z.string().max(100000) }).strict(),
   z.object({ type: z.literal("delete_block"), blockId: identifier }).strict(),
   z.object({ type: z.literal("move_block"), blockId: identifier, parentId: identifier.nullable().optional(), order: z.number().finite() }).strict(),
 ]);
@@ -38,7 +43,7 @@ type BlockRow = { id: string; value: Row };
 type Plan = { writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[] };
 
 const externalScope = (actual: string) => actual.startsWith("user:") ? "personal" : actual;
-const structural = (operation: Operation) => operation.type === "insert_block" || operation.type === "delete_block" || operation.type === "move_block";
+const structural = (operation: Operation) => operation.type === "insert_block" || operation.type === "insert_blocks" || operation.type === "delete_block" || operation.type === "move_block";
 const needsRevision = (operations: Operation[]) => operations.some((operation) => structural(operation) || operation.type !== "insert_text" || typeof operation.index === "number");
 const parentOf = (block: Row) => typeof block.parent_id === "string" ? block.parent_id : null;
 
@@ -97,17 +102,44 @@ function planOperations(store: Store, who: Actor, scopeName: string, pageId: str
   try {
     doc.transact(() => {
       for (const operation of operations) {
-        if (operation.type === "insert_block") {
+        if (operation.type === "insert_block" || operation.type === "insert_blocks") {
           const after = operation.afterId ? find(operation.afterId) : undefined;
           const parent = after ? parentOf(after.value) : null;
           const siblings = [...working.values()].filter((row) => parentOf(row.value) === parent).sort((a, b) => Number(a.value.order) - Number(b.value.order) || a.id.localeCompare(b.id));
           const previous = after ? Number(after.value.order) : Number(siblings.at(-1)?.value.order ?? 0);
           const next = after ? siblings.find((row) => Number(row.value.order) > previous) : undefined;
+          if (operation.type === "insert_blocks") {
+            const tree = markdownToBlockTree(operation.markdown, id);
+            const ordered = Object.values(tree.by_id).sort((a, b) => {
+              const depth = (block: typeof a): number => block.parent_id ? depth(tree.by_id[block.parent_id]) + 1 : 0;
+              return depth(a) - depth(b) || a.order - b.order;
+            });
+            /* Root-level entries share `after`'s sibling slot; children keep
+               their own parent and order. Roots need fractional slots between
+               `previous` and `next`. */
+            let slot = 1;
+            const roots = ordered.filter((block) => !block.parent_id).length;
+            const spacing = next ? (Number(next.value.order) - previous) / (roots + 1) : 1024;
+            if (!Number.isFinite(spacing) || spacing <= 0) fail(409, "段落顺序需要重新整理。", "structure_conflict");
+            for (const block of ordered) {
+              const blockId = block.id; const recordId = blockRecordId(pageId, blockId);
+              const fresh = new Y.Doc(); newDocs.push(fresh);
+              const text = fieldOf(fresh, blockField(recordId));
+              editText(text, captureText(text), block.content as ReturnType<typeof readText>);
+              newTexts.set(blockId, text);
+              const order = block.parent_id ? Number(block.order) : previous + spacing * slot++;
+              const { parent_id: blockParent, ...rest } = block;
+              working.set(blockId, { id: recordId, value: { ...rest, order, ...(blockParent ? { parent_id: blockParent } : {}), content: readText(text), page: pageId } });
+            }
+            continue;
+          }
           const order = next ? previous + (Number(next.value.order) - previous) / 2 : previous + 1024;
           if (!Number.isFinite(order) || order <= previous || (next && order >= Number(next.value.order))) fail(409, "段落顺序需要重新整理。", "structure_conflict");
           const blockId = id(); const recordId = blockRecordId(pageId, blockId);
           const fresh = new Y.Doc(); newDocs.push(fresh);
-          const text = fieldOf(fresh, blockField(recordId)); text.insert(0, operation.text);
+          const text = fieldOf(fresh, blockField(recordId));
+          if (operation.format === "markdown") editText(text, captureText(text), markdownInlineToContent(operation.text) as ReturnType<typeof readText>);
+          else text.insert(0, operation.text);
           newTexts.set(blockId, text);
           working.set(blockId, { id: recordId, value: { id: blockId, page: pageId, kind: operation.kind ?? "text", order, ...(parent ? { parent_id: parent } : {}), content: readText(text) } });
           continue;
@@ -134,8 +166,19 @@ function planOperations(store: Store, who: Actor, scopeName: string, pageId: str
         const text = textOf(operation.blockId);
         const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
         boundary(text, index);
-        if (operation.type === "insert_text") text.insert(index, operation.text);
-        else {
+        if (operation.type === "insert_text") {
+          if (operation.format === "markdown") {
+            /* Inline Markdown expands to runs: marks ride Y.Text attributes,
+               mention runs are embeds. An absent marks object must be sent as
+               {} — Y.Text merges an insert with no attributes into the item
+               before it and silently inherits its marks. */
+            let at = index;
+            for (const run of markdownInlineToContent(operation.text) as Array<{ text?: string; embed?: Record<string, unknown>; marks?: Record<string, unknown> }>) {
+              if (run.embed) { text.insertEmbed(at, structuredClone(run.embed), run.marks ?? {}); at += 1; }
+              else if (run.text) { text.insert(at, run.text, run.marks ?? {}); at += run.text.length; }
+            }
+          } else text.insert(index, operation.text);
+        } else {
           const end = index + operation.length;
           if (!Number.isSafeInteger(end)) fail(400, "文字范围无效。", "bad_request");
           boundary(text, end);

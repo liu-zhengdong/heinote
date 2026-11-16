@@ -40,6 +40,8 @@ Authorization: Bearer notes_...
 }
 ```
 
+也可以用 `markdown` 代替 `text` 提供正文：服务端按与粘贴、导入相同的规则把 Markdown 解析为块树（标题、列表、todo、引用、代码块、分割线、表格及行内标记）。`text` 与 `markdown` 互斥，同时提供返回 400。
+
 `parentId` 存在时，页面继承父页面的空间。没有父页面和空间时，页面属于令牌账号的私有空间。标题最多 500 个字符。正文最多 100000 个字符。
 
 创建团队库页面时，传入该库的 `spaceId`。也可使用等价字段 `scope`；同时提供时必须一致。省略 `parentId` 会使用固定首页。提供父页面时，父页面必须属于该库。库内数据库、正文操作、附件和版本沿用原接口及成员权限。不能通过这些接口把原有页面迁出知识库，或把其他空间页面移入。
@@ -78,7 +80,7 @@ Authorization: Bearer notes_...
 }
 ```
 
-`title` 和 `text` 均可省略。提供 `text` 会替换整页块树，保存为一个纯文本块。该操作不会保留原正文的富文本、表格或嵌入结构。只改标题时，应省略 `text`。
+`title`、`text` 和 `markdown` 均可省略。提供 `text` 会替换整页块树，保存为一个纯文本块。该操作不会保留原正文的富文本、表格或嵌入结构。提供 `markdown` 同样整体替换，但按 Markdown 规则重建块树；两者互斥。只改标题时，应省略 `text` 和 `markdown`。
 
 服务器在修改前保存检查点。旧修订值返回 409。Agent 应重新读取页面，再决定如何处理冲突。
 
@@ -252,7 +254,7 @@ PATCH 镜像属性（携带 `relation_origin`）不允许修改类型或方向�
 }
 ```
 
-创建要求数据库 `baseRevision`。创建条目不改变数据库配置修订，因此多条创建可以使用同一配置修订。返回 `201` 和条目页面对象。正文初始值与普通页面创建规则一致。
+创建要求数据库 `baseRevision`。创建条目不改变数据库配置修订，因此多条创建可以使用同一配置修订。返回 `201` 和条目页面对象。正文初始值与普通页面创建规则一致：可用 `markdown` 代替 `text` 写入带格式正文，两者互斥。
 
 修改条目：
 
@@ -358,10 +360,11 @@ Content-Type: application/json
 
 | 操作 | 参数 | 结果 |
 | --- | --- | --- |
-| `insert_text` | `blockId, index, text` | 在起点、终点或数值位置插入 |
+| `insert_text` | `blockId, index, text, format?` | 在起点、终点或数值位置插入；`format: "markdown"` 时按行内 Markdown 解析标记（code、粗斜体、链接），不产生新块 |
 | `delete_text` | `blockId, index, length` | 删除指定文字范围 |
 | `format_text` | `blockId, index, length, marks` | 修改指定范围的格式 |
-| `insert_block` | `text, afterId?, kind?` | 插入同级块；默认 `kind` 为 `text` |
+| `insert_block` | `text, afterId?, kind?, format?` | 插入同级块；默认 `kind` 为 `text`；`format: "markdown"` 时 `text` 按行内 Markdown 解析 |
+| `insert_blocks` | `markdown, afterId?` | 把 Markdown 展开为块树插入（标题、列表、表格、代码块等）；`afterId` 省略时追加到末尾 |
 | `delete_block` | `blockId` | 删除块及其子树 |
 | `move_block` | `blockId, parentId?, order` | 在本页移动块；`parentId: null` 表示顶层 |
 

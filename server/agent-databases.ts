@@ -3,6 +3,7 @@ import { z } from "zod";
 import { isDeepStrictEqual } from "node:util";
 import schema from "../schema.ts";
 import { newPage } from "../src/core/block-tree.ts";
+import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { isImageType, normalizeStoredFile } from "../src/core/files.ts";
 import type { DatabaseConfig, DatabaseProperty, DatabaseView, NotePage } from "../src/core/types.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
@@ -104,7 +105,7 @@ const addPropertySchema = z.object({ ...requestFields, property: propertySchema 
 const updatePropertySchema = z.object({ ...requestFields, property: propertyPatch }).strict();
 const addViewSchema = z.object({ ...requestFields, view: viewSchema }).strict();
 const updateViewSchema = z.object({ ...requestFields, view: viewPatch }).strict();
-export const createRowSchema = z.object({ ...requestFields, ...rowFields, text: z.string().max(100000).default("") }).strict();
+export const createRowSchema = z.object({ ...requestFields, ...rowFields, text: z.string().max(100000).optional(), markdown: z.string().max(100000).optional() }).strict();
 export const updateRowSchema = z.object({ ...requestFields, databaseRevision: revision, ...rowFields }).strict()
   .refine((value) => value.title !== undefined || value.properties !== undefined || value.propertyFiles !== undefined, "请提供条目修改。");
 export const querySchema = z.object({
@@ -295,15 +296,24 @@ export function commit(store: Store, who: Actor, writes: Write[], checkpoints: s
   store.apply(who, writes);
   store.collaboration.flush();
 }
-export function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string, extra: Row): string {
+export function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string | undefined, extra: Row, markdown?: string): string {
   const page = newPage(id(), kind, parentId, { now: stamp(), author: asAuthor(who) }, id());
   const { title: _title, parent_id: _parent, block_tree, ...fields } = page;
-  const block = Object.values(block_tree.by_id)[0];
-  const { parent_id: _blockParent, ...blockFields } = block;
-  commit(store, who, [
+  const writes: Write[] = [
     { scope: externalScope(scope), collection: "pages", id: page.id, action: "put", base: null, value: { ...fields, title_content: [{ text: title }], ...(parentId ? { parent_id: parentId } : {}), ...extra } },
-    { scope: externalScope(scope), collection: "blocks", id: blockRecordId(page.id, block.id), action: "put", base: null, value: { ...blockFields, page: page.id, content: [{ text }] } },
-  ]);
+  ];
+  if (markdown !== undefined) {
+    const tree = markdownToBlockTree(markdown, id);
+    for (const block of Object.values(tree.by_id)) {
+      const { parent_id: blockParent, ...blockFields } = block;
+      writes.push({ scope: externalScope(scope), collection: "blocks", id: blockRecordId(page.id, block.id), action: "put", base: null, value: { ...blockFields, page: page.id, ...(blockParent ? { parent_id: blockParent } : {}) } });
+    }
+  } else {
+    const block = Object.values(block_tree.by_id)[0];
+    const { parent_id: _blockParent, ...blockFields } = block;
+    writes.push({ scope: externalScope(scope), collection: "blocks", id: blockRecordId(page.id, block.id), action: "put", base: null, value: { ...blockFields, page: page.id, content: [{ text: text ?? "" }] } });
+  }
+  commit(store, who, writes);
   return page.id;
 }
 export function rowDto(store: Store, who: Actor, rowId: string, config: DatabaseConfig) {
@@ -576,12 +586,13 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
     const input = createRowSchema.parse(req.body);
     mutation(req, res, input, load(req), (who, db) => {
       checkRevision(store, db.scope, db.page.id, input.baseRevision);
+      if (input.text !== undefined && input.markdown !== undefined) bad("text 与 markdown 只能提供一个。");
       const patch = rowPatch(store, who, db, input);
       const kept: Record<string, string> | undefined = patch.properties
         ? Object.fromEntries(Object.entries(patch.properties as Record<string, string | null>).filter(([, value]) => value !== null)) as Record<string, string>
         : undefined;
       if (kept) patch.properties = kept;
-      const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() });
+      const pageId = createPage(store, who, db.scope, "document", db.page.id, input.title ?? "", input.text, { ...patch, row_order: Date.now() }, input.markdown);
       const peers = kept ? relationPeers(store, who, db, pageId, undefined, kept) : [];
       if (peers.length) commit(store, who, peers);
       recordTokenEvent(store.db, who.tokenId, { action: "create", pageId, pageTitle: input.title ?? "" });

@@ -71,9 +71,9 @@ heinote pages [--full]                        # 列出页面（默认 id/title/k
 heinote search <query> [--space S] [--limit N] [--offset N]
                                               # 跨空间搜索页面标题与正文
 heinote page <id>                             # 读页面与块树
-heinote create-page --title T [--text F] [--parent-id P] [--space-id S]
+heinote create-page --title T [--text F | --markdown F] [--parent-id P] [--space-id S]
 heinote set-title <id> --title T              # 只改标题
-heinote append <id> --text F [--kind K] [--suggest]
+heinote append <id> --text F [--format markdown] | --markdown F [--suggest]
 heinote ops <id> --ops ops.json [--suggest]   # 结构化修改，JSON 数组
 heinote proposals <id>                        # 提案与状态
 heinote versions <id> / checkpoint <id> --summary S / restore <id> --version-id V
@@ -100,8 +100,10 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 跨空间搜索页面 | `heinote search "关键词"` |
 | 读页面与块树 | `heinote page <id>` |
 | 追加文字 | `heinote append <id> --text "内容"` 或 `--text -` |
+| 追加富文本 | `heinote append <id> --markdown -`（标题、列表、表格、代码块整块树插入） |
+| 追加行内标记 | `heinote append <id> --text "`code` **粗**" --format markdown` |
 | 局部修改 | `heinote ops <id> --ops ops.json`（操作见下） |
-| 创建文档页 | `heinote create-page --title T --text F` |
+| 创建文档页 | `heinote create-page --title T --text F`（或 `--markdown F` 写富文本） |
 | 创建条目 | `heinote row-create <db> --data row.json` |
 | 改条目属性 | `heinote row-set <db> <row> --data '{"properties":{...}}'` |
 | 查询条目 | `heinote db-query <db> --query '{"filters":[...]}'` |
@@ -117,12 +119,18 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 ```json
 [
   {"type":"insert_text","blockId":"<块ID>","index":"end","text":"追加"},
+  {"type":"insert_text","blockId":"<块ID>","index":"end","text":"`code` *斜体*","format":"markdown"},
   {"type":"format_text","blockId":"<块ID>","index":0,"length":4,"marks":{"bold":true}},
   {"type":"insert_block","text":"新段落","afterId":"<块ID>","kind":"text"},
+  {"type":"insert_blocks","markdown":"# 标题\n\n- 列表\n\n| a | b |\n| --- | --- |\n| 1 | 2 |"},
   {"type":"delete_block","blockId":"<块ID>"},
   {"type":"move_block","blockId":"<块ID>","order":1024}
 ]
 ```
+
+`format:"markdown"` 只解析行内标记（code、粗斜体、链接）；`insert_blocks`
+的 `markdown` 展开为多个块。两者与纯文本路径并存，省略时原样写入字面
+文字。
 
 数值 `index`/`length` 使用 UTF-16。结构操作（`insert_block`、`delete_block`、
 `move_block`）和数值范围需要 `baseRevision`，脚本已自动注入当前值。

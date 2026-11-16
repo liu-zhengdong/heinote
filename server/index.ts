@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { Store, fail, hash, id, secret, HttpError, writeSchema, asAuthor, type Actor, type Row, type User } from "./store.ts";
 import { newPage } from "../src/core/block-tree.ts";
+import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { restoredPage } from "../src/core/versions.ts";
 import type { NotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
@@ -657,8 +658,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/v1/pages", (req, res) => { const who = actor(req); res.json(Object.values(store.state(who).pages).filter((page) => !page.archived).map((page) => store.pageDto(who, page.id))); });
   app.post("/api/v1/pages", (req, res) => {
-    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).default(""), kind: z.enum(["document", "app"]).default("document"), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
-    if (input.kind === "app" && input.text) fail(400, "应用页面没有正文。", "bad_request");
+    const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).optional(), markdown: z.string().max(100000).optional(), kind: z.enum(["document", "app"]).default("document"), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
+    if (input.kind === "app" && (input.text || input.markdown)) fail(400, "应用页面没有正文。", "bad_request");
+    if (input.text !== undefined && input.markdown !== undefined) fail(400, "text 与 markdown 只能提供一个。", "bad_request");
     const pageId = store.transaction(() => {
       const parent = input.parentId ? store.page(who, input.parentId) : undefined;
       const requested = input.scope ?? input.spaceId;
@@ -670,7 +672,14 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const knowledgeBase = store.knowledgeBases.get(scope);
       const page = newPage(id(), input.kind, input.parentId ?? knowledgeBase?.homePageId ?? null, { author: who.user.id, now: currentTime() }, id());
       page.title = input.title;
-      const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text }];
+      if (input.markdown !== undefined) {
+        page.block_tree = markdownToBlockTree(input.markdown, id);
+        if (!Object.keys(page.block_tree.by_id).length) {
+          const blockId = id(); page.block_tree = { by_id: { [blockId]: { id: blockId, kind: "text", parent_id: null, order: 1024, content: [] } } };
+        }
+      } else {
+        const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text ?? "" }];
+      }
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
       store.savePage(scope, page);
       recordTokenEvent(store.db, who.tokenId, { action: "create", pageId: page.id, pageTitle: page.title });
@@ -682,7 +691,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.patch("/api/v1/pages/:id", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId);
     const input = parse(z.object({
-      title: z.string().max(500).optional(), text: z.string().max(100000).optional(), baseRevision: z.string(),
+      title: z.string().max(500).optional(), text: z.string().max(100000).optional(), markdown: z.string().max(100000).optional(), baseRevision: z.string(),
       app: z.object({
         draft: z.string().max(APP_SOURCE_BUDGET_BYTES).optional(),
         databases: z.array(z.object({ id: z.string().min(1).max(256), read: z.boolean(), write: z.boolean() }).strict()).max(50).optional(),
@@ -691,6 +700,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     store.transaction(() => {
       const { page, scope } = store.page(who, pageId); store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       if (input.baseRevision !== store.revision(scope, pageId)) fail(409, "页面已被修改。请重新读取。", "conflict");
+      if (input.text !== undefined && input.markdown !== undefined) fail(400, "text 与 markdown 只能提供一个。", "bad_request");
       if (input.app && page.kind !== "app") fail(400, "只有应用页面接受 app 字段。", "bad_request");
       if (input.app?.draft !== undefined && Buffer.byteLength(input.app.draft, "utf8") > APP_SOURCE_BUDGET_BYTES) fail(400, "源码超过 2MB 上限。", "bad_request");
       const bindings = input.app?.databases ? normalizeBindings(input.app.databases) : undefined;
@@ -708,6 +718,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       if (input.title !== undefined) { next.title = input.title; delete next.title_content; }
       if (input.text !== undefined) {
         const blockId = id(); next.block_tree = { by_id: { [blockId]: { id: blockId, kind: "text", parent_id: null, order: 1024, content: [{ text: input.text }] } } };
+      }
+      if (input.markdown !== undefined) {
+        next.block_tree = markdownToBlockTree(input.markdown, id);
+        if (!Object.keys(next.block_tree.by_id).length) {
+          const blockId = id(); next.block_tree = { by_id: { [blockId]: { id: blockId, kind: "text", parent_id: null, order: 1024, content: [] } } };
+        }
       }
       if (input.app) {
         next.app = {

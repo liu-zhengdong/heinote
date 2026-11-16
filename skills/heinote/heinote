@@ -188,13 +188,20 @@ def cmd_page(client, a):
 
 
 def cmd_create_page(client, a):
-    body = {"title": a.title or "", "text": read_value(a.text) if a.text else ""}
+    if a.text is not None and a.markdown is not None:
+        die("--text 与 --markdown 只能提供一个。")
+    body = {"title": a.title or ""}
+    if a.markdown is not None:
+        body["markdown"] = read_value(a.markdown)
+    else:
+        body["text"] = read_value(a.text) if a.text else ""
     for flag, key in (("parent_id", "parentId"), ("space_id", "spaceId"), ("scope", "scope")):
         if getattr(a, flag):
             body[key] = getattr(a, flag)
     if a.kind:
         body["kind"] = a.kind
-        body.pop("text")
+        body.pop("text", None)
+        body.pop("markdown", None)
     status, payload = client.request("POST", "/api/v1/pages", body)
     emit(status, payload)
 
@@ -207,8 +214,19 @@ def cmd_set_title(client, a):
 
 
 def cmd_append(client, a):
-    op = {"type": "insert_block", "text": read_value(a.text)}
-    if a.kind:
+    if a.text is not None and a.markdown is not None:
+        die("--text 与 --markdown 只能提供一个。")
+    if a.markdown is not None:
+        if a.kind:
+            die("--kind 只作用于 --text 的单块插入。")
+        op = {"type": "insert_blocks", "markdown": read_value(a.markdown)}
+    else:
+        if a.text is None:
+            die("append 需要 --text 或 --markdown。")
+        op = {"type": "insert_block", "text": read_value(a.text)}
+        if a.format:
+            op["format"] = a.format
+    if a.kind and op["type"] == "insert_block":
         op["kind"] = a.kind
     ops_body(client, a.id, [op], "suggest" if a.suggest else "apply", a.request_id, a.force)
 
@@ -465,6 +483,7 @@ def build_parser():
     sp = sub.add_parser("create-page", help="创建文档页或应用页")
     sp.add_argument("--title")
     sp.add_argument("--text", help="正文文字；`-` 从标准输入读取")
+    sp.add_argument("--markdown", help="Markdown 正文（标题、列表、表格、代码块等）；`-` 从标准输入读取。与 --text 互斥")
     sp.add_argument("--kind", choices=["document", "app"])
     sp.add_argument("--parent-id")
     sp.add_argument("--space-id")
@@ -476,9 +495,11 @@ def build_parser():
     sp.add_argument("--title", required=True)
     sp.set_defaults(fn=cmd_set_title)
 
-    sp = sub.add_parser("append", help="在页面末尾追加一个块")
+    sp = sub.add_parser("append", help="在页面末尾追加内容")
     sp.add_argument("id")
-    sp.add_argument("--text", required=True, help="块文字；`-` 从标准输入读取")
+    sp.add_argument("--text", help="块文字；`-` 从标准输入读取")
+    sp.add_argument("--markdown", help="Markdown 展开为多个块插入（表格、列表、标题等）；`-` 从标准输入读取。与 --text 互斥")
+    sp.add_argument("--format", choices=["markdown"], help="把 --text 按行内 Markdown 解析（code、粗斜体、链接）")
     sp.add_argument("--kind", help="块类型，默认 text")
     sp.add_argument("--suggest", action="store_true", help="保存为提案而不直接修改")
     rid(sp)
