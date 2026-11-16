@@ -2652,16 +2652,16 @@ kbd {
   font-family: var(--font-page, var(--heinote-font-body));
 }
 
-/* Chinese in an italic run is set in Kai, the CJK way to set emphasis, and
-   stands upright; its Latin keeps its italic. Serif pages take TW-Kai (then
-   LXGW WenKai TC for what it lacks), Default pages WenKai; Mono stays mono.
-   The rule covers every italic run in the document — a table cell's or a
-   database field's as much as a block's. */
+/* An italic run slants, the way Word and Notion slant Chinese: the browser
+   synthesises the lean the CJK faces lack (synthesis is off app-wide, so it
+   is named back on here), while the Latin in the same run takes its real
+   italic face. The Kai convention for CJK emphasis — upright, brush-set —
+   was tried and read as "nothing changed" beside the body face, so the
+   lean is what a Chinese italic shows. `font-synthesis-weight` stays on so
+   a bold italic CJK run still emboldens. */
 .doc :is(em, i) {
   font-family: var(--font-page-italic, inherit);
-  /* Neither Kai has a bold (TW-Kai is one weight, WenKai stops at Medium),
-     so bold Chinese in an italic run is emboldened by the browser. The Latin
-     around it has real bold italics, so nothing else is synthesised. */
+  font-synthesis-style: auto;
   font-synthesis-weight: auto;
 }
 

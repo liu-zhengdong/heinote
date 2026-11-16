@@ -7,15 +7,7 @@
   --heinote-font-body: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "PingFang SC", "Noto Sans SC", "Noto Sans Backtick Fix", "Noto Sans", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   --heinote-font-serif: "Iowan Old Style", "Palatino Linotype", "Noto Serif CJK SC", "Songti SC", serif;
   --heinote-font-code: "SFMono-Regular", Consolas, "Liberation Mono", "Noto Sans SC", monospace;
-  /* Italic stacks are the body stacks reordered: the Latin faces first —
-     they hold real italics, and synthesis is off app-wide — then the Kai
-     faces a Chinese italic run is set in (the system's own, then the
-     families fonts.load may add), and the plain CJK fallbacks last. Without
-     Kai in the stack a Chinese <em> fell through to PingFang upright, where
-     italic asked for nothing anyone could see. Arial sits before PingFang
-     so a Linux box maps it to Liberation's real italic rather than matching
-     Noto Sans SC's Latin upright. */
-  --heinote-font-body-italic: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", Helvetica, "HeiNote WenKai", "LXGW WenKai", "LXGW WenKai TC", "Kaiti SC", KaiTi, STKaiti, Arial, "PingFang SC", "Noto Sans SC", "Noto Sans Backtick Fix", "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-  --heinote-font-serif-italic: "Iowan Old Style", "Palatino Linotype", "Palatino", "HeiNote Kai", "HeiNote WenKai", "TW-Kai", "LXGW WenKai TC", "LXGW WenKai", "Kaiti SC", KaiTi, STKaiti, "Noto Serif CJK SC", "Songti SC", serif;
+  --heinote-font-body-italic: var(--heinote-font-body);
+  --heinote-font-serif-italic: var(--heinote-font-serif);
 }
 .sidebar__foot .account-entry { flex: 1; }
