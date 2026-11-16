@@ -71,7 +71,7 @@ import { blockDefinition, DatabaseIcon, PageIcon, pageGlyph } from "./block-regi
 import { downloadFile, isImageType, notShown, refuseFiles, showFile, stageFile, type StagedFile } from "./file-store";
 import { CoverImage, settleCover, useHomedCovers } from "./CoverImage";
 import { IconImage, PageIconMark, recentsFile, rememberIconFile, settleIcon, useHomedIcons } from "./PageIcon";
-import { ImageViewer } from "./MediaBlocks";
+import { ImageViewer } from "./ImageViewer";
 import { rememberCodeLanguage } from "./code-highlight";
 import { BlockMenu } from "./BlockMenu";
 import { BlockRow, type BlockActions, type LinkLine } from "./BlockRow";

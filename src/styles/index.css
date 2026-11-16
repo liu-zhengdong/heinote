@@ -4514,13 +4514,135 @@ pre.block__editable {
   background: rgba(255, 255, 255, 0.14);
 }
 
+/* The stage is the picture's room: what it holds is placed by the frame's
+   transform, not by layout, so the room can clip what zoom spills and the
+   marks can follow the picture as one. */
 .viewer__stage {
   position: relative;
-  display: grid;
   min-height: 0;
   flex: 1;
-  place-items: center;
+  overflow: hidden;
   color: #fff;
+}
+
+.viewer__stage:not(.is-annotating) {
+  cursor: zoom-in;
+}
+
+.viewer__stage.is-annotating {
+  cursor: crosshair;
+}
+
+/* The frame carries the picture and its marks as one thing: placed at its
+   pan corner, sized by the picture's zoom, moved about by the transform. */
+.viewer__frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.viewer__stage:not(.is-annotating) .viewer__frame {
+  cursor: grab;
+}
+
+.viewer__stage.is-panning .viewer__frame {
+  cursor: grabbing;
+}
+
+.viewer__frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-sm);
+  user-select: none;
+}
+
+/* The marks sit over the picture inside its frame: strokes are drawn in the
+   picture's own shares, so scaling the frame scales them with it. */
+.viewer__marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* While marks are being made, the picture itself takes no clicks — the
+   frame's pointer listeners do the drawing instead of the panning. */
+.viewer__stage.is-annotating .viewer__marks {
+  pointer-events: none;
+}
+
+/* The mark tools' second row: shaped like the bar's own, kept off it so a
+   picture's name and its steps keep their room. */
+.viewer__tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 8px;
+  color: #fff;
+}
+
+.viewer__tools .icon-btn {
+  color: #fff;
+}
+
+.viewer__tools .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.viewer__tools .icon-btn:disabled {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.viewer__tools .icon-btn.is-on,
+.viewer__bar .icon-btn.is-on {
+  background: rgba(35, 131, 226, 0.5);
+}
+
+.viewer__tools-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.viewer__swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 50%;
+  transition: transform var(--t-tap) var(--e-out);
+}
+
+.viewer__swatch.is-on {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.viewer__zoom {
+  min-width: 42px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* A text mark's input stands where its letters will land: transparent,
+   borderless, its size the letters' own so what is typed is what stays. */
+.viewer__text-spot {
+  position: absolute;
+  z-index: 3;
+  min-width: 120px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  line-height: 1.3;
+  outline: 1px dashed rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+  resize: none;
 }
 
 /* A cell's pictures stepped through: where this one stands, and the steps
@@ -4564,15 +4686,21 @@ pre.block__editable {
   right: 8px;
 }
 
-.viewer__stage img {
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: var(--r-sm);
-  object-fit: contain;
+.viewer__missing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  font-size: 14px;
 }
 
-.viewer__missing {
-  font-size: 14px;
+.viewer__stage > .spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
 }
 
 /* ── Simple tables ──────────────────────────────────────────────────────── */

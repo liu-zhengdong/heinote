@@ -1,8 +1,7 @@
-import { ChevronLeft, ChevronRight, Download, Paperclip, Replace, RotateCw, X } from "lucide-react";
+import { Paperclip, Replace, RotateCw } from "lucide-react";
 import { useEffect, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { formatFileSize, normalizeStoredFile } from "../../core/files";
 import type { Block, StoredFile } from "../../core/types";
-import { Modal } from "../../components/Modal";
 import { peekFileUrl, type ShownFile } from "./file-store";
 
 export type UploadState = "uploading" | "failed";
@@ -149,84 +148,6 @@ export function FileBlock({
   );
 }
 
-/** A picture at full size over the page — the original, not the page copy. */
-/** Pictures looked through in turn — a cell's: where this one stands among
- *  them, and a step to the one before or after. */
-export interface ViewerBrowse {
-  index: number;
-  count: number;
-  onStep(delta: -1 | 1): void;
-}
-
-export function ImageViewer({
-  file,
-  actions,
-  browse,
-  onDownload,
-  onClose,
-}: {
-  file: StoredFile;
-  actions: Pick<MediaActions, "showFile">;
-  browse?: ViewerBrowse;
-  onDownload(): void;
-  onClose(): void;
-}) {
-  const { url, failed } = useFileUrl(file, "original", actions);
-  const first = !browse || browse.index <= 0;
-  const last = !browse || browse.index >= browse.count - 1;
-  /* ← and → step through them, as Notion's viewer does; at either end there
-     is nowhere further to go. */
-  useEffect(() => {
-    if (!browse) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      event.preventDefault();
-      event.stopPropagation();
-      const back = event.key === "ArrowLeft";
-      if (back ? browse.index > 0 : browse.index < browse.count - 1) browse.onStep(back ? -1 : 1);
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [browse]);
-  return (
-    <Modal open label={file.name} className="viewer" onClose={onClose}>
-      <div className="viewer__bar">
-        <span className="viewer__name">{file.name}</span>
-        {browse && browse.count > 1 ? <span className="viewer__count">{browse.index + 1} of {browse.count}</span> : null}
-        <button type="button" className="icon-btn" aria-label="Download" onClick={onDownload}><Download size={16} /></button>
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}><X size={16} /></button>
-      </div>
-      <div className="viewer__stage" onClick={onClose}>
-        {url ? (
-          <img src={url} alt={file.name} onClick={(event) => event.stopPropagation()} />
-        ) : failed ? (
-          <p className="viewer__missing">This image could not be loaded.</p>
-        ) : (
-          <span className="spinner" aria-label="Loading" />
-        )}
-        {browse && browse.count > 1 ? (
-          <>
-            <button
-              type="button"
-              className="viewer__step viewer__step--back"
-              aria-label="Previous image"
-              disabled={first}
-              onClick={(event) => { event.stopPropagation(); browse.onStep(-1); }}
-            >
-              <ChevronLeft size={20} />
-            </button>
-            <button
-              type="button"
-              className="viewer__step viewer__step--next"
-              aria-label="Next image"
-              disabled={last}
-              onClick={(event) => { event.stopPropagation(); browse.onStep(1); }}
-            >
-              <ChevronRight size={20} />
-            </button>
-          </>
-        ) : null}
-      </div>
-    </Modal>
-  );
-}
+/* The picture viewer itself lives in ImageViewer.tsx — its own file, its
+   own concerns: the zoom, the pan and the marks are no longer this block's
+   to keep among the embeds. */
