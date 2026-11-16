@@ -9,6 +9,7 @@ import { markdownInlineToContent } from "../src/core/inline-markdown.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { isKeptLink } from "../src/core/inline-content.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
+import { checkedStoredFile, storedFileSchema } from "./agent-files.ts";
 import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
 import { recordTokenEvent } from "./token-identity.ts";
 
@@ -25,7 +26,8 @@ const operationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("insert_text"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), text: z.string().max(100000), format: inlineFormat }).strict(),
   z.object({ type: z.literal("delete_text"), blockId: identifier, index: position, length: position }).strict(),
   z.object({ type: z.literal("format_text"), blockId: identifier, index: position, length: position, marks }).strict(),
-  z.object({ type: z.literal("insert_block"), afterId: identifier.optional(), text: z.string().max(100000), kind: z.enum(BLOCK_KINDS).optional(), format: inlineFormat }).strict(),
+  z.object({ type: z.literal("insert_block"), afterId: identifier.optional(), text: z.string().max(100000), kind: z.enum(BLOCK_KINDS).optional(), file: storedFileSchema.optional(), format: inlineFormat }).strict(),
+  z.object({ type: z.literal("insert_image"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), file: storedFileSchema, width: z.number().int().min(16).max(10000).optional() }).strict(),
   z.object({ type: z.literal("insert_blocks"), afterId: identifier.optional(), markdown: z.string().max(100000) }).strict(),
   z.object({ type: z.literal("delete_block"), blockId: identifier }).strict(),
   z.object({ type: z.literal("move_block"), blockId: identifier, parentId: identifier.nullable().optional(), order: z.number().finite() }).strict(),
@@ -135,13 +137,26 @@ function planOperations(store: Store, who: Actor, scopeName: string, pageId: str
           }
           const order = next ? previous + (Number(next.value.order) - previous) / 2 : previous + 1024;
           if (!Number.isFinite(order) || order <= previous || (next && order >= Number(next.value.order))) fail(409, "段落顺序需要重新整理。", "structure_conflict");
+          const kind = operation.file !== undefined ? "file" : operation.kind ?? "text";
+          const file = operation.file === undefined ? undefined : checkedStoredFile(store, who, loaded.scope, operation.file);
           const blockId = id(); const recordId = blockRecordId(pageId, blockId);
           const fresh = new Y.Doc(); newDocs.push(fresh);
           const text = fieldOf(fresh, blockField(recordId));
           if (operation.format === "markdown") editText(text, captureText(text), markdownInlineToContent(operation.text) as ReturnType<typeof readText>);
           else text.insert(0, operation.text);
           newTexts.set(blockId, text);
-          working.set(blockId, { id: recordId, value: { id: blockId, page: pageId, kind: operation.kind ?? "text", order, ...(parent ? { parent_id: parent } : {}), content: readText(text) } });
+          working.set(blockId, { id: recordId, value: { id: blockId, page: pageId, kind, order, ...(file ? { file } : {}), ...(parent ? { parent_id: parent } : {}), content: readText(text) } });
+          continue;
+        }
+        if (operation.type === "insert_image") {
+          const row = find(operation.blockId);
+          if (row.value.kind === "file" || row.value.kind === "table" || row.value.kind === "divider" || row.value.kind === "embed") fail(400, "图片只能放进文字段落。", "bad_request");
+          const file = checkedStoredFile(store, who, loaded.scope, operation.file, true);
+          const text = textOf(operation.blockId);
+          const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
+          boundary(text, index);
+          const mention = { mention: { kind: "image", file, ...(operation.width ? { width: operation.width } : {}) } };
+          text.insertEmbed(index, mention, {});
           continue;
         }
         if (operation.type === "delete_block") {

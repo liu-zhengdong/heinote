@@ -85,6 +85,10 @@ heinote row-create <db> --data F              # data 含 title/text/properties
 heinote row-set <db> <row> --data F           # data 含 title/properties
 heinote db-prop <db> --data F [--property-id P]
 heinote db-view <db> --data F [--view-id V]
+heinote upload <file> [--scope S] [--path P] [--name N] [--type T]
+                                              # 上传附件，返回 StoredFile JSON
+heinote download --path P [--scope S] [--out F]
+                                              # 下载附件（默认写 stdout）
 heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 ```
 
@@ -109,6 +113,10 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 查询条目 | `heinote db-query <db> --query '{"filters":[...]}'` |
 | 存检查点 | `heinote checkpoint <id> --summary S` |
 | 恢复版本 | `heinote restore <id> --version-id V` |
+| 上传附件 | `heinote upload pic.png --name "截图"`（返回 `StoredFile`） |
+| 插图进段落 | `upload` 后 `ops`：`{"type":"insert_image","blockId":...,"index":"end","file":<StoredFile>}` |
+| 附件块 | `ops`：`{"type":"insert_block","text":"说明","file":<StoredFile>}`（kind 自动为 file） |
+| 条目图片属性 | `row-create --data` 的 `propertyFiles`：`{"<属性id>":[<StoredFile>]}` |
 | 未封装接口 | `heinote req POST pages/<id>/checkpoint --data '{}'` |
 
 ### ops 操作数组

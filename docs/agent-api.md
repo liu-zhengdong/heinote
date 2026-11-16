@@ -29,6 +29,25 @@ Authorization: Bearer notes_...
 | POST | `/pages/:id/checkpoint` | 保存检查点 |
 | POST | `/pages/:id/restore` | 恢复检查点 |
 
+## 附件接口
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| PUT | `/files/:scope?path=&name=` | 上传附件字节，返回 `StoredFile` |
+| GET | `/files/:scope?path=` | 下载附件字节 |
+
+`scope` 为 `personal` 或空间 ID。`PUT` 携带原始请求体，`Content-Type` 存入附件类型，上限 8 MB。`path` 省略时服务端生成 `files/agent/<随机>/` 下的安全路径；`name` 为显示名，缺省取路径末段。响应（201）即 `StoredFile`：
+
+```json
+{ "path": "files/agent/<随机>/file.png", "owner": "<用户 id>", "name": "file.png", "size": 68, "type": "image/png" }
+```
+
+共享空间的附件额外携带 `"space": "<空间 ID>"`。返回对象可以直接写进 `insert_block.file`、`insert_image.file` 和 `propertyFiles` —— 三类引用共用同一份校验：字段必须与服务端记录一致，`path` 的 `type`/`size` 必须匹配该空间当前索引，`personal` 附件的 `owner` 必须是令牌账号，共享空间附件的 `space` 必须匹配。
+
+同一路径重复上传相同字节幂等返回成功；不同字节返回 409。上传计入配额。`GET` 仅要求读取权限，`read` 令牌可用；`PUT` 要求写权限。上传记入令牌活动（`action: "upload"`）。
+
+### 页面创建
+
 创建输入：
 
 ```json
@@ -267,7 +286,7 @@ PATCH 镜像属性（携带 `relation_origin`）不允许修改类型或方向�
 }
 ```
 
-修改可以提供 `title`、`properties` 和 `propertyFiles`。省略的属性保留。`properties` 中的 `null` 清除该值。修改要求条目与数据库的当前修订。条目必须属于路径指定的数据库。正文追加或格式修改继续使用 `/pages/:id/operations`。
+修改可以提供 `title`、`properties` 和 `propertyFiles`。省略的属性保留。`properties` 中的 `null` 清除该值。修改要求条目与数据库的当前修订。条目必须属于路径指定的数据库。正文追加或格式修改继续使用 `/pages/:id/operations`。`propertyFiles` 的每个值是 `StoredFile` 数组，校验规则与「附件接口」一致；用 `PUT /files/:scope` 上传即可取得合法引用。
 
 值规则：
 
@@ -363,8 +382,9 @@ Content-Type: application/json
 | `insert_text` | `blockId, index, text, format?` | 在起点、终点或数值位置插入；`format: "markdown"` 时按行内 Markdown 解析标记（code、粗斜体、链接），不产生新块 |
 | `delete_text` | `blockId, index, length` | 删除指定文字范围 |
 | `format_text` | `blockId, index, length, marks` | 修改指定范围的格式 |
-| `insert_block` | `text, afterId?, kind?, format?` | 插入同级块；默认 `kind` 为 `text`；`format: "markdown"` 时 `text` 按行内 Markdown 解析 |
+| `insert_block` | `text, afterId?, kind?, format?, file?` | 插入同级块；默认 `kind` 为 `text`；`format: "markdown"` 时 `text` 按行内 Markdown 解析；提供 `file`（`StoredFile`）时插入附件块，`kind` 强制为 `file`，`text` 为说明文字 |
 | `insert_blocks` | `markdown, afterId?` | 把 Markdown 展开为块树插入（标题、列表、表格、代码块等）；`afterId` 省略时追加到末尾 |
+| `insert_image` | `blockId, index, file, width?` | 在文字段落内插入行内图片提及，`file` 必须是图片 `StoredFile`，`width` 取 16–10000 |
 | `delete_block` | `blockId` | 删除块及其子树 |
 | `move_block` | `blockId, parentId?, order` | 在本页移动块；`parentId: null` 表示顶层 |
 
