@@ -98,6 +98,7 @@ import {
   insertProperty,
   localeWeekStart,
   monthGrid,
+  moveProperty,
   moveStatusOption,
   multiValues,
   PROPERTY_LABELS,
@@ -2485,7 +2486,9 @@ export function DatabaseView({
           titleLabel={titleLabel}
           titleIcon={config.title_icon}
           properties={properties}
+          readOnly={readOnly}
           onChange={saveHidden}
+          onReorder={(propertyId, index) => saveConfig(moveProperty(config, propertyId, index))}
         />
       </Popover>
 
