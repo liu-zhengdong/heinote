@@ -92,6 +92,20 @@ async function dragColumn(page: Page, sourceId: string, target: Locator, upper: 
   await target.dispatchEvent("drop", { dataTransfer: transfer });
   await grip.dispatchEvent("dragend", { dataTransfer: transfer });
 }
+/** A table head pulled by its name onto the left or right half of another
+ *  head — the panel's drag, started from the header itself. */
+async function dragColumnHead(page: Page, sourceId: string, targetId: string, left: boolean) {
+  const head = page.locator(`table.db__table thead th[data-column="${sourceId}"]`);
+  const target = page.locator(`table.db__table thead th[data-column="${targetId}"]`);
+  const button = head.getByRole("button");
+  const box = await target.boundingBox();
+  expect(box).not.toBeNull();
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  await button.dispatchEvent("dragstart", { dataTransfer: transfer });
+  await target.dispatchEvent("dragover", { dataTransfer: transfer, clientX: box!.x + box!.width * (left ? 0.25 : 0.75) });
+  await target.dispatchEvent("drop", { dataTransfer: transfer });
+  await button.dispatchEvent("dragend", { dataTransfer: transfer });
+}
 async function shot(page: Page, path: string, locator = page.locator("main").first()) {
   await page.evaluate(async () => { await document.fonts.ready; });
   await locator.screenshot({ path, animations: "disabled" });
@@ -172,8 +186,29 @@ test("columns panel reorders a database's columns", async ({ page }) => {
      API returns, and a hidden column's place is kept on the record. */
   expect(await propertyOrder(token, databaseId)).toEqual(["prop_url", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
   expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
+
+  /* ── The table head itself drags a column, to a head's left or right ── */
+  /* 窗口, pulled onto 估点's right, lands behind it; its column washes and
+     the ghost head's fades while it is held. The hidden 链接 keeps its
+     place on the record — the head it never drew does not move it. */
+  await dragColumnHead(page, "prop_due", "prop_num", false);
+  expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
+  expect(await propertyOrder(token, databaseId)).toEqual(["prop_url", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
+
+  /* A meta head only moves among meta: onto 完成 it does not land. */
+  await dragColumnHead(page, "prop_id", "prop_done", true);
+  expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
+  /* …but 创建于 onto 标识's left swaps them inside their own group. */
+  await dragColumnHead(page, "prop_created", "prop_id", true);
+  expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_created", "prop_id"]);
+  /* The name column's head is never a drag's — its press stays the menu's;
+     every other head carries the draggable mark. */
+  await expect(page.locator(`table.db__table thead th[data-column="name"]`).getByRole("button")).not.toHaveAttribute("draggable", "true");
+  await expect(page.locator(`table.db__table thead th[data-column="prop_num"]`).getByRole("button")).toHaveAttribute("draggable", "true");
+  await shot(page, join(evidence, "uc44-columns-head-drag@2x.png"));
+
   await page.reload();
   await page.locator(".tree-row__main").filter({ hasText: "任务" }).first().click();
   await expect(page.locator("table.db__table")).toBeVisible();
-  expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_id", "prop_created"]);
+  expect(await headOrder(page)).toEqual(["name", "prop_num", "prop_due", "prop_done", "prop_created", "prop_id"]);
 });

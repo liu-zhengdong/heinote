@@ -36,7 +36,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -81,6 +81,7 @@ import {
   changePropertyType,
   changeViewKind,
   clampColumnWidth,
+  COLUMN_DRAG,
   COLUMN_WIDTH,
   columnWidth,
   columnWraps,
@@ -96,6 +97,7 @@ import {
   groupableProperties,
   groupProperty,
   insertProperty,
+  isMetaType,
   localeWeekStart,
   monthGrid,
   moveProperty,
@@ -456,12 +458,20 @@ function ColumnHead({
   open,
   readOnly,
   onMenu,
+  draggable,
+  onColumnDragStart,
+  onColumnDragEnd,
 }: {
   icon: ReactNode;
   label: string;
   open: boolean;
   readOnly: boolean;
   onMenu(anchor: AnchorRect): void;
+  /** A column head may be pulled straight onto another's place — a press
+      that goes nowhere is still the menu's click. */
+  draggable?: boolean;
+  onColumnDragStart?(event: ReactDragEvent<HTMLElement>): void;
+  onColumnDragEnd?(): void;
 }) {
   const content = (
     <>
@@ -476,6 +486,9 @@ function ColumnHead({
       className={`db__th ${open ? "is-open" : ""}`}
       aria-haspopup="menu"
       aria-expanded={open}
+      draggable={draggable}
+      onDragStart={onColumnDragStart}
+      onDragEnd={onColumnDragEnd}
       onClick={(event) => onMenu(rectOf(event.currentTarget))}
     >
       {content}
@@ -589,6 +602,7 @@ function TableLayout({
   menuColumn,
   onColumnMenu,
   onResize,
+  onReorder,
   groups,
   groupedBy,
   onCalc,
@@ -607,6 +621,11 @@ function TableLayout({
   onColumnMenu(column: string, anchor: AnchorRect): void;
   /** A column dragged to a new width, when the drag ends. */
   onResize(column: string, width: number): void;
+  /** A column head pulled onto a neighbour's side: the dragged column's id,
+      the column beside the gap it lands in, and which side of that column.
+      DatabaseView turns the pair into a spot inside its own list — hidden
+      columns a head never drew count. */
+  onReorder?(propertyId: string, boundaryId: string, place: "before" | "after"): void;
   /** The row groups and the property they group by — none, one open group. */
   groups: readonly ViewGroup[];
   groupedBy: DatabaseProperty | undefined;
@@ -672,6 +691,25 @@ function TableLayout({
     document.documentElement.classList.add("is-resizing-column");
     endResize.current = cancel;
     setResizing({ column, width });
+  };
+
+  /* A column head held by its name is the same drag the Columns panel gives
+     a grip: its shadow follows the pointer, a blue edge marks the gap it
+     fills and its column washes over so the rows read where it lands. Own
+     and system columns keep to their own lists — a head only takes one that
+     matches its kind. The name column stays put; a reader drags nothing. */
+  const [colDrag, setColDrag] = useState<{ id: string; meta: boolean } | null>(null);
+  const [colSpot, setColSpot] = useState<{ id: string; place: "before" | "after" } | null>(null);
+  const colSpotFor = (property: DatabaseProperty, event: ReactDragEvent<HTMLElement>) => {
+    if (!colDrag || readOnly || colDrag.meta !== isMetaType(property.type) || colDrag.id === property.id) return;
+    const before = event.clientX < event.currentTarget.getBoundingClientRect().left + event.currentTarget.offsetWidth / 2;
+    setColSpot({ id: property.id, place: before ? "before" : "after" });
+  };
+  const dropColumn = (event: ReactDragEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (colSpot && colDrag) onReorder?.(colDrag.id, colSpot.id, colSpot.place);
+    setColDrag(null);
+    setColSpot(null);
   };
 
   /* Groups fold away where the header is toggled — a pointer's choice for
@@ -793,7 +831,13 @@ function TableLayout({
       <table className="db__table" style={{ width: tableWidth }}>
         <colgroup>
           <col style={{ width: title }} />
-          {properties.map((property, index) => <col key={property.id} style={{ width: widths[index] }} />)}
+          {properties.map((property, index) => (
+            <col
+              key={property.id}
+              style={{ width: widths[index] }}
+              className={`${colDrag?.id === property.id ? "is-col-dragging" : ""} ${colSpot?.id === property.id ? "is-col-spot" : ""}`}
+            />
+          ))}
           {minimal ? null : <col />}
         </colgroup>
         <thead>
@@ -809,12 +853,25 @@ function TableLayout({
               {readOnly ? null : <ColumnResize column={TITLE_COLUMN} active={resizing?.column === TITLE_COLUMN} onStart={startResize} />}
             </th>
             {properties.map((property) => (
-              <th key={property.id} data-column={property.id}>
+              <th
+                key={property.id}
+                data-column={property.id}
+                className={`${colSpot?.id === property.id ? `is-col-drop-${colSpot.place}` : ""}`}
+                onDragOver={(event) => { if (colDrag) { event.preventDefault(); colSpotFor(property, event); } }}
+                onDrop={dropColumn}
+              >
                 <ColumnHead
                   icon={minimal ? null : <PropertyIcon property={property} />}
                   label={propertyName(property)}
                   open={menuColumn === property.id}
                   readOnly={readOnly}
+                  draggable={!readOnly && Boolean(onReorder)}
+                  onColumnDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData(COLUMN_DRAG, property.id);
+                    setColDrag({ id: property.id, meta: isMetaType(property.type) });
+                  }}
+                  onColumnDragEnd={() => { setColDrag(null); setColSpot(null); }}
                   onMenu={(anchor) => onColumnMenu(property.id, anchor)}
                 />
                 {readOnly ? null : <ColumnResize column={property.id} active={resizing?.column === property.id} onStart={startResize} />}
@@ -877,7 +934,7 @@ function BoardLayout({
   const unset = property.type === "select" ? rows.filter((row) => !propertyValue(row, property)) : [];
   const columns = unset.length ? ["", ...options] : options;
 
-  const onDrop = (value: string) => (event: DragEvent<HTMLElement>) => {
+  const onDrop = (value: string) => (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
     setDropColumn(null);
     const row = rows.find((item) => item.id === dragRowId);
@@ -1588,6 +1645,22 @@ export function DatabaseView({
   const saveView = (next: View) => saveConfig(withView(config, next));
   const openView = (viewId: string) => setPreference("database_views", { ...preferences.database_views, [databaseId]: viewId });
 
+  /* A panel row and a table head both report a reorder as a column landing
+     at a neighbour's side. The index moveProperty counts — inside the
+     dragged column's own kind, the dragged column already out — follows
+     from the boundary among what stays, so a hidden column a head never
+     drew is found for it here, not by the layout that saw only the view. */
+  const reorderProperty = (propertyId: string, boundaryId: string, place: "before" | "after") => {
+    const moving = config.properties.find((property) => property.id === propertyId);
+    const boundary = config.properties.find((property) => property.id === boundaryId);
+    if (!moving || !boundary) return;
+    const meta = isMetaType(moving.type);
+    const rest = config.properties.filter((property) => property.id !== propertyId && isMetaType(property.type) === meta);
+    const at = rest.findIndex((property) => property.id === boundaryId);
+    if (at < 0) return;
+    saveConfig(moveProperty(config, propertyId, at + (place === "after" ? 1 : 0)));
+  };
+
   const addView = (kind: DatabaseViewKind) => {
     const created = createView(createId("view"), kind, config, newPropertyId);
     saveConfig(created.config);
@@ -2029,6 +2102,7 @@ export function DatabaseView({
         menuColumn={menuColumn}
         onColumnMenu={(column, anchor) => setMenu({ kind: "column", column, anchor })}
         onResize={(column, width) => saveView(withColumnWidth(view, column, width))}
+        onReorder={reorderProperty}
       />
     );
   }
@@ -2488,7 +2562,7 @@ export function DatabaseView({
           properties={properties}
           readOnly={readOnly}
           onChange={saveHidden}
-          onReorder={(propertyId, index) => saveConfig(moveProperty(config, propertyId, index))}
+          onReorder={reorderProperty}
         />
       </Popover>
 

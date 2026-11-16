@@ -47,6 +47,11 @@ export const PROPERTY_TYPES: readonly PropertyType[] = DECLARED_PROPERTY_TYPES;
  *  meet one. */
 export const TITLE_COLUMN = "name";
 
+/** The MIME a column reorder is carried under — a head pulled by its name
+ *  and a panel row by its grip are the same gesture, kept apart from a
+ *  board card's row drag. */
+export const COLUMN_DRAG = "text/x-notes-column";
+
 /** What a property is called. A name typed away to nothing reads as its
  *  type, as a view's does, rather than as a blank column. */
 export function propertyName(property: Pick<DatabaseProperty, "name" | "type">): string {

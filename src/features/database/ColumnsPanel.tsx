@@ -2,7 +2,7 @@ import { ArrowDown, ArrowUp, Eye, EyeOff, GripVertical, RotateCcw } from "lucide
 import { useState, type DragEvent } from "react";
 import { MenuItem, MenuList } from "../../components/Menu";
 import type { DatabaseProperty } from "../../core/types";
-import { isMetaType, propertyName } from "./database-model";
+import { COLUMN_DRAG, isMetaType, propertyName } from "./database-model";
 import { PropertyIcon, TitleIcon } from "./properties";
 
 /* The columns a view draws, as Notion's Columns tool: every property a row
@@ -13,10 +13,6 @@ import { PropertyIcon, TitleIcon } from "./properties";
    Search narrows the list; Reset shows them all. While the list is
    filtered the grip and the arrows rest — a row's place there is not the
    order it would write. */
-
-/** The id a dragged column carries on its drag, apart from the sort
- *  panel's — one never drops into the other. */
-const COLUMN_DRAG = "text/x-notes-column";
 
 export function ColumnsPanel({
   hidden,
@@ -34,8 +30,10 @@ export function ColumnsPanel({
   properties: readonly DatabaseProperty[];
   readOnly: boolean;
   onChange(hidden: string[]): void;
-  /** A column moved to `index` among its own kind's (its group as drawn). */
-  onReorder(propertyId: string, index: number): void;
+  /** A column landing at a neighbour's side: the dragged column's id, the
+      column beside the gap it fills, and which side — the same words a
+      dragged table head reports in. */
+  onReorder?(propertyId: string, boundaryId: string, place: "before" | "after"): void;
 }) {
   const [query, setQuery] = useState("");
   /** The row being dragged: its id, and which group it belongs to. */
@@ -50,11 +48,10 @@ export function ColumnsPanel({
   const system = shown.filter((property) => isMetaType(property.type));
   const reorderable = !readOnly && !typed && Boolean(onReorder);
 
-  /** A keyboard step: `index` is where the row lands among its own kind
-   *  once it is out of the list — the index `moveProperty` counts on. */
+  /** A keyboard step reads as a drop beside the neighbour it passes. */
   const move = (list: readonly DatabaseProperty[], from: number, to: number) => {
     if (from < 0 || to < 0 || to > list.length - 1) return;
-    onReorder(list[from].id, to);
+    onReorder?.(list[from].id, list[to].id, to < from ? "before" : "after");
   };
 
   const over = (event: DragEvent<HTMLElement>, meta: boolean, index: number) => {
@@ -74,7 +71,12 @@ export function ColumnsPanel({
     if (from < 0) { setDrag(null); setSpot(null); return; }
     if (spot && spot.meta === meta) {
       const to = spot.index > from ? spot.index - 1 : spot.index;
-      if (to !== from) onReorder(drag.id, to);
+      if (to !== from) {
+        const rest = list.filter((property) => property.id !== drag.id);
+        const next = rest[to];
+        if (next) onReorder?.(drag.id, next.id, "before");
+        else onReorder?.(drag.id, rest[rest.length - 1].id, "after");
+      }
     }
     setDrag(null);
     setSpot(null);

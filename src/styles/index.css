@@ -6007,6 +6007,37 @@ button.db__th:hover,
   background: var(--fill-hover);
 }
 
+/* A column head held by its name is picked up like a panel row's by its
+   grip: its own column fades to a ghost, and the gap it lands in gets a
+   blue edge and a wash down the whole column, so the rows read where it
+   goes before it is let go. */
+.db__table col.is-col-dragging {
+  opacity: 0.4;
+}
+
+.db__table col.is-col-spot {
+  background: var(--blue-tint);
+}
+
+.db__table th.is-col-drop-before::before,
+.db__table th.is-col-drop-after::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 2px;
+  background: var(--blue);
+  content: "";
+}
+
+.db__table th.is-col-drop-before::before {
+  left: 0;
+}
+
+.db__table th.is-col-drop-after::after {
+  right: 0;
+}
+
 .db__table tbody tr {
   transition: background var(--t-tap) var(--e-out);
 }
