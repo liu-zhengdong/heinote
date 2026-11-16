@@ -36,7 +36,7 @@ import type { DismissReason } from "../../hooks/useDismiss";
 import { LinkForm, linkHref, selectedAddress } from "./FormatToolbar";
 import { inlineFromNodes, keptOffset } from "./rich-text";
 import { focusRange, selectionOffsets, selectionRect } from "./selection";
-import { markForKey, MARKS } from "./marks";
+import { delimiterMark, markForKey, MARKS } from "./marks";
 
 /* Words typed outside a page's paragraphs — a page's name (TitleField), a
    simple table's cell (SimpleTable) — in one line of `contenteditable` of
@@ -271,6 +271,13 @@ export function RichField({
     const refuse = (event: InputEvent) => {
       if (event.inputType === "insertParagraph" || event.inputType === "insertLineBreak" || event.inputType.startsWith("format")) {
         event.preventDefault();
+        return;
+      }
+      /* An input method's commit (a Chinese keyboard's `·`, `＊`, `～`…) is an
+         `insertText` without a printable keydown — the same delimiter over a
+         selection reaches the field here. */
+      if (event.inputType === "insertText" && delimiterInput.current(event)) {
+        event.preventDefault();
       }
     };
     element.addEventListener("beforeinput", refuse);
@@ -287,6 +294,26 @@ export function RichField({
     lastInput.current = next;
     run(() => onChange(next));
   };
+
+  /* The delimiter logic the `beforeinput` listener above defers to — in a ref
+     so the one-time listener always calls the latest render's closure. */
+  const delimiterInput = useRef<(event: InputEvent) => boolean>(() => false);
+  useLayoutEffect(() => {
+    delimiterInput.current = (event) => {
+      if (!event.data || event.data.length !== 1) return false;
+      const mark = delimiterMark(event.data);
+      const element = ref.current;
+      if (!mark || !element || !grammar.marks || readOnly || composing.current) return false;
+      const offsets = selectionOffsets(element);
+      if (!offsets || offsets.start === offsets.end) return false;
+      const start = Math.min(offsets.start, offsets.end);
+      const end = Math.max(offsets.start, offsets.end);
+      const words = shownWords(element, grammar);
+      if (!inlinePlainText(words).slice(start, end).trim().length) return false;
+      toggleMark(mark, { start, end });
+      return true;
+    };
+  });
 
   /** The words selected in the field now, when there are some. */
   const measure = (): FieldSelection | null => {
@@ -440,6 +467,27 @@ export function RichField({
       const end = Math.max(offsets.start, offsets.end);
       draw(grammar.normalize(replaceRange(words, start, end, "\n")), start + 1);
       return;
+    }
+    /* A delimiter typed over selected words marks them, as the page's own
+       blocks do — but only in a grammar that holds marks (a name does not).
+       A caret, or words already carrying the mark throughout, falls through:
+       the character is typed like any other. */
+    if (grammar.marks && !readOnly && !meta && !event.altKey && event.key.length === 1) {
+      const mark = delimiterMark(event.key);
+      if (mark) {
+        const element = ref.current;
+        const offsets = element ? selectionOffsets(element) : null;
+        if (element && offsets && offsets.start !== offsets.end) {
+          const start = Math.min(offsets.start, offsets.end);
+          const end = Math.max(offsets.start, offsets.end);
+          const words = shownWords(element, grammar);
+          if (inlinePlainText(words).slice(start, end).trim().length > 0) {
+            event.preventDefault();
+            toggleMark(mark, { start, end });
+            return;
+          }
+        }
+      }
     }
     onKeyDown?.(event);
     if (event.defaultPrevented) return;

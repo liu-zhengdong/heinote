@@ -34,14 +34,17 @@ import {
   caretOffset,
   caretOnFirstLine,
   caretOnLastLine,
+  caretRect,
   focusAtEnd,
   focusRange,
   selectedBlockRanges,
   selectionOffsets,
+  type BlockTextRange,
 } from "./selection";
 import { CARET_KEYS, type Editor } from "./editor-state";
 import type { BlockTyping } from "./useBlockTyping";
-import { markForKey } from "./marks";
+import { delimiterMark, markForKey, mentionOpener, wordsCanQueryMention } from "./marks";
+import { pointRect } from "../../hooks/useAnchoredPosition";
 
 /** A key pressed in a block: the slash and mention menus' keys while one is
  *  open, then Notion's — Enter and Backspace at a line's edges, Tab and
@@ -54,6 +57,66 @@ export function blockKeys(editor: Editor & BlockTyping) {
     pendingTextSelection, checkpointHistory, execute, selectBlocks, runReplace, replaceSelection, nextEditable,
     moveCaret, applyBlockShortcut, runCommand, openMoveTo, closeMenus, chooseMention, applyMarkToBlocks, openLink,
   } = editor;
+
+  /** One typed character over selected words, as Notion treats them: `` ` ``,
+   *  `*`/`_`, `~` and their full-width kin mark the selection — across blocks
+   *  too; `[` or `【` makes the words a `[[` page-mention query. It answers
+   *  what was intercepted — the caller prevents the character's typing.
+   *
+   *  Only real words selected qualify: a caret takes the character as typed,
+   *  code blocks carry no marks, and a selection that is nothing but
+   *  whitespace has nothing to mark. When every selected run already has the
+   *  mark, the character takes it back off. A `[` over a selection reaching
+   *  past this block — or over words that could never be a `[[` query —
+   *  replaces it like any other character.
+   *
+   *  For `[[` the brackets go in as their own history step first (⌘Z gives
+   *  the words back without them) and the caret lands after the words, which
+   *  makes the words themselves the menu's query. The menu cannot open by
+   *  itself here — `mentionQueryAt` only runs on real input — so its state
+   *  is set directly; `chooseMention` then replaces `[[words` with the picked
+   *  page as usual. */
+  const delimitSelection = (block: Block, element: HTMLElement, char: string): boolean => {
+    const across = blocksRef.current ? selectedBlockRanges(blocksRef.current) : [];
+    const within = across.length ? null : selectionOffsets(element);
+    const spans: BlockTextRange[] | null = across.length
+      ? across
+      : within && within.start !== within.end
+        ? [{ blockId: block.id, start: Math.min(within.start, within.end), end: Math.max(within.start, within.end) }]
+        : null;
+    const mark = delimiterMark(char);
+    if (mark && spans
+      && spans.every((span) => tree.by_id[span.blockId] && tree.by_id[span.blockId].kind !== "code")
+      && spans.some((span) => inlinePlainText(tree.by_id[span.blockId]?.content ?? []).slice(span.start, span.end).trim().length > 0)) {
+      const enabled = spans.every((span) => rangeHasMark(tree.by_id[span.blockId].content, span.start, span.end, mark));
+      applyMarkToBlocks(spans, mark, !enabled);
+      return true;
+    }
+    if (mentionOpener(char) && block.kind !== "code" && spans?.length === 1 && spans[0].blockId === block.id) {
+      const words = inlinePlainText(block.content).slice(spans[0].start, spans[0].end);
+      if (wordsCanQueryMention(words)) {
+        const anchor = caretRect(element);
+        checkpointHistory({ kind: "text", pageId: page.id, ranges: [{ blockId: block.id, start: spans[0].start, end: spans[0].start }] });
+        execute(updateBlockContent(tree, block.id, replaceRange(block.content, spans[0].start, spans[0].start, "[[")), {
+          id: block.id, start: spans[0].start + 2 + words.length, force: true,
+        });
+        setMention({ blockId: block.id, from: spans[0].start, query: words, trigger: "[[", anchor: pointRect(anchor?.left ?? 0, anchor?.bottom ?? 0) });
+        setMentionIndex(0);
+        return true;
+      }
+    }
+    return false;
+  };
+
+  /** The input an input method commits (a Chinese keyboard's `·`, `＊`, `【`,
+   *  `～`…) reaches `beforeinput` as `insertText` without a printable
+   *  keydown — so a delimiter over a selection is caught here too, where the
+   *  selection still stands. `insertCompositionText` belongs to the method
+   *  mid-word; by the commit that ends it the selection is already replaced,
+   *  so only the direct `insertText` is checked. */
+  const onBlockBeforeInput = (block: Block, element: HTMLElement, data: string | null): boolean =>
+    data !== null && data.length === 1 && delimitSelection(block, element, data);
+
   const onBlockKeyDown = (block: Block, event: KeyboardEvent<HTMLElement>) => {
     // Keys the input method owns are the input method's: the Enter that picks
     // a candidate must not split the block, nor its Backspace delete it.
@@ -62,6 +125,15 @@ export function blockKeys(editor: Editor & BlockTyping) {
     const element = event.currentTarget;
     const definition = blockDefinition(block.kind);
     const meta = event.metaKey || event.ctrlKey;
+
+    /* A delimiter over selected words: see onBlockBeforeInput. A key reaches
+       here first, so what it intercepts is prevented before the browser ever
+       types it — and it is done, or the cross-block replace below would
+       still swallow the selection it just marked. */
+    if (!meta && !event.altKey && delimitSelection(block, element, event.key)) {
+      event.preventDefault();
+      return;
+    }
 
     /* A selection across blocks: Delete and Backspace take all of it, a typed
        character replaces all of it, Enter replaces it with a new line. Marks
@@ -427,5 +499,5 @@ export function blockKeys(editor: Editor & BlockTyping) {
       }
     }
   };
-  return onBlockKeyDown;
+  return { onBlockKeyDown, onBlockBeforeInput };
 }

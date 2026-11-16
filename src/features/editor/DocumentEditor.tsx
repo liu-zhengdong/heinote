@@ -212,7 +212,7 @@ type PageMenuProps = ComponentProps<typeof PageMenu>;
 const ROW_ACTIONS: Record<Exclude<keyof BlockActions, "describeMention" | "showFile" | "writeTable">, true> = {
   add: true, dragOver: true, drop: true, toggleCheck: true, openBacklinks: true,
   toggleLink: true, openLinkMenu: true, rowDragStart: true, rowDragEnd: true, openBlockMenu: true,
-  openLinkedPage: true, setLanguage: true, copyCode: true, change: true, keyDown: true, paste: true, pickIcon: true,
+  openLinkedPage: true, setLanguage: true, copyCode: true, change: true, keyDown: true, beforeInput: true, paste: true, pickIcon: true,
   pickFile: true, downloadFile: true, resizeCard: true,
   retryUpload: true, leaveTable: true, selectTable: true, readEmbed: true,
 };
@@ -979,7 +979,7 @@ export function DocumentEditor({
   const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, pickTarget, placeFiles, pickFile } = useMedia(editor);
   const typing = blockTyping({ ...editor, placeFiles });
   const { onBlockChange, chooseMention, onBlockPaste, nextEditable, runCommand } = typing;
-  const onBlockKeyDown = blockKeys({ ...editor, ...typing });
+  const { onBlockKeyDown, onBlockBeforeInput } = blockKeys({ ...editor, ...typing });
   useSelectedBlockKeys(editor);
 
   /** Follows a link — to a page, or to a block where it is now (found by its
@@ -1647,6 +1647,7 @@ export function DocumentEditor({
       },
       change: onBlockChange,
       keyDown: onBlockKeyDown,
+      beforeInput: onBlockBeforeInput,
       paste: onBlockPaste,
       pickIcon: (block, anchor) => setPicker({ kind: "callout", blockId: block.id, anchor }),
       showFile: (file, which) => (platform ? showFile(platform.files, file, which) : notShown()),
