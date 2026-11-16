@@ -12,6 +12,9 @@ let server: Awaited<ReturnType<typeof startServer>>;
 let directory: string;
 const password = "UC-45-image-viewer-password-2026!";
 const evidence = resolve(".evidence/uc45-image-viewer");
+/* A dense screen like the desk's: marks land where the pointer did when the
+   canvas backing counts device pixels twice the CSS ones. */
+test.use({ deviceScaleFactor: 2 });
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-uc45-image-viewer-"));
@@ -80,15 +83,27 @@ async function shot(page: Page, path: string, locator = page.locator(".overlay__
   await page.evaluate(async () => { await document.fonts.ready; });
   await locator.screenshot({ path, animations: "disabled" });
 }
-/** Alpha painted inside the marks canvas: pixels a stroke leaves behind. */
-async function marksPixels(page: Page): Promise<number> {
+/** Alpha painted inside the marks canvas, and where it stands: the painted
+ *  pixels' centre as a share of the shown picture. */
+async function marksStats(page: Page): Promise<{ painted: number; cx: number; cy: number }> {
   return page.locator(".viewer__marks").evaluate((canvas: HTMLCanvasElement) => {
     const data = canvas.getContext("2d")!.getImageData(0, 0, canvas.width, canvas.height).data;
-    let painted = 0;
-    for (let at = 3; at < data.length; at += 4) if (data[at] > 0) painted += 1;
-    return painted;
+    let painted = 0, sx = 0, sy = 0;
+    for (let at = 0; at < data.length; at += 4) {
+      if (data[at + 3] > 0) {
+        painted += 1;
+        sx += (at / 4) % canvas.width;
+        sy += Math.floor(at / 4 / canvas.width);
+      }
+    }
+    return {
+      painted,
+      cx: painted ? sx / painted / canvas.width : 0,
+      cy: painted ? sy / painted / canvas.height : 0,
+    };
   });
 }
+const marksPixels = async (page: Page) => (await marksStats(page)).painted;
 
 test("the picture viewer zooms, pans and takes temporary marks", async ({ page }) => {
   await mkdir(evidence, { recursive: true });
@@ -139,21 +154,27 @@ test("the picture viewer zooms, pans and takes temporary marks", async ({ page }
   await page.getByRole("button", { name: "Annotate" }).click();
   await expect(page.locator(".viewer__tools")).toBeVisible();
   expect(await marksPixels(page)).toBe(0);
-  const stageBox = await stage(page).boundingBox();
-  const at = (shareX: number, shareY: number) => ({ x: stageBox!.x + stageBox!.width * shareX, y: stageBox!.y + stageBox!.height * shareY });
-  const from = at(0.4, 0.4); const to = at(0.6, 0.6);
+  /* Marks land under the pointer: the stroke drawn between two points on
+     the shown picture has its centre between the picture's own shares of
+     them — not the stage's, and not half the distance at a dense screen. */
+  const frameBox = await frame(page).boundingBox();
+  const at = (shareX: number, shareY: number) => ({ x: frameBox!.x + frameBox!.width * shareX, y: frameBox!.y + frameBox!.height * shareY });
+  const from = at(0.35, 0.35); const to = at(0.65, 0.65);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   await page.mouse.move(to.x, to.y, { steps: 8 });
   await page.mouse.up();
-  const painted = await marksPixels(page);
-  expect(painted).toBeGreaterThan(200);
+  const marks = await marksStats(page);
+  expect(marks.painted).toBeGreaterThan(200);
+  expect(marks.cx).toBeCloseTo(0.5, 1);
+  expect(marks.cy).toBeCloseTo(0.5, 1);
   await shot(page, join(evidence, "uc45-viewer-marked@2x.png"));
 
   /* A mark follows the picture's own scale: zooming keeps it over what it
      circled, it does not drift on the room. */
+  const stageBox = await stage(page).boundingBox();
   await stage(page).dispatchEvent("wheel", { deltaY: -300, clientX: stageBox!.x + stageBox!.width / 2, clientY: stageBox!.y + stageBox!.height / 2 });
-  expect(await marksPixels(page)).toBeGreaterThan(painted);
+  expect(await marksPixels(page)).toBeGreaterThan(marks.painted);
 
   await page.getByRole("button", { name: "Undo" }).click();
   expect(await marksPixels(page)).toBe(0);

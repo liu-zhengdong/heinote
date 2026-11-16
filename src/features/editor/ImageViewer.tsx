@@ -75,6 +75,10 @@ function drawStrokes(canvas: HTMLCanvasElement, width: number, height: number, s
   }
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
+  /* The canvas backing is device pixels, the marks' math is in the shown
+     picture's CSS pixels — the transform between them is the density's, so
+     a mark lands where the pointer did on screens of every density. */
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   /* Everything drawn is in screen pixels of the shown picture: a mark's
      place is its picture share times the shown size, its weight the same. */
@@ -111,7 +115,7 @@ function drawStrokes(canvas: HTMLCanvasElement, width: number, height: number, s
       ctx.strokeRect(Math.min(from.x, to.x), Math.min(from.y, to.y), Math.abs(to.x - from.x), Math.abs(to.y - from.y));
     } else if (stroke.tool === "text" && stroke.text && points.length) {
       const size = Math.max(10, (stroke.size ?? TEXT_SIZE) * h);
-      ctx.font = `600 ${size}px var(--font, sans-serif)`;
+      ctx.font = `600 ${size}px sans-serif`;
       ctx.textBaseline = "top";
       const start = points[0];
       ctx.fillText(stroke.text, start.x, start.y);
@@ -295,7 +299,12 @@ export function ImageViewer({
     const stage = stageRect();
     if (!stage) return;
     const point = imagePoint(event.clientX, event.clientY, stage, pan, natural.w, natural.h, zoom);
-    setDraft({ ...drawFrom.current, points: drawFrom.current.tool === "pen" ? [...drawFrom.current.points, point] : [drawFrom.current.points[0], point] });
+    /* A pen keeps every step of the path; shapes keep their two corners. */
+    drawFrom.current = {
+      ...drawFrom.current,
+      points: drawFrom.current.tool === "pen" ? [...drawFrom.current.points, point] : [drawFrom.current.points[0], point],
+    };
+    setDraft(drawFrom.current);
   };
 
   const release = () => {
