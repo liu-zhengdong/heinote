@@ -79,13 +79,17 @@ test("a shared page shows the diagram to a guest", async ({ page, browser }) => 
   await code.locator('.block__editable[contenteditable="true"]').pressSequentially("sequenceDiagram\n  读者->>笔记: 打开分享页\n  笔记-->>读者: 出图");
   await code.locator(".mermaid svg").waitFor({ timeout: 30000 });
 
-  // The editor commits asynchronously in batches: wait for the code block
-  // itself — not just the page — to exist server-side before sharing, or
-  // the guest reads a page with no mermaid block yet.
+  // The editor commits asynchronously in batches: wait for the code
+  // block's drawn source — the very text the diagram renders — to sit
+  // server-side before sharing, or the guest reads a page with a
+  // half-typed diagram. The block's DOM text is what pele drew, so the
+  // record matching it means the shareable page is the drawn one.
+  const drawn = await code.locator('.block__editable[contenteditable="true"]').innerText();
   await expect.poll(async () => {
     const rows = await (await page.request.get(`${server.url}/api/records/personal/blocks`)).json();
-    return rows.some((row: { value: { kind?: string; language?: string; page?: string } }) =>
-      row.value.page === pageId && row.value.kind === "code" && row.value.language === "mermaid");
+    return rows.some((row: { value: { kind?: string; language?: string; page?: string; content?: { text?: string }[] } }) =>
+      row.value.page === pageId && row.value.kind === "code" && row.value.language === "mermaid" &&
+      (row.value.content ?? []).map((run) => run.text ?? "").join("") === drawn);
   }, { timeout: 15000 }).toBe(true);
 
   let status = 0;

@@ -673,6 +673,34 @@ export function duplicateProperty(
   };
 }
 
+/* A database's column order is `properties` itself: every consumer — the
+   table's head, the row page's property list, a gallery card's chips, the
+   Agent API's row values — reads it in place. Reordering is a splice back
+   into that list, never a reorder of the view's id-keyed settings. */
+
+/** A property moved to `index` among its own kind's — an ordinary
+ *  property counts only the ordinary ones, a meta column only the meta
+ *  ones, as the Columns panel draws them apart. `index` is inside the
+ *  segment (its length is the end). The write always leaves the two
+ *  segments whole: `properties` comes back every ordinary property first,
+ *  every meta one last, so a stray meta column an earlier insert left in
+ *  the middle is tidied in the same step. */
+export function moveProperty(config: DatabaseConfig, propertyId: string, index: number): DatabaseConfig {
+  const moving = config.properties.find((property) => property.id === propertyId);
+  if (!moving) return config;
+  const meta = isMetaType(moving.type);
+  const rest = config.properties.filter((property) => property.id !== propertyId);
+  const segment = rest.filter((property) => isMetaType(property.type) === meta);
+  const at = Math.max(0, Math.min(Math.trunc(index) || 0, segment.length));
+  const before = segment[at];
+  const position = before ? rest.indexOf(before) : (segment.length ? rest.indexOf(segment[segment.length - 1]) + 1 : rest.length);
+  const next = [...rest];
+  next.splice(position, 0, moving);
+  const own = next.filter((property) => !isMetaType(property.type));
+  const system = next.filter((property) => isMetaType(property.type));
+  return withProperties(config, [...own, ...system]);
+}
+
 /** Takes a property out of the database, and out of every view that hangs
  *  on it: a sort or a filter on it goes (a filter left behind would hide rows
  *  with nothing on screen to say why), a board or a calendar placing rows
