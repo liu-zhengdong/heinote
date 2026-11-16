@@ -2654,8 +2654,10 @@ kbd {
 
 /* Chinese in an italic run is set in Kai, the CJK way to set emphasis, and
    stands upright; its Latin keeps its italic. Serif pages take TW-Kai (then
-   LXGW WenKai TC for what it lacks), Default pages WenKai; Mono stays mono. */
-.block__editable :is(em, i) {
+   LXGW WenKai TC for what it lacks), Default pages WenKai; Mono stays mono.
+   The rule covers every italic run in the document — a table cell's or a
+   database field's as much as a block's. */
+.doc :is(em, i) {
   font-family: var(--font-page-italic, inherit);
   /* Neither Kai has a bold (TW-Kai is one weight, WenKai stops at Medium),
      so bold Chinese in an italic run is emboldened by the browser. The Latin
