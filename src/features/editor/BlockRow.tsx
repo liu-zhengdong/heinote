@@ -124,6 +124,9 @@ export interface BlockActions extends MediaActions, TableActions, EmbedActions {
   change(block: Block, content: InlineContent, text: string, element: HTMLElement, composing: boolean): void;
   describeMention: DescribeMention;
   keyDown(block: Block, event: KeyboardEvent<HTMLElement>): void;
+  /** A character about to be typed, before the browser types it. Answers
+   *  whether the editor took it (the event is then prevented). */
+  beforeInput(block: Block, element: HTMLElement, data: string | null): boolean;
   paste(block: Block, event: ClipboardEvent<HTMLElement>): void;
 }
 
@@ -204,6 +207,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       describe={actions.describeMention}
       onChange={(content, text, element, composing) => actions.change(block, content, text, element, composing)}
       onKeyDown={(event) => actions.keyDown(block, event)}
+      onBeforeInput={(element, data) => actions.beforeInput(block, element, data)}
       onPaste={(event) => actions.paste(block, event)}
     />
   );

@@ -44,6 +44,7 @@ export const InlineEditor = memo(function InlineEditor({
   collaboration,
   onChange,
   onKeyDown,
+  onBeforeInput,
   onPaste,
 }: {
   block: Block;
@@ -56,6 +57,9 @@ export const InlineEditor = memo(function InlineEditor({
    *  again until it lets go. */
   onChange(content: InlineContent, text: string, element: HTMLElement, composing: boolean): void;
   onKeyDown(event: KeyboardEvent<HTMLElement>): void;
+  /** A character about to be typed — an input method's commit reaches here
+   *  without a printable keydown. Answers whether the editor took it. */
+  onBeforeInput(element: HTMLElement, data: string | null): boolean;
   onPaste(event: ClipboardEvent<HTMLElement>): void;
 }) {
   const ref = useRef<HTMLElement | null>(null);
@@ -70,6 +74,10 @@ export const InlineEditor = memo(function InlineEditor({
    *  is needed from one that is not. */
   const drawn = useRef("");
   const sync = useRef<(marks?: boolean) => void>(() => {});
+  /** The once-registered `beforeinput` listener calls through these so it
+   *  always reaches this render's `run` and `onBeforeInput`. */
+  const runRef = useRef<(action: () => void) => boolean>(() => true);
+  const beforeInputRef = useRef(onBeforeInput);
   const definition = blockDefinition(block.kind);
   const Tag = definition.tag ?? "div";
   const code = block.kind === "code";
@@ -114,6 +122,27 @@ export const InlineEditor = memo(function InlineEditor({
     if (bound.current === previous) bound.current = updated;
     return true;
   };
+
+  /* `beforeinput` natively, not through React: an input method's committed
+     character (a Chinese keyboard's `·`, `＊`, `【`) reaches it with the
+     selection still standing, and React's synthetic `onBeforeInput` does not
+     carry it. */
+  useLayoutEffect(() => {
+    runRef.current = run;
+    beforeInputRef.current = onBeforeInput;
+  });
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const beforeInput = (event: InputEvent) => {
+      if (composing.current || event.inputType !== "insertText" && event.inputType !== "insertReplacementText") return;
+      let taken = false;
+      const allowed = runRef.current(() => { taken = beforeInputRef.current(element, event.data); });
+      if (!allowed || taken) event.preventDefault();
+    };
+    element.addEventListener("beforeinput", beforeInput);
+    return () => element.removeEventListener("beforeinput", beforeInput);
+  }, []);
 
   useLayoutEffect(() => {
     commit.current = (element) => {
