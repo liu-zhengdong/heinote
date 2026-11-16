@@ -245,6 +245,61 @@ async function secondLine(page: Page) {
   await page.keyboard.press("Enter");
 }
 
+test("【【 typed through an IME auto-pair opens the menu; choosing eats the 】", async ({ page }) => {
+  await register(page, "fw-pair");
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  const paragraph = page.locator('.block__editable[contenteditable="true"]').first();
+  await paragraph.click();
+  await paragraph.pressSequentially("see ");
+  // The IME commits 【 and the method pairs it with 】 at once; the next 【
+  // lands inside the pair — the typist ends with 【【|】.
+  await page.keyboard.insertText("【");
+  await page.keyboard.insertText("】");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.insertText("【");
+  await expect(paragraph).toHaveText("see 【【】");
+  const menu = page.locator(".mention-menu");
+  await expect(menu).toBeVisible();
+  // No page named "pair" exists — the menu's first option makes it.
+  await page.keyboard.insertText("pair");
+  await page.keyboard.press("Enter");
+  const mention = paragraph.locator(".mention");
+  await expect(mention).toHaveAttribute("data-label", "pair");
+  await expect(paragraph).toHaveText("see ⁣ ");
+});
+
+test("an IME-paired 】 over a selected word does not close the [[ menu", async ({ page }) => {
+  await register(page, "fw-sel-pair");
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  const paragraph = page.locator('.block__editable[contenteditable="true"]').first();
+  await paragraph.click();
+  await paragraph.pressSequentially("more words here");
+  await selectIn(paragraph, 0, 4);
+  await page.keyboard.insertText("【");
+  const menu = page.locator(".mention-menu");
+  await expect(menu).toBeVisible();
+  // The auto-paired 】 follows the commit — it is swallowed, menu and words stay.
+  await page.keyboard.insertText("】");
+  await expect(menu).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(paragraph).toHaveText("[[more words here");
+});
+
+test("an atomic 【】 commit over a selection still opens the [[ query", async ({ page }) => {
+  await register(page, "fw-atomic");
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  const paragraph = page.locator('.block__editable[contenteditable="true"]').first();
+  await paragraph.click();
+  await paragraph.pressSequentially("more words here");
+  await selectIn(paragraph, 0, 4);
+  // Some methods commit the pair as one event, data "【】".
+  await page.keyboard.insertText("【】");
+  const menu = page.locator(".mention-menu");
+  await expect(menu).toBeVisible();
+  await expect(paragraph).toHaveText("[[more words here");
+});
+
 test("[ over a selection spanning blocks just replaces it", async ({ page }) => {
   await openPage(page, "selmarks-linkcross", "Link Across");
   const first = page.locator('.block__editable[contenteditable="true"]').first();
