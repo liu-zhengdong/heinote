@@ -20,7 +20,8 @@ import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
 import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-requests.ts";
 import { attachPublicApp } from "./public-app.ts";
-import { activePage, mutation } from "./mutation.ts";
+import { activePage, externalScope, mutation } from "./mutation.ts";
+import { blockRecordId } from "../src/platform/record-ids.ts";
 import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
@@ -683,6 +684,20 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       }
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
       store.savePage(scope, page);
+      // Mirrors the window's create_page: a child page also appears as an
+      // expanded link at the end of its parent's words, when the parent has
+      // a body to carry it (documents do; apps and databases don't).
+      if (parent && parent.page.kind === "document") {
+        const siblings = Object.values(parent.page.block_tree?.by_id ?? {}).filter((block) => !block.parent_id);
+        const top = siblings.length ? Math.max(...siblings.map((block) => block.order)) : 0;
+        const blockId = id();
+        // A live collaboration page rejects structural writes without its
+        // current basis; a page never touched by collaboration has no basis.
+        const docRow = store.one("SELECT generation FROM collaboration_documents WHERE scope=? AND page_id=?", scope, parent.page.id);
+        const expected = docRow ? [{ scope: externalScope(scope), pageId: parent.page.id, generation: String(docRow.generation), revision: store.revision(scope, parent.page.id) }] : [];
+        store.apply(who, [{ scope: externalScope(scope), collection: "blocks", id: blockRecordId(parent.page.id, blockId), action: "put", base: null,
+          value: { id: blockId, page: parent.page.id, kind: "text", order: top + 1024, content: [{ embed: { mention: { kind: "page", page_id: page.id, expanded: true } } }] } }], undefined, [], expected);
+      }
       recordTokenEvent(store.db, who.tokenId, { action: "create", pageId: page.id, pageTitle: page.title });
       return page.id;
     });

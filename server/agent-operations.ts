@@ -28,6 +28,7 @@ const operationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("format_text"), blockId: identifier, index: position, length: position, marks }).strict(),
   z.object({ type: z.literal("insert_block"), afterId: identifier.optional(), text: z.string().max(100000), kind: z.enum(BLOCK_KINDS).optional(), file: storedFileSchema.optional(), format: inlineFormat }).strict(),
   z.object({ type: z.literal("insert_image"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), file: storedFileSchema, width: z.number().int().min(16).max(10000).optional() }).strict(),
+  z.object({ type: z.literal("insert_page_link"), blockId: identifier, index: z.union([z.literal("start"), z.literal("end"), position]), pageId: identifier, expanded: z.boolean().optional(), locked: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("insert_blocks"), afterId: identifier.optional(), markdown: z.string().max(100000) }).strict(),
   z.object({ type: z.literal("delete_block"), blockId: identifier }).strict(),
   z.object({ type: z.literal("move_block"), blockId: identifier, parentId: identifier.nullable().optional(), order: z.number().finite() }).strict(),
@@ -146,6 +147,18 @@ function planOperations(store: Store, who: Actor, scopeName: string, pageId: str
           else text.insert(0, operation.text);
           newTexts.set(blockId, text);
           working.set(blockId, { id: recordId, value: { id: blockId, page: pageId, kind, order, ...(file ? { file } : {}), ...(parent ? { parent_id: parent } : {}), content: readText(text) } });
+          continue;
+        }
+        if (operation.type === "insert_page_link") {
+          find(operation.blockId);
+          if (operation.pageId === pageId) fail(400, "页面不能嵌入自身。", "bad_request");
+          const target = store.page(who, operation.pageId);
+          if (target.page.archived) fail(404, "目标页面不存在。", "not_found");
+          const text = textOf(operation.blockId);
+          const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
+          boundary(text, index);
+          const mention = { mention: { kind: "page", page_id: operation.pageId, ...(operation.expanded ? { expanded: true } : {}), ...(operation.locked ? { locked: true } : {}) } };
+          text.insertEmbed(index, mention, {});
           continue;
         }
         if (operation.type === "insert_image") {

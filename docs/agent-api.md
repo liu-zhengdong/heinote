@@ -61,7 +61,7 @@ Authorization: Bearer notes_...
 
 也可以用 `markdown` 代替 `text` 提供正文：服务端按与粘贴、导入相同的规则把 Markdown 解析为块树（标题、列表、todo、引用、代码块、分割线、表格及行内标记）。`text` 与 `markdown` 互斥，同时提供返回 400。
 
-`parentId` 存在时，页面继承父页面的空间。没有父页面和空间时，页面属于令牌账号的私有空间。标题最多 500 个字符。正文最多 100000 个字符。
+`parentId` 存在时，页面继承父页面的空间。没有父页面和空间时，页面属于令牌账号的私有空间。标题最多 500 个字符。正文最多 100000 个字符。父页面是文档时，新页面同时以展开链接块（`expanded` 页面提及）出现在父页面正文末尾，与窗口「新建页面」一致；父页面是应用或数据库时无正文可承载，不插入链接。
 
 创建团队库页面时，传入该库的 `spaceId`。也可使用等价字段 `scope`；同时提供时必须一致。省略 `parentId` 会使用固定首页。提供父页面时，父页面必须属于该库。库内数据库、正文操作、附件和版本沿用原接口及成员权限。不能通过这些接口把原有页面迁出知识库，或把其他空间页面移入。
 
@@ -385,6 +385,7 @@ Content-Type: application/json
 | `insert_block` | `text, afterId?, kind?, format?, file?` | 插入同级块；默认 `kind` 为 `text`；`format: "markdown"` 时 `text` 按行内 Markdown 解析；提供 `file`（`StoredFile`）时插入附件块，`kind` 强制为 `file`，`text` 为说明文字 |
 | `insert_blocks` | `markdown, afterId?` | 把 Markdown 展开为块树插入（标题、列表、表格、代码块等）；`afterId` 省略时追加到末尾 |
 | `insert_image` | `blockId, index, file, width?` | 在文字段落内插入行内图片提及，`file` 必须是图片 `StoredFile`，`width` 取 16–10000 |
+| `insert_page_link` | `blockId, index, pageId, expanded?, locked?` | 在段落内插入页面链接提及；`expanded: true` 把目标页就地展开渲染（小应用即显示为运行中的 iframe），`locked: true` 使其在展开态只读 |
 | `delete_block` | `blockId` | 删除块及其子树 |
 | `move_block` | `blockId, parentId?, order` | 在本页移动块；`parentId: null` 表示顶层 |
 
@@ -392,7 +393,7 @@ Content-Type: application/json
 
 每次最多提交 100 项操作。修改失败时整批回滚。成功返回页面对象和最新 `collaboration`。Agent 应保留返回值，供后续操作使用。
 
-Linked view 以页面链接 mention 的字段表达：`expanded: true` 就地展开，`locked: true` 在块内只读，`view` 固定一个数据库视图 ID。字段随块树记录保存；HTTP `operations` 不提供 mention 字段的写路径，创建 linked view 使用窗口命令 `create_page`（`expanded` + `locked`，数据库链接自动固定首个视图）或 `update_block`（`view` 指定视图，`""` 清除，含 `view` 的请求隐含 `expanded: true`）。
+Linked view 以页面链接 mention 的字段表达：`expanded: true` 就地展开，`locked: true` 在块内只读，`view` 固定一个数据库视图 ID。字段随块树记录保存。`insert_page_link` 可写入 `expanded`/`locked`（如嵌入小应用页面就地渲染）；`view` 字段仍无 HTTP 写路径，固定视图使用窗口命令 `create_page`（`expanded` + `locked`，数据库链接自动固定首个视图）或 `update_block`（`view` 指定视图，`""` 清除，含 `view` 的请求隐含 `expanded: true`）。
 
 `requestId` 必须在该账号中唯一。网络重试使用相同 ID 和完全相同的输入。服务器返回原结果，不重复插入。相同 ID 配合不同输入返回 409。重试仍会检查当前权限。原结果可能早于当前页面，继续编辑前应重新读取。
 

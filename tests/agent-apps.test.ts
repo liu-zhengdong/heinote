@@ -284,3 +284,79 @@ test("read token can read an app but cannot patch it", async (t) => {
   assert.equal(fetched.page.kind, "app");
   denied(await readerAgent.request(`/pages/${app.id}`, { method: "PATCH", body: { baseRevision: app.revision, app: { draft: HTML } } }));
 });
+
+// UC-47: embed an app page inside a document. The Agent writes a page-link
+// mention with `expanded: true`; the browser renders it as the app's iframe.
+test("insert_page_link embeds an app in place; expanded defaults to a plain link", async (t) => {
+  const { agent } = await fixture(t);
+  const host = await agent.createDocument();
+  const [first] = Object.values(host.page.block_tree.by_id) as Json[];
+  const app = await agent.createApp();
+  const drafted = await agent.patchApp(app.id, app.revision, { draft: HTML });
+  await agent.enable(app.id, drafted.revision);
+
+  const ops = async (id: string, operations: Json[]) => {
+    const page = await agent.getPage(id);
+    return agent.request(`/pages/${id}/operations`, {
+      method: "POST",
+      body: { requestId: randomUUID(), generation: page.collaboration.generation, baseRevision: page.collaboration.revision, mode: "apply", operations },
+    });
+  };
+
+  const expanded = ok(await ops(host.id, [
+    { type: "insert_page_link", blockId: first.id, index: "end", pageId: app.id, expanded: true },
+  ]));
+  const target = expanded.page.block_tree.by_id[first.id];
+  const run = (target.content ?? []).find((entry: Json) => entry.mention?.kind === "page" && entry.mention.page_id === app.id);
+  assert.ok(run, JSON.stringify(target.content));
+  assert.equal(run.mention.expanded, true);
+
+  const second = ok(await ops(host.id, [
+    { type: "insert_page_link", blockId: first.id, index: "start", pageId: app.id },
+  ]));
+  const plain = (second.page.block_tree.by_id[first.id].content ?? []).find((entry: Json) => entry.mention?.kind === "page" && entry.mention.page_id === app.id && !entry.mention.expanded);
+  assert.ok(plain, JSON.stringify(second.page.block_tree.by_id[first.id].content));
+});
+
+test("insert_page_link refuses missing, foreign and self targets; batch rolls back", async (t) => {
+  const { agent, browser } = await fixture(t);
+  const host = await agent.createDocument();
+  const [first] = Object.values(host.page.block_tree.by_id) as Json[];
+  const stranger = browser();
+  await register(stranger, "stranger2");
+  const outsider = new Agent(browser(), (await makeToken(stranger, "write")).token);
+  const foreign = await outsider.createApp();
+
+  const ops = async (operations: Json[]) => {
+    const page = await agent.getPage(host.id);
+    return agent.request(`/pages/${host.id}/operations`, {
+      method: "POST",
+      body: { requestId: randomUUID(), generation: page.collaboration.generation, baseRevision: page.collaboration.revision, mode: "apply", operations },
+    });
+  };
+  for (const pageId of ["missing-page", foreign.id, host.id]) {
+    const reply = await ops([{ type: "insert_page_link", blockId: first.id, index: "end", pageId, expanded: true }]);
+    assert.ok([400, 403, 404].includes(reply.status), `${pageId}: ${reply.status} ${JSON.stringify(reply.body)}`);
+  }
+  const after = await agent.getPage(host.id);
+  assert.equal(after.page.block_tree.by_id[first.id].content.length, 1, "no page mention may survive a failed batch");
+});
+
+test("creating a child page appends an expanded link to the parent's end", async (t) => {
+  const { agent } = await fixture(t);
+  const host = await agent.createDocument();
+  const child = await agent.createApp({ parentId: host.id, title: "子图" });
+  const parent = await agent.getPage(host.id);
+  const links = Object.values(parent.page.block_tree.by_id as Json)
+    .flatMap((block: Json) => (block.content ?? []).filter((run: Json) => run.mention?.kind === "page"))
+    .map((run: Json) => run.mention);
+  assert.equal(links.length, 1, JSON.stringify(parent.page.block_tree));
+  assert.equal(links[0].page_id, child.id);
+  assert.equal(links[0].expanded, true);
+  const grandchild = await agent.createDocument({ parentId: child.id, title: "app 的孩子" });
+  const appPage = await agent.getPage(child.id);
+  const appLinks = Object.values(appPage.page.block_tree?.by_id ?? {})
+    .flatMap((block: Json) => (block.content ?? []).filter((run: Json) => run.mention?.kind === "page"));
+  assert.equal(appLinks.length, 0, "an app page has no body to carry the backlink");
+  assert.ok(grandchild.id);
+});

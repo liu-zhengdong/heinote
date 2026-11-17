@@ -269,6 +269,46 @@ def cmd_enable(client, a):
            ("enable", a.id), a.request_id, a.force)
 
 
+def cmd_get_app(client, a):
+    page = page_state(client, a.id)
+    if page.get("page", {}).get("kind") != "app":
+        die("目标页面不是应用页面。")
+    app = page.get("page", {}).get("app") or {}
+    source = app.get("draft") if app.get("draft") is not None else app.get("enabled")
+    if source is None:
+        die("应用页面还没有源码（draft 与 enabled 都为空）。")
+    if a.out:
+        with open(os.path.expanduser(a.out), "w", encoding="utf-8") as f:
+            f.write(source)
+        emit(200, {"saved": a.out, "bytes": len(source.encode("utf-8")),
+                   "from": "draft" if app.get("draft") is not None else "enabled"})
+    else:
+        sys.stdout.write(source)
+
+
+def cmd_set_app(client, a):
+    page = page_state(client, a.id)
+    if page.get("page", {}).get("kind") != "app":
+        die("目标页面不是应用页面（create-page --kind app 创建）。")
+    if a.file == "-":
+        source = sys.stdin.read()
+    elif os.path.isfile(os.path.expanduser(a.file)):
+        with open(os.path.expanduser(a.file), encoding="utf-8") as f:
+            source = f.read()
+    else:
+        die(f"文件不存在: {a.file}")
+    body = {"baseRevision": page["revision"], "app": {"draft": source}}
+    status, payload = client.request("PATCH", f"/api/v1/pages/{a.id}", body)
+    emit(status, payload)
+    if a.draft_only:
+        return
+    # PATCH 不接受 requestId；enable 的幂等仍走 mutate 的确定性标识。
+    current = page_state(client, a.id)
+    mutate(client, "POST", f"/api/v1/pages/{a.id}/enable",
+           {"baseRevision": current["revision"]}, ("enable", a.id, hashlib.sha256(source.encode()).hexdigest()[:16]),
+           a.request_id, a.force)
+
+
 def db_state(client, db_id):
     status, payload = client.request("GET", f"/api/v1/databases/{db_id}")
     if status != 200 or not isinstance(payload, dict):
@@ -593,6 +633,19 @@ def build_parser():
     sp.add_argument("--version-id", required=True)
     sp.add_argument("--no-revision", action="store_true", help="不携带当前修订")
     sp.set_defaults(fn=cmd_restore)
+
+    sp = sub.add_parser("get-app", help="读出应用页面源码（draft 优先于 enabled）")
+    sp.add_argument("id")
+    sp.add_argument("--out", help="写入文件；省略时输出到 stdout")
+    sp.set_defaults(fn=cmd_get_app)
+
+    sp = sub.add_parser("set-app", help="用本地文件整体替换应用源码并启用（--draft-only 只写草稿）")
+    sp.add_argument("id")
+    sp.add_argument("--file", required=True, help="HTML 文件路径；`-` 读标准输入")
+    sp.add_argument("--draft-only", action="store_true", help="只写 app.draft，不启用")
+    sp.add_argument("--request-id", help="enable 步骤的显式幂等标识")
+    sp.add_argument("--force", action="store_true", help="为 enable 步骤生成新幂等标识")
+    sp.set_defaults(fn=cmd_set_app)
 
     sp = sub.add_parser("enable", help="启用应用页面的草稿源码")
     sp.add_argument("id")

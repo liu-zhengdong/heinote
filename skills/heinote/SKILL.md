@@ -78,6 +78,8 @@ heinote ops <id> --ops ops.json [--suggest]   # 结构化修改，JSON 数组
 heinote proposals <id>                        # 提案与状态
 heinote versions <id> / checkpoint <id> --summary S / restore <id> --version-id V
 heinote enable <id>                           # 启用应用页面草稿
+heinote set-app <id> --file F [--draft-only]  # 本地 HTML 上传/替换应用源码并启用（--file - 读 stdin）
+heinote get-app <id> [--out F]                # 读出应用源码（draft 优先于 enabled）
 heinote db <id>                               # 读数据库配置与修订
 heinote db-query <id> [--query F]             # 只读查询条目
 heinote db-create --data F
@@ -113,6 +115,9 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 查询条目 | `heinote db-query <db> --query '{"filters":[...]}'` |
 | 存检查点 | `heinote checkpoint <id> --summary S` |
 | 恢复版本 | `heinote restore <id> --version-id V` |
+| 嵌 HTML 进正文 | `create-page --kind app --parent-id <宿主>` → `set-app <app> --file f.html`（父页自动出现展开嵌入块） |
+| 改已嵌 HTML | `get-app <app> --out f.html` → 改文件 → `set-app <app> --file f.html` |
+| 手动插入嵌入块 | `ops`：`{"type":"insert_page_link","blockId":...,"index":"end","pageId":"<页>","expanded":true}` |
 | 上传附件 | `heinote upload pic.png --name "截图"`（返回 `StoredFile`） |
 | 插图进段落 | `upload` 后 `ops`：`{"type":"insert_image","blockId":...,"index":"end","file":<StoredFile>}` |
 | 附件块 | `ops`：`{"type":"insert_block","text":"说明","file":<StoredFile>}`（kind 自动为 file） |
