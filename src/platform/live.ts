@@ -347,6 +347,9 @@ export class LiveCollection<R extends object> {
   private timer?: ReturnType<typeof setTimeout>;
   private closed = false;
   private epoch = 0;
+  /** The server's record changelog watermark this mirror reached (ISS-12).
+   *  Polls send it as `after`; 0 means a cold pull of the whole collection. */
+  private latest = 0;
   private stop: () => void;
   private constructor(readonly name: string, readonly scope: string) {
     this.stop = onScopeChange(scope, () => {
@@ -363,10 +366,18 @@ export class LiveCollection<R extends object> {
   }
   private async refresh(): Promise<void> {
     const epoch = this.epoch;
-    const rows = await request<Array<{ id: string; value: R }>>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}`);
+    // Delta since our watermark; a server whose watermark moved backwards
+    // (restored backup, fresh database) is re-pulled cold with after=0.
+    const cold = this.latest === 0;
+    const delta = await request<{ latest: number; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
     if (this.closed || epoch !== this.epoch) return;
-    const incoming = new Map(rows.map((row) => [row.id, row.value]));
-    if (JSON.stringify([...incoming]) !== JSON.stringify([...this.remote])) { this.remote = incoming; this.emit(); }
+    if (delta.latest < this.latest) { this.latest = 0; void this.refresh().catch(() => undefined); return; }
+    this.latest = delta.latest;
+    if (cold) { this.remote = new Map(delta.rows.map((row) => [row.id, row.value])); this.emit(); return; }
+    if (!delta.rows.length && !delta.deleted.length) return;
+    for (const row of delta.rows) this.remote.set(row.id, row.value);
+    for (const id of delta.deleted) this.remote.delete(id);
+    this.emit();
   }
   private schedule(): void { if (!this.closed) this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200); }
   private values(): Map<string, R> {

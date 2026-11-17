@@ -1,4 +1,5 @@
 import express, { type Request, type Response, type NextFunction } from "express";
+import compression from "compression";
 import { scrypt, timingSafeEqual, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream";
@@ -89,6 +90,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   };
   const app = express();
   let collaborationSocket: ReturnType<typeof attachCollaborationSocket> | undefined;
+  // ISS-12: record payloads are tens of MB of JSON; gzip them in-app so
+  // compression doesn't depend on the reverse proxy's gzip_types.
+  app.use(compression());
   app.use((_req, res, next) => { res.once("finish", () => collaborationSocket?.revalidate()); next(); });
   app.disable("x-powered-by");
   const secure = publicUrl?.startsWith("https://") ?? false;
@@ -463,7 +467,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const who = actor(req); const scope = store.scope(who, text(req.params.scope)); const collection = text(req.params.collection);
     if (!["pages", "blocks", "versions", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
     if (collection === "workspace_settings" && !scope.startsWith("user:")) fail(403, "设置仅属于个人。");
-    res.json(store.records(scope, collection));
+    // ?after=<seq> asks for the delta since that watermark (ISS-12). Without
+    // it the response stays the plain array older clients expect.
+    const after = req.query.after === undefined ? undefined : parse(z.number().int().min(0), Number(req.query.after));
+    if (after === undefined) res.json(store.records(scope, collection));
+    else res.json(store.recordsSince(scope, collection, after));
   });
   app.get("/api/collaboration/:scope/:pageId", (req, res) => {
     res.json(store.collaboration.snapshot(actor(req), text(req.params.scope), text(req.params.pageId)));

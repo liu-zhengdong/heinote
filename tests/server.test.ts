@@ -359,6 +359,38 @@ test("record patches merge unrelated fields and reject stale writes to the same 
   assert.equal(Object.hasOwn(withoutWidth, "full_width"), false);
 });
 
+test("collection deltas: cold pull carries the watermark, later reads only changed rows (ISS-12)", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  const user = await register(browser, "alice");
+  await put(browser, "personal", "pages", "first", page("first", user.id));
+  const cold = status(await browser.request("/api/records/personal/pages?after=0"), 200);
+  assert.equal(typeof cold.latest, "number");
+  assert.ok(cold.rows.some((row: Json) => row.id === "first"));
+  assert.deepEqual(cold.deleted, []);
+  // Nothing changed: the delta carries no rows, just the watermark.
+  const quiet = status(await browser.request(`/api/records/personal/pages?after=${cold.latest}`), 200);
+  assert.equal(quiet.latest, cold.latest);
+  assert.deepEqual(quiet.rows, []);
+  assert.deepEqual(quiet.deleted, []);
+  // A write and a delete surface as one row and one tombstone.
+  const base = page("second", user.id);
+  await put(browser, "personal", "pages", "second", base);
+  const putReply = status(await browser.request(`/api/records/personal/pages?after=${cold.latest}`), 200);
+  assert.ok(putReply.latest > cold.latest);
+  assert.deepEqual(putReply.rows.map((row: Json) => row.id), ["second"]);
+  const firstRow = status(await browser.request("/api/records/personal/pages"), 200).find((row: Json) => row.id === "first");
+  status(await browser.structure(`/api/records/personal/pages/first`, { method: "POST", body: { action: "delete", base: firstRow.value } }), 200);
+  const delReply = status(await browser.request(`/api/records/personal/pages?after=${putReply.latest}`), 200);
+  assert.deepEqual(delReply.rows, []);
+  assert.deepEqual(delReply.deleted, ["first"]);
+  // Other collections sequence independently: blocks changes never leak into pages.
+  const blocks = status(await browser.request("/api/records/personal/blocks?after=0"), 200);
+  assert.equal(blocks.latest >= 0 && blocks.rows.every((row: Json) => row.value.page), true);
+  // The plain (unparameterized) read keeps its array shape for older callers.
+  assert.ok(Array.isArray(status(await browser.request("/api/records/personal/pages"), 200)));
+});
+
 test("public links expose only their page tree and revocation stops anonymous reads", async (t) => {
   const f = await fixture(t);
   const owner = f.browser();

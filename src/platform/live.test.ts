@@ -78,7 +78,10 @@ beforeEach(async () => {
     setItem: (key: string, value: string) => storage.set(key, value),
   });
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
-    if (path !== "/api/records/batch") return json([]);
+    if (path !== "/api/records/batch") {
+      // Delta polls carry ?after=; plain reads (rebase) expect the array.
+      return json(path.includes("?after=") ? { latest: 0, rows: [], deleted: [] } : []);
+    }
     const batch = JSON.parse(String(init?.body)) as Batch;
     sent.push({ account: hooks.account, batch });
     return respond(batch);

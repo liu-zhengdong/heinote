@@ -16,6 +16,7 @@ import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
 import { Quotas } from "./quotas.ts";
 import { LATEST_VERSION } from "./migrations/index.ts";
+import { DELTA_DDL, DELTA_TRIGGERS } from "./record-delta.ts";
 import { documentKey, pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -85,7 +86,9 @@ export class Store {
       CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL, page_id TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
       CREATE TABLE IF NOT EXISTS agent_auth_requests(id TEXT PRIMARY KEY, name TEXT NOT NULL, access TEXT NOT NULL, ip TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', user_id TEXT REFERENCES users(id), token_id TEXT REFERENCES tokens(id), granted_token TEXT, created_at TEXT NOT NULL, expires INTEGER NOT NULL, resolved_at TEXT);
-      CREATE INDEX IF NOT EXISTS idx_agent_auth_requests_status ON agent_auth_requests(status);`);
+      CREATE INDEX IF NOT EXISTS idx_agent_auth_requests_status ON agent_auth_requests(status);
+      ${DELTA_DDL}
+      ${DELTA_TRIGGERS}`);
     // UC-33: user_version is the migration cursor. A database whose version
     // disagrees with this code means migrateDatabase was skipped (or never
     // ran on a legacy, unstamped file); the constructor refuses rather than
@@ -181,6 +184,22 @@ export class Store {
   }
   records(scope: string, collection: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection=? ORDER BY id", scope, collection).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+  }
+  /** The collection's watermark plus the rows touched after `after`: each
+   *  changed row under its record id, and each removed row's id under
+   *  `deleted`. `after` 0 yields the whole collection (rows written before
+   *  the changelog never entered it, so they're read from `records`). */
+  recordsSince(scope: string, collection: string, after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const latest = Number(this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection)?.seq ?? 0);
+    if (after <= 0) return { latest, rows: this.records(scope, collection), deleted: [] };
+    const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
+      WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
+    const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
+    for (const row of changed) {
+      if (Number(row.deleted) || row.value == null) deleted.push(String(row.id));
+      else rows.push({ id: String(row.id), value: JSON.parse(String(row.value)) });
+    }
+    return { latest, rows, deleted };
   }
   /** One page's paragraphs. Uses the page-key expression index; records(scope,"blocks") would scan the whole plane per page. */
   blocksOf(scope: string, pageId: string): Array<{ id: string; value: Row }> {

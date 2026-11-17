@@ -51,6 +51,30 @@ function records(scope: string, collection: string): Map<string, Value> {
   return result;
 }
 const rows = (scope: string, collection: string): Row[] => [...records(scope, collection)].map(([id, value]) => ({ id, value }));
+/** Miniature of the server-side record changelog (ISS-12): writes bump a
+ *  per-collection watermark; reads with ?after=N return only what changed. */
+let changes = new Map<string, Map<string, { seq: number; deleted: boolean }>>();
+let watermarks = new Map<string, number>();
+const keyOf = (scope: string, collection: string) => `${scope}${collection}`;
+function bump(scope: string, collection: string, id: string, deleted: boolean) {
+  const key = keyOf(scope, collection);
+  const seq = (watermarks.get(key) ?? 0) + 1; watermarks.set(key, seq);
+  const log = changes.get(key) ?? new Map(); log.set(id, { seq, deleted }); changes.set(key, log);
+}
+function delta(scope: string, collection: string, after: number) {
+  const key = keyOf(scope, collection);
+  const latest = watermarks.get(key) ?? 0;
+  if (after <= 0) return { latest, rows: rows(scope, collection), deleted: [] };
+  const log = changes.get(key) ?? new Map();
+  const changedRows: Row[] = []; const deleted: string[] = [];
+  for (const [id, entry] of log) {
+    if (entry.seq <= after) continue;
+    const value = records(scope, collection).get(id);
+    if (entry.deleted || value === undefined) deleted.push(id);
+    else changedRows.push({ id, value });
+  }
+  return { latest, rows: changedRows, deleted };
+}
 function seedPage(scope: string, id: string, extra: Value = {}): void {
   records(scope, "pages").set(id, {
     id, kind: "document", icon: "", title_content: [{ text: id }],
@@ -66,7 +90,7 @@ function holdPages(scope: string) {
   const path = `/api/records/${scope}/pages`;
   const list = heldReads.get(path) ?? [];
   list.push({ started: () => started.resolve(), response: response.promise }); heldReads.set(path, list);
-  const release = (value = rows(scope, "pages")) => response.resolve(json(value));
+  const release = (value = rows(scope, "pages")) => response.resolve(json({ latest: watermarks.get(keyOf(scope, "pages")) ?? 0, rows: value, deleted: [] }));
   cleanupReads.push(() => release());
   return { started: started.promise, release };
 }
@@ -100,7 +124,7 @@ async function drain(): Promise<void> { for (let index = 0; index < 30; index +=
 
 beforeEach(() => {
   vi.clearAllMocks(); hooks.account = `workspace-account-${++account}`;
-  remote = new Map(); sent = []; documents = []; work = []; cleanupReads = []; heldReads = new Map();
+  remote = new Map(); sent = []; documents = []; work = []; cleanupReads = []; heldReads = new Map(); changes = new Map(); watermarks = new Map();
   const storage = new Map<string, string>();
   vi.stubGlobal("localStorage", { getItem: (name: string) => storage.get(name) ?? null, setItem: (name: string, value: string) => storage.set(name, value) });
   vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
@@ -108,16 +132,16 @@ beforeEach(() => {
       const batch = JSON.parse(String(init?.body)) as Batch; sent.push(batch);
       const result = batch.writes.map((write) => {
         const collection = records(write.scope, write.collection);
-        if (write.action === "delete") { collection.delete(write.id); return null; }
+        if (write.action === "delete") { collection.delete(write.id); bump(write.scope, write.collection, write.id, true); return null; }
         const value = write.action === "put" ? write.value! : merge(collection.get(write.id) ?? {}, write.patch!);
-        collection.set(write.id, value); return value;
+        collection.set(write.id, value); bump(write.scope, write.collection, write.id, false); return value;
       });
       return json(result);
     }
-    const held = heldReads.get(path)?.shift();
+    const held = heldReads.get(path.split("?")[0])?.shift();
     if (held) { held.started(); return held.response; }
-    const match = /^\/api\/records\/([^/]+)\/([^/]+)$/.exec(path);
-    if (match) return json(rows(decodeURIComponent(match[1]), match[2]));
+    const match = /^\/api\/records\/([^/]+)\/([^/?]+)(?:\?after=(\d+))?$/.exec(path);
+    if (match) return match[3] === undefined ? json(rows(decodeURIComponent(match[1]), match[2])) : json(delta(decodeURIComponent(match[1]), match[2], Number(match[3])));
     throw new Error(`Unexpected request: ${path}`);
   }));
 });
@@ -158,12 +182,12 @@ describe("workspace space subscriptions", () => {
     const first = track(document.refreshSpaces([kb()])); await old.started;
     await document.refreshSpaces([]);
     const replacement = track(document.refreshSpaces([kb()])); await drain();
-    expect(vi.mocked(fetch).mock.calls.filter(([path]) => path === "/api/records/knowledge/pages")).toHaveLength(2);
+    expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).startsWith("/api/records/knowledge/pages?"))).toHaveLength(2);
     old.release([{ ...rows("knowledge", "pages")[0], value: { ...rows("knowledge", "pages")[0].value, title_content: [{ text: "Old" }] } }]);
     await first;
     const follow = track(document.refreshSpaces([kb()])); await drain();
     expect(document.state.pages.home).toBeUndefined();
-    expect(vi.mocked(fetch).mock.calls.filter(([path]) => path === "/api/records/knowledge/pages")).toHaveLength(2);
+    expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).startsWith("/api/records/knowledge/pages?"))).toHaveLength(2);
     next.release(); await Promise.all([replacement, follow]); await drain();
     expect(document.state.pages.home.title).toBe("home");
   });
