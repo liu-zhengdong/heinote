@@ -320,10 +320,11 @@ export class Store {
     const seen = new Set<string>();
     while (cursor && !seen.has(cursor)) {
       seen.add(cursor);
-      const scope = [personal, ...spaces].find((scope) => this.record(scope, "pages", cursor));
+      const current: string = cursor;
+      const scope = [personal, ...spaces].find((scope) => this.record(scope, "pages", current));
       if (!scope) break;
-      const value = this.record(scope, "pages", cursor)!;
-      byId.set(cursor, { scope, value });
+      const value: Row = this.record(scope, "pages", current)!;
+      byId.set(current, { scope, value });
       cursor = typeof value.parent_id === "string" ? value.parent_id : undefined;
     }
     if (!byId.has(pageId)) return new Map();
