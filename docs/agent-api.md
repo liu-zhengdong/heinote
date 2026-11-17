@@ -21,6 +21,7 @@ Authorization: Bearer notes_...
 | GET | `/pages` | 列出账号可见的未归档页面 |
 | POST | `/pages` | 创建文档或应用页面 |
 | GET | `/pages/:id` | 读取正文、块树及修订值 |
+| GET | `/pages/:id/markdown` | 读取正文的 Markdown 投影 |
 | PATCH | `/pages/:id` | 修改标题或替换纯文本正文；应用页面改 `app` 字段 |
 | POST | `/pages/:id/enable` | 启用应用页面的草稿源码 |
 | POST | `/pages/:id/operations` | 幂等结构化修改或创建提案 |
@@ -90,6 +91,8 @@ Authorization: Bearer notes_...
 ```
 
 示例省略了页面的其他字段。`page.block_tree` 返回实际编辑器数据。`text` 是按顺序提取的纯文本，不能表达所有块类型。
+
+`GET /pages/:id/markdown` 返回 `{"id","title","revision","scope","markdown"}`，其中 `markdown` 是正文按复制与导出相同规则序列化的结果：标题、列表、todo、引用、代码块、表格、分割线展开为 Markdown 结构，行内标记保留。页面提及写为页面标题，附件写为可下载链接（`/api/v1/files/<scope>?path=…`，需要同一令牌访问）。这是可读投影，不保留块 ID、提及身份或不可序列化的结构（如 linked view 的视图固定）；写回请使用 `PATCH` 的 `markdown` 或 `insert_blocks`。仅文档页面可用，应用与数据库页面返回 400。
 
 更新输入：
 

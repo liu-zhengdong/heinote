@@ -11,6 +11,7 @@ import { z } from "zod";
 import { Store, fail, hash, id, secret, HttpError, writeSchema, asAuthor, type Actor, type Row, type User } from "./store.ts";
 import { newPage } from "../src/core/block-tree.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
+import { blockTreeToMarkdown, readableDescriber } from "../src/core/export-markdown.ts";
 import { restoredPage } from "../src/core/versions.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
@@ -737,6 +738,32 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.status(201).json(store.pageDto(who, pageId));
   });
   app.get("/api/v1/pages/:id", (req, res) => { const who = actor(req); res.json(store.pageDto(who, text(req.params.id))); });
+  /* The body re-serialized as the Markdown the copy/export path writes —
+     a readable projection for agents, not the lossless block tree. */
+  app.get("/api/v1/pages/:id/markdown", (req, res) => {
+    const who = actor(req);
+    const pageId = text(req.params.id);
+    const { page, scope } = store.page(who, pageId);
+    if (page.kind !== "document") fail(400, "只有文档页面导出正文 Markdown。", "bad_request");
+    // Page mentions read as their titles; look each referenced page up by
+    // record (the projection only holds this page's ancestors).
+    const titles = new Map<string, string>([[page.id, page.title]]);
+    for (const block of Object.values(page.block_tree.by_id)) {
+      for (const run of block.content) {
+        const pageRef = run.mention?.kind === "page" ? run.mention.page_id : undefined;
+        if (!pageRef || titles.has(pageRef)) continue;
+        const record = store.pageRecord(who, pageRef);
+        const content = record?.title_content as Array<{ text?: string }> | undefined;
+        titles.set(pageRef, Array.isArray(content) ? content.map((run) => run.text ?? "").join("") : "");
+      }
+    }
+    const titleOf = (id: string) => titles.get(id) ?? "";
+    const fileScope = scope.startsWith("user:") ? "personal" : scope;
+    const markdown = blockTreeToMarkdown(page.block_tree, titleOf,
+      (file: StoredFile) => `/api/v1/files/${fileScope}?path=${encodeURIComponent(file.path)}`,
+      readableDescriber(titleOf));
+    res.json({ id: page.id, title: page.title, revision: store.revision(scope, pageId), scope, markdown });
+  });
   app.patch("/api/v1/pages/:id", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId);
     const input = parse(z.object({

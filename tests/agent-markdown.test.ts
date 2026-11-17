@@ -12,7 +12,7 @@ import { startServer } from "../server/index.ts";
 type Json = any;
 type Server = Awaited<ReturnType<typeof startServer>>;
 interface Reply { status: number; body: Json }
-interface Options { method?: string; body?: unknown; token?: string }
+interface Options { method?: string; body?: unknown; raw?: Buffer; token?: string }
 
 class Browser {
   cookie = "";
@@ -24,8 +24,9 @@ class Browser {
         Origin: this.url(),
         ...(options.token ? { Authorization: `Bearer ${options.token}` } : this.cookie ? { Cookie: this.cookie } : {}),
         ...(options.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(options.raw !== undefined ? { "Content-Type": "image/png" } : {}),
       },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: options.body !== undefined ? JSON.stringify(options.body) : options.raw,
       redirect: "manual",
     });
     if (!options.token) for (const entry of response.headers.getSetCookie()) {
@@ -268,4 +269,61 @@ test("UC-42: read-only tokens cannot use markdown write paths", async (t) => {
 test("UC-42: app pages reject markdown like text", async (t) => {
   const { request } = await fixture(t);
   invalid(await request("/pages", { method: "POST", body: { title: "app", kind: "app", markdown: "# x" } }));
+});
+
+test("UC-42: GET /pages/:id/markdown re-serializes the body", async (t) => {
+  const { request, readOnly } = await fixture(t);
+  const created = dto(ok(await request("/pages", { method: "POST", body: { title: "UC-42 页", markdown: MD } }), 201));
+  const reply = ok(await readOnly(`/pages/${created.id}/markdown`));
+  assert.equal(reply.id, created.id);
+  assert.equal(reply.title, "UC-42 页");
+  assert.equal(reply.revision, created.revision);
+  const markdown = reply.markdown;
+  assert.equal(typeof markdown, "string");
+  // Structures survive: headings, lists, todo, quote, code fence, table, divider.
+  assert.match(markdown, /^# 需求记录$/m);
+  assert.match(markdown, /^- 列表一$/m);
+  assert.match(markdown, /^ {2}- 嵌套条目$/m);
+  assert.match(markdown, /^- \[x\] 已完成事项$/m);
+  assert.match(markdown, /^> 一段引用$/m);
+  assert.match(markdown, /^```mermaid$/m);
+  assert.match(markdown, /\| 列一 \| 列二 \|/);
+  assert.match(markdown, /^---$/m);
+  // Inline marks round-trip through their Markdown spelling.
+  assert.match(markdown, /`inline code` 与 \*\*加粗\*\* 以及 \[链接\]\(https:\/\/example\.com\)/);
+});
+
+test("UC-42: markdown projection names page mentions and links files", async (t) => {
+  const { request } = await fixture(t);
+  const parent = dto(ok(await request("/pages", { method: "POST", body: { title: "父页", text: "" } }), 201));
+  await request("/pages", {
+    method: "POST", body: { title: "子页标题", parentId: parent.id, text: "子正文" },
+  });
+  // Attach a file block so the projection must emit a downloadable link.
+  const file = ok(await request(`/files/personal?name=${encodeURIComponent("说明图.png")}`, {
+    method: "PUT", raw: Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+  }), 201);
+  const fresh = dto(ok(await request(`/pages/${parent.id}`)));
+  const last = blocksOf(fresh).at(-1)!;
+  await dto(ok(await request(`/pages/${parent.id}/operations`, {
+    method: "POST",
+    body: {
+      requestId: randomUUID(), generation: fresh.collaboration.generation,
+      baseRevision: fresh.revision, mode: "apply",
+      operations: [{ type: "insert_block", afterId: last.id, text: "附件说明", file }],
+    },
+  })));
+  const reply = ok(await request(`/pages/${parent.id}/markdown`));
+  // The expanded child link reads as the child's title, not a raw page id.
+  assert.match(reply.markdown, /^子页标题$/m);
+  // The file block links the downloadable attachment URL with its caption.
+  assert.match(reply.markdown, /\[说明图\.png\]\(\/api\/v1\/files\/personal\?path=[^)\s]+\) 附件说明/);
+});
+
+test("UC-42: non-document pages reject the markdown projection", async (t) => {
+  const { request } = await fixture(t);
+  const app = dto(ok(await request("/pages", { method: "POST", body: { title: "app", kind: "app" } }), 201));
+  invalid(await request(`/pages/${app.id}/markdown`));
+  const db = dto(ok(await request("/databases", { method: "POST", body: { requestId: randomUUID(), title: "db" } }), 201));
+  invalid(await request(`/pages/${db.id}/markdown`));
 });
