@@ -5,13 +5,20 @@ import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
 import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
+import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
-import { base64ToBytes, bytesToBase64, documentKey, isObject, isStructureChange, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
+import { base64ToBytes, bytesToBase64, documentKey, isObject, isStructureChange, setAt, valueAt, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
 
 type Value = Record<string, unknown>;
 type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: object; patch?: object; base?: object | null };
-type Pending = { write?: Write; change?: LocalTextChange; update?: TextUpdate; bases: ExpectedPage[]; structural: boolean; transaction?: symbol; error?: unknown; accept(value: Value | null): void; refuse(reason: unknown): void };
-interface SavedBatch { requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[] }
+type Pending = { write?: Write; change?: LocalTextChange; update?: TextUpdate; unrestored?: TextUpdate; bases: ExpectedPage[]; structural: boolean; transaction?: symbol; error?: unknown; accept(value: Value | null): void; refuse(reason: unknown): void };
+interface SavedBatch {
+  requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[];
+  /** Local journal evidence: all fields covered by each page's text deltas.
+   * The HTTP endpoint ignores this metadata. Missing keys never prove that
+   * a value patch can replace every part of an old-generation delta. */
+  textKeys?: Record<string, string[]>;
+}
 interface AccountQueue {
   account: string;
   staged: Pending[];
@@ -68,15 +75,20 @@ function addresses(batch: SavedBatch): DocumentAddress[] {
 function assemble(items: Pending[], requestId: string): SavedBatch {
   const firstBases = new Map<string, ExpectedPage>(); const structural = new Set<string>();
   const updates = new Map<string, { address: TextUpdate; bytes: Uint8Array[] }>();
+  const knownKeys = new Map<string, Set<string> | null>();
   for (const item of items) {
     for (const basis of item.bases) { const key = documentKey(basis); if (!firstBases.has(key)) firstBases.set(key, basis); if (item.structural) structural.add(key); }
     const update = item.change?.update ?? item.update;
     if (update) {
+      const pageKey = documentKey(update);
+      if (!item.change?.keys) knownKeys.set(pageKey, null);
+      else if (knownKeys.get(pageKey) !== null) knownKeys.set(pageKey, new Set([...(knownKeys.get(pageKey) ?? []), ...item.change.keys]));
       const key = JSON.stringify([update.scope, update.pageId, update.generation]);
       const group = updates.get(key) ?? { address: update, bytes: [] }; group.bytes.push(base64ToBytes(update.update)); updates.set(key, group);
     }
   }
-  return { requestId, writes: items.flatMap((item) => item.write ? [item.write] : []), textUpdates: [...updates.values()].map(({ address, bytes }) => ({ ...address, update: bytesToBase64(Y.mergeUpdates(bytes)) })), expectedPages: [...firstBases].filter(([key]) => structural.has(key)).map(([, basis]) => basis) };
+  const textKeys = Object.fromEntries([...knownKeys].flatMap(([key, keys]) => keys ? [[key, [...keys]]] : []));
+  return { ...(Object.keys(textKeys).length ? { textKeys } : {}), requestId, writes: items.flatMap((item) => item.write ? [item.write] : []), textUpdates: [...updates.values()].map(({ address, bytes }) => ({ ...address, update: bytesToBase64(Y.mergeUpdates(bytes)) })), expectedPages: [...firstBases].filter(([key]) => structural.has(key)).map(([, basis]) => basis) };
 }
 function scopes(batch: SavedBatch): string[] {
   return [...new Set([...batch.writes, ...batch.textUpdates, ...batch.expectedPages].map((item) => item.scope))];
@@ -151,16 +163,51 @@ function rebaseWrite(write: Write, current: JsonRecord | undefined): Write | nul
   if (!current) return { ...write, action: "patch", patch: {}, base: null };
   return { ...write, base: current };
 }
+/** Explicit rich-text values that can stand in for a restored stale delta.
+ *  Metadata and arbitrary arrays cannot supply the missing text intent. */
+function textPatches(write: Write): Array<{ path: string[]; value: RichText }> {
+  const pageId = pageOf(write);
+  if (!pageId || write.action !== "patch" || !isObject(write.patch)) return [];
+  const result: Array<{ path: string[]; value: RichText }> = [];
+  const key = write.collection === "pages" ? "title_content" : "content";
+  if (Array.isArray(write.patch[key])) result.push({ path: [key], value: write.patch[key] as RichText });
+  const table = write.patch.table;
+  if (write.collection === "blocks" && isObject(table) && isObject(table.rows)) for (const [rowId, row] of Object.entries(table.rows)) {
+    if (isObject(row) && isObject(row.cells)) for (const [columnId, value] of Object.entries(row.cells)) {
+      if (Array.isArray(value)) result.push({ path: ["table", "rows", rowId, "cells", columnId], value: value as RichText });
+    }
+  }
+  return result;
+}
+/** Online only wakes the current wait; the next request still proves reachability. */
+function retryDelay(delay: number): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = () => { clearTimeout(timer); if (typeof window !== "undefined") window.removeEventListener("online", finish); resolve(); };
+    const timer = setTimeout(finish, delay);
+    if (typeof window !== "undefined") window.addEventListener("online", finish, { once: true });
+  });
+}
 /** Fetch current records/snapshots and rebase the batch onto them. Returns
  *  the rebased batch, or null when a write cannot be safely replayed. */
-async function rebaseBatch(owner: AccountQueue, batch: SavedBatch): Promise<SavedBatch | null> {
-  const collectionsNeeded = new Set(batch.writes.map((write) => collectionKey(write.scope, write.collection)));
-  const records = new Map<string, Map<string, JsonRecord>>();
-  for (const key of collectionsNeeded) {
-    const [scope, name] = JSON.parse(key) as [string, string];
-    const rows = await request<Array<{ id: string; value: JsonRecord }>>(`/api/records/${encodeURIComponent(scope)}/${name}`);
-    records.set(key, new Map(rows.map((row) => [row.id, row.value])));
+async function rebaseBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Promise<SavedBatch | null> {
+  const collectionsNeeded = new Map<string, Set<string>>();
+  for (const write of batch.writes) {
+    const key = collectionKey(write.scope, write.collection);
+    const ids = collectionsNeeded.get(key) ?? new Set<string>(); ids.add(write.id); collectionsNeeded.set(key, ids);
   }
+  const records = new Map<string, Map<string, JsonRecord>>();
+  for (const [key, ids] of collectionsNeeded) {
+    const [scope, name] = JSON.parse(key) as [string, string];
+    const current = new Map<string, JsonRecord>(); const list = [...ids];
+    for (let index = 0; index < list.length; index += 100) {
+      const query = list.slice(index, index + 100).map(encodeURIComponent).join(",");
+      const rows = await request<Array<{ id: string; value: JsonRecord }>>(`/api/records/${encodeURIComponent(scope)}/${name}?ids=${query}`);
+      for (const row of rows) current.set(row.id, row.value);
+    }
+    records.set(key, current);
+  }
+  const unrestored = new Set(items.flatMap((item) => item.unrestored ? [item.unrestored] : []));
+  const replayedText = new Set<string>();
   const simulated = new Map<string, JsonRecord | undefined>();
   const writes: Write[] = [];
   const expected = new Map<string, ExpectedPage>();
@@ -168,8 +215,18 @@ async function rebaseBatch(owner: AccountQueue, batch: SavedBatch): Promise<Save
     const recordKey = collectionKey(write.scope, write.collection);
     const stateKey = `${recordKey}:${write.id}`;
     const current = simulated.has(stateKey) ? simulated.get(stateKey) : records.get(recordKey)?.get(write.id);
-    const rebased = rebaseWrite(write, current);
+    let rebased = rebaseWrite(write, current);
     if (!rebased) return null;
+    const pageId = pageOf(write);
+    if (pageId && [...unrestored].some((update) => update.scope === write.scope && update.pageId === pageId)) {
+      for (const field of textPatches(write)) {
+        const base = isObject(write.base) ? valueAt(write.base, field.path) : undefined;
+        const remote = current && valueAt(current, field.path);
+        if (!Array.isArray(base) || !Array.isArray(remote)) return null;
+        rebased = { ...rebased, patch: setAt((rebased.patch ?? {}) as JsonRecord, field.path, rebaseText(base as RichText, field.value, remote as RichText)) };
+        replayedText.add(JSON.stringify([documentKey({ scope: write.scope, pageId }), `${write.collection}/${encodeURIComponent(write.id)}/${field.path.map(encodeURIComponent).join("/")}`]));
+      }
+    }
     const after = rebased.action === "put" ? rebased.value as JsonRecord : rebased.action === "patch" ? merge(current ?? {}, (rebased.patch ?? {}) as Value) : undefined;
     simulated.set(stateKey, after);
     writes.push(rebased);
@@ -180,21 +237,36 @@ async function rebaseBatch(owner: AccountQueue, batch: SavedBatch): Promise<Save
       if (!expected.has(address)) {
         // A page without a collaboration document needs no barrier: the
         // server skips expectedPages for documents it has not initialized.
-        const snapshot = await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(write.scope)}/${encodeURIComponent(pageId)}`).catch(() => null);
+        const snapshot = await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(write.scope)}/${encodeURIComponent(pageId)}`).catch((error) => { if (error instanceof ApiError && error.status === 404) return null; throw error; });
         if (snapshot) expected.set(address, { scope: write.scope, pageId, generation: snapshot.generation, revision: snapshot.revision });
       }
     }
   }
   const textUpdates: TextUpdate[] = [];
   for (const update of batch.textUpdates) {
+    // Restore first confirms the untouched original request. Only its 409
+    // permits replacing stale bytes with their record-level text intent.
+    if (unrestored.has(update)) {
+      const keys = batch.textKeys?.[documentKey(update)];
+      if (!keys?.length || !keys.every((key) => replayedText.has(JSON.stringify([documentKey(update), key])))) return null;
+      continue;
+    }
     const resync = await resyncSession(update.scope, update.pageId);
     if (!resync) return null;
     if (Object.keys(resync.orphanFields).length)
       publishRecovery(owner.account, { message: "页面结构已变化。被移除段落的未保存文字已保留为草稿。", writes: [], documents: [{ scope: update.scope, pageId: update.pageId, generation: resync.snapshot.generation, fields: resync.orphanFields }] });
-    if (resync.update) textUpdates.push(resync.update);
-    // Same generation: the saved delta is still valid against the live doc.
-    else if (resync.session.snapshot.generation === update.generation) textUpdates.push(update);
-    else if (!resync.session.pendingText.length) return null; // The saved update cannot be replayed without its session.
+    if (resync.update) {
+      // A session can also contain text belonging to a later structural
+      // batch. Send only this batch's changes, migrated in place by resync.
+      const changes = items.flatMap((item) => {
+        const change = item.change?.update ?? item.update;
+        return change && change.scope === update.scope && change.pageId === update.pageId && change.generation === resync.snapshot.generation ? [change] : [];
+      });
+      if (!changes.length) return null;
+      textUpdates.push({ ...changes[0], update: bytesToBase64(Y.mergeUpdates(changes.map((change) => base64ToBytes(change.update)))) });
+    } else if (resync.session.snapshot.generation !== update.generation && !resync.session.pendingText.length) return null;
+    // No residual text, verified by the pending session or a same-generation
+    // delta: the prior batch/remote already satisfied this text intent.
   }
   return { ...batch, requestId: uuid(), writes, textUpdates, expectedPages: [...expected.values()] };
 }
@@ -223,7 +295,10 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
     try { for (;;) {
       if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
       try {
-        const result = await request<Array<Value | null>>("/api/records/batch", { method: "POST", body: JSON.stringify(batch) });
+        // Only a successful rebase after the original request's 409 may
+        // settle an empty text-only batch locally. Record writes still go
+        // through the server so acceptWrite receives every current record.
+        const result = replays > 0 && !batch.writes.length && !batch.textUpdates.length ? [] : await request<Array<Value | null>>("/api/records/batch", { method: "POST", body: JSON.stringify(batch) });
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
         acknowledge(); releasePendingCommit(batch.requestId);
         owner.journal.delete(batch.requestId); persistJournal(owner);
@@ -236,15 +311,24 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
         if (error instanceof ApiError && error.status < 500) {
           if (error.status === 409 && REPLAYABLE_CODES.has(error.code) && replays < REPLAY_LIMIT) {
-            replays += 1; releasePendingCommit(batch.requestId); announce();
+            releasePendingCommit(batch.requestId); announce();
             try {
-              const rebased = await rebaseBatch(owner, batch);
+              const rebased = await rebaseBatch(owner, batch, items);
               if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
               if (rebased) {
+                replays += 1;
                 owner.journal.delete(batch.requestId); batch = rebased; owner.journal.set(batch.requestId, batch); persistJournal(owner);
                 registerPendingCommit(batch.requestId, acknowledge); continue;
               }
-            } catch (reason) { if (isCurrent(owner)) { await new Promise((resolve) => setTimeout(resolve, delay)); delay = Math.min(delay * 2, 10000); registerPendingCommit(batch.requestId, acknowledge); continue; } }
+            } catch (reason) {
+              if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
+              const transient = reason instanceof TypeError || reason instanceof ApiError && (reason.status >= 500 || reason.status === 409 && REPLAYABLE_CODES.has(reason.code));
+              if (!transient) {
+                if (reason instanceof ApiError && (reason.status === 401 || reason.status === 403 && DENIED_CODES.has(reason.code))) for (const scope of involved) owner.denied.add(scope);
+                refuseBatch(owner, batch, items, reason); return;
+              }
+              await retryDelay(delay); delay = Math.min(delay * 2, 10000); registerPendingCommit(batch.requestId, acknowledge); continue;
+            }
             refuseBatch(owner, batch, items, error); return;
           }
           if (error.status === 401 || error.status === 403 && DENIED_CODES.has(error.code)) {
@@ -254,7 +338,7 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
           refuseBatch(owner, batch, items, error); return;
         }
         announce();
-        await new Promise((resolve) => setTimeout(resolve, delay)); delay = Math.min(delay * 2, 10000);
+        await retryDelay(delay); delay = Math.min(delay * 2, 10000);
       }
     } } finally { if (announced) syncState(-1); }
   });
@@ -314,11 +398,14 @@ export async function restoreSavedWrites(): Promise<void> {
         return { write, bases: batch.expectedPages, structural: false, accept: (value) => lives.forEach((live) => live.acceptWrite(write, value)), refuse: (reason) => lives.forEach((live) => live.refuseWrite(write, reason)) };
       });
       for (const update of batch.textUpdates) {
-        const change: LocalTextChange = { update, sessionKey: documentKey(update) };
-        if (restorePendingText(update, change) !== null) items.push({ change, bases: [], structural: false, accept: () => {}, refuse: () => {} });
-        // A saved update that no longer fits its session cannot be replayed;
-        // the whole batch falls back to a preserved draft.
-        else items.push({ bases: [], structural: false, error: new Error("待保存文字的基础已失效。内容已保留为草稿。"), accept: () => {}, refuse: () => {} });
+        // Session migration mutates change.update in place. Keep it separate
+        // from the journal payload until the original request is confirmed.
+        const change: LocalTextChange = { update: { ...update }, sessionKey: documentKey(update) };
+        if (restorePendingText(change.update, change) !== null) items.push({ change, bases: [], structural: false, accept: () => {}, refuse: () => {} });
+        // Keep the original bytes and ID for idempotent confirmation first.
+        // After a 409, only an explicit same-page text patch may replace them;
+        // pure stale deltas still preserve the complete original batch.
+        else items.push({ unrestored: update, bases: [], structural: false, accept: () => {}, refuse: () => {} });
       }
       restored.push(runBatch(owner, batch, items));
     }

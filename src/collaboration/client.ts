@@ -3,7 +3,7 @@ import { ApiError, request } from "../platform/http";
 import type { RichText } from "../platform/schema";
 import { parseBlockRecordId } from "../platform/record-ids";
 import { editObservedField, installTextLookup, type RegisteredField } from "./binding";
-import { captureText, editText, readFields, readText } from "./text";
+import { captureText, editText, readFields, readText, rebaseText } from "./text";
 import { publishRecovery } from "./recovery";
 import { nextHistoryOrder } from "../core/history-clock";
 import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, fieldsInPage, pageRevision, setAt, valueAt, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "./protocol";
@@ -18,13 +18,15 @@ export function setTextHistoryView(view: string): void { historyView = view; }
 interface Session {
   snapshot: DocumentSnapshot; doc: Y.Doc; undo: Y.UndoManager; lastField: string; lastKind: string;
   /** Uncommitted local text changes, one entry per pending submission. */
-  pendingText: Array<{ keys: string[]; change?: LocalTextChange }>;
+  pendingText: Array<{ keys: string[]; change?: LocalTextChange; update: TextUpdate; fields: Record<string, { base: RichText; next: RichText }> }>;
   fieldsByRecord: Map<string, Array<{ path: string[]; value: RichText }>> | null;
   projections: Map<string, { input: JsonRecord; output: JsonRecord }>;
 }
 export interface LocalTextChange { update: TextUpdate; sessionKey: string; keys?: string[] }
 const sessions = new Map<string, Session>();
 const opening = new Map<string, Promise<void>>();
+const resyncTails = new Map<string, Promise<unknown>>();
+const pageLifecycles = new Map<string, number>();
 const pendingCommits = new Map<string, () => void>();
 const settledChanges = new WeakSet<LocalTextChange>();
 const scopeListeners = new Map<string, Set<() => void>>();
@@ -35,6 +37,7 @@ let socket: WebSocket | null = null;
 let reconnect: ReturnType<typeof setTimeout> | undefined;
 let reconnectDelay = 250;
 let accountId = "";
+let lifecycle = 0;
 let suspended = false;
 let notifying = false;
 const changedScopes = new Set<string>();
@@ -59,64 +62,85 @@ function newSession(snapshot: DocumentSnapshot): Session {
   return session;
 }
 function destroySession(session: Session): void { session.undo.destroy(); session.doc.destroy(); }
-function pendingKeys(session: Session): Set<string> {
-  const keys = new Set<string>();
-  for (const entry of session.pendingText) for (const key of entry.keys) keys.add(key);
-  return keys;
-}
 export interface SessionResync { snapshot: DocumentSnapshot; session: Session; update: TextUpdate | null; orphanFields: Record<string, RichText> }
-/** Rebuild a session on a newer snapshot while carrying uncommitted local
- *  text forward. Old-generation update bytes are meaningless across a
- *  rebuild, so the merged user-visible content is moved into the new field
- *  identities field by field and re-encoded against the snapshot vector. */
+/** Carry local intents into new field identities, keeping each pending
+ * submission's delta separate so a later structural action cannot leak
+ * into an earlier batch. The queue submits only its own change references. */
 export async function resyncSession(scope: string, pageId: string, snapshot?: DocumentSnapshot): Promise<SessionResync | null> {
-  const key = documentKey({ scope, pageId });
-  const current = sessions.get(key);
-  const next = snapshot ?? await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`);
-  const old = current && current.snapshot.generation !== next.generation ? readFields(current.doc) : null;
-  const session = newSession(next);
-  if (current && old) {
-    const vector = Y.encodeStateVector(session.doc);
-    const carried = pendingKeys(current);
-    const orphan: Record<string, RichText> = {};
-    const fields = session.doc.getMap<Y.Text>("fields");
-    session.doc.transact(() => {
-      for (const field of carried) {
-        const text = fields.get(field);
-        const content = old[field];
-        if (text instanceof Y.Text && content) editText(text, captureText(text), content);
-        else if (content) orphan[field] = content;
+  const key = documentKey({ scope, pageId }); const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
+  const previous = resyncTails.get(key) ?? Promise.resolve();
+  const task = previous.catch(() => undefined).then(async (): Promise<SessionResync | null> => {
+    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return null;
+    const current = sessions.get(key);
+    const next = snapshot ?? await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`);
+    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key) || sessions.get(key) !== current) return null;
+    if (current?.snapshot.generation === next.generation) {
+      const remote = new Y.Doc();
+      let vector: Uint8Array;
+      try { Y.applyUpdate(remote, base64ToBytes(next.state)); vector = Y.encodeStateVector(remote); }
+      finally { remote.destroy(); }
+      Y.applyUpdate(current.doc, base64ToBytes(next.state), REMOTE);
+      current.snapshot = next;
+      const delta = current.pendingText.length ? Y.encodeStateAsUpdate(current.doc, vector) : null;
+      return { snapshot: next, session: current, update: delta && delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null, orphanFields: {} };
+    }
+    const session = newSession(next);
+    const orphanFields: Record<string, RichText> = {};
+    if (current) {
+      const vector = Y.encodeStateVector(session.doc);
+      const fields = session.doc.getMap<Y.Text>("fields");
+      // Prepare every intent before mutating its original pending update.
+      const migrated: Array<{ entry: Session["pendingText"][number]; update: string; fields: Session["pendingText"][number]["fields"] }> = [];
+      try {
+        for (const entry of current.pendingText) {
+          const before = Y.encodeStateVector(session.doc);
+          const moved: Session["pendingText"][number]["fields"] = {};
+          session.doc.transact(() => {
+            for (const key of entry.keys) {
+              const intent = entry.fields[key];
+              if (!intent) throw new Error("待保存文字缺少可重放的基线。");
+              const text = fields.get(key);
+              if (!(text instanceof Y.Text)) { orphanFields[key] = intent.next; continue; }
+              const base = readText(text);
+              editText(text, captureText(text), rebaseText(intent.base, intent.next, base));
+              moved[key] = { base, next: readText(text) };
+            }
+          }, REMOTE);
+          migrated.push({ entry, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, before)), fields: moved });
+        }
+      } catch (error) { destroySession(session); throw error; }
+      for (const { entry, update, fields } of migrated) {
+        Object.assign(entry.update, { generation: next.generation, update });
+        entry.fields = fields; entry.keys = Object.keys(fields);
       }
-    }, REMOTE);
-    session.pendingText = current.pendingText;
-    destroySession(current);
+      session.pendingText = current.pendingText;
+      destroySession(current); sessions.set(key, session);
+      const delta = Y.encodeStateAsUpdate(session.doc, vector);
+      return { snapshot: next, session, update: delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null, orphanFields };
+    }
     sessions.set(key, session);
-    const delta = Y.encodeStateAsUpdate(session.doc, vector);
-    const update = delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null;
-    return { snapshot: next, session, update, orphanFields: orphan };
-  }
-  if (current) {
-    destroySession(session);
-    Y.applyUpdate(current.doc, base64ToBytes(next.state), REMOTE);
-    current.snapshot = next;
-    return { snapshot: next, session: current, update: null, orphanFields: {} };
-  }
-  sessions.set(key, session);
-  return { snapshot: next, session, update: null, orphanFields: {} };
+    return { snapshot: next, session, update: null, orphanFields };
+  });
+  resyncTails.set(key, task);
+  const cleanup = () => { if (resyncTails.get(key) === task) resyncTails.delete(key); };
+  void task.then(cleanup, cleanup);
+  return task;
 }
 function refused(session: Session, message: string): void {
   if (!session.pendingText.length) return;
   publishRecovery(accountId, { message, writes: [], documents: [{ ...session.snapshot, state: bytesToBase64(Y.encodeStateAsUpdate(session.doc)), fields: readFields(session.doc) }] });
 }
 function receive(snapshot: DocumentSnapshot, reset = false): void {
-  const key = documentKey(snapshot); const current = sessions.get(key);
+  const key = documentKey(snapshot); const current = sessions.get(key); const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
   if (!current) { sessions.set(key, newSession(snapshot)); consumeSnapshot(snapshot); notify(snapshot.scope); return; }
   if (current.snapshot.generation !== snapshot.generation) {
     void resyncSession(snapshot.scope, snapshot.pageId, snapshot).then((result) => {
-      if (result?.session && Object.keys(result.orphanFields).length)
+      if (!result || epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+      if (Object.keys(result.orphanFields).length)
         publishRecovery(accountId, { message: "页面结构已变化。被移除段落的未保存文字已保留为草稿。", writes: [], documents: [{ scope: snapshot.scope, pageId: snapshot.pageId, generation: snapshot.generation, fields: result.orphanFields }] });
       consumeSnapshot(snapshot); notify(snapshot.scope);
     }).catch(() => {
+      if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key) || sessions.get(key) !== current) return;
       refused(current, "页面结构或版本已变化。未保存的文字已保留为草稿。");
       destroySession(current); sessions.set(key, newSession(snapshot));
       consumeSnapshot(snapshot); notify(snapshot.scope);
@@ -135,9 +159,10 @@ function subscribe(address: DocumentAddress): void {
 function connect(): void {
   if (suspended || !accountId || socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   clearTimeout(reconnect);
-  socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/collaboration`);
-  socket.onopen = () => { reconnectDelay = 250; for (const session of sessions.values()) subscribe(session.snapshot); };
+  const link = socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/collaboration`);
+  socket.onopen = () => { if (socket !== link) return; reconnectDelay = 250; for (const session of sessions.values()) subscribe(session.snapshot); };
   socket.onmessage = (event) => {
+    if (socket !== link) return;
     let message: { type: string; requestId?: string; snapshot?: DocumentSnapshot; documents?: Array<{ type: string; snapshot: DocumentSnapshot }>; scope?: string; pageId?: string };
     try { message = JSON.parse(String(event.data)); } catch { return; }
     if (message.type === "commit") {
@@ -147,6 +172,7 @@ function connect(): void {
     else if (message.snapshot) receive(message.snapshot, message.type === "reset");
     else if (message.type === "revoked" && message.scope && message.pageId) {
       const key = documentKey({ scope: message.scope, pageId: message.pageId }); const session = sessions.get(key);
+      pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
       if (session) {
         refused(session, "访问权限已撤销。未保存的文字已保留为草稿。");
         session.undo.destroy(); session.doc.destroy(); sessions.delete(key); notify(message.scope);
@@ -155,11 +181,12 @@ function connect(): void {
     }
   };
   socket.onclose = () => {
+    if (socket !== link) return;
     socket = null;
     if (suspended || !sessions.size) return;
     reconnect = setTimeout(connect, reconnectDelay); reconnectDelay = Math.min(10000, reconnectDelay * 2);
   };
-  socket.onerror = () => socket?.close();
+  socket.onerror = () => link.close();
 }
 export function configureCollaboration(userId: string): void {
   if (accountId && accountId !== userId) closeCollaboration();
@@ -180,14 +207,23 @@ export async function openCollaborativePage(scope: string, pageId: string): Prom
   if (sessions.has(key)) return;
   let pending = opening.get(key);
   if (!pending) {
-    pending = request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`).then((snapshot) => { receive(snapshot); subscribe(snapshot); connect(); }).finally(() => opening.delete(key));
+    const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
+    pending = request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`).then((snapshot) => {
+      if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+      if (!sessions.has(key)) receive(snapshot);
+      subscribe(snapshot); connect();
+    }).finally(() => { if (opening.get(key) === pending) opening.delete(key); });
     opening.set(key, pending);
   }
   return pending;
 }
 export async function refreshCollaborativePage(scope: string, pageId: string): Promise<void> {
-  try { receive(await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`)); }
-  catch (error) {
+  const epoch = lifecycle; const key = documentKey({ scope, pageId }); const pageEpoch = pageLifecycles.get(key);
+  try {
+    const snapshot = await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`);
+    if (epoch === lifecycle && pageEpoch === pageLifecycles.get(key)) receive(snapshot);
+  } catch (error) {
+    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
     const session = sessionFor(scope, pageId);
     if (session && error instanceof ApiError && [401, 403, 404].includes(error.status)) session.snapshot.canEdit = false;
     throw error;
@@ -225,8 +261,10 @@ export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
  *  but a share that follows a page's creation closely can race it, so this
  *  waits briefly for the snapshot to exist rather than leave a write doomed
  *  to fail. */
+function isOffline(): boolean { return globalThis.navigator?.onLine === false; }
 export async function awaitCollaborativeBasis(scope: string, pageId: string): Promise<void> {
   if (sessionFor(scope, pageId)) return;
+  if (isOffline()) return;
   const deadline = Date.now() + 3000;
   let delay = 100;
   while (Date.now() < deadline) {
@@ -238,6 +276,7 @@ export async function awaitCollaborativeBasis(scope: string, pageId: string): Pr
        nothing. Transient errors (and 409 not_ready) can still yield a
        document, so they keep retrying. */
     if (error instanceof ApiError && error.status === 404) return;
+    if (isOffline()) return;
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 800);
   }
@@ -279,10 +318,12 @@ export function localRecordText(scope: string, collection: string, id: string, b
   const kind = changed.some(({ text, next }) => readText(text).map((run) => run.text ?? "\u2063").join("") !== next.map((run) => run.text ?? "\u2063").join("")) ? "typing" : "format";
   if (session.lastField !== changed[0].key || session.lastKind !== kind) session.undo.stopCapturing();
   session.lastField = changed[0].key; session.lastKind = kind;
+  const fields = Object.fromEntries(changed.map(({ key, text }) => [key, { base: readText(text), next: [] as RichText }]));
   session.doc.transact(() => { for (const change of changed) { const field = registeredField(session, change.key); if (field) editObservedField(field, change.next); } }, structureDepth ? STRUCTURAL : LOCAL_TEXT_ORIGIN);
   const keys = changed.map((item) => item.key);
   const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope, pageId: session.snapshot.pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
-  session.pendingText.push({ keys, change });
+  for (const { key, text } of changed) fields[key].next = readText(text);
+  session.pendingText.push({ keys, change, update: change.update, fields });
   return change;
 }
 export function settleText(change: LocalTextChange): void {
@@ -294,6 +335,7 @@ export function settleText(change: LocalTextChange): void {
   }
 }
 export async function resetRefusedText(address: DocumentAddress): Promise<void> {
+  const key = documentKey(address); pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
   const current = sessionFor(address.scope, address.pageId);
   if (current) { destroySession(current); sessions.delete(documentKey(address)); }
   await openCollaborativePage(address.scope, address.pageId).catch(() => undefined);
@@ -305,7 +347,8 @@ export function restorePendingText(update: TextUpdate, change?: LocalTextChange)
   Y.applyUpdate(session.doc, base64ToBytes(update.update), "recovered pending text");
   const after = readFields(session.doc);
   const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  session.pendingText.push({ keys, change });
+  const fields = Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }]));
+  session.pendingText.push({ keys, change, update, fields });
   return keys;
 }
 function sessionForPage(pageId: string): Session | undefined { return [...sessions.values()].find((session) => session.snapshot.pageId === pageId); }
@@ -322,7 +365,8 @@ export function replayTextHistory(pageId: string, direction: "undo" | "redo"): P
   const after = readFields(session.doc);
   const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope: session.snapshot.scope, pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
-  session.pendingText.push({ keys, change });
+  const fields = Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }]));
+  session.pendingText.push({ keys, change, update: change.update, fields });
   return submitUndo(change.update).finally(() => settleText(change));
 }
 export function latestTextHistory(direction: "undo" | "redo"): { pageId: string; order: number; view: string } | null {
@@ -339,7 +383,7 @@ export function discardTextRedo(): void { for (const session of sessions.values(
 export function stopTextHistory(pageId?: string): void { for (const session of sessions.values()) if (!pageId || session.snapshot.pageId === pageId) session.undo.stopCapturing(); }
 export function connectedPage(pageId: string): boolean { return Boolean(sessionForPage(pageId)); }
 export function closeCollaboration(): void {
-  suspended = true; clearTimeout(reconnect); socket?.close(); socket = null;
+  lifecycle += 1; suspended = true; clearTimeout(reconnect); socket?.close(); socket = null;
   for (const session of sessions.values()) { session.undo.destroy(); session.doc.destroy(); }
-  sessions.clear(); opening.clear(); scopeListeners.clear();
+  sessions.clear(); opening.clear(); resyncTails.clear(); pageLifecycles.clear(); scopeListeners.clear();
 }

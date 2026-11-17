@@ -5,7 +5,7 @@ import { blockRecordId, parseBlockRecordId } from "./record-ids";
 import { Plane } from "./plane";
 import { WorkspaceDocument } from "./workspace-document";
 
-const hooks = vi.hoisted(() => ({ account: "workspace-account", publishRecovery: vi.fn() }));
+const hooks = vi.hoisted(() => ({ account: "workspace-account", publishRecovery: vi.fn(), getRecovery: vi.fn(() => []) }));
 vi.mock("../collaboration/client", () => ({
   collaborationAccount: () => hooks.account,
   awaitCollaborativeBasis: async () => {},
@@ -18,7 +18,7 @@ vi.mock("../collaboration/client", () => ({
   withStructureText: (action: () => void) => action(),
 }));
 vi.mock("../collaboration/binding", () => ({ observedText: () => null }));
-vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery, navigationClosing: () => false }));
+vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery, getRecovery: hooks.getRecovery, navigationClosing: () => false }));
 
 type Value = Record<string, unknown>;
 type Row = { id: string; value: Value };
@@ -229,6 +229,58 @@ describe("workspace space subscriptions", () => {
     await document.close(); held.release(); await loading; await drain();
     expect(document.state.pages.home).toBeUndefined();
     expect(watch).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("background checkpoints and write dependencies", () => {
+  it("does not turn thirty failed background checkpoints into refused edits", async () => {
+    const document = await open(); const statuses: string[] = [];
+    document.onSyncStatus((status) => statuses.push(status));
+    const checkpoints = Array.from({ length: 30 }, () => document.afterWrites(
+      async () => { throw new TypeError("Failed to fetch"); }, { trackRefusal: false },
+    ));
+    await Promise.allSettled(checkpoints); await drain();
+    await expect(document.afterWrites(async () => "saved")).resolves.toBe("saved");
+    expect(statuses).not.toContain("refused");
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a dependent operation when a prior content write is refused", async () => {
+    const document = await open(); const pending = deferred<void>();
+    const refused = pending.promise.then(() => { throw new Error("permission denied"); });
+    document.track(refused);
+    const operation = vi.fn(async () => "must not execute");
+    const result = document.afterWrites(operation, { trackRefusal: false });
+    pending.resolve();
+    await expect(result).rejects.toThrow("请先处理未保存的草稿。");
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("keeps dependency refusal ordering when clearing drafts while an operation waits", async () => {
+    const events = new EventTarget(); vi.stubGlobal("window", events);
+    const document = await open();
+    document.track(Promise.reject(new Error("old refusal one")));
+    document.track(Promise.reject(new Error("old refusal two"))); await drain();
+    const pending = deferred<void>();
+    document.track(pending.promise.then(() => { throw new Error("new refusal"); }));
+    const operation = vi.fn(async () => "must not execute");
+    const result = document.afterWrites(operation, { trackRefusal: false });
+    events.dispatchEvent(new CustomEvent("notes:recovery-changed", { detail: { userId: hooks.account } }));
+    pending.resolve();
+    await expect(result).rejects.toThrow("请先处理未保存的草稿。");
+    expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("clears the refused sync status only when this account's drafts are handled", async () => {
+    const events = new EventTarget(); vi.stubGlobal("window", events);
+    const document = await open(); const statuses: string[] = [];
+    document.onSyncStatus((status) => statuses.push(status));
+    document.track(Promise.reject(new Error("permanently refused"))); await drain();
+    expect(statuses.at(-1)).toBe("refused");
+    events.dispatchEvent(new CustomEvent("notes:recovery-changed", { detail: { userId: "another-account" } }));
+    expect(statuses.at(-1)).toBe("refused");
+    events.dispatchEvent(new CustomEvent("notes:recovery-changed", { detail: { userId: hooks.account } }));
+    expect(statuses.at(-1)).toBe("saved");
   });
 });
 

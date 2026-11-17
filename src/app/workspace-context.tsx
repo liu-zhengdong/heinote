@@ -681,11 +681,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!document || !platform) return true;
     const page = document.state.pages[pageId];
     if (!page) return true;
+    if (globalThis.navigator?.onLine === false) return true;
     // A page this member may only read keeps the history its editors write:
     // a viewer's checkpoint would be turned away by the space.
     const spaceId = spaceOfPage(document.state.pages, pageId);
     if (spaceId && (!spaces[spaceId] || spaces[spaceId].role === "viewer" || spaces[spaceId].knowledgeBase?.archived)) return true;
-    void document.afterWrites(() => request(`/api/v1/pages/${encodeURIComponent(pageId)}/checkpoint`, { method: "POST", body: JSON.stringify({ summary }) })).catch((error) => publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "版本未保存。", writes: [] }));
+    void document.afterWrites(
+      () => request(`/api/v1/pages/${encodeURIComponent(pageId)}/checkpoint`, { method: "POST", body: JSON.stringify({ summary }) }),
+      { trackRefusal: false },
+    ).catch((error) => {
+      if (!(error instanceof ApiError)) return;
+      if (error.status >= 500 || error.status === 404 || error.status === 409) return;
+      publishRecovery(platform.bootstrap.user.id, { message: error.message || "版本未保存。", writes: [], dedupe: `checkpoint:${pageId}` });
+    });
     return true;
   }, [document, platform, spaces]);
 

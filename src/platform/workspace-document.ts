@@ -8,6 +8,7 @@ import { blockRecordId } from "./record-ids";
 import { restoreSavedWrites, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
 import { awaitCollaborativeBasis, withStructureText } from "../collaboration/client";
+import { getRecovery } from "../collaboration/recovery";
 import {
   pageOfRef,
   pageRecords,
@@ -103,14 +104,31 @@ export class WorkspaceDocument {
   private readonly writing = new Set<Promise<void>>();
   /** Writes the platform refused for good in this window. */
   private refusals = 0;
+  /** Monotonic dependency barrier; handling drafts must not reset it. */
+  private refusalVersion = 0;
   /** Viewer spaces and archived knowledge bases receive no content writes. */
   private readonly readOnly = new Set<string>();
   private loading = true;
   private projecting = false;
   private closed = false;
+  private readonly stopRecovery: () => void;
 
   private constructor(platform: PlatformClient) {
     this.platform = platform;
+    const userId = platform.bootstrap.user.id;
+    const onRecoveryChanged = (event: Event) => {
+      if ((event as CustomEvent<{ userId?: string }>).detail?.userId !== userId) return;
+      if (!getRecovery(userId).length && this.refusals > 0) {
+        this.refusals = 0;
+        this.updateSyncStatus();
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("notes:recovery-changed", onRecoveryChanged);
+      this.stopRecovery = () => window.removeEventListener("notes:recovery-changed", onRecoveryChanged);
+    } else {
+      this.stopRecovery = () => {};
+    }
   }
 
   static async open(platform: PlatformClient, known?: readonly SpaceSummary[]): Promise<WorkspaceDocument> {
@@ -347,7 +365,7 @@ export class WorkspaceDocument {
       () => {
         // A plane let go of (a space left) drops what was on its way there;
         // anything else was refused for good, and its collection took it back.
-        if (this.planes.get(key) === plane && !this.closed) this.refusals += 1;
+        if (this.planes.get(key) === plane && !this.closed) this.refuse();
       },
     ).finally(() => {
       this.writing.delete(tracked);
@@ -357,15 +375,18 @@ export class WorkspaceDocument {
     this.updateSyncStatus();
   }
 
+  private refuse(): void { this.refusals += 1; this.refusalVersion += 1; }
+
   track(work: Promise<unknown>): void {
-    const tracked = work.then(() => undefined, () => { if (!this.closed) this.refusals += 1; }).finally(() => { this.writing.delete(tracked); this.updateSyncStatus(); });
+    const tracked = work.then(() => undefined, () => { if (!this.closed) this.refuse(); }).finally(() => { this.writing.delete(tracked); this.updateSyncStatus(); });
     this.writing.add(tracked); this.updateSyncStatus();
   }
 
-  afterWrites<T>(work: () => Promise<T>): Promise<T> {
-    const prior = [...this.writing]; const refused = this.refusals;
-    const task = Promise.all(prior).then(() => { if (this.refusals > refused) throw new Error("请先处理未保存的草稿。"); return work(); });
-    this.track(task); return task;
+  afterWrites<T>(work: () => Promise<T>, options: { trackRefusal?: boolean } = {}): Promise<T> {
+    const prior = [...this.writing]; const refused = this.refusalVersion;
+    const task = Promise.all(prior).then(() => { if (this.refusalVersion > refused) throw new Error("请先处理未保存的草稿。"); return work(); });
+    if (options.trackRefusal !== false) this.track(task);
+    return task;
   }
 
   onChange(listener: (state: WorkspaceState) => void): () => void {
@@ -401,7 +422,7 @@ export class WorkspaceDocument {
    *  meanwhile, or when some are still on their way after FLUSH_WAIT_MS: they
    *  go on trying. */
   async flush(): Promise<void> {
-    const refused = this.refusals;
+    const refused = this.refusalVersion;
     const deadline = Date.now() + FLUSH_WAIT_MS;
     while (this.writing.size && Date.now() < deadline) {
       await Promise.race([
@@ -409,7 +430,7 @@ export class WorkspaceDocument {
         new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(0, deadline - Date.now()))),
       ]);
     }
-    if (this.refusals > refused) throw new Error("The server refused some of these changes: they were taken back.");
+    if (this.refusalVersion > refused) throw new Error("The server refused some of these changes: they were taken back.");
     if (this.writing.size) throw new Error("Some changes are not saved yet: they go on trying.");
   }
 
@@ -466,6 +487,7 @@ export class WorkspaceDocument {
       // A last save that fails goes on trying in the collections' own queue
       // for as long as the page is open; a document nobody holds stops here.
       this.closed = true;
+      this.stopRecovery();
       this.desired.clear();
       this.opening.clear();
       for (const stop of this.stops.values()) stop();

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as Y from "yjs";
 import type { RichText } from "../platform/schema";
 import { blockField, cellField, titleField } from "./protocol";
-import { captureSelection, captureText, editText, fieldOf, readFields, readText, resolveSelection, seedFields, updateFields } from "./text";
+import { captureSelection, captureText, editText, fieldOf, readFields, readText, rebaseText, resolveSelection, seedFields, updateFields } from "./text";
 
 const key = blockField("8_page-id_block-id");
 const runs = (text: string): RichText => text ? [{ text }] : [];
@@ -17,6 +17,38 @@ function fork(doc: Y.Doc) {
   Y.applyUpdate(copy, Y.encodeStateAsUpdate(doc));
   return { doc: copy, text: fieldOf(copy, key) };
 }
+
+describe("text intent across document generations", () => {
+  it("keeps both writers' insertions instead of replacing the remote field", () => {
+    const merged = rebaseText(runs("base"), runs("base LOCAL"), runs("base REMOTE"));
+    const text = merged.map((run) => run.text ?? "").join("");
+    expect(text).toContain("LOCAL"); expect(text).toContain("REMOTE");
+    expect(text.match(/base/g)).toHaveLength(1);
+  });
+
+  it("deletes only baseline text and keeps remotely added text and marks", () => {
+    const merged = rebaseText(runs("abcd"), runs("ad"), [
+      { text: "ab" }, { text: "REMOTE", marks: { italic: true } }, { text: "cd" },
+    ]);
+    expect(merged).toEqual([{ text: "a" }, { text: "REMOTE", marks: { italic: true } }, { text: "d" }]);
+  });
+
+  it("does not resurrect deleted characters or duplicate already satisfied edits", () => {
+    expect(rebaseText(runs("ab"), runs("ab!"), runs("b"))).toEqual(runs("b!"));
+    expect(rebaseText(runs("ab"), runs("ab!"), runs("ab!"))).toEqual(runs("ab!"));
+  });
+
+  it("keeps concurrent formatting and atomic mentions", () => {
+    const embed = { mention: { kind: "page", page_id: "target" } };
+    const base: RichText = [{ text: "ab" }, { embed }];
+    const local: RichText = [{ text: "ab", marks: { bold: true } }, { embed }];
+    const remote: RichText = [{ text: "aXb", marks: { italic: true } }, { embed }];
+    expect(rebaseText(base, local, remote)).toEqual([
+      { text: "a", marks: { bold: true, italic: true } }, { text: "X", marks: { italic: true } },
+      { text: "b", marks: { bold: true, italic: true } }, { embed },
+    ]);
+  });
+});
 
 // The expectation is the visible intent and convergence, not Yjs item layout.
 describe("shared text fields", () => {

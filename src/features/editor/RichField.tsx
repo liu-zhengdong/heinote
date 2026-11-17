@@ -29,7 +29,7 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { preserveTextDraft, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
+import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DismissReason } from "../../hooks/useDismiss";
@@ -202,14 +202,15 @@ export function RichField({
     return bound.current;
   };
   const run = (action: () => void): boolean => {
-    const previous = bound.current;
+    let previous = bound.current;
     if (previous) {
-      const current = renderedText(previous.field.pageId, previous.field.key);
-      if (!current || current.field.text !== previous.field.text || current.field.generation !== previous.field.generation) {
+      const current = refreshTextBinding(previous);
+      if (!current) {
         if (ref.current) saveDraft({ bound: previous, content: shownWords(ref.current, grammar) });
         sync.current();
         return false;
       }
+      previous = current; bound.current = current;
     }
     const updated = withTextBasis(previous, action);
     if (bound.current === previous) bound.current = updated;
