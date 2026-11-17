@@ -272,6 +272,40 @@ export class Store {
   blocksOf(scope: string, pageId: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=? ORDER BY id", scope, pageId).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
+  /** The changelog fingerprint of one page's rows: the pages record's seq
+   *  plus the newest block seq (block ids carry the len_pageId_ prefix,
+   *  so the GLOB is a primary-key range scan). Any write bumps a seq via
+   *  the record_changes triggers, so a changed fingerprint is proof of a
+   *  changed page; rows predating the changelog report seq 0 — constant,
+   *  which is correct. ~0.5ms of indexed reads per call. */
+  private pageFingerprint(scope: string, pageId: string): string {
+    const prefix = `${pageId.length}_${pageId}_`;
+    const pageSeq = this.one("SELECT seq FROM record_changes WHERE scope=? AND collection='pages' AND id=?", scope, pageId);
+    const blockSeq = this.one("SELECT MAX(seq) seq FROM record_changes WHERE scope=? AND collection='blocks' AND id GLOB ?", scope, `${prefix}*`);
+    return `${Number(pageSeq?.seq ?? 0)}:${Number(blockSeq?.seq ?? 0)}`;
+  }
+  /** Parsed page + blocks, cached against the changelog fingerprint. A
+   *  page switch used to re-parse ~1500 JSON rows (269ms on the largest
+   *  vault page) for every snapshot and revision call — the event loop
+   *  starved under two tabs switching between big pages (ISS-13).
+   *  Callers MUST NOT mutate the returned objects; all current users only
+   *  serialize or hash them. */
+  private readonly pageBundles = new Map<string, { fingerprint: string; bundle: { page: Row | undefined; blocks: Array<{ id: string; value: Row }> } }>();
+  pageBundle(scope: string, pageId: string): { page: Row | undefined; blocks: Array<{ id: string; value: Row }> } {
+    const fingerprint = this.pageFingerprint(scope, pageId);
+    const key = `${scope}${pageId}`;
+    const hit = this.pageBundles.get(key);
+    if (hit && hit.fingerprint === fingerprint) {
+      this.pageBundles.delete(key);
+      this.pageBundles.set(key, hit);
+      return hit.bundle;
+    }
+    const bundle = { page: this.record(scope, "pages", pageId), blocks: this.blocksOf(scope, pageId) };
+    this.pageBundles.set(key, { fingerprint, bundle });
+    const first = this.pageBundles.keys().next();
+    if (this.pageBundles.size > 256 && !first.done) this.pageBundles.delete(first.value);
+    return bundle;
+  }
   record(scope: string, collection: string, recordId: string): Row | undefined {
     const row = this.selectOne("SELECT value FROM records WHERE scope=? AND collection=? AND id=?", scope, collection, recordId);
     return row ? JSON.parse(String(row.value)) : undefined;
@@ -578,8 +612,21 @@ export class Store {
     for (const part of historyParts(version)) this.put(scope, "versions", part.id, part.value as unknown as Row);
     this.pruneHistory(scope); return version;
   }
+  /** Content hash used for optimistic concurrency. The hash itself cost
+   *  700ms on the largest vault page — cache it against the same
+   *  fingerprint as pageBundle. */
+  private readonly pageRevisions = new Map<string, { fingerprint: string; revision: string }>();
   revision(scope: string, pageId: string): string {
-    return pageRevision(this.record(scope, "pages", pageId), this.blocksOf(scope, pageId));
+    const fingerprint = this.pageFingerprint(scope, pageId);
+    const key = `${scope}${pageId}`;
+    const hit = this.pageRevisions.get(key);
+    if (hit && hit.fingerprint === fingerprint) return hit.revision;
+    const { page, blocks } = this.pageBundle(scope, pageId);
+    const revision = pageRevision(page, blocks);
+    this.pageRevisions.set(key, { fingerprint, revision });
+    const first = this.pageRevisions.keys().next();
+    if (this.pageRevisions.size > 256 && !first.done) this.pageRevisions.delete(first.value);
+    return revision;
   }
   pageDto(actor: Actor, pageId: string) {
     const { page, scope } = this.page(actor, pageId);

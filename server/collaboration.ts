@@ -70,9 +70,8 @@ export class CollaborationStore {
   private stored(scope: string, pageId: string): Row | undefined { return this.store.one("SELECT * FROM collaboration_documents WHERE scope=? AND page_id=?", scope, pageId); }
   private load(row: Row): Y.Doc { const doc = new Y.Doc(); Y.applyUpdate(doc, row.state as Uint8Array); return doc; }
   private pageData(scope: string, pageId: string) {
-    const page = this.store.record(scope, "pages", pageId);
+    const { page, blocks } = this.store.pageBundle(scope, pageId);
     if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
-    const blocks = this.store.blocksOf(scope, pageId);
     return { page, blocks, fields: fieldsInPage(pageId, page, blocks), structure: hash(JSON.stringify(structureOf(page, blocks))) };
   }
   private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean): void {
