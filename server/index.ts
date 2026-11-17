@@ -17,6 +17,7 @@ import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
+import { attachAgentCopy } from "./agent-copy.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
@@ -863,6 +864,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     collaborationSocket?.notifyAuthRequests(userId, pendingAuthRequests(store, userId));
   }, options.authRequestTtlMs);
   attachAgentOperations(app, store, actor);
+  attachAgentCopy(app, { store, actor });
   attachAgentFiles(app, store, actor);
   attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));

@@ -238,6 +238,15 @@ def cmd_create_page(client, a):
     emit(status, payload)
 
 
+def cmd_copy(client, a):
+    body = {}
+    if a.space_id:
+        body["spaceId"] = a.space_id
+    if a.parent_id:
+        body["parentId"] = a.parent_id
+    mutate(client, "POST", f"/api/v1/pages/{a.id}/copy", body, body, a.request_id, a.force)
+
+
 def cmd_set_title(client, a):
     page = page_state(client, a.id)
     body = {"baseRevision": page["revision"], "title": a.title}
@@ -629,6 +638,13 @@ def build_parser():
     sp.add_argument("--space-id")
     sp.add_argument("--scope")
     sp.set_defaults(fn=cmd_create_page)
+
+    sp = sub.add_parser("copy", help="把页面（含子树）拷贝到个人空间或某个空间")
+    sp.add_argument("id")
+    sp.add_argument("--space-id", help="目标空间：\"personal\"（默认）或空间 id；知识库落在其首页下")
+    sp.add_argument("--parent-id", help="目标空间内的父页面")
+    rid(sp)
+    sp.set_defaults(fn=cmd_copy)
 
     sp = sub.add_parser("set-title", help="只修改标题，不动正文")
     sp.add_argument("id")

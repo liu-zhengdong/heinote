@@ -1,0 +1,182 @@
+import type { Express, Request } from "express";
+import { randomUUID } from "node:crypto";
+import { z } from "zod";
+import { descendantPageIds } from "../src/core/page-tree.ts";
+import { relinkContent } from "../src/core/block-tree.ts";
+import { blockRecordId } from "../src/platform/record-ids.ts";
+import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
+import { fail, id, type Actor, type Row, type Store } from "./store.ts";
+import { externalScope, mutation } from "./mutation.ts";
+import { recordTokenEvent } from "./token-identity.ts";
+
+/* Copying a page's whole tree into another scope — the agent counterpart of
+   the window's "拷贝到个人空间". Unlike the window's copy (which leaves
+   attachments pointing at the source space), references here are remapped
+   and the bytes re-stored under the destination's file index, so the copy
+   is self-contained. Pages get fresh ids; links to copied pages point at
+   the copies; links pointing outside stay literal. */
+
+const inputSchema = z.object({
+  requestId: z.string().min(1).max(256),
+  /** Destination: "personal" or a space id the member may write to. */
+  spaceId: z.string().min(1).max(256).optional(),
+  /** Where the copy lands inside the destination; defaults: a knowledge
+   *  base's home page, otherwise the destination's top level. */
+  parentId: z.string().min(1).max(256).optional(),
+}).strict();
+
+const safeFileName = (name: string): string => {
+  const sanitize = (value: string) => value.normalize("NFKD").replace(/[^\w.-]+/g, "-").replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+  const ext = /\.[^./]{1,10}$/.exec(name)?.[0] ?? "";
+  const stem = sanitize(ext ? name.slice(0, -ext.length) : name) || "file";
+  return `${stem}${ext}`.slice(-80);
+};
+const copiedPath = (file: StoredFile) => `files/agent/${randomUUID().replaceAll("-", "")}/${safeFileName(file.name)}`;
+
+async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+/** Every StoredFile a page holds: paragraphs, inline pictures, cover and
+ *  icon, database-row pictures. `preview` paths travel with their file. */
+function storedFiles(page: LoadedNotePage): StoredFile[] {
+  const found: StoredFile[] = [];
+  const push = (file: StoredFile | undefined) => { if (file) found.push(file); };
+  push(page.cover_image);
+  push(page.icon_image);
+  for (const files of Object.values(page.property_files ?? {})) for (const file of files) push(file);
+  for (const block of Object.values(page.block_tree.by_id)) {
+    push(block.file);
+    for (const run of block.content) if (run.mention?.kind === "image") push(run.mention.file);
+  }
+  return found;
+}
+
+/** Rewrites every StoredFile nested anywhere in `value` through `rewrite`
+ *  (blocks' `file`, image mentions, cover/icon/property pictures).
+ *  A StoredFile is the only record shape carrying path+owner+size+type. */
+function remapFiles<T>(value: T, rewrite: (file: StoredFile) => StoredFile): T {
+  const visit = (node: unknown): unknown => {
+    if (!node || typeof node !== "object") return node;
+    if (Array.isArray(node)) return node.map(visit);
+    const record = node as Row;
+    if (typeof record.path === "string" && typeof record.size === "number" && typeof record.type === "string" && typeof record.owner === "string") {
+      return rewrite(record as StoredFile);
+    }
+    return Object.fromEntries(Object.entries(record).map(([key, entry]) => [key, visit(entry)]));
+  };
+  return visit(value) as T;
+}
+
+export function attachAgentCopy(app: Express, { store, actor }: { store: Store; actor: (req: Request) => Actor }): void {
+  app.post("/api/v1/pages/:id/copy", async (req, res) => {
+    const who = actor(req);
+    const input = inputSchema.parse(req.body);
+    const pageId = String(req.params.id);
+
+    // Attachment bytes move with the copy: drained now, re-stored inside the
+    // mutation's transaction. Files whose bytes are already gone keep their
+    // original (broken) reference — the copy can't resurrect them.
+    const source = store.page(who, pageId);
+    const all = store.state(who).pages;
+    const ids = [pageId, ...descendantPageIds(all, pageId)];
+    const pages: LoadedNotePage[] = [];
+    for (const idInTree of ids) {
+      const found = store.page(who, idInTree);
+      if (found.scope === source.scope && !found.page.archived) pages.push(found.page);
+    }
+    const bytes = new Map<string, Buffer>();
+    for (const page of pages) {
+      for (const file of storedFiles(page)) {
+        for (const path of [file.path, file.preview]) {
+          if (!path || bytes.has(path)) continue;
+          const stored = store.files.read(source.scope, path);
+          if (stored) bytes.set(path, await drain(stored.stream));
+        }
+      }
+    }
+
+    mutation(store, actor, req, res, input,
+      (who) => {
+        const source = store.page(who, pageId);
+        if (source.page.archived) fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
+        const targetScope = store.scope(who, input.spaceId ?? "personal", true);
+        const parent = input.parentId ? store.page(who, input.parentId) : undefined;
+        if (parent && parent.scope !== targetScope) fail(400, "父页面不属于目标空间。", "bad_request");
+        if (parent && parent.page.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");
+        if (parent && parent.page.archived) fail(409, "父页面已归档。", "conflict");
+        const library = store.knowledgeBases.get(targetScope);
+        const destination = parent?.page ?? (library ? store.page(who, library.homePageId).page : undefined);
+        if (destination && destination.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");
+        return { source, targetScope, destination };
+      },
+      (who, { source, targetScope, destination }) => {
+        const inPersonal = targetScope.startsWith("user:");
+        // Fresh ids for the whole tree; internal links remapped, external
+        // mentions left pointing where they did.
+        const idsBySource = new Map(pages.map((page) => [page.id, id()]));
+        const pathsBySource = new Map<string, string>();
+        const copyFile = (file: StoredFile): StoredFile => {
+          const path = pathsBySource.get(file.path) ?? copiedPath(file);
+          pathsBySource.set(file.path, path);
+          const data = bytes.get(file.path);
+          if (data && !store.files.write(targetScope, path, file.type, data)) fail(409, "附件路径冲突。", "conflict");
+          const preview = file.preview
+            ? (() => { const next = copiedPath(file); const p = bytes.get(file.preview); if (p) store.files.write(targetScope, next, "image/jpeg", p); return next; })()
+            : undefined;
+          const { space: _space, ...rest } = file;
+          return { ...rest, path, owner: who.user.id, ...(inPersonal ? {} : { space: targetScope }), ...(preview ? { preview } : {}) };
+        };
+
+        const now = new Date().toISOString();
+        const author = who.user.id;
+        const newRoot = idsBySource.get(pageId)!;
+        for (const page of pages) {
+          const isRoot = page.id === pageId;
+          const copy: LoadedNotePage = remapFiles(structuredClone(page), copyFile);
+          copy.id = idsBySource.get(page.id)!;
+          copy.parent_id = isRoot ? destination?.id ?? null
+            : idsBySource.get(page.parent_id ?? "") ?? null;
+          copy.block_tree = {
+            by_id: Object.fromEntries(Object.values(copy.block_tree.by_id).map((block) => {
+              const renamed = {
+                ...block,
+                id: id(),
+                parent_id: block.parent_id ? idsBySource.get(block.parent_id) ?? null : null,
+                content: relinkContent(block.content, idsBySource),
+              };
+              return [renamed.id, renamed];
+            })),
+          };
+          copy.created_at = now; copy.updated_at = now;
+          copy.created_by = author; copy.updated_by = author;
+          delete copy.share_space_id;
+          // An app's bindings point at databases in the source space; the
+          // copy keeps its source but arrives unbound.
+          if (copy.app && targetScope !== source.scope) copy.app = { draft: copy.app.draft, enabled: copy.app.enabled };
+          // A copied tree lands at the destination's top as a shared root.
+          if (isRoot && !destination && !inPersonal) copy.share_space_id = targetScope;
+          store.savePage(targetScope, copy);
+        }
+
+        // Same as POST /pages: a child page also appears as an expanded link
+        // at the end of its parent's body.
+        if (destination) {
+          const siblings = Object.values(destination.block_tree.by_id).filter((block) => !block.parent_id);
+          const top = siblings.length ? Math.max(...siblings.map((block) => block.order)) : 0;
+          const blockId = id();
+          const docRow = store.one("SELECT generation FROM collaboration_documents WHERE scope=? AND page_id=?", targetScope, destination.id);
+          const expected = docRow ? [{ scope: externalScope(targetScope), pageId: destination.id, generation: String(docRow.generation), revision: store.revision(targetScope, destination.id) }] : [];
+          store.apply(who, [{ scope: externalScope(targetScope), collection: "blocks", id: blockRecordId(destination.id, blockId), action: "put", base: null,
+            value: { id: blockId, page: destination.id, kind: "text", order: top + 1024, content: [{ embed: { mention: { kind: "page", page_id: newRoot, expanded: true } } }] } }], `copy-link:${input.requestId}`, [], expected);
+        }
+        recordTokenEvent(store.db, who.tokenId, { action: "copy", pageId: newRoot, pageTitle: source.page.title });
+        // Materialize the copied pages' collaboration documents so the reply's
+        // snapshot (pageDto) finds them — commit-time flush hasn't run yet.
+        store.collaboration.flush();
+        return { status: 201, body: store.pageDto(who, newRoot), scope: targetScope, pageIds: [newRoot, ...(destination ? [destination.id] : [])] };
+      });
+  });
+}
