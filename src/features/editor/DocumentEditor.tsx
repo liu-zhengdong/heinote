@@ -2581,6 +2581,10 @@ export function DocumentEditor({
       // A box selection must not start a text selection, nor take the caret.
       onMouseDown={(event) => { if (marqueeStart.current) event.preventDefault(); }}
     >
+      {/* The others' caret in the title — the page's own fields, outside
+          `.blocks`, are drawn by this layer; the blocks' own layer is inside
+          the `.blocks` row. */}
+      {historical ? null : <RemoteCarets root={articleRef} />}
       {cover ? (
         <div
           className={`doc__cover ${cover.kind === "image" ? "doc__cover--image" : ""}`}
@@ -2646,6 +2650,7 @@ export function DocumentEditor({
             className="doc__title"
             label="Page title"
             historyField="title"
+            blockId={page.id}
             collaboration={historical ? undefined : { pageId: page.id, key: titleField(page.id) }}
             content={titleContent}
             readOnly={readOnly}

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useUi } from "../../app/ui-context";
 import { useWorkspace } from "../../app/workspace-context";
+import { titleField } from "../../collaboration/protocol";
 import { pageTitleContent, titleFields } from "../../core/title";
 import type { NotePage } from "../../core/types";
 import { linkedPageId } from "../editor/mentions";
+import { RemoteCarets } from "../editor/RemoteCarets";
 import { TitleField } from "../editor/TitleField";
 import { IconImage } from "../editor/PageIcon";
 import { pageIcon } from "../editor/page-decoration";
@@ -28,6 +30,7 @@ export function DatabaseSheet({ database, readOnly: heldReadOnly = false }: {
   const { updatePage, canEdit, document, selectPage } = useWorkspace();
   const { openPeek } = useUi();
   const titleRef = useRef<HTMLElement | null>(null);
+  const surfaceRef = useRef<HTMLElement | null>(null);
 
   const databaseId = database.id;
   const readOnly = heldReadOnly || !canEdit(database.id);
@@ -40,7 +43,7 @@ export function DatabaseSheet({ database, readOnly: heldReadOnly = false }: {
   if (!database.database) return null;
 
   return (
-    <article className="db db--page" data-page-id={database.id}>
+    <article ref={surfaceRef} className="db db--page" data-page-id={database.id}>
       <div className="db__head">
         {(() => {
           const icon = pageIcon(database);
@@ -61,6 +64,8 @@ export function DatabaseSheet({ database, readOnly: heldReadOnly = false }: {
           elementRef={(element) => { titleRef.current = element; }}
           className="doc__title"
           historyField="title"
+          blockId={database.id}
+          collaboration={readOnly ? undefined : { pageId: database.id, key: titleField(database.id) }}
           content={titleContent}
           placeholder="New database"
           label="Database title"
@@ -75,6 +80,7 @@ export function DatabaseSheet({ database, readOnly: heldReadOnly = false }: {
         />
       </div>
       <DatabaseViews databaseId={database.id} variant="page" readOnly={heldReadOnly} />
+      {heldReadOnly ? null : <RemoteCarets root={surfaceRef} />}
     </article>
   );
 }

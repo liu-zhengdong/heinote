@@ -2344,6 +2344,9 @@ kbd {
 .db {
   --read: 16px;
   --lead: 1.5;
+  /* The others' carets on this database's own surface are drawn here
+     (RemoteCarets). */
+  position: relative;
 }
 
 .doc {
@@ -6796,6 +6799,8 @@ button.db__th:hover,
   display: flex;
   min-width: 0;
   flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
   container: dbv / inline-size;
 }
 
@@ -6912,6 +6917,8 @@ button.db__th:hover,
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
 }
 
 /* A table wider than the words' column scrolls on into the page's right

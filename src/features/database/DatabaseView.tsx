@@ -156,6 +156,8 @@ import { CardImage, ImageStrip, useHomedImages } from "./ImageProperty";
 import { databaseConvertible, databaseToBlocks } from "./convert";
 import { ordersBetween } from "../editor/editor-commands";
 import { linkedWordsAt, NameWords, TitleField } from "../editor/TitleField";
+import { RemoteCarets } from "../editor/RemoteCarets";
+import { titleField } from "../../collaboration/protocol";
 import { followHref } from "../editor/RichField";
 import { inTrash, isBareRow, spaceOfPage } from "../../core/page-tree";
 import { relationPeerMutations } from "./relation";
@@ -352,6 +354,8 @@ function RowName({
           placeholder="Untitled"
           label={label}
           historyField="title"
+          blockId={row.id}
+          collaboration={{ pageId: row.id, key: titleField(row.id) }}
           focusOnMount={caret}
           onChange={(next) => onRename(row, next)}
           onKeyDown={(event) => {
@@ -371,6 +375,7 @@ function RowName({
       {row.title ? (
         <span
           className={titleClass}
+          data-block-name={row.id}
           onClick={(event) => {
             const href = linkedWordsAt(event.target);
             if (!href) return;
@@ -381,7 +386,7 @@ function RowName({
         >
           <NameWords content={pageTitleContent(row)} />
         </span>
-      ) : <span className={titleClass} data-empty="" />}
+      ) : <span className={titleClass} data-block-name={row.id} data-empty="" />}
     </>
   );
 }
@@ -1048,6 +1053,8 @@ function CardTitle({
         placeholder="Untitled"
         label="Name"
         historyField="title"
+        blockId={row.id}
+        collaboration={{ pageId: row.id, key: titleField(row.id) }}
         focusOnMount="all"
         onChange={(next) => onRename(row, next)}
         onKeyDown={(event) => {
@@ -1072,7 +1079,7 @@ function CardTitle({
       }}
     >
       {row.icon || row.icon_image ? <span aria-hidden="true"><PageIconMark page={row} size={15} /></span> : null}
-      <span className="card-open__name">{row.title ? <NameWords content={pageTitleContent(row)} /> : "Untitled"}</span>
+      <span className="card-open__name" data-block-name={row.id}>{row.title ? <NameWords content={pageTitleContent(row)} /> : "Untitled"}</span>
     </button>
   );
 }
@@ -1378,7 +1385,7 @@ function CalendarLayout({
                 </button>
               )}
               {items.slice(0, 3).map((row) => (
-                <button type="button" key={row.id} className="db-cal__item" data-page-id={row.id} onClick={(event) => onOpen(row.id, fullPage(event))}>
+                <button type="button" key={row.id} className="db-cal__item" data-page-id={row.id} data-block-name={row.id} onClick={(event) => onOpen(row.id, fullPage(event))}>
                   {row.title || "Untitled"}
                 </button>
               ))}
@@ -2117,6 +2124,9 @@ export function DatabaseView({
       className={`dbv dbv--${variant} ${readOnly ? "dbv--readonly" : ""} ${minimal ? "dbv--minimal" : ""} ${quiet ? "dbv--quiet" : ""}`}
       onContextMenu={rowMenu}
     >
+      {/* The others on this database: their caret in a name being typed
+          (RemoteCarets). */}
+      <RemoteCarets root={rootRef} />
       {/* One row: an inline database's name — on its own page, whose name is
           the page's, its views — then its tools: Filter, Sort, Search and ···,
           which holds the rest of the view and of the database. In a document

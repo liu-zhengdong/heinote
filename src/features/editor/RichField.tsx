@@ -134,6 +134,10 @@ export interface RichFieldProps {
   placeholder: string;
   readOnly?: boolean;
   collaboration?: { pageId: string; key: string };
+  /** `data-block-id`: what this field's caret counts as — a page's title
+   *  carries the page's id, a row's name the row's — so its place is said in
+   *  presence and the others' caret can land on it (RemoteCarets). */
+  blockId?: string;
   /** `data-history-field`: undo brings the caret back here. */
   historyField?: string;
   /** Takes the caret when it appears: all of it selected, or after it. */
@@ -160,6 +164,7 @@ export function RichField({
   placeholder,
   readOnly = false,
   collaboration,
+  blockId,
   historyField,
   focusOnMount,
   elementRef,
@@ -583,6 +588,7 @@ export function RichField({
         aria-placeholder={placeholder}
         aria-readonly={readOnly || undefined}
         data-placeholder={placeholder}
+        data-block-id={blockId}
         data-history-field={historyField}
         data-collaboration-page={collaboration?.pageId}
         data-collaboration-field={collaboration?.key}

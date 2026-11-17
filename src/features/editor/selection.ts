@@ -24,18 +24,30 @@ export interface DomCaretPoint {
   blockId: string;
 }
 
-/** Whether an editable belongs to this editor, and not to a block shown in it
- *  from another page (which has an editor, and its own `.blocks`, of its own). */
+/** Whether an editable belongs to this surface, and not to one shown in it —
+ *  a block drawn in place has an editor, and its own `.blocks`, of its own.
+ *  `.db` and `.dbv` are a database's own surfaces: its name, rows' names and
+ *  cells. */
 function ownedBy(root: HTMLElement, editable: Element): boolean {
-  return editable.closest(".blocks") === root;
+  return editable.closest(".doc, .blocks, .db, .dbv, .dbv-inline") === root;
 }
+
+/** Where a `data-block-id`'s caret lands: a block's own words inside its
+ *  row, a named field that carries the id itself — a page's title, a row's
+ *  name being typed, an inline database's own name — or, at rest, the name
+ *  as it's drawn (`data-block-name`), so another's caret has somewhere to
+ *  be when nobody is typing in it. */
+const editablesOf = (blockId: string) => {
+  const id = CSS.escape(blockId);
+  return `[data-block-id="${id}"] .block__editable, :is(.title-field, input, textarea)[data-block-id="${id}"], [data-block-name="${id}"]`;
+};
 
 /** A block's editable within one editor. The same block can be on screen
  *  twice — on its page and shown in place in another — so an editor only
  *  ever looks among its own. */
 export function editableWithin(root: HTMLElement | null, blockId: string): HTMLElement | null {
   if (!root) return null;
-  for (const editable of root.querySelectorAll<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"] .block__editable`)) {
+  for (const editable of root.querySelectorAll<HTMLElement>(editablesOf(blockId))) {
     if (ownedBy(root, editable)) return editable;
   }
   return null;
@@ -48,7 +60,7 @@ export function editableWithin(root: HTMLElement | null, blockId: string): HTMLE
 export function selectRanges(root: HTMLElement | null, ranges: readonly BlockTextRange[]): HTMLElement | null {
   const editable = (blockId: string) => (root
     ? editableWithin(root, blockId)
-    : document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"] .block__editable`));
+    : document.querySelector<HTMLElement>(editablesOf(blockId)));
   const first = ranges[0];
   const last = ranges.at(-1);
   const start = first ? editable(first.blockId) : null;
@@ -104,7 +116,9 @@ function rangeToOffset(element: HTMLElement, container: Node, offset: number): n
 
 function editableFromNode(node: Node | null): HTMLElement | null {
   const element = node instanceof Element ? node : node?.parentElement;
-  return element?.closest<HTMLElement>(".block__editable") ?? null;
+  /* `.block__editable` is a block's words; a named `data-block-id` field —
+     a title, a row's name — is the place that id's caret lands. */
+  return element?.closest<HTMLElement>(".block__editable, :is(.title-field, input, textarea)[data-block-id]") ?? null;
 }
 
 function blockIdForEditable(element: HTMLElement | null): string | null {

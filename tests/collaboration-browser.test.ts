@@ -1,5 +1,5 @@
 import { test as base, expect, type Browser, type BrowserContext, type Locator, type Page, type Route, type WebSocketRoute } from "@playwright/test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -258,6 +258,18 @@ async function downloadDraft(page: Page, contains: string): Promise<void> {
   const download = await downloaded; expect(download.suggestedFilename()).toBe("notes-unsaved-draft.json");
   const path = await download.path(); expect(path).not.toBeNull();
   const raw = await readFile(path!, "utf8"); expect(() => JSON.parse(raw)).not.toThrow(); expect(raw).toContain(contains);
+}
+async function createDatabaseIn(pair: Pair, title: string): Promise<Json> {
+  const created = await api(pair.ownerContext, pair.url, "/api/v1/databases", {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), spaceId: pair.scope, title, database: { title_name: "名称", properties: [], views: [{ id: "table", name: "全部", kind: "table" }] } },
+  });
+  const read = await api(pair.ownerContext, pair.url, `/api/v1/databases/${created.id}`, { token: pair.token });
+  return { id: created.id, revision: read.revision };
+}
+async function openPage(pair: Pair, page: Page, pageId: string): Promise<void> {
+  await page.goto(`${pair.url}/?page=${pageId}`);
+  await expect(page.locator(`article[data-page-id="${pageId}"]`)).toBeVisible();
 }
 function countTextRequests(page: Page, pair: Pair): Json[] {
   const requests: Json[] = [];
@@ -679,4 +691,54 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   expect(after.generation).toBe(before.generation); expect(after.revision).toBe(before.revision); expect(after.state).toBe(before.state);
   await persisted(pair, "abc\nPEERDEF");
   await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]); await expect(paragraphs(pair, pair.peer)).toHaveText(["abc", "PEERDEF"]);
+});
+
+/* A collaborator's caret is drawn over a database the way it is over a
+   document's blocks: on the database's own name as it's typed, and on a
+   row's name — the field while it is being renamed, the name as it's drawn
+   at rest — wherever the peer is working. */
+test("a peer typing in a shared database's name and a row's name draws a caret for the owner", async ({ app }) => {
+  const pair = await app.pair();
+  const evidence = resolve(".evidence/collaboration-database");
+  await mkdir(evidence, { recursive: true });
+  const database = await createDatabaseIn(pair, "协作清单");
+  const row = await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const rowId = row.page.id;
+  await Promise.all([openPage(pair, pair.owner, database.id), openPage(pair, pair.peer, database.id)]);
+  const caret = (page: Page) => page.locator(`article[data-page-id="${database.id}"] .remote-caret`);
+
+  /* The peer types the database's own name; the owner sees their caret on
+     the same name (the `.title-field` carrying the database's id). */
+  const name = (page: Page) => page.locator(`article[data-page-id="${database.id}"] .doc__title.title-field[data-block-id="${database.id}"]`);
+  await name(pair.peer).click();
+  await pair.peer.keyboard.insertText("乙改");
+  const ownerName = name(pair.owner);
+  await expect(ownerName).toHaveText("协作清单乙改");
+  const fieldBox = await ownerName.boundingBox();
+  await expect(caret(pair.owner)).toBeVisible({ timeout: 15000 });
+  const caretBox = await caret(pair.owner).boundingBox();
+  expect(caretBox!.x, "The caret sits inside the name's field").toBeGreaterThanOrEqual(fieldBox!.x);
+  expect(caretBox!.x).toBeLessThanOrEqual(fieldBox!.x + fieldBox!.width);
+  expect(caretBox!.y).toBeGreaterThanOrEqual(fieldBox!.y - 4);
+  expect(caretBox!.y).toBeLessThanOrEqual(fieldBox!.y + fieldBox!.height + 4);
+  await name(pair.peer).blur();
+
+  /* The peer renames a row; whether or not the name is open in the owner's
+     window, the caret lands on the name as it's drawn. */
+  const rowName = (page: Page) => page.locator(`article[data-page-id="${database.id}"] tr[data-page-id="${rowId}"] .db__row-title`);
+  await rowName(pair.peer).click();
+  await expect(rowName(pair.peer)).toHaveClass(/title-field/);
+  await pair.peer.keyboard.insertText("中");
+  await expect(rowName(pair.owner)).toHaveText("待办事项中");
+  /* Presence is polled: the previous caret (on the database's name) is
+     still drawn until the next look says the peer moved onto the row. */
+  await expect.poll(async () => {
+    const c = await caret(pair.owner).boundingBox();
+    const n = await rowName(pair.owner).boundingBox();
+    return Boolean(c && n && c.x >= n.x && c.x <= n.x + n.width && c.y >= n.y - 4 && c.y <= n.y + n.height + 4);
+  }, { timeout: 15000, message: "The peer's caret lands on the row's name" }).toBe(true);
+  await pair.owner.screenshot({ path: join(evidence, "remote-caret-database.png") });
 });
