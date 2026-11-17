@@ -3,7 +3,7 @@ import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactN
 import { orderedBlocks, pageFirstLine } from "../../core/block-tree";
 import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
-import { codeLanguage } from "../editor/code-highlight";
+import { codeHtml, codeLanguage, highlighterReady, whenHighlighterReady } from "../editor/code-highlight";
 import { MermaidDiagram } from "../editor/MermaidDiagram";
 import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
@@ -84,6 +84,18 @@ function Inline({ content, context }: { content: InlineContent; context: ReaderC
   })}</>;
 }
 
+/** A code block on the public reader, coloured like the editor's. The
+ *  grammar chunk loads with the first code block on the page; until it
+ *  arrives — or if it fails — the code shows as plain text. */
+function PublicCode({ source, language }: { source: string; language?: string }) {
+  const [coloured, setColoured] = useState(highlighterReady);
+  useEffect(() => {
+    if (coloured) return;
+    return whenHighlighterReady(() => setColoured(true));
+  }, [coloured]);
+  return <pre><code dangerouslySetInnerHTML={{ __html: codeHtml(source, language) }} /></pre>;
+}
+
 function BlockBody({ block, context }: { block: Block; context: ReaderContext }) {
   const text = <Inline content={block.content} context={context} />;
   switch (block.kind) {
@@ -100,7 +112,7 @@ function BlockBody({ block, context }: { block: Block; context: ReaderContext })
          same shape the editor's read-only view has. */
       return <>
         {codeLanguage(block.language).id === "mermaid" ? <MermaidDiagram text={source} /> : null}
-        <pre><code>{source}</code></pre>
+        <PublicCode source={source} language={block.language} />
       </>;
     }
     case "file": return <div>{block.file ? <a className="public-reader__file" href={fileHref(block.file, context.token)} target="_blank" rel="noopener noreferrer"><Paperclip size={16} aria-hidden="true" />{block.file.name}</a> : "文件不可用"}{block.content.length ? <p>{text}</p> : null}</div>;
