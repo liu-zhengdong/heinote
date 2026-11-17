@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -116,6 +117,7 @@ async function fixture(t: TestContext) {
     await rm(target, { recursive: true, force: true });
   });
   return {
+    directory,
     browser: () => new Browser(() => server.url),
     async restart() {
       await server.close();
@@ -389,6 +391,28 @@ test("collection deltas: cold pull carries the watermark, later reads only chang
   assert.equal(blocks.latest >= 0 && blocks.rows.every((row: Json) => row.value.page), true);
   // The plain (unparameterized) read keeps its array shape for older callers.
   assert.ok(Array.isArray(status(await browser.request("/api/records/personal/pages"), 200)));
+});
+
+test("a collection with no watermark seeds one on read — it cannot answer 0 forever (ISS-12 regression)", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  const user = await register(browser, "alice");
+  await put(browser, "personal", "pages", "first", page("first", user.id));
+  // Simulate a pre-delta collection: drop the row the trigger planted.
+  const db = new DatabaseSync(join(f.directory, "notes.sqlite"));
+  db.exec("DELETE FROM record_seq WHERE collection='pages'");
+  db.close();
+  // A cold pull must plant a real watermark; 0 would cold-pull forever.
+  const cold = status(await browser.request("/api/records/personal/pages?after=0"), 200);
+  assert.ok(cold.latest > 0, `cold pull returned watermark ${cold.latest} — clients poll with after=0 forever`);
+  assert.ok(cold.rows.some((row: Json) => row.id === "first"));
+  // Holding that watermark: quiet, then a write surfaces at seq > it.
+  const quiet = status(await browser.request(`/api/records/personal/pages?after=${cold.latest}`), 200);
+  assert.deepEqual(quiet.rows, []);
+  await put(browser, "personal", "pages", "second", page("second", user.id));
+  const later = status(await browser.request(`/api/records/personal/pages?after=${cold.latest}`), 200);
+  assert.ok(later.latest > cold.latest);
+  assert.deepEqual(later.rows.map((row: Json) => row.id), ["second"]);
 });
 
 test("per-page block pulls: ?pages=p:seq serves only that page's rows from its own watermark (UC-48)", async (t) => {

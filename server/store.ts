@@ -185,12 +185,23 @@ export class Store {
   records(scope: string, collection: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection=? ORDER BY id", scope, collection).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
+  /** The collection's watermark, lazily seeded: collections whose rows all
+   *  predate the changelog (or that nobody wrote since) carry no record_seq
+   *  row, and reporting 0 there tells clients to cold-pull the whole
+   *  collection on every poll (ISS-12). The first read plants seq=1 — later
+   *  writes bump it through the trigger like anywhere else. */
+  private watermark(scope: string, collection: string): number {
+    const found = this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection);
+    if (found) return Number(found.seq);
+    this.db.prepare("INSERT INTO record_seq SELECT ?,?,1 WHERE NOT EXISTS(SELECT 1 FROM record_seq WHERE scope=? AND collection=?)").run(scope, collection, scope, collection);
+    return 1;
+  }
   /** The collection's watermark plus the rows touched after `after`: each
    *  changed row under its record id, and each removed row's id under
    *  `deleted`. `after` 0 yields the whole collection (rows written before
    *  the changelog never entered it, so they're read from `records`). */
   recordsSince(scope: string, collection: string, after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
-    const latest = Number(this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection)?.seq ?? 0);
+    const latest = this.watermark(scope, collection);
     if (after <= 0) return { latest, rows: this.records(scope, collection), deleted: [] };
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
@@ -206,7 +217,7 @@ export class Store {
    *  cold read) and tombstones through the page-scoped record id
    *  (`<len>_<pageId>_<rest>`). UC-48 lazy loading polls per loaded page. */
   recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
-    const latest = Number(this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection)?.seq ?? 0);
+    const latest = this.watermark(scope, collection);
     const wanted = new Set(pageIds);
     const inPage = (id: string, value: Row | null): boolean => {
       if (value && typeof value.page === "string") return wanted.has(value.page);
