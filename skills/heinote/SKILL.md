@@ -137,7 +137,8 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
   {"type":"insert_block","text":"新段落","afterId":"<块ID>","kind":"text"},
   {"type":"insert_blocks","markdown":"# 标题\n\n- 列表\n\n| a | b |\n| --- | --- |\n| 1 | 2 |"},
   {"type":"delete_block","blockId":"<块ID>"},
-  {"type":"move_block","blockId":"<块ID>","order":1024}
+  {"type":"move_block","blockId":"<块ID>","order":1024},
+  {"type":"insert_page_link","blockId":"<块ID>","index":"end","pageId":"<页ID>","expanded":true}
 ]
 ```
 
