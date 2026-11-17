@@ -36,7 +36,9 @@ Authorization: Bearer notes_...
 | PUT | `/files/:scope?path=&name=` | 上传附件字节，返回 `StoredFile` |
 | GET | `/files/:scope?path=` | 下载附件字节 |
 
-`scope` 为 `personal` 或空间 ID。`PUT` 携带原始请求体，`Content-Type` 存入附件类型，上限 8 MB。`path` 省略时服务端生成 `files/agent/<随机>/` 下的安全路径；`name` 为显示名，缺省取路径末段。响应（201）即 `StoredFile`：
+`scope` 为 `personal` 或空间 ID。`PUT` 携带原始请求体，`Content-Type` 存入附件类型，上限 8 MB。`path` 省略时服务端生成 `files/agent/<随机>/` 下的安全路径；`name` 为显示名，缺省取路径末段。
+
+`path` 以 `files/` 开头，后接用 `/` 分隔的段。段内可以是任何文字，包括中文和 emoji；不能含 `\`、`:`、`*`、`?`、`"`、`<`、`>`、`|` 和控制字符，不能以空格或点结尾，也不能用 `con`、`nul`、`com1` 这类设备名。每段最长 100 字符，整个 `path` 最长 320 字符。`%2e%2e` 这类转义按解码后的内容判断。显示名与路径分开：中文文件名放 `name`，`path` 用能长期保存的写法。响应（201）即 `StoredFile`：
 
 ```json
 { "path": "files/agent/<随机>/file.png", "owner": "<用户 id>", "name": "file.png", "size": 68, "type": "image/png" }

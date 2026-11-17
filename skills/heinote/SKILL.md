@@ -57,23 +57,27 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 
 - 写命令自动 GET 目标，注入当前 `generation`、`baseRevision`、`databaseRevision`。
 - `requestId` 默认为业务参数（不含服务端修订）的确定性摘要。同一命令重跑
-  命中服务端幂等缓存：摘要相同时返回原结果；修订已前进时返回 409「请求 ID
-  已用于其他操作」，脚本改写为 `{"deduplicated": true}` 且退出码 0，未重复写入。
+  命中服务端幂等缓存：摘要相同时返回原结果；修订已前进时服务端返回 409
+  「请求 ID 已用于其他操作」。脚本把它改写为 `{"deduplicated": true}` 且
+  退出码 0，未重复写入。直接 curl 时没有这层改写，看到的是 409。
 - `--force` 生成新标识，允许有意重复相同业务输入（如重复追加同一段落）。
 - `--request-id` 显式指定幂等标识，覆盖默认值。
-- `--text -`、`--data -`、`--ops -`、`--query -` 从标准输入读取；`--data`
-  也接受 JSON 字符串或文件路径。长文本一律经文件或管道传入，不做命令行转义。
+- `--text`、`--markdown` 收的是字面文本，不读文件路径：`--text "内容"`。
+- `-` 表示从标准输入读：`--text -`、`--data -`、`--ops -`、`--query -`。
+  长文本走管道，不做命令行转义：`printf '%s' "$body" | heinote append <id> --text -`。
+- `--data` 另外接受 JSON 字符串和文件路径（`--data row.json`）；`--markdown`
+  没有这个用法，需要整块富文本时用 `--ops` 的 `insert_blocks`。
 
 ### 子命令
 
 ```sh
 heinote pages [--full]                        # 列出页面（默认 id/title/kind 摘要）
 heinote search <query> [--space S] [--limit N] [--offset N]
-                                              # 跨空间搜索页面标题与正文
+                                              # 搜标题与正文；返回 {hits,total,hasMore,nextOffset}
 heinote page <id>                             # 读页面与块树
-heinote create-page --title T [--text F | --markdown F] [--parent-id P] [--space-id S]
+heinote create-page --title T [--text STR | --markdown STR] [--parent-id P] [--space-id S]
 heinote set-title <id> --title T              # 只改标题
-heinote append <id> --text F [--format markdown] | --markdown F [--suggest]
+heinote append <id> --text STR [--format markdown] | --markdown STR [--suggest]
 heinote ops <id> --ops ops.json [--suggest]   # 结构化修改，JSON 数组
 heinote proposals <id>                        # 提案与状态
 heinote versions <id> / checkpoint <id> --summary S / restore <id> --version-id V
@@ -98,6 +102,14 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 盲目注入会让 `POST /pages` 等接口返回 400）。需要幂等时显式加
 `--request-id auto`（确定性标识）或 `--request-id <值>`。
 
+`search` 的每条 `hits` 含 `id`、`title`、`scope`、`space`、`crumb`，正文命中
+时另有 `excerpt`。搜索忽略大小写，也忽略全角/半角与 NFC/NFD 的写法差异；
+显示的文字仍是页面原文。
+
+`upload` 的 `--path` 必须以 `files/` 开头。段内可以用中文和 emoji，但不能
+含 `\ : * ? " < > |` 或控制字符，不能以空格、点结尾，也不能用 `con`、`nul`、
+`com1` 这类设备名。省略 `--path` 时服务端生成路径，中文名放 `--name`。
+
 ### 典型任务
 
 | 任务 | 命令 |
@@ -109,7 +121,7 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 追加富文本 | `heinote append <id> --markdown -`（标题、列表、表格、代码块整块树插入） |
 | 追加行内标记 | `heinote append <id> --text "`code` **粗**" --format markdown` |
 | 局部修改 | `heinote ops <id> --ops ops.json`（操作见下） |
-| 创建文档页 | `heinote create-page --title T --text F`（或 `--markdown F` 写富文本） |
+| 创建文档页 | `heinote create-page --title T --text "正文"`（或 `--markdown "# 标题"` 写富文本） |
 | 创建条目 | `heinote row-create <db> --data row.json` |
 | 改条目属性 | `heinote row-set <db> <row> --data '{"properties":{...}}'` |
 | 查询条目 | `heinote db-query <db> --query '{"filters":[...]}'` |
@@ -146,12 +158,34 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 的 `markdown` 展开为多个块。两者与纯文本路径并存，省略时原样写入字面
 文字。
 
+`insert_block` 只接受 `text`、`afterId`、`kind`、`format`、`file` 五个字段。
+它不接受 `index`；写成 `index` 会被拒（400 `Unrecognized key: "index"`）。
+
 数值 `index`/`length` 使用 UTF-16。结构操作（`insert_block`、`delete_block`、
-`move_block`）和数值范围需要 `baseRevision`，脚本已自动注入当前值。
+`move_block`）和数值范围需要 `baseRevision`，脚本已自动注入当前值。直接
+HTTP 提交时缺它会返回 400「数值范围与结构操作必须携带页面基础修订」。
+
+### 查询条目（db-query）
+
+`--query` 的 `filters` 是条件列表，条目之间按 AND 组合：
+
+```json
+{"filters":[{"property_id":"status","op":"is","value":"进行中"}]}
+```
+
+`op` 按属性类型选：select 与 status 用 `is`、`is_not`；text、url、email 等文字
+类用 `contains`、`is`、`is_not`；number 用 `eq`、`gt`、`lt` 等；空值判断用
+`is_empty`、`is_not_empty`。省略 `op` 时用该类型的默认运算符。字段名写作
+`operator` 会被拒（400 `Unrecognized key: "operator"`）。
+
+`query` 字段搜索条目标题。`sorts` 用 `{"property_id":"status","direction":"asc"}`。
+完整运算符表见 `docs/agent-api.md` 的「视图」一节。
 
 ## 写入规则（curl 兜底时适用）
 
 - 写入前先 GET，取 `revision` 与 `collaboration.generation`。
+- 数据库写接口同样要 `baseRevision`（数据库修订）：脚本自动取，直连 HTTP
+  要先 `GET /databases/:id`。
 - 结构化修改、数据库写和页面启用要求 `requestId`，同一账号共用 ID 空间。
 - 重试必须使用相同 `requestId` 和完全相同的输入；同 ID 不同输入返回 409。
 - `index:"start"`/`"end"` 可省略 `baseRevision`；结构操作必须携带。
