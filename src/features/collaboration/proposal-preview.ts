@@ -1,3 +1,4 @@
+import { bodyBlock } from "../../core/block-tree";
 import { inlinePlainText } from "../../core/inline-content";
 import type { NotePage } from "../../core/types";
 
@@ -16,7 +17,7 @@ export function textPreviews(page: Pick<NotePage, "block_tree"> | null, operatio
   const blocks = new Map<string, TextPreview>();
   for (const operation of operations) {
     if (operation.type !== "insert_text" && operation.type !== "delete_text") return null;
-    const block = page.block_tree.by_id[operation.blockId]; if (!block) return null;
+    const block = bodyBlock(page, operation.blockId); if (!block) return null;
     const text = inlinePlainText(block.content);
     const preview = blocks.get(operation.blockId) ?? { blockId: operation.blockId, before: text, after: text };
     const index = operation.index === "start" ? 0 : operation.index === "end" ? preview.after.length : operation.index;

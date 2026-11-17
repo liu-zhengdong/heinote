@@ -34,6 +34,9 @@ export interface Composite {
   /** The page records it was made from: the page drawn and every block
    *  drawn in it, each as the record it was then. */
   sources: ReadonlyMap<string, NotePage>;
+  /** Expanded link targets not pulled in yet (UC-48): loading them redraws
+   *  them in place; until then they draw as the row they are. */
+  unloaded: ReadonlySet<string>;
 }
 
 /** Whether a page's line is drawn as the page itself, in place: a document
@@ -65,23 +68,27 @@ export function composeTree(pages: Record<string, NotePage>, top: NotePage, show
   const rows = new Map<string, string>();
   const owner = new Map<string, string>();
   const sources = new Map<string, NotePage>();
-  const taken = new Set<string>([pageId, ...Object.keys(top.block_tree.by_id)]);
+  const taken = new Set<string>([pageId, ...Object.keys(top.block_tree?.by_id ?? {})]);
+  const unloaded = new Set<string>();
   const inPlace = (row: Block, holder: NotePage): NotePage | undefined => {
     const link = lineLink(row);
     if (!link?.expanded || link.locked) return undefined;
     const target = pages[link.page_id];
     if (!target || target.archived || target.kind !== "document" || target.parent_id !== holder.id) return undefined;
+    // An expanded target not pulled in is asked for — and drawn as the row
+    // it is until its blocks arrive (UC-48).
+    if (!target.block_tree) { unloaded.add(target.id); return undefined; }
     if (taken.has(target.id) || Object.keys(target.block_tree.by_id).some((id) => taken.has(id))) return undefined;
     return showInPlace(row, target) ? target : undefined;
   };
   // A page's own top-level blocks go under `under`: its node, or the top.
   const place = (page: NotePage, under: string | null) => {
     sources.set(page.id, page);
-    for (const block of Object.values(page.block_tree.by_id)) {
+    for (const block of Object.values(page.block_tree?.by_id ?? {})) {
       const target = inPlace(block, page);
       if (target) {
         taken.add(target.id);
-        for (const id of Object.keys(target.block_tree.by_id)) taken.add(id);
+        for (const id of Object.keys(target.block_tree?.by_id ?? {})) taken.add(id);
         // Its name and icon are its page's, exactly as the page keeps them.
         byId[target.id] = {
           ...createBlock(target.id, "page", { parent_id: block.parent_id ?? under, order: block.order }),
@@ -98,7 +105,7 @@ export function composeTree(pages: Record<string, NotePage>, top: NotePage, show
     }
   };
   place(top, null);
-  return { pageId, tree: { by_id: byId }, rows, owner, sources };
+  return { pageId, tree: { by_id: byId }, rows, owner, sources, unloaded };
 }
 
 export interface RouteOptions {
@@ -145,7 +152,7 @@ export function routeTransaction(
   const rowOf = (pageId: string): Block | undefined => {
     const rowId = composite.rows.get(pageId);
     const holder = composite.owner.get(pageId);
-    return rowId && holder ? composite.sources.get(holder)?.block_tree.by_id[rowId] : undefined;
+    return rowId && holder ? composite.sources.get(holder)?.block_tree?.by_id[rowId] : undefined;
   };
 
   // What the transaction reaches: the nodes it names, and everything under
@@ -192,7 +199,7 @@ export function routeTransaction(
   const put = (holder: string, block: Block) => {
     const page = made.get(holder);
     if (page) {
-      page.block_tree.by_id[block.id] = block;
+      page.block_tree!.by_id[block.id] = block;
       return;
     }
     bodies.push({ type: "set", path: bodyPath(holder, block.id), value: block });

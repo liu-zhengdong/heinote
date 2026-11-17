@@ -1,7 +1,7 @@
 import type { Actor, Row, Store } from "./store.ts";
 import { pageName } from "../src/core/block-tree.ts";
 import { blockTreeToMarkdown, wikilinkDescriber } from "../src/core/export-markdown.ts";
-import type { NotePage, StoredFile } from "../src/core/types.ts";
+import type { LoadedNotePage, NotePage, StoredFile } from "../src/core/types.ts";
 import { ZipStream } from "../src/core/zip.ts";
 
 /* The member's whole workspace as one zip: each page a Markdown file, the
@@ -63,7 +63,7 @@ interface ScopeExport {
   scope: string;
   label: string;
   dir: string;
-  pages: NotePage[];
+  pages: LoadedNotePage[];
   records: Record<string, Record<string, Row>>;
 }
 
@@ -72,7 +72,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
   // and read by hash afterwards, outside the transaction.
   store.db.exec("BEGIN DEFERRED");
   let scopeExports: ScopeExport[];
-  let state: { pages: Record<string, NotePage> };
+  let state: { pages: Record<string, LoadedNotePage> };
   try {
     state = store.state(who);
     const personal = `user:${who.user.id}`;
@@ -213,7 +213,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
   zip.finish();
 }
 
-function pageMarkdown(pages: Record<string, NotePage>, page: NotePage, depth: number): string {
+function pageMarkdown(pages: Record<string, LoadedNotePage>, page: LoadedNotePage, depth: number): string {
   const titleOf = (id: string) => pages[id] ? pageName(pages[id]) : "";
   const prefix = "../".repeat(depth);
   const markdown = blockTreeToMarkdown(page.block_tree, titleOf,

@@ -12,7 +12,7 @@ import { Store, fail, hash, id, secret, HttpError, writeSchema, asAuthor, type A
 import { newPage } from "../src/core/block-tree.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { restoredPage } from "../src/core/versions.ts";
-import type { NotePage, StoredFile } from "../src/core/types.ts";
+import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
@@ -468,9 +468,31 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (!["pages", "blocks", "versions", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
     if (collection === "workspace_settings" && !scope.startsWith("user:")) fail(403, "设置仅属于个人。");
     // ?after=<seq> asks for the delta since that watermark (ISS-12). Without
-    // it the response stays the plain array older clients expect.
+    // it the response stays the plain array older clients expect. ?pages=
+    // narrows the delta to records of those pages (UC-48 lazy blocks);
+    // ?ids= returns exactly the records named (write rebase).
     const after = req.query.after === undefined ? undefined : parse(z.number().int().min(0), Number(req.query.after));
-    if (after === undefined) res.json(store.records(scope, collection));
+    const ids = typeof req.query.ids === "string" && req.query.ids ? req.query.ids.split(",") : undefined;
+    const pageSpecs = typeof req.query.pages === "string" && req.query.pages ? req.query.pages.split(",") : undefined;
+    if (ids) res.json(store.recordsByIds(scope, collection, ids));
+    else if (pageSpecs && after !== undefined) {
+      const groups = pageSpecs.map((spec) => {
+        const [pageId, since = "0"] = spec.split(":", 2);
+        return { pageId: text(pageId), since: parse(z.number().int().min(0), Number(since)) };
+      });
+      // One watermark for the whole page set: take the freshest page
+      // response shape — the collection watermark — with rows of every
+      // group merged and ids deduped.
+      const rows = new Map<string, Row>(); const deleted = new Set<string>(); let latest = 0;
+      for (const group of groups) {
+        const delta = store.recordsSincePages(scope, collection, [group.pageId], group.since);
+        latest = Math.max(latest, delta.latest);
+        for (const row of delta.rows) rows.set(row.id, row.value);
+        for (const id of delta.deleted) deleted.add(id);
+      }
+      res.json({ latest, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
+    }
+    else if (after === undefined) res.json(store.records(scope, collection));
     else res.json(store.recordsSince(scope, collection, after));
   });
   app.get("/api/collaboration/:scope/:pageId", (req, res) => {
@@ -772,7 +794,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         const draft = page.app?.draft;
         if (!draft || !draft.trim()) fail(400, "没有可启用的草稿。", "bad_request");
         store.checkpoint(who, page.id, "启用应用源码前");
-        const next = { ...page, updated_at: currentTime(), updated_by: asAuthor(who), app: { ...(page.app ?? {}), enabled: draft } };
+        const next: LoadedNotePage = { ...page, block_tree: page.block_tree, updated_at: currentTime(), updated_by: asAuthor(who), app: { ...(page.app ?? {}), enabled: draft } };
         delete next.app!.draft;
         store.savePage(scope, next);
         recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: page.id, pageTitle: next.title });
@@ -797,7 +819,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       if (baseRevision && store.revision(scope, pageId) !== baseRevision) fail(409, "页面已有新修改。请重新检查后恢复。", "conflict");
       const version = store.state(who).versions[pageId]?.[versionId]; if (!version) fail(404, "版本不存在。");
       store.checkpoint(who, pageId, "恢复前", true);
-      const restored: NotePage = restoredPage(version.snapshot, page); restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
+      // A version's snapshot was written from a whole page: it keeps its body.
+      const restored: LoadedNotePage = restoredPage(version.snapshot, page) as LoadedNotePage; restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
       store.savePage(scope, restored);
       store.collaboration.reset(scope, pageId);
       recordTokenEvent(store.db, who.tokenId, { action: "restore", pageId, pageTitle: restored.title, versionId: version.id });

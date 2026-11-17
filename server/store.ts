@@ -9,7 +9,7 @@ import { isCurrent } from "../src/core/versions.ts";
 import { emptyPlane, Projector, type PlaneRecords, type RecordValue } from "../src/platform/records.ts";
 import { historyParts } from "../src/platform/history-record.ts";
 import { blockRecordId, parseBlockRecordId, parseHistoryId } from "../src/platform/record-ids.ts";
-import type { NotePage, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
+import type { LoadedNotePage, LoadedWorkspaceState, NotePage, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
 import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
@@ -201,6 +201,57 @@ export class Store {
     }
     return { latest, rows, deleted };
   }
+  /** The same delta, limited to records that belong to one of `pageIds`:
+   *  rows match through their `page` field (via the records_page index on a
+   *  cold read) and tombstones through the page-scoped record id
+   *  (`<len>_<pageId>_<rest>`). UC-48 lazy loading polls per loaded page. */
+  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const latest = Number(this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection)?.seq ?? 0);
+    const wanted = new Set(pageIds);
+    const inPage = (id: string, value: Row | null): boolean => {
+      if (value && typeof value.page === "string") return wanted.has(value.page);
+      const parsed = /^(\d+)_/.exec(id);
+      if (parsed) {
+        const length = Number(parsed[1]);
+        if (wanted.has(id.slice(parsed[0].length, parsed[0].length + length))) return true;
+      }
+      return false;
+    };
+    if (after <= 0) {
+      const marks = pageIds.map(() => "?").join(",");
+      // The records_page index answers blocks-by-page directly; other
+      // collections fall back to the page-scoped id prefix.
+      const found = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND json_extract(value,'$.page') IN (${marks})`, scope, collection, ...pageIds)
+        .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+      // Rows whose record id names one of the pages but whose value lacks a
+      // `page` field miss the index; the page-scoped id prefix finds them
+      // without a full scan.
+      const prefixes = pageIds.map((pageId) => `${pageId.length}_${pageId}_`);
+      const extra = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND (${prefixes.map(() => "id LIKE ?").join(" OR ")})`,
+        scope, collection, ...prefixes.map((prefix) => `${prefix}%`))
+        .filter((row) => !new Set(found.map((found) => found.id)).has(String(row.id)))
+        .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+      return { latest, rows: [...found, ...extra], deleted: [] };
+    }
+    const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
+      WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
+    const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
+    for (const row of changed) {
+      const id = String(row.id);
+      if (Number(row.deleted) || row.value == null) { if (inPage(id, null)) deleted.push(id); continue; }
+      const value = JSON.parse(String(row.value)) as Row;
+      if (inPage(id, value)) rows.push({ id, value });
+    }
+    return { latest, rows, deleted };
+  }
+  /** Exact reads by record id — rebase needs just the rows a failed batch
+   *  touched, not the whole collection (UC-48). */
+  recordsByIds(scope: string, collection: string, ids: string[]): Array<{ id: string; value: Row }> {
+    if (!ids.length) return [];
+    const marks = ids.map(() => "?").join(",");
+    return this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND id IN (${marks})`, scope, collection, ...ids)
+      .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+  }
   /** One page's paragraphs. Uses the page-key expression index; records(scope,"blocks") would scan the whole plane per page. */
   blocksOf(scope: string, pageId: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=? ORDER BY id", scope, pageId).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
@@ -215,12 +266,14 @@ export class Store {
   plane(scope: string): PlaneRecords {
     return Object.fromEntries(Object.keys(emptyPlane()).map((collection) => [collection, new Map(this.records(scope, collection).map((row) => [row.id, row.value as RecordValue]))])) as unknown as PlaneRecords;
   }
-  state(actor: Actor) {
+  /* The server's window is everything: no lazy bodies server-side, so the
+     projected pages are all LoadedNotePage (UC-48). */
+  state(actor: Actor): LoadedWorkspaceState {
     const planes = new Map<string, PlaneRecords>([["personal", this.plane(`user:${actor.user.id}`)]]);
     for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) planes.set(String(member.space_id), this.plane(String(member.space_id)));
-    return new Projector().project(planes);
+    return new Projector().project(planes) as LoadedWorkspaceState;
   }
-  page(actor: Actor, pageId: string): { page: NotePage; scope: string } {
+  page(actor: Actor, pageId: string): { page: LoadedNotePage; scope: string } {
     const page = this.state(actor).pages[pageId];
     if (!page) fail(404, "页面不存在。", "not_found");
     let current = page;
@@ -449,7 +502,7 @@ export class Store {
     const collaboration = this.collaboration.snapshot(actor, scope.startsWith("user:") ? "personal" : scope, pageId);
     return { id: page.id, title: page.title, text, revision, scope, page, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
   }
-  savePage(scope: string, page: NotePage): void {
+  savePage(scope: string, page: LoadedNotePage): void {
     this.transaction(() => {
       this.assertPageLocation(scope, page.id);
       const library = this.knowledgeBases.get(scope);

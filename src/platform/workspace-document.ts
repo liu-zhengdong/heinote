@@ -192,8 +192,33 @@ export class WorkspaceDocument {
 
   /** The workspace made again from what the planes hold. */
   private reproject(notify = true): void {
-    this.state = this.projector.project(this.held);
+    this.state = this.projector.project(this.held, this.loadedBodies());
     if (notify) this.notify();
+  }
+
+  /** The page-body sets the projector marks loaded (UC-48): what each
+   *  plane's lazy blocks mirror actually holds. */
+  private loadedBodies(): ReadonlyMap<string, ReadonlySet<string>> {
+    const loaded = new Map<string, ReadonlySet<string>>();
+    for (const [key, plane] of this.planes) loaded.set(key, plane.loadedPageIds);
+    return loaded;
+  }
+
+  /** Pull a set of pages' bodies into their planes (UC-48). Pages route to
+   *  the plane their record lives in; a page nobody knows is tried in every
+   *  open plane — a pull that finds nothing marks nothing. Idempotent and
+   *  safe to fire-and-forget from rendering code. */
+  async loadPages(pageIds: readonly string[]): Promise<void> {
+    if (this.closed || !pageIds.length) return;
+    const byPlane = new Map<string, string[]>();
+    const unknown: string[] = [];
+    for (const pageId of pageIds) {
+      const plane = this.projector.pagePlanes.get(pageId);
+      if (plane) (byPlane.get(plane) ?? byPlane.set(plane, []).get(plane)!).push(pageId);
+      else unknown.push(pageId);
+    }
+    for (const plane of this.planes.keys()) if (unknown.length) byPlane.set(plane, [...(byPlane.get(plane) ?? []), ...unknown]);
+    await Promise.all([...byPlane].map(([plane, ids]) => this.planes.get(plane)?.loadPages(ids)));
   }
 
   /** Starts reading a space: one this member just shared a page into, or one
@@ -415,6 +440,9 @@ export class WorkspaceDocument {
        opening — wait for it so sharing does not die on that race. */
     const plane = planeOfPage(this.state, pageId);
     if (plane) await awaitCollaborativeBasis(plane, pageId);
+    /* Sharing writes the tree whole into the space: bodies not pulled in
+       yet (UC-48) are pulled first, or the copy would land empty. */
+    await this.loadPages(this.descendantPages(pageId));
     await this.addSpace(spaceId);
     if (page.share_space_id !== spaceId) this.transact([{ type: "set", path: ["pages", pageId, "share_space_id"], value: spaceId }]);
     await this.flush();
@@ -424,6 +452,8 @@ export class WorkspaceDocument {
    *  and leaves the space, whose members lose it. */
   async stopSharing(pageId: string): Promise<void> {
     if (!this.state.pages[pageId]?.share_space_id) return;
+    // Same contract as sharing: every body of the tree is here first.
+    await this.loadPages(this.descendantPages(pageId));
     this.transact([{ type: "delete", path: ["pages", pageId, "share_space_id"] }]);
     await this.flush();
   }

@@ -391,6 +391,50 @@ test("collection deltas: cold pull carries the watermark, later reads only chang
   assert.ok(Array.isArray(status(await browser.request("/api/records/personal/pages"), 200)));
 });
 
+test("per-page block pulls: ?pages=p:seq serves only that page's rows from its own watermark (UC-48)", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  const user = await register(browser, "alice");
+  const block = (pageId: string, blockId: string) => ({ id: blockId, page: pageId, kind: "text", order: 1024, content: [{ text: blockId }] });
+  await put(browser, "personal", "pages", "apple", page("apple", user.id));
+  await put(browser, "personal", "pages", "banana", page("banana", user.id));
+  await put(browser, "personal", "blocks", "5_apple_one", block("apple", "one"));
+  await put(browser, "personal", "blocks", "5_apple_two", block("apple", "two"));
+  await put(browser, "personal", "blocks", "6_banana_one", block("banana", "one"));
+  // A cold pull for apple returns its two rows and the collection watermark.
+  const cold = status(await browser.request("/api/records/personal/blocks?after=0&pages=apple:0"), 200);
+  assert.deepEqual(cold.rows.map((row: Json) => row.id).sort(), ["5_apple_one", "5_apple_two"]);
+  assert.deepEqual(cold.deleted, []);
+  assert.ok(cold.latest > 0);
+  // Several pages in one pull merge, each honoured from its own watermark:
+  // banana at 0 is cold, apple at its watermark is quiet.
+  const mixed = status(await browser.request(`/api/records/personal/blocks?after=0&pages=apple:${cold.latest},banana:0`), 200);
+  assert.deepEqual(mixed.rows.map((row: Json) => row.id), ["6_banana_one"]);
+  // A change after apple's watermark surfaces as its page's delta only.
+  await put(browser, "personal", "blocks", "5_apple_three", block("apple", "three"));
+  const later = status(await browser.request(`/api/records/personal/blocks?after=0&pages=apple:${cold.latest}`), 200);
+  assert.deepEqual(later.rows.map((row: Json) => row.id), ["5_apple_three"]);
+  // A deleted block of the page is its tombstone; another page's is not.
+  const three = later.rows[0];
+  status(await browser.structure("/api/records/personal/blocks/5_apple_three", { method: "POST", body: { action: "delete", base: three.value } }), 200);
+  const gone = status(await browser.request(`/api/records/personal/blocks?after=0&pages=apple:${later.latest}`), 200);
+  assert.deepEqual(gone.deleted, ["5_apple_three"]);
+  const otherPage = status(await browser.request(`/api/records/personal/blocks?after=0&pages=banana:${mixed.latest}`), 200);
+  assert.deepEqual(otherPage.deleted, []);
+  assert.deepEqual(otherPage.rows, []);
+});
+
+test("record reads by id: ?ids= returns exactly the named rows (UC-48)", async (t) => {
+  const f = await fixture(t);
+  const browser = f.browser();
+  const user = await register(browser, "alice");
+  await put(browser, "personal", "pages", "kept", page("kept", user.id));
+  await put(browser, "personal", "pages", "other", page("other", user.id));
+  const answer = status(await browser.request("/api/records/personal/pages?ids=kept,missing"), 200);
+  assert.deepEqual(answer.map((row: Json) => row.id), ["kept"]);
+  assert.equal(answer[0].value.id, "kept");
+});
+
 test("public links expose only their page tree and revocation stops anonymous reads", async (t) => {
   const f = await fixture(t);
   const owner = f.browser();

@@ -1,4 +1,4 @@
-import { isBlankBody, lastRootOrder } from "../core/block-tree";
+import { isBlankBody, isLoadedPage, lastRootOrder } from "../core/block-tree";
 import type { Block, NotePage } from "../core/types";
 import type { WorkspaceMutation } from "../platform/workspace-document";
 
@@ -13,9 +13,11 @@ export function bodyPath(pageId: string, blockId: string): string[] {
   return ["pages", pageId, "block_tree", "by_id", blockId];
 }
 
-/** A body nobody has written in gives up its one empty line to what comes. */
+/** A body nobody has written in gives up its one empty line to what comes.
+ *  A parent not pulled in (UC-48) writes nothing of its body: a body the
+ *  caller has not read is never rewritten. */
 function replacingBlank(parent: NotePage): { mutations: WorkspaceMutation[]; order?: number } {
-  if (!isBlankBody(parent.block_tree)) return { mutations: [] };
+  if (!isLoadedPage(parent) || !isBlankBody(parent.block_tree)) return { mutations: [] };
   const blank = Object.values(parent.block_tree.by_id)[0];
   return { mutations: [{ type: "delete", path: bodyPath(parent.id, blank.id) }], order: blank.order };
 }
@@ -23,7 +25,7 @@ function replacingBlank(parent: NotePage): { mutations: WorkspaceMutation[]; ord
 /** Puts a line last in a parent's body — in place of the empty line of a
  *  body nobody has written in. */
 export function linkIntoParent(parent: NotePage | null | undefined, row: Block): WorkspaceMutation[] {
-  if (parent?.kind !== "document") return [];
+  if (parent?.kind !== "document" || !isLoadedPage(parent)) return [];
   const blank = replacingBlank(parent);
   const order = blank.order ?? lastRootOrder(parent.block_tree);
   return [...blank.mutations, { type: "set", path: bodyPath(parent.id, row.id), value: { ...row, parent_id: null, order } }];

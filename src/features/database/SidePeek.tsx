@@ -152,9 +152,11 @@ export function SidePeek({
   pane: number;
   onResize(width: number): void;
 }) {
-  const { canEdit, selectPage } = useWorkspace();
+  const { canEdit, selectPage, loadPages } = useWorkspace();
   const { peekPageId, closePeek } = useUi();
   const page = usePage(peekPageId);
+  // The peeked page's body is pulled in as it opens (UC-48).
+  useEffect(() => { if (peekPageId) loadPages([peekPageId]); }, [loadPages, peekPageId]);
   const open = Boolean(page && !page.archived);
   const { mounted, shown } = useMountTransition(open, PEEK_EXIT_MS);
   const panelRef = useRef<HTMLElement | null>(null);
@@ -285,6 +287,8 @@ export function SidePeek({
             <DatabaseSheet database={drawn} />
           ) : drawn.kind === "app" ? (
             <AppPage page={drawn} />
+          ) : drawn.block_tree === undefined ? (
+            <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>
           ) : (
             <DocumentEditor key="page" page={drawn} readOnly={!canEdit(drawn.id)} properties={<PageProperties page={drawn} />} />
           )}

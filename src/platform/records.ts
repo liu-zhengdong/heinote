@@ -1,5 +1,5 @@
 import type { RichText } from "./schema";
-import { createBlock, normalizeBlockTree, normalizePage } from "../core/block-tree";
+import { bodyBlock, createBlock, normalizeBlockTree, normalizePage } from "../core/block-tree";
 import { inlineFromText, inlinePlainText } from "../core/inline-content";
 import { spaceOfPage, withoutUnhomed } from "../core/page-tree";
 import { contentOfRuns, storedRuns } from "../core/stored-runs";
@@ -184,7 +184,7 @@ export function recordValue(state: WorkspaceState, ref: RecordRef): RecordValue 
     }
     case "blocks": {
       const parsed = parseBlockRecordId(ref.id);
-      const block = parsed && state.pages[parsed.pageId]?.block_tree.by_id[parsed.blockId];
+      const block = parsed && bodyBlock(state.pages[parsed.pageId], parsed.blockId);
       return block && parsed ? { page: parsed.pageId, ...storedBlock(block) } : undefined;
     }
     case "versions": {
@@ -224,7 +224,7 @@ export function pageRecords(state: WorkspaceState, pageId: string): RecordRef[] 
   if (!page) return [];
   return [
     { collection: "pages", id: pageId },
-    ...Object.keys(page.block_tree.by_id).map((blockId) => ({ collection: "blocks" as const, id: blockRecordId(pageId, blockId) })),
+    ...Object.keys(page.block_tree?.by_id ?? {}).map((blockId) => ({ collection: "blocks" as const, id: blockRecordId(pageId, blockId) })),
     ...versionRecords(state, pageId),
   ];
 }
@@ -243,7 +243,7 @@ export function recordsOfPath(state: WorkspaceState, path: readonly string[]): R
   if (root !== "pages" || !id) return [];
   const page = state.pages[id];
   if (path[2] === "block_tree" && path[3] === "by_id" && path[4]) return [{ collection: "blocks", id: blockRecordId(id, path[4]) }];
-  const blocks = page ? Object.keys(page.block_tree.by_id).map((blockId) => ({ collection: "blocks" as const, id: blockRecordId(id, blockId) })) : [];
+  const blocks = page?.block_tree ? Object.keys(page.block_tree.by_id).map((blockId) => ({ collection: "blocks" as const, id: blockRecordId(id, blockId) })) : [];
   if (path[2] === "block_tree") return blocks;
   if (path.length === 2) return [{ collection: "pages", id }, ...blocks];
   return [{ collection: "pages", id }];
@@ -313,6 +313,8 @@ interface Built<T> {
  *  record; for everyone else it opens at the top level. A page whose parents
  *  lead to one this member cannot read is not theirs to see. */
 export class Projector {
+  /** Which plane each projected page's content lives in — for lazy loads. */
+  readonly pagePlanes = new Map<string, string>();
   private readonly blocks = new Map<string, Built<Block>>();
   private readonly pages = new Map<string, Built<Omit<NotePage, "block_tree">>>();
   private readonly trees = new Map<string, { blocks: Block[]; fields: Omit<NotePage, "block_tree">; page: NotePage }>();
@@ -338,7 +340,7 @@ export class Projector {
     return built;
   }
 
-  project(planes: ReadonlyMap<string, PlaneRecords>): WorkspaceState {
+  project(planes: ReadonlyMap<string, PlaneRecords>, loaded?: ReadonlyMap<string, ReadonlySet<string>>): WorkspaceState {
     const personal = planes.get(PERSONAL) ?? emptyPlane();
     const chosen = new Map<string, { plane: string; fields: Omit<NotePage, "block_tree"> }>();
     for (const [id, value] of personal.pages) {
@@ -406,11 +408,27 @@ export class Projector {
 
     const pages: Record<string, NotePage> = {};
     const kept = new Set<string>();
+    this.pagePlanes.clear();
     for (const [id, { plane, fields }] of chosen) {
+      this.pagePlanes.set(id, plane);
       const blocks: Block[] = [];
       for (const [blockId, value] of blocksByPage.get(plane)?.get(id) ?? []) {
         const block = this.reuse(this.blocks, `${plane}|${id}|${blockId}`, value, () => blockOfRecord(blockId, value));
         if (block) blocks.push(block);
+      }
+      // UC-48: an unloaded page keeps no tree; rows held for it mean its
+      // content is here even when the pull arrived indirectly.
+      const isLoaded = loaded === undefined || loaded.get(plane)?.has(id) === true || (loaded !== undefined && blocks.length > 0);
+      if (loaded !== undefined && !isLoaded) {
+        const held = this.trees.get(id);
+        const sameFields = held && (held.fields === fields || json(held.fields) === json(fields));
+        const page = held && sameFields && held.page.block_tree === undefined
+          ? held.page
+          : { ...fields } as NotePage;
+        this.trees.set(id, { blocks: [], fields, page });
+        pages[id] = page;
+        kept.add(id);
+        continue;
       }
       // A page with no paragraph yet shows one to write in.
       if (!blocks.length) {
@@ -421,9 +439,9 @@ export class Projector {
       const held = this.trees.get(id);
       const sameBlocks = held && held.blocks.length === blocks.length && held.blocks.every((block, index) => block === blocks[index]);
       const sameFields = held && (held.fields === fields || json(held.fields) === json(fields));
-      const page = held && sameBlocks && sameFields
+      const page = held && sameBlocks && sameFields && held.page.block_tree !== undefined
         ? held.page
-        : { ...fields, block_tree: held && sameBlocks ? held.page.block_tree : { by_id: Object.fromEntries(blocks.map((block) => [block.id, block])) } } as NotePage;
+        : { ...fields, block_tree: held && sameBlocks && held.page.block_tree ? held.page.block_tree : { by_id: Object.fromEntries(blocks.map((block) => [block.id, block])) } } as NotePage;
       this.trees.set(id, { blocks, fields, page });
       pages[id] = page;
       kept.add(id);

@@ -5,7 +5,7 @@ import { imeComposing } from "../../core/keyboard";
 import { inlinePlainText, inlineReadableText } from "../../core/inline-content";
 import { tableCells, tableGrid } from "../../core/simple-table";
 import { readableDescriber } from "../editor/mentions";
-import { orderedBlocks, pageName } from "../../core/block-tree";
+import { isLoadedPage, orderedBlocks, pageName } from "../../core/block-tree";
 import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
 import { inTrash, pageAncestry } from "../../core/page-tree";
@@ -78,6 +78,7 @@ export function quickFind(allPages: Record<string, NotePage>, query: string): Hi
       scored.push({ hit: { page, crumb: describe(page) }, rank: 1 });
       continue;
     }
+    if (!isLoadedPage(page)) continue;
     const match = orderedBlocks(page.block_tree)
       // A table's words are its cells'.
       .map((block) => (block.kind === "table"

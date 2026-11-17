@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import type { NotePage } from "../src/core/types.ts";
+import type { LoadedNotePage } from "../src/core/types.ts";
 import { fail, hash, type Actor, type Store } from "./store.ts";
 
 /** Agent-facing HTTP writes share one shape: a `requestId` makes them
@@ -12,11 +12,11 @@ export type Reply = { status: number; body: unknown; scope: string; pageIds: str
 
 export const externalScope = (scope: string) => scope.startsWith("user:") ? "personal" : scope;
 
-export function activePage(store: Store, who: Actor, pageId: string, write = false): { page: NotePage; scope: string } {
+export function activePage(store: Store, who: Actor, pageId: string, write = false): { page: LoadedNotePage; scope: string } {
   const found = store.page(who, pageId);
   store.scope(who, externalScope(found.scope), write);
   const pages = store.state(who).pages;
-  for (let page: NotePage | undefined = found.page; page; page = page.parent_id ? pages[page.parent_id] : undefined) {
+  for (let page: LoadedNotePage | undefined = found.page; page; page = page.parent_id ? pages[page.parent_id] : undefined) {
     if (page.archived) fail(409, "页面或父页面已归档。", "conflict");
   }
   return found;

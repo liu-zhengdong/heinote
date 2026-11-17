@@ -272,3 +272,39 @@ describe("saved transport batches and account isolation", () => {
     expect(sent[1].batch.textUpdates[0].generation).toBe("original-generation");
   });
 });
+
+describe("lazy collection pulls (UC-48)", () => {
+  it("pulls only subscribed pages' bodies, marks them, and idles with none", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, _init?: RequestInit) => {
+      if (path === "/api/records/batch") return json([]);
+      asked.push(path);
+      const pages = new URLSearchParams(path.split("?")[1]).get("pages");
+      if (!pages) return json({ latest: 7, rows: [], deleted: [] });
+      const rows = pages.split(",").flatMap((spec) => {
+        const pageId = spec.split(":")[0];
+        return pageId === "empty" ? [] : [{ id: `1_${pageId}_b1`, value: { id: "b1", page: pageId, kind: "text" } }];
+      });
+      return json({ latest: 7, rows, deleted: [] });
+    }));
+    const blocks = await live.LiveCollection.open<Record<string, unknown>>("blocks", "personal", { lazy: true });
+    opened.push(blocks);
+    const emissions: number[] = [];
+    blocks.subscribe(() => emissions.push(emissions.length), { immediate: false });
+    // Nothing subscribed: no request at all.
+    await flush(); expect(asked).toHaveLength(0);
+    expect(blocks.loadedPageIds.size).toBe(0);
+    await blocks.loadPages(["apple"]);
+    expect(blocks.get("1_apple_b1")).toBeTruthy();
+    expect(blocks.loadedPageIds.has("apple")).toBe(true);
+    expect(emissions.length).toBeGreaterThan(0);
+    // An empty page still counts as loaded once pulled (editor leaves the
+    // loading row on an honestly-empty body).
+    const before = emissions.length;
+    await blocks.loadPages(["empty"]);
+    expect(blocks.loadedPageIds.has("empty")).toBe(true);
+    expect(emissions.length).toBeGreaterThan(before);
+    // Rows already mirrored count a page as loaded without a mark.
+    expect(asked.every((path) => path.includes("?after=0&pages="))).toBe(true);
+  });
+});

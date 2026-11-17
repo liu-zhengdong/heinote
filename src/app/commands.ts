@@ -34,7 +34,7 @@
 
 import type app from "../../schema";
 import { createId } from "../core/ids";
-import { createBlock, lineLink, linesFor, orderedBlocks, pageName, withLineLink } from "../core/block-tree";
+import { bodyBlock, createBlock, isLoadedPage, lineLink, linesFor, loadedBodies, orderedBlocks, pageName, withLineLink } from "../core/block-tree";
 import { embedFromUrl, normalizeEmbed } from "../core/embeds";
 import { inlineFromText, isKeptLink, MENTION_CHAR, normalizeInlineContent, normalizeMention } from "../core/inline-content";
 import { descendantPageIds, inTrash } from "../core/page-tree";
@@ -278,7 +278,7 @@ function richContent(host: CommandHost, input: ParagraphInput): InlineContent | 
 /** The bytes of a file paragraph this person has, or of the first picture
  *  among a paragraph's words, to use again. */
 function fileOf(host: CommandHost, blockId: string): StoredFile {
-  for (const page of Object.values(pagesOf(host))) {
+  for (const page of loadedBodies(pagesOf(host))) {
     const block = page.block_tree.by_id[blockId];
     const picture = block?.content.find((run) => run.mention?.kind === "image")?.mention;
     const file = block?.file ?? (picture?.kind === "image" ? picture.file : undefined);
@@ -500,7 +500,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
         if (!id) refuse("not_ready", "HeiNote is still opening in this window: try again in a moment.");
         if (input.icon) h.workspace.updatePage(id, { icon: input.icon });
         const made = pagesOf(h)[id];
-        if (input.text && made) {
+        if (input.text && isLoadedPage(made)) {
           const first = orderedBlocks(made.block_tree)[0];
           if (first) h.workspace.applyBlockMutations(id, [{ action: "put", block: { ...first, content: inlineFromText(input.text) } }]);
         }
@@ -661,7 +661,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
       const holder = current.owner.get(original.id) ?? page.id;
       if (shows && !rowId) refuse("bad_request", "expanded and locked are a page's link's: block_id is a line holding nothing but a link to a page, or the block shown in place.");
       if (input.view) {
-        const row = pagesOf(h)[holder]?.block_tree.by_id[rowId ?? ""];
+        const row = bodyBlock(pagesOf(h)[holder], rowId ?? "");
         const linked = row ? lineLink(row) : null;
         const target = linked?.page_id ? pagesOf(h)[linked.page_id] : undefined;
         if (target?.kind !== "database" || !target.database?.views.some((view) => view.id === input.view)) {
@@ -674,7 +674,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
       return change(h, () => {
         if (edited) writeTree(h, page, { mutations: [{ action: "put", block: edited }] });
         if (shows && rowId) {
-          const row = pagesOf(h)[holder]?.block_tree.by_id[rowId];
+          const row = bodyBlock(pagesOf(h)[holder], rowId);
           if (!row) refuse("not_found", "That row is no longer in its page.");
           const next: Block = withLineLink(row, (link) => {
             const shown = { ...link };

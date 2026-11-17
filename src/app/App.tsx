@@ -27,10 +27,16 @@ const GraphView = lazy(() => import("../features/sidebar/GraphView").then((modul
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 
 /** The open page's editor, redrawn as the page changes — the shell around it
- *  is not. */
+ *  is not. A page whose body is still being pulled in (UC-48) shows a quiet
+ *  loading row where its words will be. */
 function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: NotePage | null; readOnly: boolean }) {
   const page = usePage(pageId);
+  const { loadPages } = useWorkspace();
+  useEffect(() => { loadPages([pageId]); }, [loadPages, pageId]);
   if (!page) return null;
+  if (!preview && page.block_tree === undefined) {
+    return <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>;
+  }
   return <DocumentEditor page={preview ?? page} readOnly={readOnly} historical={Boolean(preview)} />;
 }
 

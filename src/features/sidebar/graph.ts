@@ -1,4 +1,4 @@
-import { lineLink, pageName } from "../../core/block-tree";
+import { bodyBlock, lineLink, pageName } from "../../core/block-tree";
 import { pageAncestry } from "../../core/page-tree";
 import { DEFAULT_GRAPH_SETTINGS, matchesGraphQuery, pagePath, parseGraphQuery } from "../../core/graph-settings";
 import type { GraphSettings, NotePage } from "../../core/types";
@@ -72,7 +72,7 @@ export function buildGraph(pages: Record<string, NotePage>, references: Readonly
       const source = pages[reference.pageId];
       if (!source || !nodes.has(source.id)) continue;
       // A page's own row in its parent is where it lives: held, not linked.
-      const paragraph = source.block_tree.by_id[reference.paragraphId];
+      const paragraph = bodyBlock(source, reference.paragraphId);
       if (paragraph && lineLink(paragraph)?.page_id === target && pages[target]?.parent_id === source.id) continue;
       edge(source.id, target, "links");
     }

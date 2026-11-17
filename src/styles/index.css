@@ -2701,6 +2701,26 @@ kbd {
   flex-direction: column;
 }
 
+/* A page whose body is still being pulled in (UC-48): quiet lines where its
+   words will be — breathed, never spun. */
+.page-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px 2px;
+}
+
+.page-loading__line {
+  display: block;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--fill-active);
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+.page-loading__line:nth-child(2) { width: 82%; }
+.page-loading__line:nth-child(3) { width: 56%; }
+
 /* The others on the page: their caret, their name at it and what they
    select, in their avatar's colour (RemoteCarets). */
 .remote-carets {

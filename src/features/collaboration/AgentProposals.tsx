@@ -9,6 +9,7 @@ import { Modal } from "../../components/Modal";
 import { personName } from "../../components/ProfileAvatar";
 import { AuthorAvatar } from "../../components/AgentMark";
 import { Tooltip } from "../../components/Tooltip";
+import { bodyBlock } from "../../core/block-tree";
 import { inlinePlainText } from "../../core/inline-content";
 import type { NotePage, Person } from "../../core/types";
 import { ApiError, request } from "../../platform/http";
@@ -40,7 +41,7 @@ const TextDifference = memo(function TextDifference({ before, after }: TextPrevi
   </div>;
 });
 function OperationPreview({ operation, page }: { operation: Operation; page: NotePage | null }) {
-  const block = "blockId" in operation ? page?.block_tree.by_id[operation.blockId] : undefined;
+  const block = "blockId" in operation ? bodyBlock(page, operation.blockId) : undefined;
   const current = block ? inlinePlainText(block.content) : null;
   const removed = operation.type === "delete_text" && current !== null ? current.slice(operation.index, operation.index + operation.length)
     : operation.type === "delete_block" ? current : null;

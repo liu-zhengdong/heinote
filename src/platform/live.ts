@@ -350,21 +350,73 @@ export class LiveCollection<R extends object> {
   /** The server's record changelog watermark this mirror reached (ISS-12).
    *  Polls send it as `after`; 0 means a cold pull of the whole collection. */
   private latest = 0;
+  /** Lazy collections (UC-48 blocks): each page's watermark, or 0 for a page
+   *  asked for but not pulled yet. Only these pages are mirrored; the poll
+   *  sends them as `pages=<id>:<seq>` specs instead of `after`. */
+  private readonly pageWatermarks = new Map<string, number>();
   private stop: () => void;
-  private constructor(readonly name: string, readonly scope: string) {
+  private constructor(readonly name: string, readonly scope: string, private readonly lazy = false) {
     this.stop = onScopeChange(scope, () => {
       // Collaboration snapshots replace only page and block records.
       if (name === "pages" || name === "blocks") this.epoch += 1;
       this.emit();
     });
   }
-  static async open<R extends object>(name: string, scope: string): Promise<LiveCollection<R>> {
-    const live = new LiveCollection<R>(name, scope);
+  static async open<R extends object>(name: string, scope: string, options: { lazy?: boolean } = {}): Promise<LiveCollection<R>> {
+    const live = new LiveCollection<R>(name, scope, options.lazy ?? false);
     const key = collectionKey(scope, name); const group = collections.get(key) ?? new Set(); group.add(live as LiveCollection<object>); collections.set(key, group);
     try { await live.refresh(); live.schedule(); return live; }
     catch (error) { await live.close(); throw error; }
   }
+  /** The pages this lazy mirror holds (or is pulling), for the projector's
+   *  loaded-vs-unloaded decision. Pages with remote rows count too: their
+   *  content is here even if it arrived before any explicit load. */
+  get loadedPageIds(): ReadonlySet<string> {
+    const ids = new Set(this.pageWatermarks.keys());
+    if (this.lazy) for (const [id, value] of this.remote) {
+      const parsed = parseBlockRecordId(id);
+      if (parsed) ids.add(parsed.pageId);
+      else if (typeof (value as Value).page === "string") ids.add((value as Value).page as string);
+    }
+    return ids;
+  }
+  /** Subscribe a set of pages into a lazy mirror. New pages start at
+   *  watermark 0 so the next pull carries their whole content. */
+  async loadPages(pageIds: readonly string[]): Promise<void> {
+    if (!this.lazy || this.closed) return;
+    let added = false;
+    for (const pageId of pageIds) if (!this.pageWatermarks.has(pageId)) { this.pageWatermarks.set(pageId, 0); added = true; }
+    if (added) await this.refresh().catch(() => undefined);
+  }
   private async refresh(): Promise<void> {
+    if (this.lazy) {
+      // Nothing subscribed: no request at all — idle cost is zero.
+      if (!this.pageWatermarks.size) return;
+      const epoch = this.epoch;
+      const specs = [...this.pageWatermarks].map(([pageId, mark]) => `${pageId}:${mark}`);
+      // ~100 ids per request keeps the URL under proxy limits on big sets.
+      const chunks: string[][] = [];
+      for (let index = 0; index < specs.length; index += 100) chunks.push(specs.slice(index, index + 100));
+      let changed = false;
+      for (const chunk of chunks) {
+        const delta = await request<{ latest: number; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
+          `/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=0&pages=${chunk.map((spec) => encodeURIComponent(spec)).join(",")}`);
+        if (this.closed || epoch !== this.epoch) return;
+        for (const row of delta.rows) { this.remote.set(row.id, row.value); changed = true; }
+        for (const id of delta.deleted) { if (this.remote.delete(id)) changed = true; }
+        for (const spec of chunk) {
+          const pageId = spec.slice(0, spec.lastIndexOf(":"));
+          const before = this.pageWatermarks.get(pageId);
+          if (before === undefined || before === delta.latest) continue;
+          // A first pull is a load even when the page holds nothing: emit
+          // so its body can project (and its editor leave the loading row).
+          if (before === 0) changed = true;
+          this.pageWatermarks.set(pageId, delta.latest);
+        }
+      }
+      if (changed) this.emit();
+      return;
+    }
     const epoch = this.epoch;
     // Delta since our watermark; a server whose watermark moved backwards
     // (restored backup, fresh database) is re-pulled cold with after=0.
@@ -400,6 +452,10 @@ export class LiveCollection<R extends object> {
     if (this.name === "blocks") {
       for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId) this.remote.delete(id);
       for (const row of snapshot.records.blocks) this.remote.set(row.id, row.value as R);
+      // A snapshot is authoritative page content: the page counts as loaded
+      // even without an explicit subscription (UC-48).
+      if (this.lazy && !this.pageWatermarks.has(snapshot.pageId))
+        this.pageWatermarks.set(snapshot.pageId, Math.max(0, ...this.pageWatermarks.values()));
     }
   }
   restoreWrite(write: Write): void { this.pending.push(write); this.emit(); }

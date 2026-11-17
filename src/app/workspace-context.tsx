@@ -11,7 +11,7 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import { createId } from "../core/ids";
-import { BLOCK_ORDER_STEP, linesFor, newPage, orderedBlocks, pageLine, pageName, relinkContent } from "../core/block-tree";
+import { BLOCK_ORDER_STEP, isLoadedPage, linesFor, newPage, orderedBlocks, pageLine, pageName, relinkContent } from "../core/block-tree";
 import { emptyWorkspace } from "../core/workspace-state";
 import { newDatabaseConfig } from "../features/database/database-model";
 import type {
@@ -82,6 +82,9 @@ export interface WorkspaceContextValue {
   refreshSpaces(): Promise<void>;
   knowledgeBases: KnowledgeBaseClient;
   selectPage(pageId: string): void;
+  /** Pulls pages' bodies into the window (UC-48). Idempotent; safe to call
+   *  from rendering code whenever a page is about to be shown or read. */
+  loadPages(pageIds: readonly string[]): void;
   /** Whether the page pane shows the graph instead of the selected page —
    *  opened there as a note opens there. Choosing a page, even the one that
    *  was open, or making one, puts the page back. */
@@ -402,9 +405,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const scope = spaceOfPage(pages, pageId) ?? "personal";
       void openCollaborativePage(scope, pageId).catch(() => undefined);
     }
+    // The page's body joins the mirror as it opens (UC-48).
+    void document?.loadPages([pageId]).catch(() => undefined);
     setSelectedPageId(pageId);
     setGraphFor(null);
-  }, [store]);
+  }, [store, document]);
+
+  /** UC-48 body pulls: fire-and-forget, the projector marks a page loaded
+   *  when its blocks arrive. */
+  const loadPages = useCallback((pageIds: readonly string[]) => {
+    void document?.loadPages(pageIds).catch(() => undefined);
+  }, [document]);
 
   const openGraph = useCallback(() => setGraphFor(selectedRef.current), []);
   const closeGraph = useCallback(() => setGraphFor(null), []);
@@ -480,7 +491,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const mutations: WorkspaceMutation[] = [{ type: "set", path: ["pages", id], value: page }];
     const parent = parentId ? document.state.pages[parentId] : null;
     if (!parentId) mutations.push({ type: "set", path: ["roots"], value: [...document.state.roots, id] });
-    if (options.block) mutations.push(...linkIntoParent(parent, pageLine(createId("block"), id)));
+    if (options.block) {
+      const link = linkIntoParent(parent, pageLine(createId("block"), id));
+      if (link.length) mutations.push(...link);
+      /* A parent whose body is not pulled in (UC-48) gets its link late:
+         the body is pulled, then the line lands among its rows — the page
+         is never left out of where it was made. */
+      else if (parent && !isLoadedPage(parent)) {
+        void document.loadPages([parent.id]).then(() => {
+          const fresh = document.state.pages[parent.id];
+          if (fresh?.kind === "document") commit(linkIntoParent(fresh, pageLine(createId("block"), id)));
+        }).catch(() => undefined);
+      }
+    }
     commit(mutations);
     if (options.select !== false) setSelectedPageId(id);
     return id;
@@ -515,7 +538,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     ]);
   }, [commit, document, platform]);
 
-  const duplicatePage = useCallback((pageId: string, options: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean } = {}) => {
+  const duplicateNow = useCallback((pageId: string, options: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean } = {}) => {
     if (!document || !platform) return null;
     const source = document.state.pages[pageId];
     if (!source) return null;
@@ -539,7 +562,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       const title = originalId === pageId && !options.sameTitle ? `${pageName(original)} (copy)` : original.title;
       const copy: NotePage = {
         ...structuredClone(original),
-        block_tree: remapPageBlocks(structuredClone(original.block_tree), idByOriginal),
+        ...(original.block_tree ? { block_tree: remapPageBlocks(structuredClone(original.block_tree), idByOriginal) } : {}),
         id: copyId,
         // The copy's name keeps the original's links.
         ...renamedTitle(original, title),
@@ -572,8 +595,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     // copy bound for the personal space has no parent there — skip the
     // back-reference entirely.
     const holder = !options.toPersonal && source.parent_id ? document.state.pages[source.parent_id] : undefined;
-    const home = options.block !== false && holder?.kind === "document" ? linesFor(holder.block_tree, pageId)[0] : undefined;
-    if (holder && home) {
+    const home = options.block !== false && holder?.kind === "document" && isLoadedPage(holder) ? linesFor(holder.block_tree, pageId)[0] : undefined;
+    if (holder && home && isLoadedPage(holder)) {
       const siblings = orderedBlocks(holder.block_tree, home.parent_id);
       const next = siblings[siblings.findIndex((block) => block.id === home.id) + 1];
       const blockId = createId("block");
@@ -592,6 +615,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return rootCopyId;
   }, [commit, document, platform]);
 
+  /* Copying needs every body of the tree: an unread page's copy would be
+     born empty. The synchronous path runs when it is all in; otherwise the
+     bodies are pulled (UC-48) and the copy made then — callers of the slow
+     path get `null` now and the page appears on its own. */
+  const duplicatePage = useCallback((pageId: string, options: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean } = {}) => {
+    if (!document || !platform) return null;
+    const needed = [pageId, ...descendantPageIds(document.state.pages, pageId)];
+    const missing = needed.filter((id) => !isLoadedPage(document.state.pages[id]));
+    if (missing.length) {
+      void document.loadPages(missing).then(() => duplicateNow(pageId, options)).catch(() => undefined);
+      return null;
+    }
+    return duplicateNow(pageId, options);
+  }, [document, platform, duplicateNow]);
+
   /** Re-parents a page. Refuses to drop a page inside its own subtree, which is
    *  the only move that could orphan a branch. */
   const movePage = useCallback((pageId: string, parentId: string | null) => {
@@ -600,6 +638,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!page || page.parent_id === parentId || pageId === parentId) return;
     if (!canMovePageIn(document.state.pages, spacesRef.current, pageId, parentId)) return;
     if (parentId && descendantPageIds(document.state.pages, pageId).includes(parentId)) return;
+    /* A move across spaces carries the tree's records into the other plane:
+       bodies not pulled in (UC-48) are pulled first, then the move retries —
+       same contract sharePageTree holds. */
+    const crossing = parentId && spaceOfPage(document.state.pages, pageId) !== spaceOfPage(document.state.pages, parentId);
+    if (crossing) {
+      const missing = [pageId, ...descendantPageIds(document.state.pages, pageId)].filter((id) => !isLoadedPage(document.state.pages[id]));
+      if (missing.length) {
+        void document.loadPages(missing).then(() => movePage(pageId, parentId)).catch(() => undefined);
+        return;
+      }
+    }
     const mutations: WorkspaceMutation[] = [
       { type: "set", path: ["pages", pageId, "parent_id"], value: parentId },
     ];
@@ -1032,6 +1081,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     refreshSpaces,
     knowledgeBases,
     selectPage,
+    loadPages,
     graphOpen,
     openGraph,
     closeGraph,
@@ -1080,6 +1130,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     refreshSpaces,
     knowledgeBases,
     selectPage,
+    loadPages,
     graphOpen,
     openGraph,
     closeGraph,

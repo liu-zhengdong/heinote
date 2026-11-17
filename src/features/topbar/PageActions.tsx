@@ -98,7 +98,7 @@ export function PageActions({
   /* The page it is drawn in, in place, when it is a block there. */
   const holder = usePage(page.parent_id);
   const shownIn = holder?.kind === "document"
-    && Object.values(holder.block_tree.by_id).some((row) => lineLink(row)?.page_id === page.id && lineLink(row)?.expanded)
+    && Object.values(holder.block_tree?.by_id ?? {}).some((row) => lineLink(row)?.page_id === page.id && lineLink(row)?.expanded)
     ? holder
     : undefined;
   const sharing = sharePageId === page.id;

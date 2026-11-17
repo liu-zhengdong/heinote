@@ -30,7 +30,7 @@
    7. One step of undo each way, and every other member sees one change.
    8. Someone who may only read the page changes nothing. */
 
-import { BLOCK_ORDER_STEP, linesFor, lineLink, createBlock, descendantsOf, newPage, orderedBlocks } from "../../core/block-tree";
+import { BLOCK_ORDER_STEP, isLoadedPage, linesFor, lineLink, createBlock, descendantsOf, newPage, orderedBlocks } from "../../core/block-tree";
 import { inlineFromText, inlinePlainText, inlineReadable, type DescribeMention } from "../../core/inline-content";
 import { tableCells, tableFromCells, tableGrid } from "../../core/simple-table";
 import { pageTitleContent, titleFields } from "../../core/title";
@@ -184,7 +184,9 @@ export function databaseConvertible(pages: Record<string, NotePage>, databaseId:
   if (!database || !config) return { table: "This is not a database.", list: "This is not a database." };
   const rows = databaseRows(pages, databaseId);
   const children = new Set(Object.values(pages).map((page) => page.parent_id));
-  const full = rows.filter((row) => !emptyBody(row.block_tree) || children.has(row.id));
+  // A row not pulled in counts as full: it might hold content — the
+  // conversion is never offered while one is unread (UC-48).
+  const full = rows.filter((row) => !row.block_tree || !emptyBody(row.block_tree) || children.has(row.id));
   const pictured = rows.some((row) => row.cover_image || row.cover
     || config.properties.some((property) => property.type === "image" && rowImages(row, property.id).length));
   const table = full.length
@@ -277,9 +279,11 @@ export function databaseToBlocks(
 
   // Drawn in the page holding it: the blocks stand where it was drawn.
   const holder = database.parent_id ? pages[database.parent_id] : undefined;
+  // A holder not pulled in draws nothing into it: the rows land in the
+  // database's own body instead.
   const drawn = holder?.kind === "document" ? linesFor(holder.block_tree, databaseId) : [];
   const shownAt = drawn.find((block) => lineLink(block)?.expanded) ?? drawn[0];
-  if (holder && shownAt && lineLink(shownAt)?.expanded) {
+  if (holder && isLoadedPage(holder) && shownAt && lineLink(shownAt)?.expanded) {
     const siblings = orderedBlocks(holder.block_tree, shownAt.parent_id);
     const next = siblings[siblings.findIndex((block) => block.id === shownAt.id) + 1];
     const heading = database.title.trim()
@@ -304,7 +308,7 @@ export function databaseToBlocks(
   const blocks = made.map((block, index) => ({ ...block, parent_id: null, order: (index + 1) * BLOCK_ORDER_STEP }));
   return {
     mutations: [
-      ...Object.keys(database.block_tree.by_id).map((blockId): WorkspaceMutation => ({ type: "delete", path: ["pages", databaseId, "block_tree", "by_id", blockId] })),
+      ...Object.keys(database.block_tree?.by_id ?? {}).map((blockId): WorkspaceMutation => ({ type: "delete", path: ["pages", databaseId, "block_tree", "by_id", blockId] })),
       ...blocks.map((block): WorkspaceMutation => ({ type: "set", path: ["pages", databaseId, "block_tree", "by_id", block.id], value: block })),
       { type: "set", path: ["pages", databaseId, "kind"], value: "document" },
       { type: "delete", path: ["pages", databaseId, "database"] },

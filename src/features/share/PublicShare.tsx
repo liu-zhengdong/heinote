@@ -255,7 +255,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
                 ? <AppSurface page={active} shareToken={token} />
                 : <p className="account-muted">小应用尚未启用。</p>
             ) : (
-              <BlockChildren tree={active.block_tree} context={context} />
+              <BlockChildren tree={active.block_tree!} context={context} />
             )}
             {document ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
               <a key={page.id} href={pageHref(page.id)}><PublicPageIcon page={page} token={token} size={16} />{titleOf(page)}</a>)}</nav> : null}

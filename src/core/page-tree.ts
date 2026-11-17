@@ -57,7 +57,8 @@ export function pageHolders(pages: Record<string, NotePage>): ReadonlySet<string
  *  values when what was in it is gone. */
 export function isBareRow(pages: Record<string, NotePage>, page: NotePage | undefined): boolean {
   if (!page || !isRow(pages, page) || page.icon || page.icon_image || page.cover || page.cover_image) return false;
-  return !pageHolders(pages).has(page.id) && !bodyHolds(page.block_tree);
+  // A row whose body is not pulled in counts as held: unknown stays shown.
+  return !pageHolders(pages).has(page.id) && !(page.block_tree ? bodyHolds(page.block_tree) : true);
 }
 
 /** Every page under a page, nearest first — from one pass over the pages. */

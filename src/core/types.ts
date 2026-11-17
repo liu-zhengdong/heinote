@@ -223,11 +223,25 @@ export type NotePage = Omit<PageRecord, "title_content" | "parent_id" | "propert
   title: string;
   title_content?: InlineContent;
   parent_id: string | null;
-  block_tree: BlockTree;
+  /** The page's paragraphs. Absent while the page's content has not been
+   *  pulled into this window (UC-48): every reader must handle it. */
+  block_tree?: BlockTree;
   properties?: Record<string, string>;
   property_files?: Record<string, StoredFile[]>;
   database?: DatabaseConfig;
 };
+
+/** A page whose body is in this window (UC-48). Paths that read or write a
+ *  page's paragraphs take this type: their callers establish it by loading
+ *  the page first (navigation, a command's entry), so inside them
+ *  `block_tree` is never absent. */
+export type LoadedNotePage = NotePage & { block_tree: BlockTree };
+
+/** The same workspace with every body present — the server's view: its
+ *  reads assemble whole pages, so inside it `block_tree` is never absent. */
+export interface LoadedWorkspaceState extends Omit<WorkspaceState, "pages"> {
+  pages: Record<string, LoadedNotePage>;
+}
 
 /** A checkpoint of a page: the page as it was, kept in its history's parts
  *  (platform/history-record.ts). */

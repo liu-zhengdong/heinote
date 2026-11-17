@@ -192,10 +192,12 @@ export function referenceIndex(pages: Record<string, NotePage>): ReadonlyMap<str
   if (known) return known;
   const index = new Map<string, BlockReference[]>();
   const sources = Object.values(pages)
+    // Unloaded bodies index nothing (UC-48): the index is partial and a
+    // missing link only means "not pulled in", never "nobody links here".
     .filter((page) => !page.archived && page.block_tree)
     .toSorted((left, right) => nameOf(left).localeCompare(nameOf(right)) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   for (const page of sources) {
-    for (const [target, paragraphs] of linksIn(page.block_tree).targets) {
+    for (const [target, paragraphs] of linksIn(page.block_tree!).targets) {
       const references = index.get(target) ?? [];
       references.push(...paragraphs.map((paragraphId) => ({ pageId: page.id, paragraphId })));
       index.set(target, references);

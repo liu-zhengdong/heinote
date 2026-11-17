@@ -12,9 +12,29 @@ import {
 } from "./inline-content";
 import { normalizeEmbed } from "./embeds";
 import { normalizeSimpleTable } from "./simple-table";
-import type { Block, BlockKind, BlockTree, InlineContent, NotePage } from "./types";
+import type { Block, BlockKind, BlockTree, InlineContent, LoadedNotePage, NotePage } from "./types";
 
 export const BLOCK_ORDER_STEP = 1024;
+
+/** UC-48 page-body loading, the two places policy lives:
+ *  - `isLoadedPage` narrows a page to `LoadedNotePage` — the body-present
+ *    invariant write paths and the editor depend on.
+ *  - `loadedBodies` gives every cross-page scan the same rule: a body not
+ *    pulled in contributes nothing. Missing means "not loaded", never
+ *    "empty" — the caller's job is to say what partial results are for. */
+export function isLoadedPage(page: NotePage | null | undefined): page is LoadedNotePage {
+  return page?.block_tree !== undefined;
+}
+export function loadedBodies(pages: Readonly<Record<string, NotePage>>): LoadedNotePage[] {
+  return Object.values(pages).filter(isLoadedPage);
+}
+/** A block of a page that may not be pulled in — the one idiom for looking
+ *  into another page's body. */
+export function bodyBlock(page: Pick<NotePage, "block_tree"> | null | undefined, blockId: string): Block | undefined {
+  return page?.block_tree?.by_id[blockId];
+}
+/** A body with no paragraphs: the shared value for "loaded but empty". */
+export const EMPTY_TREE: BlockTree = { by_id: {} };
 
 export function createBlock(
   id: string,
@@ -95,7 +115,7 @@ export function newPage(
   parentId: string | null,
   stamp: { now: string; author: string },
   blockId: string,
-): NotePage {
+): LoadedNotePage {
   return {
     id,
     title: "",
@@ -173,7 +193,7 @@ function firstLineUnder(tree: BlockTree, parentId: string | null, describe?: Des
  *  it is named, as a block made from paragraphs is. Empty for one with no
  *  words. */
 export function pageFirstLine(page: Pick<NotePage, "block_tree">, describe?: DescribeMention): string {
-  return firstLineUnder(page.block_tree, null, describe);
+  return page.block_tree ? firstLineUnder(page.block_tree, null, describe) : "";
 }
 
 /** What a page is called: its title, or — unnamed — its first line, or

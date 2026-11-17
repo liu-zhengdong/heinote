@@ -1,4 +1,4 @@
-import { pageName } from "../../core/block-tree";
+import { bodyBlock, pageName } from "../../core/block-tree";
 import { inlineReadableText, type DescribeMention } from "../../core/inline-content";
 import type { NotePage } from "../../core/types";
 import { MenuItem, MenuList } from "../../components/Menu";
@@ -39,7 +39,7 @@ export function BlockBacklinks({
         </div>
         {references.map((reference) => {
           const page = pages[reference.pageId];
-          const paragraph = page?.block_tree.by_id[reference.paragraphId];
+          const paragraph = bodyBlock(page, reference.paragraphId);
           if (!page || !paragraph) return null;
           const passage = inlineReadableText(paragraph.content, describe).replace(/\s+/g, " ").trim();
           return (

@@ -27,7 +27,8 @@ export class Plane {
    *  member's own alone. */
   static async open(spaceId?: string): Promise<Plane> {
     const names: readonly HeiNoteCollection[] = spaceId ? SPACE_COLLECTIONS : COLLECTIONS;
-    const settled = await Promise.allSettled(names.map((name) => (spaceId ? HANDLES[name].in(spaceId) : HANDLES[name]).live()));
+    // UC-48: blocks mirror pages on demand — everything else stays eager.
+    const settled = await Promise.allSettled(names.map((name) => (spaceId ? HANDLES[name].in(spaceId) : HANDLES[name]).live({ lazy: name === "blocks" })));
     const opened = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     const refused = settled.find((result) => result.status === "rejected");
     if (refused) {
@@ -55,6 +56,18 @@ export class Plane {
   /** A record as the plane shows it now: what the next write is made over. */
   get(ref: RecordRef): RecordValue | undefined {
     return this.live.get(ref.collection)?.get(ref.id);
+  }
+
+  /** The pages this plane's blocks mirror holds (UC-48): the projector marks
+   *  these loaded; the rest project without a body. */
+  get loadedPageIds(): ReadonlySet<string> {
+    return this.live.get("blocks")?.loadedPageIds ?? new Set();
+  }
+
+  /** Pull these pages' blocks into the mirror. Safe to call for pages the
+   *  plane does not own; those simply pull nothing. */
+  async loadPages(pageIds: readonly string[]): Promise<void> {
+    await this.live.get("blocks")?.loadPages(pageIds);
   }
 
   /** Hands a write to its collection; settles once it is stored, or refused

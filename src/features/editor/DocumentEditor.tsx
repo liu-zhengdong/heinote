@@ -292,6 +292,10 @@ export function DocumentEditor({
   const showInPlace = useCallback((_row: Block, target: NotePage) => readOnly || canEdit(target.id), [canEdit, readOnly]);
   const composite = useMemo(() => composeTree(pages, page, showInPlace), [page, pages, showInPlace]);
   const tree = composite.tree;
+  /* Pages shown in place arrive as their lines load them (UC-48): an
+     expanded link's page is pulled in, then redrawn where it stands. */
+  const { loadPages } = useWorkspace();
+  useEffect(() => { if (composite.unloaded.size) loadPages([...composite.unloaded]); }, [composite, loadPages]);
   /** The page holding a line drawn here: the block it is written in, or this
    *  page. */
   const ownerOf = useCallback((blockId: string): string => composite.owner.get(blockId) ?? page.id, [composite, page.id]);
@@ -439,7 +443,7 @@ export function DocumentEditor({
      A page created *to be shared* opens the Share dialog first — this waits
      behind it, then takes the caret once that dialog closes. */
   useEffect(() => {
-    if (readOnly || embed || page.title || sharePageId) return;
+    if (readOnly || embed || page.title || sharePageId || !page.block_tree) return;
     const blocks = Object.values(page.block_tree.by_id);
     if (blocks.length > 1 || blocks.some((block) => inlinePlainText(block.content))) return;
     titleRef.current?.focus();
@@ -907,7 +911,8 @@ export function DocumentEditor({
     const pages = store.getState().pages;
     const target = pages[targetId];
     const tops = topLevelBlocks(tree, ids);
-    if (!target || !tops.length) return;
+    // The target must be loaded: its blocks carry what is moved there.
+    if (!target?.block_tree || !tops.length) return;
     const blocks = new Set(tops.filter((block) => composite.rows.has(block.id)).map((block) => block.id));
     // A block goes as the page it is, its line with it.
     for (const pageId of movingPages(ids)) movePage(pageId, targetId);
@@ -916,7 +921,7 @@ export function DocumentEditor({
       const fragment = storedFragment(composite, extractFragment(tree, lines));
       execute(deleteBlocks(tree, lines, createId("block")), undefined, { cut: lines });
       const latest = (workspace?.state.pages ?? pages)[targetId] ?? target;
-      applyBlockMutations(targetId, appendFragment(latest.block_tree, fragment));
+      applyBlockMutations(targetId, appendFragment(latest.block_tree!, fragment));
     }
     setBlockSelection(null);
     toast(`Moved to ${pageName(target)}`, "success");
@@ -1022,7 +1027,7 @@ export function DocumentEditor({
     const live = workspace?.state.pages ?? pages;
     const holder = composite.owner.get(ref.row);
     const rowId = composite.rows.get(ref.row);
-    const row = holder && rowId ? live[holder]?.block_tree.by_id[rowId] : undefined;
+    const row = holder && rowId ? live[holder]?.block_tree?.by_id[rowId] : undefined;
     if (!platform || !holder || !row || Boolean(lineLink(row)?.expanded) === shown) return;
     const next: Block = withLineLink(row, fold);
     commitWrites([
@@ -1172,7 +1177,7 @@ export function DocumentEditor({
    *  link to it is shown. */
   const mountsOf = useCallback((pageId: string): BlockReference[] => (references.get(pageId) ?? []).filter((reference) => {
     if (reference.pageId === ownerOf(pageId)) return false;
-    const paragraph = pages[reference.pageId]?.block_tree.by_id[reference.paragraphId];
+    const paragraph = pages[reference.pageId]?.block_tree?.by_id[reference.paragraphId];
     return Boolean(paragraph?.content.some((run) => run.mention?.kind === "page" && run.mention.page_id === pageId && run.mention.expanded));
   }), [ownerOf, pages, references]);
 
@@ -1182,8 +1187,8 @@ export function DocumentEditor({
   const rehomeBlock = useCallback((blockId: string) => {
     const mount = mountsOf(blockId)[0];
     const target = mount ? pages[mount.pageId] : undefined;
-    const paragraph = mount ? target?.block_tree.by_id[mount.paragraphId] : undefined;
-    if (!mount || !target || !paragraph) return;
+    const paragraph = mount ? target?.block_tree?.by_id[mount.paragraphId] : undefined;
+    if (!mount || !target?.block_tree || !paragraph) return;
     const shownLink = mountedLink(paragraph.content);
     const whole = shownLink?.kind === "page" && shownLink.page_id === blockId;
     const siblings = orderedBlocks(target.block_tree, paragraph.parent_id);
@@ -1559,7 +1564,7 @@ export function DocumentEditor({
     if (readOnly || !platform || !writes.length) return false;
     const live = workspace?.state.pages ?? pages;
     const owner = ownerOf(block.id);
-    const stored = live[owner]?.block_tree.by_id[block.id];
+    const stored = live[owner]?.block_tree?.by_id[block.id];
     if (stored?.kind !== "table") return false;
     const before = stored.table ?? normalizeSimpleTable(undefined);
     const size = tableBytes(applyTableWrites(before, writes));

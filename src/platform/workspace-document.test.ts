@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SpaceSummary } from "../core/types";
 import type { PlatformClient } from "./client";
-import { blockRecordId } from "./record-ids";
+import { blockRecordId, parseBlockRecordId } from "./record-ids";
 import { Plane } from "./plane";
 import { WorkspaceDocument } from "./workspace-document";
 
@@ -140,8 +140,29 @@ beforeEach(() => {
     }
     const held = heldReads.get(path.split("?")[0])?.shift();
     if (held) { held.started(); return held.response; }
-    const match = /^\/api\/records\/([^/]+)\/([^/?]+)(?:\?after=(\d+))?$/.exec(path);
-    if (match) return match[3] === undefined ? json(rows(decodeURIComponent(match[1]), match[2])) : json(delta(decodeURIComponent(match[1]), match[2], Number(match[3])));
+    const match = /^\/api\/records\/([^/]+)\/([^/?]+)\??(.*)$/.exec(path);
+    if (match) {
+      const scope = decodeURIComponent(match[1]); const collection = match[2]; const query = new URLSearchParams(match[3]);
+      const ids = query.get("ids");
+      if (ids !== null) return json(ids.split(",").flatMap((id) => { const value = records(scope, collection).get(id); return value === undefined ? [] : [{ id, value }]; }));
+      const pages = query.get("pages");
+      if (pages !== null) {
+        // UC-48: each `pageId:seq` spec is that page's own watermark.
+        const rowsOut: Row[] = []; const deletedOut: string[] = []; let latest = 0;
+        for (const spec of pages.split(",")) {
+          const [pageId, since = "0"] = spec.split(":", 2);
+          const part = delta(scope, collection, Number(since));
+          latest = Math.max(latest, part.latest);
+          const inPage = (id: string, value: Value | null) => value && typeof value.page === "string" ? value.page === pageId : parseBlockRecordId(id)?.pageId === pageId;
+          for (const row of part.rows) if (inPage(row.id, row.value)) rowsOut.push(row);
+          for (const id of part.deleted) if (inPage(id, records(scope, collection).get(id) ?? null)) deletedOut.push(id);
+        }
+        return json({ latest, rows: rowsOut, deleted: deletedOut });
+      }
+      const after = query.get("after");
+      if (after !== null) return json(delta(scope, collection, Number(after)));
+      return json(rows(scope, collection));
+    }
     throw new Error(`Unexpected request: ${path}`);
   }));
 });

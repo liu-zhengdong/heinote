@@ -48,7 +48,7 @@ import { Select } from "../../components/Select";
 import { Tooltip } from "../../components/Tooltip";
 import { imeComposing } from "../../core/keyboard";
 import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
-import { orderedBlocks, pageName } from "../../core/block-tree";
+import { EMPTY_TREE, orderedBlocks, pageName } from "../../core/block-tree";
 import { createId } from "../../core/ids";
 import { inlinePlainText, isoDate } from "../../core/inline-content";
 import { pageTitleContent, titleFields } from "../../core/title";
@@ -269,9 +269,10 @@ function RowChips({
   );
 }
 
-/** The first lines a page actually says, for cards that preview it. */
+/** The first lines a page actually says, for cards that preview it. A row
+ *  whose body is not pulled in previews nothing. */
 function previewText(row: NotePage, lines: number): string[] {
-  return orderedBlocks(row.block_tree)
+  return orderedBlocks(row.block_tree ?? EMPTY_TREE)
     .map((block) => inlinePlainText(block.content).trim())
     .filter(Boolean)
     .slice(0, lines);
@@ -1497,7 +1498,7 @@ export function DatabaseView({
    *  no tabs to switch with, and nothing here is changed. */
   pinnedViewId?: string;
 }) {
-  const { document, preferences, setPreference, updatePage: writePage, createPage, selectPage, archivePage, canEdit, commitWrites, platform } = useWorkspace();
+  const { document, preferences, setPreference, updatePage: writePage, createPage, selectPage, archivePage, canEdit, commitWrites, platform, loadPages } = useWorkspace();
   const { peekPageId, openPeek, closePeek, toast } = useUi();
   /* Someone who can only view a shared database reads it, switches between
      its views (which view is open is theirs), filters nothing and changes
@@ -1521,6 +1522,9 @@ export function DatabaseView({
      a page elsewhere leaves every database as it is. */
   const database = usePage(databaseId);
   const allRows = useWorkspaceState((state) => databaseRows(state.pages, databaseId), sameItems);
+  /* A database's rows are its content: their bodies arrive with it (UC-48),
+     in one batched pull. */
+  useEffect(() => { if (allRows.length) loadPages(allRows.map((row) => row.id)); }, [allRows, loadPages]);
   // The rows that are their values alone, which show no page mark.
   const bareIds = useWorkspaceState((state) => databaseRows(state.pages, databaseId).filter((row) => isBareRow(state.pages, row)).map((row) => row.id), sameItems);
   const bare = useMemo(() => new Set(bareIds), [bareIds]);
