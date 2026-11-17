@@ -53,6 +53,7 @@ interface PageRow {
     kind: "document" | "database";
     title_content: Array<{ text: string }>;
     database?: unknown;
+    parent_id?: string;
   };
 }
 
@@ -66,6 +67,7 @@ async function savedPages(page: Page) {
     kind: value.kind,
     title: value.title_content.map((run) => run.text).join(""),
     hasDatabase: value.database !== undefined,
+    parentId: value.parent_id,
   })).sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -658,5 +660,43 @@ test("the shared view lists public links and shares pages at once", async ({ pag
   await expect(tree.getByRole("heading", { name: "我共享的" })).toBeVisible();
   await expect.poll(async () => JSON.stringify(await (await page.request.get(`${server.url}/api/records/personal/pages`)).json())).toContain("share_space_id");
   await expect(sharedTab).toHaveText(/已分享\s*2$/);
+  expect(errors).toEqual([]);
+});
+
+test("copy to… lands a copy under the chosen page and at the top level", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await register(page, "sidebar_copy_to");
+  await createDocument(page, "Source notes");
+  await createDocument(page, "Target folder");
+  const tree = page.getByRole("tree", { name: "Files", exact: true });
+
+  // A copy under another page, from the row menu's picker.
+  await tree.getByRole("button", { name: "Source notes", exact: true }).first().hover();
+  await tree.getByRole("button", { name: "Actions for Source notes", exact: true }).click();
+  const rowMenu = page.locator('.menu[role="menu"][aria-label="Page actions"]');
+  await expect(rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true })).toBeVisible();
+  await rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true }).click();
+  await expect(rowMenu).toBeHidden();
+  const picker = page.getByRole("dialog", { name: "拷贝到…", exact: true });
+  await expect(picker).toBeVisible();
+  await picker.locator("input").fill("Target");
+  await picker.getByRole("option", { name: "Target folder" }).click();
+  await expect.poll(async () => {
+    const rows = await savedPages(page);
+    const copies = rows.filter((row) => row.title === "Source notes");
+    const target = rows.find((row) => row.title === "Target folder");
+    return JSON.stringify({ copies: copies.length, nested: copies.filter((row) => row.parentId === target?.id).length });
+  }).toContain('"copies":2,"nested":1');
+  await expect(tree.getByRole("button", { name: "Expand Target folder", exact: true })).toBeVisible();
+
+  // A copy at the top level through the picker's "Top level".
+  await tree.getByRole("button", { name: "Target folder", exact: true }).first().hover();
+  await tree.getByRole("button", { name: "Actions for Target folder", exact: true }).first().click();
+  await rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true }).click();
+  await picker.getByRole("option", { name: "Top level" }).click();
+  await expect.poll(async () => {
+    const rows = await savedPages(page);
+    return rows.filter((row) => row.title === "Target folder" && !row.parentId).length;
+  }).toBe(2);
   expect(errors).toEqual([]);
 });

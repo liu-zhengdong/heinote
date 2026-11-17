@@ -51,12 +51,13 @@ import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
 import { pageAncestry, spaceOfPage } from "../../core/page-tree";
 import { buildTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
-import { useWorkspaceState } from "../../app/workspace-store";
+import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
 import { capitalized } from "../../core/title";
 import { pageGlyph } from "../editor/block-registry";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
+import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
 import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
 import "./sidebar.css";
@@ -277,6 +278,7 @@ export function Sidebar() {
     archivePage,
     createPage,
     duplicatePage,
+    copyPageTo,
     ensureShareSpace,
     movePage,
     selectPage,
@@ -299,6 +301,7 @@ export function Sidebar() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
+  const [copyPicker, setCopyPicker] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [newMenu, setNewMenu] = useState<AnchorRect | null>(null);
   const [sortMenu, setSortMenu] = useState<AnchorRect | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
@@ -866,9 +869,15 @@ export function Sidebar() {
   const menuIsHome = Boolean(menuPage && activeSpace?.knowledgeBase?.homePageId === menuPage.id);
   const menuSpaceId = menuPage ? spaceOfPage(pages, menuPage.id) : undefined;
   const menuInLibrary = Boolean(menuSpaceId && spaces[menuSpaceId]?.knowledgeBase);
-  /* Any page inside a shared space — a knowledge base, or someone else's
-     shared tree — offers the private copy out. */
-  const menuInSharedSpace = Boolean(menuSpaceId);
+  // Where a copy may land: a document page the member can write to.
+  const copyPage = copyPicker ? pages[copyPicker.pageId] : undefined;
+  const copyTargets = useWorkspaceState(
+    (state) => (copyPage
+      ? Object.values(state.pages).filter((candidate) =>
+          candidate.id !== copyPage.id && candidate.kind === "document" && !candidate.archived && canEdit(candidate.id))
+      : null),
+    (left, right) => (left && right ? sameItems(left, right) : left === right),
+  );
 
   return (
     <>
@@ -1023,20 +1032,14 @@ export function Sidebar() {
               onSelect={() => { selectPage(menuPage.id); requestShare(menuPage.id); setRowMenu(null); }}
             />
             <MenuItem icon={<Link size={16} />} label="Copy link" onSelect={() => { copyPageLink(menuPage.id); setRowMenu(null); }} />
-            {/* The only way content leaves a shared space: a private copy in
-                the member's own space. There it can be shared freely. */}
-            {menuInSharedSpace ? (
-              <MenuItem
-                icon={<FolderInput size={16} />}
-                label="拷贝到个人空间"
-                onSelect={() => {
-                  const copyId = duplicatePage(menuPage.id, { toPersonal: true });
-                  if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
-                  else toast("无法拷贝此页面", "error");
-                  setRowMenu(null);
-                }}
-              />
-            ) : null}
+            {/* The only way content leaves a shared space or a knowledge
+                base: a copy the server makes at the destination (fresh ids,
+                attachments re-stored). */}
+            <MenuItem
+              icon={<FolderInput size={16} />}
+              label="拷贝到…"
+              onSelect={() => { setCopyPicker(rowMenu); setRowMenu(null); }}
+            />
             {menuEditable ? (
               <>
                 <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={menuIsHome} onSelect={() => { if (!menuIsHome) { duplicatePage(menuPage.id); setRowMenu(null); } }} />
@@ -1057,6 +1060,33 @@ export function Sidebar() {
           </MenuList>
         ) : null}
       </Popover>
+
+      {/* "拷贝到…": choosing a page lands a copy of the row's page and its
+          subtree under it — or at Files' top. */}
+      {copyPicker && copyPage ? (
+        <MoveToMenu
+          anchor={copyPicker.anchor}
+          pages={copyTargets ?? []}
+          count={1}
+          label="拷贝到…"
+          placeholder="拷贝到…"
+          onMove={(targetId) => {
+            setCopyPicker(null);
+            void copyPageTo(copyPage.id, targetId).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onMoveToTop={() => {
+            setCopyPicker(null);
+            void copyPageTo(copyPage.id, null).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onClose={() => setCopyPicker(null)}
+        />
+      ) : null}
 
       <EmptyTrashConfirm
         open={emptyTrashConfirm}

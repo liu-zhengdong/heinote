@@ -103,6 +103,13 @@ export interface WorkspaceContextValue {
    *  level of the member's own space — the sanctioned way content leaves a
    *  shared space or a knowledge base. */
   duplicatePage(pageId: string, options?: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean }): string | null;
+  /** Copies a page and its subtree into another document page — or, with
+   *  `parentId` null, to the top level of the member's own space. The
+   *  server makes the copy (fresh ids, links re-pointed, attachments
+   *  re-stored under the destination); the window pulls the copy in once
+   *  it answers. Resolves to the copy's id, null while the workspace is
+   *  not loaded. */
+  copyPageTo(pageId: string, parentId: string | null): Promise<string | null>;
   /** Moves a page to another folder: every link to it stays where it is. */
   movePage(pageId: string, parentId: string | null): void;
   /** `record: false` keeps a change out of undo — for bookkeeping the
@@ -630,6 +637,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return duplicateNow(pageId, options);
   }, [document, platform, duplicateNow]);
 
+  const copyPageTo = useCallback(async (pageId: string, parentId: string | null): Promise<string | null> => {
+    if (!document || !platform) return null;
+    const body: Record<string, string> = { requestId: `copy-${uuid()}` };
+    if (parentId) body.parentId = parentId;
+    else body.spaceId = "personal";
+    const answer = await request<{ id: string }>(`/api/v1/pages/${encodeURIComponent(pageId)}/copy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    void document.loadPages([answer.id]).catch(() => undefined);
+    return answer.id;
+  }, [document, platform]);
+
   /** Re-parents a page. Refuses to drop a page inside its own subtree, which is
    *  the only move that could orphan a branch. */
   const movePage = useCallback((pageId: string, parentId: string | null) => {
@@ -1096,6 +1117,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     createPage,
     updatePage,
     duplicatePage,
+    copyPageTo,
     movePage,
     applyBlockMutations,
     commitWrites: commit,
@@ -1145,6 +1167,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     createPage,
     updatePage,
     duplicatePage,
+    copyPageTo,
     movePage,
     applyBlockMutations,
     commit,

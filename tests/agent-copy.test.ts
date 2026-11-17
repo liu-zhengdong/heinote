@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import { startServer } from "../server/index.ts";
 
 // POST /api/v1/pages/:id/copy: a page tree copied into another scope — the
-// agent counterpart of the window's "拷贝到个人空间", with attachments
+// agent counterpart of the window's "拷贝到…", with attachments
 // re-stored under the destination.
 
 type Json = any;
