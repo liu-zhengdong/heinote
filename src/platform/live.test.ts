@@ -35,7 +35,7 @@ vi.mock("../collaboration/binding", () => ({ observedText: () => null }));
 vi.mock("../collaboration/recovery", () => ({ publishRecovery: hooks.publishRecovery, navigationClosing: () => false }));
 
 type Write = { scope: string; collection: string; id: string; action: string; value?: object; patch?: object; base?: object | null };
-type Batch = { requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[] };
+type Batch = { requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[]; textKeys?: Record<string, string[]> };
 type LiveModule = typeof import("./live");
 let live: LiveModule;
 let storage: Map<string, string>;
@@ -270,6 +270,207 @@ describe("saved transport batches and account isolation", () => {
     await vi.advanceTimersByTimeAsync(250); expect(await pending).toBe("accepted");
     expect(sent).toHaveLength(2); expect(sent[1].batch).toEqual(sent[0].batch);
     expect(sent[1].batch.textUpdates[0].generation).toBe("original-generation");
+  });
+});
+
+describe("offline replay recovery (UC-37 rework)", () => {
+  function resynced(text: TextUpdate, pending = true, generation = "new-generation") {
+    return { snapshot: { ...text, generation }, session: { snapshot: { generation }, pendingText: pending ? [{ keys: ["field"] }] : [] }, update: null, orphanFields: {} };
+  }
+  function restoredTextBatch(id: string, withWrite = true): Batch {
+    return { textKeys: { [JSON.stringify(["A", "page"])]: ["pages/page/title_content"] }, requestId: id, writes: withWrite ? [{ scope: "A", collection: "pages", id: "page", action: "patch", base: { title_content: [{ text: "before" }] }, patch: { title_content: [{ text: "offline" }] } }] : [], textUpdates: [update("A")], expectedPages: [] };
+  }
+
+  it("journals the complete changed field set for later value-level recovery", async () => {
+    hooks.pageBasis.mockReturnValue({ scope: "A", pageId: "page", generation: "g1", revision: "r1" });
+    const pages = await collection("A", "pages");
+    await pages.put("page", { title_content: [{ text: "base" }] });
+    const text = update("A");
+    hooks.localRecordText.mockReturnValue({ update: text, sessionKey: JSON.stringify(["A", "page"]), keys: ["pages/page/title_content"] });
+    await pages.patch("page", { title_content: [{ text: "base local" }] });
+    expect(sent.at(-1)!.batch.textKeys).toEqual({ [JSON.stringify(["A", "page"])]: ["pages/page/title_content"] });
+  });
+
+  it("queries only affected IDs in bounded chunks during rebase", async () => {
+    const batch = saved("many-records", "A");
+    batch.writes = Array.from({ length: 205 }, (_, index) => ({ scope: "A", collection: "settings", id: `row ${index}`, action: "put", value: {} }));
+    batch.writes.push({ ...batch.writes[0] });
+    storage.set("notes:pending:account-one", JSON.stringify([batch]));
+    respond = (next) => next.requestId === batch.requestId ? conflict() : accepted(next);
+    await live.restoreSavedWrites();
+    const paths = vi.mocked(fetch).mock.calls.map(([path]) => String(path)).filter((path) => path !== "/api/records/batch");
+    expect(paths).toHaveLength(3);
+    const chunks = paths.map((path) => new URLSearchParams(path.split("?")[1]).get("ids")?.split(","));
+    expect(chunks.map((chunk) => chunk?.length)).toEqual([100, 100, 5]);
+    expect(chunks.flat()).toEqual(batch.writes.slice(0, 205).map((write) => write.id));
+  });
+
+  it("recovers after four transient failures inside rebase without exhausting replay attempts", async () => {
+    vi.useFakeTimers(); const a = await collection("A");
+    const original = vi.mocked(fetch).getMockImplementation()!; let failures = 0;
+    vi.mocked(fetch).mockImplementation(async (path, init) => {
+      if (String(path).startsWith("/api/records/A/settings") && !String(path).includes("?after=") && ++failures <= 4) throw new TypeError("offline during rebase");
+      return original(path, init);
+    });
+    respond = (batch) => failures < 5 ? conflict() : accepted(batch);
+    const pending = outcome(a.put("offline", { text: "retained" })); await flush();
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(await pending).toBe("accepted"); expect(failures).toBe(5);
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.get("notes:pending:account-one")!)).toEqual([]);
+  });
+
+  it("does not endlessly retry a permanent API refusal while fetching rebase records", async () => {
+    vi.useFakeTimers(); const a = await collection("A");
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).startsWith("/api/records/A/settings") && !String(path).includes("?after=") ? denied() : original(path, init));
+    respond = () => conflict();
+    const pending = outcome(a.put("refused", {})); await flush();
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
+    expect(await pending).toBe("refused");
+    expect(hooks.publishRecovery.mock.calls[0][1].message).toBe("此空间仅可查看。");
+  });
+
+  it("preserves an unreplayable text conversion instead of retrying it forever", async () => {
+    const text = update("A"); hooks.resyncSession.mockRejectedValue(new Error("missing text baseline"));
+    respond = () => conflict();
+    expect(await outcome(hooks.submitUndo!(text))).toBe("refused");
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
+    expect(hooks.publishRecovery.mock.calls[0][1].message).toBe("missing text baseline");
+  });
+
+  it("settles a later old-generation text batch already included by an earlier replay", async () => {
+    const first = update("A"); const second = update("A");
+    const gate = deferred<Response>(); let carried = false;
+    hooks.resyncSession.mockImplementation(async () => {
+      if (carried) return resynced(second);
+      first.generation = "new-generation";
+      return { ...resynced(first), update: first };
+    });
+    respond = (batch) => {
+      if (batch.textUpdates[0]?.generation === "new-generation") { carried = true; return accepted(batch); }
+      if (sent.length === 1) return gate.promise;
+      if (!batch.writes.length && !batch.textUpdates.length) return refused(400);
+      return conflict();
+    };
+    const one = outcome(hooks.submitUndo!(first)); await flush();
+    const two = outcome(hooks.submitUndo!(second)); await flush();
+    gate.resolve(conflict());
+    expect(await Promise.all([one, two])).toEqual(["accepted", "accepted"]);
+    expect(sent).toHaveLength(3); expect(hooks.publishRecovery).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.get("notes:pending:account-one")!)).toEqual([]);
+  });
+
+  it("sends only the current batch's migrated delta rather than the whole session", async () => {
+    const text = update("A"); const later = update("later structural text");
+    const { base64ToBytes } = await import("../collaboration/protocol");
+    hooks.resyncSession.mockImplementation(async () => {
+      text.generation = "new-generation";
+      return { ...resynced(text), update: { ...text, update: bytesToBase64(Y.mergeUpdates([base64ToBytes(text.update), base64ToBytes(later.update)])) } };
+    });
+    respond = (batch) => batch.textUpdates[0]?.generation === "new-generation" ? accepted(batch) : conflict();
+    expect(await outcome(hooks.submitUndo!(text))).toBe("accepted");
+    expect(sent[1].batch.textUpdates).toEqual([{ ...text, update: bytesToBase64(Y.mergeUpdates([base64ToBytes(text.update)])) }]);
+  });
+
+  it("settles a same-generation delta verified equal to the remote snapshot", async () => {
+    const text = update("A"); hooks.resyncSession.mockResolvedValue(resynced(text, false, text.generation));
+    respond = () => conflict();
+    expect(await outcome(hooks.submitUndo!(text))).toBe("accepted");
+    expect(sent).toHaveLength(1); expect(hooks.publishRecovery).not.toHaveBeenCalled();
+  });
+
+  it("does not discard a pure stale delta without a pending session", async () => {
+    const text = update("A"); hooks.resyncSession.mockResolvedValue(resynced(text, false)); respond = () => conflict();
+    expect(await outcome(hooks.submitUndo!(text))).toBe("refused");
+    expect(hooks.publishRecovery.mock.calls[0][1].batches[0].textUpdates).toEqual([text]);
+  });
+
+  it("wakes the active backoff on online and removes both event and timer after settling", async () => {
+    vi.useFakeTimers(); const target = new EventTarget(); vi.stubGlobal("window", target);
+    const remove = vi.spyOn(target, "removeEventListener");
+    vi.stubGlobal("navigator", { onLine: true });
+    let attempts = 0; respond = (batch) => ++attempts <= 2 ? Promise.reject(new TypeError("still offline")) : accepted(batch);
+    const pending = outcome(hooks.submitUndo!(update("A"))); await flush();
+    expect(sent).toHaveLength(1); target.dispatchEvent(new Event("online")); await flush();
+    expect(sent).toHaveLength(2); expect(hooks.publishRecovery).not.toHaveBeenCalled();
+    target.dispatchEvent(new Event("online")); expect(await pending).toBe("accepted");
+    expect(remove).toHaveBeenCalledTimes(2); expect(vi.getTimerCount()).toBe(0);
+    target.dispatchEvent(new Event("online")); await flush(); expect(sent).toHaveLength(3);
+  });
+
+  it("cleans the online listener when the backoff timer expires", async () => {
+    vi.useFakeTimers(); const target = new EventTarget(); vi.stubGlobal("window", target);
+    const remove = vi.spyOn(target, "removeEventListener"); let attempts = 0;
+    respond = (batch) => ++attempts === 1 ? Promise.reject(new TypeError("offline")) : accepted(batch);
+    const pending = outcome(hooks.submitUndo!(update("A"))); await flush();
+    await vi.advanceTimersByTimeAsync(250); expect(await pending).toBe("accepted");
+    expect(remove).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("replays restored old-generation text via its value patch after confirming the original request", async () => {
+    const batch = restoredTextBatch("restored-text"); storage.set("notes:pending:account-one", JSON.stringify([batch]));
+    hooks.restorePendingText.mockReturnValue(null); hooks.resyncSession.mockResolvedValue(resynced(batch.textUpdates[0], false));
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).startsWith("/api/records/A/pages") ? json([{ id: "page", value: { title_content: [{ text: "before" }] } }]) : original(path, init));
+    respond = (next) => next.requestId === batch.requestId ? conflict() : accepted(next);
+    await live.restoreSavedWrites();
+    expect(sent).toHaveLength(2); expect(sent[0].batch).toEqual(batch);
+    expect(sent[1].batch.requestId).not.toBe(batch.requestId); expect(sent[1].batch.textUpdates).toEqual([]);
+    expect(sent[1].batch.writes[0].patch).toEqual(batch.writes[0].patch);
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+    expect(JSON.parse(storage.get("notes:pending:account-one")!)).toEqual([]);
+  });
+
+  it("merges restored value text with concurrent remote edits rather than dropping the contested field", async () => {
+    const batch = restoredTextBatch("concurrent-restored");
+    batch.writes[0].base = { title_content: [{ text: "base" }] }; batch.writes[0].patch = { title_content: [{ text: "base local" }] };
+    storage.set("notes:pending:account-one", JSON.stringify([batch])); hooks.restorePendingText.mockReturnValue(null);
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).startsWith("/api/records/A/pages") ? json([{ id: "page", value: { title_content: [{ text: "remote base" }] } }]) : original(path, init));
+    respond = (next) => next.requestId === batch.requestId ? conflict() : accepted(next);
+    await live.restoreSavedWrites();
+    expect(sent[1].batch.writes[0].patch).toEqual({ title_content: [{ text: "remote base local" }] });
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+  });
+
+  it.each(["unknown", "uncovered"])("preserves a stale delta when its value patches leave %s fields", async (coverage) => {
+    const batch = restoredTextBatch("incomplete-coverage");
+    if (coverage === "unknown") delete batch.textKeys;
+    else batch.textKeys![JSON.stringify(["A", "page"])].push("blocks/4_page_other/content");
+    storage.set("notes:pending:account-one", JSON.stringify([batch])); hooks.restorePendingText.mockReturnValue(null);
+    const original = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (path, init) => String(path).startsWith("/api/records/A/pages") ? json([{ id: "page", value: { title_content: [{ text: "before" }] } }]) : original(path, init));
+    respond = () => conflict(); await live.restoreSavedWrites();
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
+    expect(hooks.publishRecovery.mock.calls[0][1].batches[0]).toEqual(batch);
+  });
+
+  it("keeps restored request bytes unchanged when the pending session migrates its update", async () => {
+    const batch = restoredTextBatch("migrated-before-send"); storage.set("notes:pending:account-one", JSON.stringify([batch]));
+    hooks.restorePendingText.mockImplementation((pending) => { pending.generation = "migrated-generation"; return []; });
+    await live.restoreSavedWrites();
+    expect(sent.map(({ batch: next }) => next)).toEqual([batch]);
+    expect(hooks.publishRecovery).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original digest when the restored request already committed", async () => {
+    const batch = restoredTextBatch("already-committed"); storage.set("notes:pending:account-one", JSON.stringify([batch]));
+    hooks.restorePendingText.mockReturnValue(null);
+    await live.restoreSavedWrites();
+    expect(sent.map(({ batch: next }) => next)).toEqual([batch]);
+    expect(hooks.publishRecovery).not.toHaveBeenCalled(); expect(hooks.resyncSession).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("preserves restored pure old deltas, including when unrelated writes exist (%s)", async (unrelated) => {
+    const batch = restoredTextBatch("pure-old", false);
+    if (unrelated) batch.writes = saved("unrelated", "A").writes;
+    storage.set("notes:pending:account-one", JSON.stringify([batch]));
+    hooks.restorePendingText.mockReturnValue(null); hooks.resyncSession.mockResolvedValue(resynced(batch.textUpdates[0], false)); respond = () => conflict();
+    await live.restoreSavedWrites();
+    expect(hooks.publishRecovery).toHaveBeenCalledTimes(1);
+    expect(hooks.publishRecovery.mock.calls[0][1].batches[0]).toEqual(batch);
+    expect(JSON.parse(storage.get("notes:pending:account-one")!)).toEqual([]);
   });
 });
 

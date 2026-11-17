@@ -14,6 +14,16 @@ export function renderedText(pageId: string, key: string): BoundText | null {
   const field = lookup(pageId, key);
   return field ? { field, basis: captureText(field.text) } : null;
 }
+/** A new generation can keep the exact words the DOM observed. In that
+ * case its identity may be adopted without discarding the user's next input.
+ * Same-generation remote edits retain the old observed basis for merging. */
+export function refreshTextBinding(bound: BoundText): BoundText | null {
+  const current = lookup(bound.field.pageId, bound.field.key);
+  if (!current) return null;
+  if (current.text === bound.field.text && current.generation === bound.field.generation) return bound;
+  return JSON.stringify(basisText(bound.basis)) === JSON.stringify(readText(current.text))
+    ? { field: current, basis: captureText(current.text) } : null;
+}
 /** Scope native DOM intent across the existing synchronous mutation pipeline. */
 export function withTextBasis(bound: BoundText | null, action: () => void): BoundText | null {
   const current = bound ? lookup(bound.field.pageId, bound.field.key) : null;

@@ -12,7 +12,7 @@ import {
 import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, type DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { preserveTextDraft, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
+import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import { editableHtml } from "./block-html";
 import { blockDefinition } from "./block-registry";
@@ -108,14 +108,15 @@ export const InlineEditor = memo(function InlineEditor({
     return bound.current;
   };
   const run = (action: () => void): boolean => {
-    const previous = bound.current;
+    let previous = bound.current;
     if (previous) {
-      const current = renderedText(previous.field.pageId, previous.field.key);
-      if (!current || current.field.text !== previous.field.text || current.field.generation !== previous.field.generation) {
+      const current = refreshTextBinding(previous);
+      if (!current) {
         if (ref.current) saveDraft({ bound: previous, content: readDom(ref.current) });
         sync.current(true);
         return false;
       }
+      previous = current; bound.current = current;
     }
     const updated = withTextBasis(previous, action);
     // A synchronous render may already have drawn and captured newer runs.

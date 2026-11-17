@@ -196,6 +196,23 @@ export function editText(text: Y.Text, basis: TextBasis, next: RichText): TextBa
   // Keep the DOM's desired atoms. Unseen remote atoms remain outside its basis.
   return makeBasis({ text, atoms: result, empty: boundary(before, 0, "right") });
 }
+/** Replay a value-level edit after a generation changed its character IDs.
+ * Both edits observe the old committed text. Local deletion/formatting can
+ * therefore affect only baseline characters, never the remote additions. */
+export function rebaseText(base: RichText, local: RichText, remote: RichText): RichText {
+  if (equal(base, local) || equal(local, remote)) return remote;
+  if (equal(base, remote)) return local;
+  const doc = new Y.Doc();
+  try {
+    const text = doc.getText("rebase");
+    editText(text, captureText(text), base);
+    const basis = captureText(text);
+    editText(text, basis, remote);
+    editText(text, basis, local);
+    return readText(text);
+  } finally { doc.destroy(); }
+}
+
 export function captureSelection(basis: TextBasis, start: number, end: number): TextSelection {
   const data = dataOf(basis);
   const selection = Object.freeze({}) as TextSelection;

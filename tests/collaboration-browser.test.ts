@@ -124,11 +124,13 @@ interface Pair {
   ownerWire: Wire;
   peerWire: Wire;
   mentionId?: string;
+  cachedPageId?: string;
 }
+interface PairOptions { mention?: boolean; cachedTeamPage?: boolean }
 interface App {
   url: string;
   errors: string[];
-  pair(initial?: string, options?: { mention?: boolean }): Promise<Pair>;
+  pair(initial?: string, options?: PairOptions): Promise<Pair>;
   gate(page: Page, accepts: (body: Json) => boolean): Promise<BatchGate>;
   watch(page: Page): Promise<Wire>;
 }
@@ -140,7 +142,7 @@ const test = base.extend<{ app: App }>({
     const watch = async (page: Page) => { page.on("pageerror", (error) => errors.push(error.message)); return Wire.attach(page); };
     const app: App = {
       url: server.url, errors, watch,
-      async pair(initial = "共享基线", options = {}) { return setupPair(browser, server.url, contexts, watch, initial, options.mention === true); },
+      async pair(initial = "共享基线", options = {}) { return setupPair(browser, server.url, contexts, watch, initial, options); },
       async gate(page, accepts) { const gate = new BatchGate(page, accepts); gates.push(gate); await gate.install(); return gate; },
     };
     try { await use(app); }
@@ -157,7 +159,7 @@ const test = base.extend<{ app: App }>({
 test.describe.configure({ mode: "default" });
 test.afterEach(async ({ app }) => { expect(app.errors, "The real editor must not throw unhandled exceptions").toEqual([]); });
 
-async function setupPair(browser: Browser, url: string, contexts: BrowserContext[], watch: (page: Page) => Promise<Wire>, initial: string, withMention: boolean): Promise<Pair> {
+async function setupPair(browser: Browser, url: string, contexts: BrowserContext[], watch: (page: Page) => Promise<Wire>, initial: string, options: PairOptions): Promise<Pair> {
   const ownerContext = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } });
   const peerContext = await browser.newContext({ acceptDownloads: true, viewport: { width: 1280, height: 900 } });
   contexts.push(ownerContext, peerContext);
@@ -165,10 +167,12 @@ async function setupPair(browser: Browser, url: string, contexts: BrowserContext
   const peerUser = (await api(peerContext, url, "/api/auth/register", { method: "POST", data: { handle: "peer", displayName: "peer", password }, status: 201 })).user;
   const token = (await api(ownerContext, url, "/api/tokens", { method: "POST", data: { name: "Browser collaboration setup", access: "write" }, status: 201 })).token;
   const peerToken = (await api(peerContext, url, "/api/tokens", { method: "POST", data: { name: "Browser peer setup", access: "write" }, status: 201 })).token;
-  const scope = (await api(ownerContext, url, "/api/spaces", { method: "POST", data: { name: "真实浏览器协作" }, status: 201 })).spaceId;
+  const scope = (await api(ownerContext, url, options.cachedTeamPage ? "/api/knowledge-bases" : "/api/spaces", { method: "POST", data: { name: "真实浏览器协作", ...(options.cachedTeamPage ? { requestId: randomUUID() } : {}) }, status: 201 })).spaceId;
   const page = await api(ownerContext, url, "/api/v1/pages", { method: "POST", token, data: { spaceId: scope, title: "协作测试页", text: initial }, status: 201 });
   let mentionId: string | undefined;
-  if (withMention) mentionId = (await api(ownerContext, url, "/api/v1/pages", { method: "POST", token, data: { spaceId: scope, title: "提及目标", text: "目标页正文" }, status: 201 })).id;
+  if (options.mention) mentionId = (await api(ownerContext, url, "/api/v1/pages", { method: "POST", token, data: { spaceId: scope, title: "提及目标", text: "目标页正文" }, status: 201 })).id;
+  let cachedPageId: string | undefined;
+  if (options.cachedTeamPage) cachedPageId = (await api(ownerContext, url, "/api/v1/pages", { method: "POST", token, data: { spaceId: scope, title: "离线缓存页", text: "缓存页正文" }, status: 201 })).id;
   await api(ownerContext, url, `/api/spaces/${scope}/invitations`, { method: "POST", data: { handle: "peer", role: "editor" } });
   const invitation = (await api(peerContext, url, "/api/invitations"))[0];
   await api(peerContext, url, `/api/invitations/${invitation.id}`, { method: "POST", data: { accept: true } });
@@ -176,8 +180,9 @@ async function setupPair(browser: Browser, url: string, contexts: BrowserContext
   expect(row).toBeTruthy();
   const owner = await ownerContext.newPage(); const peer = await peerContext.newPage();
   const ownerWire = await watch(owner); const peerWire = await watch(peer);
-  const pair = { url, owner, peer, ownerContext, peerContext, ownerId: ownerUser.id, peerId: peerUser.id, token, peerToken, scope, pageId: page.id, recordId: row.id, blockId: row.value.id, bodyKey: `blocks/${row.id}/content`, titleKey: `pages/${page.id}/title_content`, ownerWire, peerWire, mentionId };
-  await Promise.all([openEditor(pair, owner, initial), openEditor(pair, peer, initial)]);
+  const pair = { url, owner, peer, ownerContext, peerContext, ownerId: ownerUser.id, peerId: peerUser.id, token, peerToken, scope, pageId: page.id, recordId: row.id, blockId: row.value.id, bodyKey: `blocks/${row.id}/content`, titleKey: `pages/${page.id}/title_content`, ownerWire, peerWire, mentionId, cachedPageId };
+  if (options.cachedTeamPage) await Promise.all([openTeamEditorThroughUI(pair, owner, initial), openTeamEditorThroughUI(pair, peer, initial)]);
+  else await Promise.all([openEditor(pair, owner, initial), openEditor(pair, peer, initial)]);
   return pair;
 }
 function body(pair: Pair, page = pair.owner): Locator { return page.locator(`.block__editable[data-collaboration-page="${pair.pageId}"][data-collaboration-field="${pair.bodyKey}"]`); }
@@ -188,6 +193,39 @@ async function openEditor(pair: Pair, page: Page, initial?: string): Promise<voi
   await page.goto(`${pair.url}/?page=${pair.pageId}`); await ready;
   await expect(body(pair, page)).toHaveAttribute("contenteditable", "true");
   if (initial !== undefined) await expect(body(pair, page)).toHaveText(initial);
+}
+async function showPageList(page: Page): Promise<void> {
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toBeVisible();
+  if (!await page.getByRole("tree", { name: "Files", exact: true }).isVisible()) await page.getByRole("button", { name: "All pages", exact: true }).click();
+  await expect(page.getByRole("tree", { name: "Files", exact: true })).toBeVisible();
+}
+async function selectPageThroughUI(page: Page, pageId: string): Promise<void> {
+  await showPageList(page);
+  await page.getByRole("tree", { name: "Files", exact: true }).locator(`.tree-row[data-page-id="${pageId}"] .tree-row__main`).click();
+  await expect(page.locator(`article[data-page-id="${pageId}"]`)).toBeVisible();
+  await expect(page.locator(`.block__editable[data-collaboration-page="${pageId}"]`).first()).toHaveAttribute("contenteditable", "true");
+}
+async function openTeamEditorThroughUI(pair: Pair, page: Page, initial: string): Promise<void> {
+  await page.goto(pair.url);
+  await showPageList(page);
+  await page.getByRole("button", { name: "切换空间", exact: true }).click();
+  const menu = page.getByRole("menu", { name: "切换空间", exact: true });
+  await menu.getByRole("menuitem").filter({ hasText: "真实浏览器协作" }).click();
+  await expect(menu).toBeHidden();
+  await page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Expand 真实浏览器协作", exact: true }).click();
+  await selectPageThroughUI(page, pair.pageId);
+  await expect(body(pair, page)).toHaveText(initial);
+}
+async function storedEntries(page: Page, key: string): Promise<Json[]> {
+  // Observe the public browser journal only; never seed or alter app state.
+  return page.evaluate((key) => JSON.parse(localStorage.getItem(key) ?? "[]"), key);
+}
+async function expectNoDraft(pair: Pair, page = pair.owner): Promise<void> {
+  const account = page === pair.peer ? pair.peerId : pair.ownerId;
+  await expect.poll(() => storedEntries(page, `notes:recovery:${account}`)).toEqual([]);
+  await expect(page.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "下载为文件", exact: false })).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 }
 async function focusEdge(locator: Locator, edge: "start" | "end"): Promise<void> {
   await locator.click();
@@ -321,6 +359,92 @@ test("offline DOM edits survive the old page closing and merge after reopening t
   const converged = (await dto(pair)).text;
   await expect(body(pair, reopened)).toHaveText(converged); await expect(body(pair, pair.peer)).toHaveText(converged);
   await openEditor(pair, reopened, converged);
+});
+
+test("UC-37: offline batches, title, native split and cached-page navigation converge in the original runtime without a draft", async ({ app }, testInfo) => {
+  test.setTimeout(60_000);
+  const pair = await app.pair("前半后半", { cachedTeamPage: true });
+  expect(pair.cachedPageId).toBeTruthy();
+  const cachedPageId = pair.cachedPageId!;
+  const pendingKey = `notes:pending:${pair.ownerId}`;
+  const journal = () => storedEntries(pair.owner, pendingKey);
+  const cachedBody = pair.owner.locator(`.block__editable[data-collaboration-page="${cachedPageId}"]`);
+
+  // Both documents must already have been opened through the real sidebar.
+  // The offline switch below must reuse that cache in this JavaScript runtime.
+  await selectPageThroughUI(pair.owner, cachedPageId);
+  await expect(cachedBody).toHaveText("缓存页正文");
+  await selectPageThroughUI(pair.owner, pair.pageId);
+  await expect(paragraphs(pair)).toHaveText(["前半后半"]);
+  await expect.poll(journal).toEqual([]);
+  await expectNoDraft(pair);
+  await pair.ownerContext.setOffline(true);
+
+  let pendingCount = 0;
+  let firstParagraph = "前半后半";
+  for (const chunk of ["第一批", "第二批", "第三批"]) {
+    await typeAt(pair, pair.owner, chunk);
+    firstParagraph += chunk;
+    await expect(body(pair)).toHaveText(firstParagraph);
+    await expect.poll(async () => (await journal()).length, { message: "Each native edit must add a distinct durable offline batch" }).toBeGreaterThan(pendingCount);
+    pendingCount = (await journal()).length;
+  }
+  await focusEdge(title(pair), "end"); await pair.owner.keyboard.insertText("离线标题");
+  const expectedTitle = "协作测试页离线标题";
+  await expect(title(pair)).toHaveText(expectedTitle);
+  await expect.poll(async () => (await journal()).length).toBeGreaterThan(pendingCount);
+  pendingCount = (await journal()).length;
+
+  await focusEdge(body(pair), "start");
+  await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight");
+  await pair.owner.keyboard.press("Enter");
+  let secondParagraph = "后半第一批第二批第三批";
+  await expect(paragraphs(pair)).toHaveText(["前半", secondParagraph]);
+  await expect.poll(async () => (await journal()).length).toBeGreaterThan(pendingCount);
+  pendingCount = (await journal()).length;
+  for (const chunk of ["拆段后第一批", "拆段后第二批"]) {
+    await focusEdge(paragraphs(pair).nth(1), "end"); await pair.owner.keyboard.insertText(chunk);
+    secondParagraph += chunk;
+    await expect(paragraphs(pair)).toHaveText(["前半", secondParagraph]);
+    await expect.poll(async () => (await journal()).length).toBeGreaterThan(pendingCount);
+    pendingCount = (await journal()).length;
+  }
+
+  await selectPageThroughUI(pair.owner, cachedPageId);
+  await expect(cachedBody).toHaveText("缓存页正文");
+  await selectPageThroughUI(pair.owner, pair.pageId);
+  await expect(paragraphs(pair)).toHaveText(["前半", secondParagraph]);
+  await expect(title(pair)).toHaveText(expectedTitle);
+  await focusEdge(paragraphs(pair).first(), "end"); await pair.owner.keyboard.insertText("返回后续写");
+  const expectedParagraphs = ["前半返回后续写", secondParagraph];
+  await expect(paragraphs(pair)).toHaveText(expectedParagraphs);
+  await expect.poll(async () => (await journal()).length).toBeGreaterThan(pendingCount);
+  await expectNoDraft(pair);
+  const offlineRemote = await dto(pair);
+  expect(offlineRemote.text).toBe("前半后半"); expect(offlineRemote.title).toBe("协作测试页");
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半后半"]);
+
+  // Reconnect the existing runtime before any reload. A refresh-only recovery
+  // cannot satisfy the remote, DOM and journal assertions in this section.
+  await pair.ownerContext.setOffline(false);
+  await expect.poll(async () => {
+    const remote = await dto(pair); return { text: remote.text, title: remote.title };
+  }, { timeout: 20_000 }).toEqual({ text: expectedParagraphs.join("\n"), title: expectedTitle });
+  await expect(paragraphs(pair)).toHaveText(expectedParagraphs);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(expectedParagraphs);
+  await expect(title(pair)).toHaveText(expectedTitle); await expect(title(pair, pair.peer)).toHaveText(expectedTitle);
+  await expect.poll(journal, { timeout: 20_000 }).toEqual([]);
+  await expectNoDraft(pair); await expectNoDraft(pair, pair.peer);
+  await expect(pair.owner.getByRole("status", { name: "All changes saved", exact: true })).toBeVisible();
+
+  await Promise.all([pair.owner.reload(), pair.peer.reload()]);
+  for (const page of [pair.owner, pair.peer]) {
+    await expect(paragraphs(pair, page)).toHaveText(expectedParagraphs);
+    await expect(title(pair, page)).toHaveText(expectedTitle);
+    await expectNoDraft(pair, page);
+  }
+  await expect.poll(journal).toEqual([]);
+  await pair.owner.screenshot({ path: testInfo.outputPath("offline-reconnected.png"), fullPage: true });
 });
 
 test("a real restore during native composition keeps the old DOM out of the new generation and offers its draft", async ({ app }) => {

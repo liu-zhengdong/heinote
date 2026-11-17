@@ -505,12 +505,13 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
   let releaseSettings = () => {};
   const settingsGate = new Promise<void>((resolveGate) => { releaseSettings = resolveGate; });
   let firstRead = true;
-  let initialSettings: Array<{ id: string; value: { roots?: string[] } }> | undefined;
-  const settingsPattern = "**/api/records/personal/workspace_settings";
+  let initialSettings: { latest: number; rows: Array<{ id: string; value: { roots?: string[] } }>; deleted: string[] } | undefined;
+  const settingsPattern = (url: URL) => url.pathname === "/api/records/personal/workspace_settings" && url.searchParams.get("after") === "0";
   await page.route(settingsPattern, async (route) => {
-    if (!firstRead) { await route.continue(); return; }
+    if (route.request().method() !== "GET" || !firstRead) { await route.continue(); return; }
     firstRead = false;
     const response = await route.fetch();
+    expect(response.status()).toBe(200);
     initialSettings = await response.json();
     await settingsGate;
     await route.fulfill({ response });
@@ -530,7 +531,7 @@ test("a collaborative startup snapshot preserves the initial workspace settings 
     releaseSettings();
     await reloading;
     await expect(page.getByLabel("Page title", { exact: true })).toHaveText("启动前页面");
-    expect(initialSettings).toContainEqual({ id: "roots", value: { roots: [existing.id] } });
+    expect(initialSettings?.rows).toContainEqual({ id: "roots", value: { roots: [existing.id] } });
 
     const creation = page.waitForResponse((response) => {
       if (!response.url().endsWith("/api/records/batch")) return false;

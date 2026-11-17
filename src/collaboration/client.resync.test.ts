@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import type { RichText } from "../platform/schema";
-import { bytesToBase64 } from "./protocol";
+import { base64ToBytes, bytesToBase64 } from "./protocol";
 import type { JsonRecord } from "./protocol";
 import { blockField } from "./protocol";
-import { seedFields } from "./text";
-import { localRecordText, resyncSession, settleText, openCollaborativePage, type LocalTextChange } from "./client";
+import { readFields, seedFields } from "./text";
+import { closeCollaboration, localRecordText, resyncSession, settleText, openCollaborativePage, refreshCollaborativePage, connectedPage, type LocalTextChange } from "./client";
 
 const runs = (text: string): RichText => text ? [{ text }] : [];
 const recordIdFor = (pageId: string) => `${pageId.length}_${pageId}_block`;
@@ -22,7 +22,7 @@ function fetchTo(respond: () => object): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(respond()), { status: 200, headers: { "content-type": "application/json" } })));
 }
 
-beforeEach(() => { vi.resetModules(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+beforeEach(() => { closeCollaboration(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("session resync across generations", () => {
   it("carries pending local text into the new generation and encodes the residual delta", async () => {
@@ -45,12 +45,74 @@ describe("session resync across generations", () => {
     Y.applyUpdate(check, Y.encodeStateAsUpdate(resync!.session.doc));
     const { readFields } = await import("./text");
     const text = readFields(resync!.session.doc)[key];
-    expect(text?.map((run) => run.text ?? "").join("")).toBe("committed and more");
+    const merged = text?.map((run) => run.text ?? "").join("") ?? "";
+    expect(merged).toContain("theirs"); expect(merged).toContain("and more");
     check.destroy();
     // The residual delta is encoded against the new snapshot vector so the
     // server's identity/key-set checks accept it as a generation-g2 update.
     expect(resync!.update!.generation).toBe("g2");
     expect(resync!.orphanFields).toEqual({});
+  });
+
+  it("re-encodes each pending batch separately without submitting a later split early", async () => {
+    const oldSnap = snapshotOf("page", "g1", { [key]: runs("abcd") });
+    fetchTo(() => oldSnap); await openCollaborativePage("A", "page");
+    const record: JsonRecord = { id: "block", page: "page", content: runs("abcd") };
+    const first = localRecordText("A", "blocks", "4_page_block", record, { ...record, content: runs("abcd!") })!;
+    const split = localRecordText("A", "blocks", "4_page_block", { ...record, content: runs("abcd!") }, { ...record, content: runs("ab") })!;
+    const next = snapshotOf("page", "g2", { [key]: runs("abcd") });
+    await resyncSession("A", "page", next);
+    const server = new Y.Doc(); Y.applyUpdate(server, base64ToBytes(next.state));
+    Y.applyUpdate(server, base64ToBytes(first.update.update));
+    expect(first.update.generation).toBe("g2");
+    expect(readFields(server)[key]).toEqual(runs("abcd!"));
+    Y.applyUpdate(server, base64ToBytes(split.update.update));
+    expect(readFields(server)[key]).toEqual(runs("ab")); server.destroy();
+  });
+
+  it("serializes resync after a failed fetch and preserves the next local change", async () => {
+    const oldSnap = snapshotOf("page", "g1", { [key]: runs("base") });
+    fetchTo(() => oldSnap); await openCollaborativePage("A", "page");
+    const record: JsonRecord = { id: "block", page: "page", content: runs("base") };
+    localRecordText("A", "blocks", "4_page_block", record, { ...record, content: runs("base LOCAL") });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValueOnce(new TypeError("offline")));
+    const failed = resyncSession("A", "page");
+    const retry = resyncSession("A", "page", snapshotOf("page", "g2", { [key]: runs("base") }));
+    await expect(failed).rejects.toThrow("offline");
+    expect(readFields((await retry)!.session.doc)[key]).toEqual(runs("base LOCAL"));
+  });
+
+  it("does not resurrect an in-flight session after its account has closed", async () => {
+    let reply!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; })));
+    const pending = resyncSession("A", "page"); await Promise.resolve(); await Promise.resolve();
+    closeCollaboration();
+    reply(new Response(JSON.stringify(snapshotOf("page", "g1", { [key]: runs("old-account") })), { status: 200 }));
+    expect(await pending).toBeNull();
+  });
+
+  it.each([openCollaborativePage, refreshCollaborativePage])("ignores a late page fetch after the account closes (%#)", async (fetchPage) => {
+    let reply!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { reply = resolve; })));
+    const pending = fetchPage("A", "page");
+    closeCollaboration();
+    reply(new Response(JSON.stringify(snapshotOf("page", "g1", { [key]: runs("old-account") })), { status: 200 }));
+    await pending; expect(connectedPage("page")).toBe(false);
+  });
+
+  it("does not replace a session opened and edited during its in-flight resync", async () => {
+    let reply!: (response: Response) => void;
+    const fresh = snapshotOf("page", "g1", { [key]: runs("base") });
+    vi.stubGlobal("fetch", vi.fn()
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { reply = resolve; }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(fresh), { status: 200 })));
+    const pending = resyncSession("A", "page"); await Promise.resolve(); await Promise.resolve();
+    await openCollaborativePage("A", "page");
+    const record: JsonRecord = { id: "block", page: "page", content: runs("base") };
+    localRecordText("A", "blocks", "4_page_block", record, { ...record, content: runs("base local") });
+    reply(new Response(JSON.stringify(fresh), { status: 200 })); expect(await pending).toBeNull();
+    const result = await resyncSession("A", "page", fresh);
+    expect(readFields(result!.session.doc)[key]).toEqual(runs("base local"));
   });
 
   it("settles an old-generation change after takeover without phantom pending", async () => {
