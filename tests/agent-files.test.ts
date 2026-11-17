@@ -274,3 +274,18 @@ test("uploading to a shared space binds space ownership and stays within role ch
   invalid(await outsider.upload(space.spaceId, { path: "files/no.png", raw: PNG, contentType: "image/png" }), [403]);
   invalid(await outsider.download(space.spaceId, file.path), [403]);
 });
+
+// A readable path may carry the file's own language; what stays out is what the
+// filesystem cannot hold portably.
+test("paths accept any script but refuse what Windows cannot store", async (t) => {
+  const { agent, user } = await fixture(t);
+  const file = storedFile(await agent.upload("personal", { path: "files/附件/内网部署 ✅.png", raw: PNG, contentType: "image/png" }), user);
+  assert.equal(file.path, "files/附件/内网部署 ✅.png");
+  assert.equal(file.name, "内网部署 ✅.png");
+  const got = await agent.download("personal", file.path);
+  assert.equal(got.status, 200);
+  assert.equal(sha256(got.body as Buffer), sha256(PNG));
+  for (const path of ["files/con.png", "files/a/nul.txt", "files/a/trailing.", "files/a/trailing ", "files/a/b\\\\c.png", "files/a/b:c.png", "files/a/b*?.png"]) {
+    invalid(await agent.upload("personal", { path, raw: PNG, contentType: "image/png" }));
+  }
+});
