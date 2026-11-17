@@ -118,19 +118,24 @@ test("UC-35: covers personal pages and team knowledge bases with space labels", 
   const teamHit = await agent.makePage({ title: "团队笔记检索页", text: "团队正文。", parentId: root.id, scope: kb.spaceId });
 
   const result = ok(await agent.search("q=笔记检索"));
-  assert.equal(result.total, 2);
+  // The child page's expanded link block on the root carries the child's
+  // title as readable mention text, so the root also body-matches — same as
+  // a link inserted by hand in the editor.
+  assert.equal(result.total, 3);
   const titles = new Map(result.hits.map((hit: Json) => [hit.id, hit]));
   const personal = titles.get(personalHit.id);
   const team = titles.get(teamHit.id);
-  assert.ok(personal && team);
+  const rootHit = titles.get(root.id);
+  assert.ok(personal && team && rootHit);
   assert.equal(personal.space, "个人空间");
   assert.equal(team.space, "团队检索库");
   assert.equal(team.scope, kb.spaceId);
   assert.equal(team.crumb, "团队检索库 / 团队根目录");
+  assert.ok(rootHit.excerpt.includes("团队笔记检索页"));
 
   // AC-04 first half: a space filter returns only that space's hits.
   const scoped = ok(await agent.search(`q=笔记检索&space=${kb.spaceId}`));
-  assert.deepEqual(scoped.hits.map((hit: Json) => hit.id), [teamHit.id]);
+  assert.deepEqual(scoped.hits.map((hit: Json) => hit.id), [teamHit.id, root.id]);
   const personalScoped = ok(await agent.search("q=笔记检索&space=personal"));
   assert.deepEqual(personalScoped.hits.map((hit: Json) => hit.id), [personalHit.id]);
 });
