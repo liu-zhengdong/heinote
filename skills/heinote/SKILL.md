@@ -28,6 +28,9 @@ description: >
    - 服务不在本机时必须先给 `HEINOTE_URL`——不配置时只默认
      `http://localhost:3000`，不做任何探测。
 4. 只读令牌只能 GET 和 `POST /databases/:id/query`；归档知识库只读。
+5. Windows 用同目录的 `heinote.cmd`：无扩展名的 `heinote` 在 Windows 上不能
+   当程序执行。`heinote.cmd` 用 `python -X utf8` 启动脚本，控制台代码页不用改。
+   没有 `python` 时它退到 `py -3`，两者都没有就报一句英文提示并退出。
 
 连通性检查：`heinote pages` 能列出页面即正常。401 为令牌无效，403 为无权。
 
@@ -50,8 +53,9 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 
 ## 脚本用法
 
-脚本为 `heinote`（本技能目录内，零依赖 Python 3 可执行文件）。响应 JSON
-输出到 stdout，HTTP 状态输出到 stderr；非 2xx 时退出码为 1。
+脚本为 `heinote`，在本技能目录内，零依赖 Python 3；Windows 上改用同目录的
+`heinote.cmd`。响应 JSON 输出到 stdout，HTTP 状态输出到 stderr，非 2xx 时退出码
+为 1。输出固定为 UTF-8，与控制台代码页无关。
 
 ### 通用规则
 
