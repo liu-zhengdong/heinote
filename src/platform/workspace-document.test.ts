@@ -9,7 +9,7 @@ const hooks = vi.hoisted(() => ({ account: "workspace-account", publishRecovery:
 vi.mock("../collaboration/client", () => ({
   collaborationAccount: () => hooks.account,
   awaitCollaborativeBasis: async () => {},
-  installRecordReader: vi.fn(), installSnapshotConsumer: vi.fn(), installUndoSubmitter: vi.fn(),
+  installRecordReader: vi.fn(), installRecordRefresh: vi.fn(), installSnapshotConsumer: vi.fn(), installUndoSubmitter: vi.fn(),
   localRecordText: () => null, onScopeChange: () => () => {},
   openCollaborativePage: async () => {}, pageBasis: () => null,
   projectRecord: (_scope: string, _name: string, _id: string, record: object) => record,

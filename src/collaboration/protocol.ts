@@ -7,8 +7,15 @@ export interface DocumentSnapshot extends DocumentAddress {
   state: string;
   revision: string;
   canEdit: boolean;
+  /** Latest broadcast sequence; baselines the delta stream a subscriber
+   *  receives after this snapshot. */
+  seq?: number;
   records?: { page: JsonRecord; blocks: Array<{ id: string; value: JsonRecord }> };
 }
+/** One committed document event pushed over the socket. `update` is the
+ *  Yjs delta against the previous sequence's state; a reset or a skipped
+ *  sequence means the subscriber pulls a snapshot instead. */
+export interface CommitEvent extends DocumentAddress { type: "document" | "reset"; seq?: number; generation?: string; revision?: string; update?: string }
 export interface TextUpdate extends DocumentAddress { generation: string; update: string }
 export interface ExpectedPage extends DocumentAddress { generation: string; revision: string }
 export type JsonRecord = Record<string, unknown>;

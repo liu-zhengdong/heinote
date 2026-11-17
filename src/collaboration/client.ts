@@ -6,7 +6,7 @@ import { editObservedField, installTextLookup, type RegisteredField } from "./bi
 import { captureText, editText, readFields, readText, rebaseText } from "./text";
 import { publishRecovery } from "./recovery";
 import { nextHistoryOrder } from "../core/history-clock";
-import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, fieldsInPage, pageRevision, setAt, valueAt, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "./protocol";
+import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, fieldsInPage, pageRevision, setAt, valueAt, type CommitEvent, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "./protocol";
 
 export const LOCAL_TEXT_ORIGIN = Symbol("this window text input");
 const REMOTE = Symbol("committed remote document");
@@ -33,6 +33,7 @@ const scopeListeners = new Map<string, Set<() => void>>();
 let readRecords: (scope: string, collection: string) => Array<{ id: string; value: JsonRecord }> = () => [];
 let submitUndo: (update: TextUpdate) => Promise<unknown> = async () => { throw new Error("Text transport is not installed"); };
 let consumeSnapshot: (snapshot: DocumentSnapshot) => void = () => {};
+let refreshScopeRecords: (scope: string) => void = () => {};
 let socket: WebSocket | null = null;
 let reconnect: ReturnType<typeof setTimeout> | undefined;
 let reconnectDelay = 250;
@@ -153,6 +154,23 @@ function receive(snapshot: DocumentSnapshot, reset = false): void {
   if (reset) current.undo.stopCapturing();
   consumeSnapshot(snapshot); notify(snapshot.scope);
 }
+/** A committed push carries the delta and the new sequence instead of a
+ *  rebuilt snapshot. Reset events and skipped sequences pull instead —
+ *  deltas cannot describe a new document identity or a missed commit. */
+function receiveCommit(item: CommitEvent): void {
+  const key = documentKey(item); const current = sessions.get(key);
+  if (!current || item.type === "reset" || !item.seq || item.seq !== (current.snapshot.seq ?? 0) + 1) {
+    /* Pull a full snapshot: reset events carry a new generation, a skipped
+     *  seq a missed commit, and seq<=1 a restarted server's stream. */
+    const pull = current ? refreshCollaborativePage(item.scope, item.pageId) : openCollaborativePage(item.scope, item.pageId);
+    void pull.catch(() => undefined);
+    refreshScopeRecords(item.scope);
+    return;
+  }
+  current.snapshot = { ...current.snapshot, seq: item.seq, generation: item.generation ?? current.snapshot.generation, revision: item.revision ?? current.snapshot.revision };
+  if (item.update) Y.applyUpdate(current.doc, base64ToBytes(item.update), REMOTE);
+  refreshScopeRecords(item.scope);
+}
 function subscribe(address: DocumentAddress): void {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "subscribe", ...address }));
 }
@@ -163,11 +181,11 @@ function connect(): void {
   socket.onopen = () => { if (socket !== link) return; reconnectDelay = 250; for (const session of sessions.values()) subscribe(session.snapshot); };
   socket.onmessage = (event) => {
     if (socket !== link) return;
-    let message: { type: string; requestId?: string; snapshot?: DocumentSnapshot; documents?: Array<{ type: string; snapshot: DocumentSnapshot }>; scope?: string; pageId?: string };
+    let message: { type: string; requestId?: string; snapshot?: DocumentSnapshot; documents?: CommitEvent[]; scope?: string; pageId?: string };
     try { message = JSON.parse(String(event.data)); } catch { return; }
     if (message.type === "commit") {
       if (message.requestId) { pendingCommits.get(message.requestId)?.(); pendingCommits.delete(message.requestId); }
-      for (const item of message.documents ?? []) receive(item.snapshot, item.type === "reset");
+      for (const item of message.documents ?? []) receiveCommit(item);
     }
     else if (message.snapshot) receive(message.snapshot, message.type === "reset");
     else if (message.type === "revoked" && message.scope && message.pageId) {
@@ -198,6 +216,7 @@ export function releasePendingCommit(requestId: string): void { pendingCommits.d
 export function installRecordReader(reader: typeof readRecords): void { readRecords = reader; }
 export function installUndoSubmitter(submitter: typeof submitUndo): void { submitUndo = submitter; }
 export function installSnapshotConsumer(consumer: typeof consumeSnapshot): void { consumeSnapshot = consumer; }
+export function installRecordRefresh(refresh: typeof refreshScopeRecords): void { refreshScopeRecords = refresh; }
 export function onScopeChange(scope: string, listener: () => void): () => void {
   const listeners = scopeListeners.get(scope) ?? new Set(); scopeListeners.set(scope, listeners); listeners.add(listener);
   return () => { listeners.delete(listener); if (!listeners.size) scopeListeners.delete(scope); };

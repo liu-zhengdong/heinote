@@ -17,6 +17,7 @@ vi.mock("../collaboration/client", () => ({
   awaitCollaborativeBasis: vi.fn().mockResolvedValue(undefined),
   collaborationAccount: () => hooks.account,
   installRecordReader: vi.fn(),
+  installRecordRefresh: vi.fn(),
   installSnapshotConsumer: vi.fn(),
   installUndoSubmitter: (submit: (update: TextUpdate) => Promise<unknown>) => { hooks.submitUndo = submit; },
   localRecordText: hooks.localRecordText,
@@ -177,6 +178,56 @@ describe("record transport scope dependencies", () => {
     writes.push(outcome(a.put("after", {})));
     expect(await Promise.all(writes)).toEqual(["accepted", "accepted", "accepted"]);
     expect(sent.map(({ batch }) => batch.writes.map((write) => write.id))).toEqual([["before"], ["inside"], ["after"]]);
+  });
+
+  it("coalesces a typing burst into one text-only batch", async () => {
+    hooks.pageBasis.mockReturnValue({ scope: "A", pageId: "page", generation: "g1", revision: "r1" });
+    const pages = await collection("A", "pages");
+    await pages.put("page", { title_content: [{ text: "base" }] });
+    sent.length = 0;
+    const strokes = ["base l", "base lo", "base local"];
+    const pending = strokes.map((text) => {
+      hooks.localRecordText.mockReturnValueOnce({ update: update("A"), sessionKey: JSON.stringify(["A", "page"]), keys: ["pages/page/title_content"] });
+      return outcome(pages.patch("page", { title_content: [{ text }] }));
+    });
+    expect(await Promise.all(pending)).toEqual(["accepted", "accepted", "accepted"]);
+    expect(sent).toHaveLength(1);
+    // The whole burst is one merged delta, and the fully-covered record
+    // patch stays out of the request — the text channel already carries it.
+    expect(sent[0].batch.textUpdates).toHaveLength(1);
+    expect(sent[0].batch.writes).toHaveLength(0);
+    expect(sent[0].batch.textKeys).toEqual({ [JSON.stringify(["A", "page"])]: ["pages/page/title_content"] });
+  });
+
+  it("flushes staged text together with the next non-text write", async () => {
+    hooks.pageBasis.mockReturnValue({ scope: "A", pageId: "page", generation: "g1", revision: "r1" });
+    const pages = await collection("A", "pages");
+    await pages.put("page", { title_content: [{ text: "base" }] });
+    sent.length = 0;
+    hooks.localRecordText.mockReturnValueOnce({ update: update("A"), sessionKey: JSON.stringify(["A", "page"]), keys: ["pages/page/title_content"] });
+    const typed = outcome(pages.patch("page", { title_content: [{ text: "typed" }] }));
+    const written = outcome(pages.put("other", { text: "other" }));
+    expect(await Promise.all([typed, written])).toEqual(["accepted", "accepted"]);
+    // A new record is structural: it lands in its own batch after the staged
+    // text so its declared basis still matches the committed state.
+    expect(sent).toHaveLength(2);
+    expect(sent[0].batch.textUpdates).toHaveLength(1);
+    expect(sent[0].batch.writes).toHaveLength(0);
+    expect(sent[1].batch.writes.map((write) => write.id)).toEqual(["other"]);
+  });
+
+  it("keeps the write when the patch also carries uncovered fields", async () => {
+    hooks.pageBasis.mockReturnValue({ scope: "A", pageId: "page", generation: "g1", revision: "r1" });
+    const pages = await collection("A", "pages");
+    await pages.put("page", { title_content: [{ text: "base" }] });
+    sent.length = 0;
+    hooks.localRecordText.mockReturnValueOnce({ update: update("A"), sessionKey: JSON.stringify(["A", "page"]), keys: ["pages/page/title_content"] });
+    expect(await outcome(pages.patch("page", { title_content: [{ text: "typed" }], pinned: true }))).toBe("accepted");
+    expect(sent).toHaveLength(1);
+    // The pinned flag is not collaborative text, so the record write stays.
+    expect(sent[0].batch.writes).toHaveLength(1);
+    expect(sent[0].batch.writes[0].patch).toEqual({ title_content: [{ text: "typed" }], pinned: true });
+    expect(sent[0].batch.textUpdates).toHaveLength(1);
   });
 
   it("keeps strict record replay atomic and does not generate new text updates", async () => {

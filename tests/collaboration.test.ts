@@ -103,7 +103,8 @@ class Feed {
       assert.ok(Array.isArray(message.documents), "An atomic commit must contain document events");
       for (const event of message.documents) {
         assert.ok(["document", "reset"].includes(event.type));
-        assert.ok(event.snapshot, "Every committed document must include its snapshot");
+        assert.ok(event.scope && event.pageId && typeof event.seq === "number", "Every committed document must carry its address and sequence");
+        if (event.type === "document") assert.ok(typeof event.update === "string" && event.revision, "A document commit carries its delta and revision");
       }
       return message.documents;
     });
@@ -224,6 +225,14 @@ function messageSnapshot(message: Json): Snapshot {
   assert.ok(message.snapshot, "Document WebSocket messages must carry a committed snapshot");
   assertSnapshotProjection(message.snapshot);
   return message.snapshot;
+}
+/** A commit event carries a delta, not a snapshot: apply it on the known
+ *  baseline and verify it lands exactly at the pushed revision. */
+function commitDoc(baseline: Snapshot, event: Json): Y.Doc {
+  assert.equal(event.type, "document");
+  const doc = fork(baseline);
+  Y.applyUpdate(doc, Buffer.from(event.update, "base64"));
+  return doc;
 }
 
 
@@ -402,9 +411,11 @@ test("WebSocket publishes committed snapshots and never publishes a rolled-back 
   const unchanged = await snapshot(s.alice, s.scope, s.pageId);
   assert.equal(unchanged.state, baseline.state); assert.equal(unchanged.revision, baseline.revision);
   ok(await submit(s.alice, baseline, bytes));
-  const pushed = messageSnapshot(await feed.message((message) => message.type === "document", mark));
+  const pushed = await feed.message((message) => message.type === "document" && typeof message.update === "string", mark);
   const durable = await snapshot(s.alice, s.scope, s.pageId);
-  assert.equal(pushed.revision, durable.revision); assert.equal(text(pushed, s.bodyKey), "事务文字起点😀终点");
+  assert.equal(pushed.revision, durable.revision);
+  const pushedDoc = commitDoc(baseline, pushed);
+  assert.equal(field(pushedDoc, s.bodyKey).toString(), "事务文字起点😀终点"); pushedDoc.destroy();
   // A WebSocket client cannot bypass the transactional HTTP update boundary.
   const beforeDirectWrite = durable.state;
   const direct = fork(durable);
@@ -465,7 +476,7 @@ test("version restore creates a new generation and rejects disconnected edits fr
   ok(await s.alice.request(`/api/v1/pages/${s.pageId}/restore`, { method: "POST", token: s.token.token, body: { versionId: version.id } }));
   const restored = await snapshot(s.alice, s.scope, s.pageId);
   assert.notEqual(restored.generation, beforeRestore.generation); assert.equal(text(restored, s.bodyKey), "检查点正文");
-  const reset = messageSnapshot(await feed.message((message) => message.type === "reset", mark));
+  const reset = await feed.message((message) => message.type === "reset", mark);
   assert.equal(reset.generation, restored.generation);
   ok(await submit(s.bob, beforeRestore, stale), 409);
   const versions = ok(await s.alice.request(`/api/v1/pages/${s.pageId}/versions`, { token: s.token.token }));
@@ -639,14 +650,17 @@ test("one cross-page text transaction arrives in one atomic WebSocket commit env
     { scope: s.scope, pageId: s.pageId, generation: parentBase.generation, update: parentUpdate },
     { scope: s.scope, pageId: child.id, generation: childBase.generation, update: childUpdate },
   ] } }));
-  await feed.message((message) => message.type === "document" && message.snapshot?.pageId === child.id, mark);
+  await feed.message((message) => message.type === "document" && message.pageId === child.id && typeof message.update === "string", mark);
   const envelopes = feed.messages.slice(mark).filter((message) => message.type === "commit");
   assert.equal(envelopes.length, 1, "One atomic HTTP batch must not expose partial per-page WebSocket commits");
   assert.equal(envelopes[0].documents.length, 2);
-  const documents = new Map<string, Snapshot>(envelopes[0].documents.map((event: Json) => [event.snapshot.pageId, messageSnapshot(event)]));
-  assert.equal(text(documents.get(s.pageId)!, s.bodyKey), "同步父页");
-  assert.equal(text(documents.get(child.id)!, childKey), "同步子页正文");
-  assert.equal(documents.get(s.pageId)!.revision, (await snapshot(s.alice, s.scope, s.pageId)).revision);
+  const documents = new Map<string, Json>(envelopes[0].documents.map((event: Json) => [event.pageId, event]));
+  const parentEvent = documents.get(s.pageId)!; const childEvent = documents.get(child.id)!;
+  const parentPushed = commitDoc(parentBase, parentEvent); const childPushed = commitDoc(childBase, childEvent);
+  assert.equal(field(parentPushed, s.bodyKey).toString(), "同步父页");
+  assert.equal(field(childPushed, childKey).toString(), "同步子页正文");
+  parentPushed.destroy(); childPushed.destroy();
+  assert.equal(parentEvent.revision, (await snapshot(s.alice, s.scope, s.pageId)).revision);
   assert.equal(documents.get(child.id)!.revision, (await snapshot(s.alice, s.scope, child.id)).revision);
   parentDoc.destroy(); childDoc.destroy();
 });

@@ -8,7 +8,7 @@ import schema from "../schema.ts";
 
 export const textUpdateSchema = z.object({ scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256), generation: z.string().min(1).max(100), update: z.string().max(8 * 1024 * 1024) });
 export const expectedPageSchema = z.object({ scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256), generation: z.string().min(1).max(100), revision: z.string().min(1).max(100) });
-export interface DocumentEvent { scope: string; pageId: string; type: "document" | "reset" | "removed"; requestId?: string }
+export interface DocumentEvent { scope: string; pageId: string; type: "document" | "reset" | "removed"; requestId?: string; seq?: number; generation?: string; revision?: string; update?: Uint8Array }
 const stamp = () => new Date().toISOString();
 
 export class CollaborationStore {
@@ -17,6 +17,9 @@ export class CollaborationStore {
   private forced = new Set<string>();
   private initial = new Map<string, Row | undefined>();
   private requestId: string | undefined;
+  /** Per-document broadcast sequence, reset on restart. Deltas are pushed
+   *  against it; a gap in a subscriber's stream means a pull instead. */
+  private sequences = new Map<string, number>();
   markRequest(requestId?: string): void { this.requestId = requestId; }
   constructor(private readonly store: Store) {}
 
@@ -60,6 +63,20 @@ export class CollaborationStore {
   rollback(): void { this.events.clear(); this.forced.clear(); this.initial.clear(); this.requestId = undefined; }
   onCommit(listener: (events: DocumentEvent[]) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   committed(): void {
+    /* Enrich once per document per commit — revision hashing and stored
+     *  rows used to be rebuilt inside every subscriber's snapshot. */
+    for (const event of this.events.values()) {
+      const key = documentKey(event);
+      if (event.type === "removed") { this.sequences.delete(key); continue; }
+      /* One sequence step per commit per document: subscribers merge the
+       *  delta only while their stream is contiguous. */
+      const seq = (this.sequences.get(key) ?? 0) + 1;
+      this.sequences.set(key, seq);
+      event.seq = seq;
+      const row = this.stored(event.scope, event.pageId);
+      event.generation = row ? String(row.generation) : undefined;
+      event.revision = row ? this.store.revision(event.scope, event.pageId) : undefined;
+    }
     const events = [...this.events.values()]; this.events.clear(); this.forced.clear();
     for (const listener of this.listeners) { try { listener(events); } catch (error) { console.error("Collaboration notification failed", error); } }
   }
@@ -74,13 +91,18 @@ export class CollaborationStore {
     if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
     return { page, blocks, fields: fieldsInPage(pageId, page, blocks), structure: hash(JSON.stringify(structureOf(page, blocks))) };
   }
-  private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean): void {
+  private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean, update?: Uint8Array): void {
     const documentId = documentKey({ scope, pageId });
     if (!this.initial.has(documentId)) this.initial.set(documentId, this.stored(scope, pageId));
     this.store.db.prepare("INSERT INTO collaboration_documents VALUES(?,?,?,?,?) ON CONFLICT(scope,page_id) DO UPDATE SET generation=excluded.generation,structure=excluded.structure,state=excluded.state").run(scope, pageId, generation, structure, Y.encodeStateAsUpdate(doc));
     const key = documentKey({ scope, pageId });
     const prior = this.events.get(key);
-    this.events.set(key, { scope, pageId, type: reset || prior?.type === "reset" ? "reset" : "document", requestId: this.requestId });
+    /* One event per document per commit: later writeDocs merge their delta
+     *  into the event so subscribers receive one contiguous batch delta. */
+    const merged = prior?.update && update ? Y.mergeUpdates([prior.update, update]) : prior?.update ?? update;
+    const type = reset || prior?.type === "reset" ? "reset" : "document";
+    // A reset replaces the document's identity: receivers pull, so no delta.
+    this.events.set(key, { scope, pageId, type, requestId: this.requestId, update: type === "reset" ? undefined : merged });
   }
   flush(): void {
     const dirty = this.store.all("SELECT scope,page_id FROM collaboration_dirty ORDER BY scope,page_id");
@@ -109,6 +131,7 @@ export class CollaborationStore {
       }
       const original = this.initial.get(key) ?? previous;
       const originalDoc = this.load(original);
+      const before = Y.encodeStateVector(originalDoc);
       const originalFields = readFields(originalDoc); originalDoc.destroy();
       const removed = Object.keys(originalFields).some((field) => !(field in data.fields));
       const added = Object.keys(data.fields).some((field) => !(field in originalFields));
@@ -120,8 +143,12 @@ export class CollaborationStore {
         this.writeDoc(scope, pageId, id(), data.structure, doc, true); doc.destroy();
       } else {
         const doc = this.load(previous);
-        if (JSON.stringify(readFields(doc)) !== JSON.stringify(data.fields)) updateFields(doc, data.fields, "server");
-        this.writeDoc(scope, pageId, String(previous.generation), data.structure, doc, false);
+        const changed = JSON.stringify(readFields(doc)) !== JSON.stringify(data.fields) || data.structure !== String(previous.structure);
+        /* applyUpdates already wrote the state when a text update ran in
+         *  this transaction; dirty markers re-run this sweep and a second
+         *  writeDoc would re-encode the whole document for nothing. */
+        if (changed) updateFields(doc, data.fields, "server");
+        if (changed || !this.events.has(key)) this.writeDoc(scope, pageId, String(previous.generation), data.structure, doc, false, changed ? Y.encodeStateAsUpdate(doc, before) : undefined);
         doc.destroy();
       }
     }
@@ -153,7 +180,7 @@ export class CollaborationStore {
     const row = this.stored(scope, pageId);
     if (!row) fail(409, "协作文档正在初始化。", "not_ready");
     const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
-    return { scope: scopeName, pageId, generation: String(row.generation), state: Buffer.from(row.state as Uint8Array).toString("base64"), revision: this.store.revision(scope, pageId), canEdit, records: { page: data.page, blocks: data.blocks } };
+    return { scope: scopeName, pageId, generation: String(row.generation), state: Buffer.from(row.state as Uint8Array).toString("base64"), revision: this.store.revision(scope, pageId), canEdit, seq: this.sequences.get(documentKey({ scope, pageId })), records: { page: data.page, blocks: data.blocks } };
   }
   checkExpected(actor: Actor, expected: ExpectedPage[]): void {
     for (const item of expected) {
@@ -201,6 +228,7 @@ export class CollaborationStore {
       if (!data || !row) fail(404, "协作页面不存在。", "not_found");
       if (row.generation !== input.generation) fail(409, "页面结构或版本已变化。旧修改保留为草稿。", "generation_conflict");
       const doc = this.load(row);
+      const before = Y.encodeStateVector(doc);
       const typeId = (text: Y.Text) => { const position = Y.createRelativePositionFromTypeIndex(text, 0); return position.type ? `${position.type.client}:${position.type.clock}` : position.tname; };
       const identities = new Map([...doc.getMap<Y.Text>("fields")].map(([key, text]) => [key, typeId(text)]));
       try {
@@ -224,7 +252,7 @@ export class CollaborationStore {
           this.store.put(scope, record.collection, record.id, valid);
         }
         this.store.put(scope, "pages", input.pageId, { ...this.store.record(scope, "pages", input.pageId), updated_at: stamp(), updated_by: actor.user.displayName });
-        this.writeDoc(scope, input.pageId, String(row.generation), String(row.structure), doc, false);
+        this.writeDoc(scope, input.pageId, String(row.generation), String(row.structure), doc, false, Y.encodeStateAsUpdate(doc, before));
       } finally { doc.destroy(); }
     }
     return approved;

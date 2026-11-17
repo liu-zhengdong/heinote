@@ -535,9 +535,13 @@ export class Store {
           mark.run(scope, pageId);
         }
       }
-      // Validate the complete transaction, after sharing has moved all records.
-      for (const scope of scopes) this.validatePlane(actor, scope);
-      for (const scope of scopes) this.pruneHistory(scope);
+      // Validate the complete transaction, after sharing has moved all
+      // records. A text-only batch touches no record the plane or version
+      // checks can break, so their full-scope scans stay for write batches.
+      if (requested.length) {
+        for (const scope of scopes) this.validatePlane(actor, scope);
+        for (const scope of scopes) this.pruneHistory(scope);
+      }
       if (requestId) this.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(actor.user.id, requestId, digest, JSON.stringify(result));
       return result;
     });

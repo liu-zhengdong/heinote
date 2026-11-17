@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server } from "node:http";
 import { WebSocketServer, WebSocket } from "ws";
 import { z } from "zod";
-import { documentKey, type DocumentSnapshot } from "../src/collaboration/protocol.ts";
+import { bytesToBase64, documentKey, type DocumentSnapshot } from "../src/collaboration/protocol.ts";
 import type { Actor, Store } from "./store.ts";
 
 interface Subscription { scope: string; pageId: string; canEdit: boolean }
@@ -38,13 +38,15 @@ export function attachCollaborationSocket(server: Server, store: Store, authoriz
     for (const client of clients) {
       if (!refreshPermissions(client)) continue;
       const who = authorize(client.request);
-      const documents: Array<{ type: "document" | "reset"; snapshot: DocumentSnapshot }> = [];
+      /* Pushes carry the committed delta, revision and sequence — not a
+       *  rebuilt snapshot per subscriber. A reset event has no delta;
+       *  receivers pull, and a skipped sequence also means a pull. */
+      const documents: Array<{ type: string; scope: string; pageId: string; seq?: number; generation?: string; revision?: string; update?: string }> = [];
       for (const subscription of client.subscriptions.values()) {
         const scope = store.scope(who, subscription.scope);
         const event = events.find((event) => event.scope === scope && event.pageId === subscription.pageId);
         if (!event || event.type === "removed") continue;
-        const current = snapshot(client, subscription);
-        documents.push({ type: event.type, snapshot: current });
+        documents.push({ type: event.type, scope: event.scope, pageId: event.pageId, seq: event.seq, generation: event.generation, revision: event.revision, update: event.update ? bytesToBase64(event.update) : undefined });
       }
       if (documents.length) send(client, { type: "commit", requestId: events.find((event) => event.requestId)?.requestId, documents });
     }

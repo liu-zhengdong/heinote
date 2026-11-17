@@ -657,12 +657,12 @@ test("UC-13: concurrent team edits merge and removed WebSocket subscribers recei
   denied(await submitText(editor, stale, forbidden));
   const current = await snapshot(owner, kb.spaceId, page.id); const ownerMark = ownerFeed.messages.length;
   ok(await submitText(owner, current, textUpdate(current, key, "Secret after removal ")));
-  await ownerFeed.wait((message) => message.snapshot?.pageId === page.id, ownerMark);
+  await ownerFeed.wait((message) => message.pageId === page.id && typeof message.update === "string", ownerMark);
   await memberFeed.barrier();
-  assert.equal(memberFeed.events(mark).some((message) => message.snapshot), false, "Removed subscriber must not receive content nested in commit events");
+  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.update || message.revision), false, "Removed subscriber must not receive content nested in commit events");
   memberFeed.subscribe(kb.spaceId, page.id);
   await memberFeed.wait((message) => message.type === "error", mark);
-  assert.equal(memberFeed.events(mark).some((message) => message.snapshot), false);
+  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.update || message.revision), false);
 });
 
 test("UC-13: archival and viewer downgrade reject already-prepared CRDT updates", async (t) => {

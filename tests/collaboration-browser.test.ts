@@ -40,11 +40,14 @@ class Wire {
   documents(after = 0): Json[] {
     return this.received.slice(after).flatMap((message) => message.type === "commit" ? message.documents : [message]);
   }
-  async sawText(value: string, after = 0): Promise<void> {
-    await expect.poll(() => this.documents(after).some((event) => event.snapshot && JSON.stringify(event.snapshot.records).includes(value)), { message: `The actual WebSocket must deliver ${value}` }).toBe(true);
+  /** Committed pushes carry a delta and revision, not a snapshot: asserting
+   *  arrival means a document event naming the page. Rendered text is
+   *  asserted on the DOM afterwards. */
+  async sawText(_value: string, after = 0, pageId?: string): Promise<void> {
+    await expect.poll(() => this.documents(after).some((event) => (event.type === "document" && typeof event.update === "string" && (!pageId || event.pageId === pageId)) || event.snapshot), { message: `The actual WebSocket must deliver ${_value}` }).toBe(true);
   }
   async sawReset(pageId: string, oldGeneration: string, after = 0): Promise<void> {
-    await expect.poll(() => this.documents(after).some((event) => event.type === "reset" && event.snapshot?.pageId === pageId && event.snapshot.generation !== oldGeneration)).toBe(true);
+    await expect.poll(() => this.documents(after).some((event) => event.type === "reset" && event.pageId === pageId && event.generation !== oldGeneration)).toBe(true);
   }
   async reconnect(pageId: string): Promise<void> {
     expect(this.links.length).toBeGreaterThan(0);
@@ -336,7 +339,7 @@ test("native Chinese composition keeps its DOM while a peer edits, commits once,
   expect(requests).toHaveLength(0); await persisted(pair, "组合基线");
   const frame = pair.ownerWire.received.length;
   await typeAt(pair, pair.peer, "乙的文字", "start"); await persisted(pair, "乙的文字组合基线");
-  await pair.ownerWire.sawText("乙的文字", frame);
+  await pair.ownerWire.sawText("乙的文字", frame, pair.pageId);
   await expect(body(pair)).toHaveText("组合基线中文输入"); expect(await body(pair).innerHTML()).toBe(preedit);
   await cdp.send("Input.insertText", { text: "中文输入" });
   await persisted(pair, "乙的文字组合基线中文输入");
@@ -508,7 +511,7 @@ test("revocation stops document pushes, refuses pending text, and preserves a do
   await typeAt(pair, pair.owner, "撤权后新内容"); await persisted(pair, "撤权基线撤权后新内容");
   await pair.ownerWire.sawText("撤权后新内容");
   await pair.peer.waitForTimeout(150); // Observe the absence of content after the permission barrier.
-  expect(pair.peerWire.documents(afterRevocation).some((event) => event.snapshot && JSON.stringify(event.snapshot.records).includes("撤权后新内容"))).toBe(false);
+  expect(pair.peerWire.documents(afterRevocation).some((event) => event.snapshot || event.update || event.revision)).toBe(false);
   expect((await pair.peerContext.request.get(`${pair.url}/api/collaboration/${pair.scope}/${pair.pageId}`)).status()).toBe(403);
 });
 
@@ -613,7 +616,7 @@ test("an unchanged original host can split after a peer's other-paragraph edit h
   await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/records/${pair.scope}/blocks`)).filter((row: Json) => row.value.page === pair.pageId).length).toBe(2);
   const originalHtml = await body(pair).innerHTML(); const beforePeer = await current(pair); const frame = pair.ownerWire.received.length;
   await focusEdge(paragraphs(pair, pair.peer).nth(1), "end"); await pair.peer.keyboard.insertText("另一段乙的修改");
-  await persisted(pair, "前半后半\n另一段乙的修改"); await pair.ownerWire.sawText("另一段乙的修改", frame);
+  await persisted(pair, "前半后半\n另一段乙的修改"); await pair.ownerWire.sawText("另一段乙的修改", frame, pair.pageId);
   await expect(paragraphs(pair).nth(1)).toHaveText("另一段乙的修改");
   expect(await body(pair).innerHTML()).toBe(originalHtml);
   const afterPeer = await current(pair); expect(afterPeer.generation).toBe(beforePeer.generation); expect(afterPeer.revision).not.toBe(beforePeer.revision);
@@ -656,7 +659,7 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   await expect(pair.owner.getByRole("status", { name: "All changes saved", exact: true })).toHaveAttribute("aria-label", "All changes saved");
   const frame = pair.ownerWire.received.length;
   await focusEdge(paragraphs(pair, pair.peer).nth(1), "start"); await pair.peer.keyboard.insertText("PEER");
-  await persisted(pair, "abc\nPEERDEF"); await pair.ownerWire.sawText("PEER", frame);
+  await persisted(pair, "abc\nPEERDEF"); await pair.ownerWire.sawText("PEER", frame, pair.pageId);
   await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]);
   const before = await current(pair);
   await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);

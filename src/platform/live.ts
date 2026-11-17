@@ -3,15 +3,15 @@ import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
-import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, refreshCollaborativePage, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
-import { base64ToBytes, bytesToBase64, documentKey, isObject, isStructureChange, setAt, valueAt, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
+import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, isObject, isStructureChange, setAt, valueAt, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "../collaboration/protocol";
 
 type Value = Record<string, unknown>;
 type Write = { scope: string; collection: string; id: string; action: "put" | "patch" | "delete"; value?: object; patch?: object; base?: object | null };
-type Pending = { write?: Write; change?: LocalTextChange; update?: TextUpdate; unrestored?: TextUpdate; bases: ExpectedPage[]; structural: boolean; transaction?: symbol; error?: unknown; accept(value: Value | null): void; refuse(reason: unknown): void };
+type Pending = { write?: Write; change?: LocalTextChange; update?: TextUpdate; unrestored?: TextUpdate; bases: ExpectedPage[]; structural: boolean; transaction?: symbol; error?: unknown; elided?: boolean; accept(value: Value | null): void; refuse(reason: unknown): void };
 interface SavedBatch {
   requestId: string; writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[];
   /** Local journal evidence: all fields covered by each page's text deltas.
@@ -23,6 +23,11 @@ interface AccountQueue {
   account: string;
   staged: Pending[];
   scheduled: boolean;
+  /** A burst of text edits is coalesced: the timer re-arms on every stroke
+   *  and a paragraph lands as one commit instead of one request per key. */
+  textTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When the current burst started, for the max-wait cap. */
+  textSince: number;
   tails: Map<string, Promise<void>>;
   /** Scopes whose writes are permanently refused (permission lost). Batches
    *  touching them are preserved as drafts without another request. */
@@ -36,6 +41,10 @@ let strictReplay = false;
 const collections = new Map<string, Set<LiveCollection<object>>>();
 const collectionKey = (scope: string, name: string) => JSON.stringify([scope, name]);
 const journalKey = (account: string) => `notes:pending:${account}`;
+/** Typing waits this long after the last stroke before its batch ships. */
+const TEXT_DEBOUNCE_MS = 400;
+/** Mid-burst commits still land by this bound, so a long paragraph saves. */
+const TEXT_MAX_WAIT_MS = 2000;
 /** Batches currently retrying or rebasing, surfaced as a quiet sync pill. */
 let syncing = 0;
 function syncState(delta: number): void {
@@ -52,7 +61,7 @@ const REPLAY_LIMIT = 3;
 function loadJournal(): AccountQueue {
   const account = collaborationAccount();
   if (queue?.account === account) return queue;
-  const owner: AccountQueue = { account, staged: [], scheduled: false, tails: new Map(), denied: new Set(), journal: new Map(), restoration: null };
+  const owner: AccountQueue = { account, staged: [], scheduled: false, textTimer: undefined, textSince: 0, tails: new Map(), denied: new Set(), journal: new Map(), restoration: null };
   queue = owner;
   if (!account) return owner;
   try {
@@ -66,16 +75,25 @@ function persistJournal(owner: AccountQueue): void {
   try { localStorage.setItem(journalKey(owner.account), JSON.stringify([...owner.journal.values()])); }
   catch { publishRecovery(owner.account, { message: "浏览器未能保留待保存内容。请立即下载草稿。", batches: [...owner.journal.values()] }); }
 }
-function addresses(batch: SavedBatch): DocumentAddress[] {
-  const result = new Map<string, DocumentAddress>();
-  for (const item of [...batch.textUpdates, ...batch.expectedPages]) result.set(documentKey(item), item);
-  for (const write of batch.writes) { const pageId = pageOf(write); if (pageId) { const address = { scope: write.scope, pageId }; result.set(documentKey(address), address); } }
-  return [...result.values()];
+/** Leaf field paths of a patch: `{"table":{"rows":{r:{"cells":{c:[..]}}}}`
+ *  yields `["table","rows","r","cells","c"]`. An empty object reaches itself. */
+function leafPaths(value: JsonRecord, path: string[] = []): string[][] {
+  const result: string[][] = [];
+  for (const [key, item] of Object.entries(value)) {
+    if (isObject(item)) { const nested = leafPaths(item, [...path, key]); result.push(...(nested.length ? nested : [[...path, key]])); }
+    else result.push([...path, key]);
+  }
+  return result;
 }
 function assemble(items: Pending[], requestId: string): SavedBatch {
   const firstBases = new Map<string, ExpectedPage>(); const structural = new Set<string>();
   const updates = new Map<string, { address: TextUpdate; bytes: Uint8Array[] }>();
   const knownKeys = new Map<string, Set<string> | null>();
+  /* Record fields already covered by this batch's collaborative text. A
+   *  patch holding only covered leaves carries nothing the server keeps
+   *  (stripProjected deletes it anyway): the write stays out of the batch
+   *  and its accept() synthesizes the merged record instead. */
+  const covered = new Map<string, Set<string>>();
   for (const item of items) {
     for (const basis of item.bases) { const key = documentKey(basis); if (!firstBases.has(key)) firstBases.set(key, basis); if (item.structural) structural.add(key); }
     const update = item.change?.update ?? item.update;
@@ -85,10 +103,22 @@ function assemble(items: Pending[], requestId: string): SavedBatch {
       else if (knownKeys.get(pageKey) !== null) knownKeys.set(pageKey, new Set([...(knownKeys.get(pageKey) ?? []), ...item.change.keys]));
       const key = JSON.stringify([update.scope, update.pageId, update.generation]);
       const group = updates.get(key) ?? { address: update, bytes: [] }; group.bytes.push(base64ToBytes(update.update)); updates.set(key, group);
+      for (const field of item.change?.keys ?? []) {
+        const address = fieldAddress(field); if (!address) continue;
+        const recordKey = `${address.collection}/${address.id}`;
+        covered.set(recordKey, new Set([...(covered.get(recordKey) ?? []), JSON.stringify(address.path)]));
+      }
+    }
+  }
+  for (const item of items) {
+    if (item.change && item.write?.action === "patch" && item.write.patch && Object.keys(item.write.patch).length) {
+      const recordKey = `${item.write.collection}/${item.write.id}`;
+      const leaves = leafPaths(item.write.patch as JsonRecord);
+      if (leaves.every((path) => covered.get(recordKey)?.has(JSON.stringify(path)))) item.elided = true;
     }
   }
   const textKeys = Object.fromEntries([...knownKeys].flatMap(([key, keys]) => keys ? [[key, [...keys]]] : []));
-  return { ...(Object.keys(textKeys).length ? { textKeys } : {}), requestId, writes: items.flatMap((item) => item.write ? [item.write] : []), textUpdates: [...updates.values()].map(({ address, bytes }) => ({ ...address, update: bytesToBase64(Y.mergeUpdates(bytes)) })), expectedPages: [...firstBases].filter(([key]) => structural.has(key)).map(([, basis]) => basis) };
+  return { ...(Object.keys(textKeys).length ? { textKeys } : {}), requestId, writes: items.flatMap((item) => item.write && !item.elided ? [item.write] : []), textUpdates: [...updates.values()].map(({ address, bytes }) => ({ ...address, update: bytesToBase64(Y.mergeUpdates(bytes)) })), expectedPages: [...firstBases].filter(([key]) => structural.has(key)).map(([, basis]) => basis) };
 }
 function scopes(batch: SavedBatch): string[] {
   return [...new Set([...batch.writes, ...batch.textUpdates, ...batch.expectedPages].map((item) => item.scope))];
@@ -302,10 +332,11 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
         acknowledge(); releasePendingCommit(batch.requestId);
         owner.journal.delete(batch.requestId); persistJournal(owner);
-        await Promise.allSettled(addresses(batch).map((address) => refreshCollaborativePage(address.scope, address.pageId)));
+        /* No pull after commit: the socket push carries this batch's delta,
+         *  and the commit it pokes into the collections settles records. */
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
         let index = 0;
-        for (const item of items) item.accept(item.write ? result[index++] : null);
+        for (const item of items) item.accept(item.write ? (item.elided ? merge((item.write.base ?? {}) as Value, (item.write.patch ?? {}) as Value) : result[index++]) : null);
         return;
       } catch (error) {
         if (!isCurrent(owner)) { cancelBatch(batch, items); return; }
@@ -347,26 +378,50 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
   void work.then(() => { for (const scope of involved) if (owner.tails.get(scope) === work) owner.tails.delete(scope); });
   return work;
 }
+/** Group staged items into batches: each `withRecordTransaction` is one
+ *  batch; writes outside one group by their target scope. A non-transacted
+ *  structural write lands alone so it can carry its own basis. */
+function drain(owner: AccountQueue): void {
+  owner.scheduled = false; clearTimeout(owner.textTimer); owner.textTimer = undefined; owner.textSince = 0;
+  const staged = owner.staged; owner.staged = []; if (!staged.length) return;
+  // Keep transaction boundaries and write order within each scope. A
+  // non-transacted structural write stands alone both ways: its basis must
+  // name the committed state, and a batch's text updates always land before
+  // its writes, so later text cannot share its batch without reordering.
+  const groups: Pending[][] = []; let previous: string | symbol | undefined; let closed = false;
+  for (const item of staged) {
+    const key = item.transaction ?? item.write?.scope ?? item.change?.update.scope ?? item.update?.scope;
+    const solo = item.structural && item.transaction === undefined;
+    if (!groups.length || key !== previous || solo || closed) groups.push([]);
+    groups.at(-1)!.push(item); previous = key; closed = solo;
+  }
+  for (const items of groups) {
+    const batch = assemble(items, uuid());
+    if (!isCurrent(owner)) { preserveBatch(owner, batch, new Error("账号已切换。内容已保留为原账号草稿。")); cancelBatch(batch, items); continue; }
+    owner.journal.set(batch.requestId, batch); persistJournal(owner); void runBatch(owner, batch, items);
+  }
+}
 function enqueue(pending: Pending): void {
   const owner = loadJournal(); pending.transaction = transaction; owner.staged.push(pending);
+  if (pending.change !== undefined) {
+    /* Text-bearing writes wait out the burst: a paragraph commits once, not
+       once per keystroke. Anything else drains the staged text together on
+       the next microtask — a batch's text updates apply before its writes,
+       so a write's declared basis stays the server's committed state. */
+    if (!owner.textSince) owner.textSince = Date.now();
+    clearTimeout(owner.textTimer);
+    owner.textTimer = setTimeout(() => drain(owner), Math.max(0, Math.min(TEXT_DEBOUNCE_MS, owner.textSince + TEXT_MAX_WAIT_MS - Date.now())));
+    return;
+  }
   if (owner.scheduled) return;
   owner.scheduled = true;
-  queueMicrotask(() => {
-    const staged = owner.staged; owner.staged = []; owner.scheduled = false;
-    // Keep transaction boundaries and write order within each scope.
-    const groups: Pending[][] = []; let previous: string | symbol | undefined;
-    for (const item of staged) {
-      const key = item.transaction ?? item.write?.scope ?? item.change?.update.scope ?? item.update?.scope;
-      if (!groups.length || key !== previous) groups.push([]);
-      groups.at(-1)!.push(item); previous = key;
-    }
-    for (const items of groups) {
-      const batch = assemble(items, uuid());
-      if (!isCurrent(owner)) { preserveBatch(owner, batch, new Error("账号已切换。内容已保留为原账号草稿。")); cancelBatch(batch, items); continue; }
-      owner.journal.set(batch.requestId, batch); persistJournal(owner); void runBatch(owner, batch, items);
-    }
-  });
+  queueMicrotask(() => drain(owner));
 }
+/* A window leaving mid-burst must not drop staged text: drain moves it
+ *  into the journal so the batch replays after reload even if its request
+ *  never flew. */
+if (typeof window !== "undefined") window.addEventListener("pagehide", () => { if (queue?.staged.length) drain(queue); });
+if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && queue?.staged.length) drain(queue); });
 export function withRecordTransaction(action: () => void): void {
   const previous = transaction; transaction ??= Symbol("record transaction");
   try { action(); } finally { transaction = previous; }
@@ -417,6 +472,11 @@ installUndoSubmitter((update) => new Promise((resolve, reject) => enqueue({ upda
 installRecordReader((scope, name) => [...(collections.get(collectionKey(scope, name)) ?? [])].at(-1)?.records as Array<{ id: string; value: JsonRecord }> ?? []);
 installSnapshotConsumer((snapshot) => {
   for (const name of ["pages", "blocks"]) for (const live of collections.get(collectionKey(snapshot.scope, name)) ?? []) live.applySnapshot(snapshot);
+});
+/* Committed pushes no longer carry snapshots: poke a row-level delta pull
+ *  so pages and blocks settle their record view without the poll's wait. */
+installRecordRefresh((scope) => {
+  for (const name of ["pages", "blocks"]) for (const live of collections.get(collectionKey(scope, name)) ?? []) live.refreshNow();
 });
 
 function merge(value: Value, patch: Value): Value {
@@ -533,6 +593,9 @@ export class LiveCollection<R extends object> {
   get(id: string): R | undefined { return this.values().get(id); }
   subscribe(listener: () => void, options: { immediate?: boolean } = {}): () => void { this.listeners.add(listener); if (options.immediate !== false) listener(); return () => { this.listeners.delete(listener); }; }
   private emit(): void { if (!this.closed) for (const listener of this.listeners) listener(); }
+  /** Pull the row delta now — a committed push pokes this so structural
+   *  changes land without waiting for the 1.2s poll. */
+  refreshNow(): void { void this.refresh().catch(() => undefined); }
   applySnapshot(snapshot: DocumentSnapshot): void {
     if (!snapshot.records || this.closed) return;
     this.epoch += 1;
