@@ -132,6 +132,21 @@ export class CollaborationStore {
     this.store.db.prepare("INSERT OR IGNORE INTO collaboration_archives VALUES(?,?,?,?,?)").run(String(row.scope), String(row.page_id), String(row.generation), row.state as Uint8Array, stamp());
     this.store.db.prepare("DELETE FROM collaboration_archives WHERE rowid IN (SELECT rowid FROM collaboration_archives WHERE scope=? AND page_id=? ORDER BY created_at DESC LIMIT -1 OFFSET 20)").run(String(row.scope), String(row.page_id));
   }
+  /** The subscription's permission answer alone. Refresh runs per HTTP
+   *  response and once a second per subscription, where the full
+   *  snapshot's block scan, state-blob read and base64 encode would melt
+   *  the single-threaded server on a big vault (ISS-13). Returns null for
+   *  a page the client can no longer see; throws exactly like snapshot()
+   *  for access and readiness failures. */
+  permission(actor: Actor, scopeName: string, pageId: string): { canEdit: boolean } | null {
+    const scope = this.store.scope(actor, scopeName);
+    const row = this.stored(scope, pageId);
+    if (!row) fail(409, "协作文档正在初始化。", "not_ready");
+    const page = this.store.record(scope, "pages", pageId);
+    if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
+    const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
+    return { canEdit };
+  }
   snapshot(actor: Actor, scopeName: string, pageId: string): DocumentSnapshot {
     const scope = this.store.scope(actor, scopeName);
     const data = this.pageData(scope, pageId);

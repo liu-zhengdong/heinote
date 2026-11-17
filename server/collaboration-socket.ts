@@ -17,12 +17,14 @@ export function attachCollaborationSocket(server: Server, store: Store, authoriz
   const send = (client: Client, value: unknown) => { if (client.socket.readyState === WebSocket.OPEN) client.socket.send(JSON.stringify(value)); };
   const snapshot = (client: Client, subscription: Subscription): DocumentSnapshot => store.collaboration.snapshot(authorize(client.request), subscription.scope, subscription.pageId);
   const refreshPermissions = (client: Client): boolean => {
-    try { authorize(client.request); } catch { client.socket.close(1008, "Session expired"); return false; }
+    let who: Actor;
+    try { who = authorize(client.request); } catch { client.socket.close(1008, "Session expired"); return false; }
     for (const [key, subscription] of client.subscriptions) {
       try {
-        const current = snapshot(client, subscription);
+        const current = store.collaboration.permission(who, subscription.scope, subscription.pageId);
+        if (!current) throw new Error("page gone");
         if (current.canEdit !== subscription.canEdit) {
-          subscription.canEdit = current.canEdit; send(client, { type: "document", snapshot: current });
+          subscription.canEdit = current.canEdit; send(client, { type: "document", snapshot: snapshot(client, subscription) });
         }
       } catch {
         client.subscriptions.delete(key);
