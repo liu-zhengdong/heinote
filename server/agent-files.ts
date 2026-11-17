@@ -4,7 +4,7 @@ import { pipeline } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import schema from "../schema.ts";
-import { isImageType, normalizeStoredFile } from "../src/core/files.ts";
+import { isImageType, normalizeStoredFile, validStoredFilePath } from "../src/core/files.ts";
 import type { StoredFile } from "../src/core/types.ts";
 import { fail, type Actor, type Store } from "./store.ts";
 import { recordTokenEvent } from "./token-identity.ts";
@@ -14,34 +14,11 @@ import { recordTokenEvent } from "./token-identity.ts";
    reference check every Agent surface shares (image properties, file
    paragraphs, image mentions). */
 
-/* A stored path is `files/` plus segments. Segments stay portable: any script
-   may name a file, but control characters, the characters Windows refuses,
-   a trailing space or dot, and Windows device names are out. `.` and `..` end
-   in a dot, so they are refused by the same rule. */
-const UNPORTABLE = /[\u0000-\u001f\u007f\\:*?"<>|]/;
-const DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
-
-function portableSegment(segment: string): boolean {
-  /* A percent escape could hide a separator or a dot-only name from this check
-     and surface later in any layer that decodes — `%2e%2e` is `..`. Judge the
-     decoded form too; a malformed escape (`100%.png`) stays as written. */
-  let decoded = segment;
-  try { decoded = decodeURIComponent(segment); } catch { /* not an escape */ }
-  return segment.length > 0 && segment.length <= 100
-    && !UNPORTABLE.test(segment) && !UNPORTABLE.test(decoded)
-    && !/[. ]$/.test(decoded) && !/^\.{1,2}$/.test(decoded)
-    && !decoded.includes("/")
-    && !DEVICE_NAME.test(decoded);
-}
-
-/** `files/` followed by portable segments: 中文与 emoji 可以，`..` 与设备名不行。 */
-function validStoredPath(value: string): boolean {
-  const segments = value.split("/");
-  return segments[0] === "files" && segments.length >= 2 && segments.slice(1).every(portableSegment);
-}
-
+/* The stored-path rule lives in src/core/files.ts so the write endpoint and
+   every reader (records, references, downloads) judge the same shape:
+   `files/` plus portable segments, any script, no traversal. */
 const pathSchema = z.string().min(1).max(320)
-  .refine(validStoredPath, "附件路径无效：需以 files/ 开头；段内不能含 \\ : * ? \" < > | 或控制字符，不能以空格或点结尾，不能用 con、nul、com1 这类设备名。");
+  .refine(validStoredFilePath, "附件路径无效：需以 files/ 开头；段内不能含 \\ : * ? \" < > | 或控制字符，不能以空格或点结尾，不能用 con、nul、com1 这类设备名。");
 const scopeParam = z.string().min(1).max(256);
 const nameParam = z.string().trim().min(1).max(255);
 
