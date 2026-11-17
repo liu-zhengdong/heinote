@@ -4,7 +4,7 @@ import { pipeline } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import schema from "../schema.ts";
-import { isImageType, normalizeStoredFile } from "../src/core/files.ts";
+import { isImageType, normalizeStoredFile, validStoredFilePath } from "../src/core/files.ts";
 import type { StoredFile } from "../src/core/types.ts";
 import { fail, type Actor, type Store } from "./store.ts";
 import { recordTokenEvent } from "./token-identity.ts";
@@ -14,9 +14,11 @@ import { recordTokenEvent } from "./token-identity.ts";
    reference check every Agent surface shares (image properties, file
    paragraphs, image mentions). */
 
-const FILE_PATH = /^files\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+/* The stored-path rule lives in src/core/files.ts so the write endpoint and
+   every reader (records, references, downloads) judge the same shape:
+   `files/` plus portable segments, any script, no traversal. */
 const pathSchema = z.string().min(1).max(320)
-  .refine((value) => FILE_PATH.test(value) && !value.split("/").includes(".."), "附件路径无效。");
+  .refine(validStoredFilePath, "附件路径无效：需以 files/ 开头；段内不能含 \\ : * ? \" < > | 或控制字符，不能以空格或点结尾，不能用 con、nul、com1 这类设备名。");
 const scopeParam = z.string().min(1).max(256);
 const nameParam = z.string().trim().min(1).max(255);
 

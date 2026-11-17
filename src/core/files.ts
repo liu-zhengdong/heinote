@@ -2,13 +2,38 @@ import type { StoredFile } from "./types";
 
 /* A file reference read from a record is untrusted: another member's client
    wrote it. Only a path under `files/`, with no way out of it, is ever read,
-   and every other field is checked for its shape. */
-const FILE_PATH = /^files\/[A-Za-z0-9._\-/]{1,300}$/;
+   and every other field is checked for its shape. The path rule is the one
+   the upload endpoint enforces: any script may name a file, but control
+   characters, the characters Windows refuses, a trailing space or dot, and
+   Windows device names (including conin$/conout$) are out. `.` and `..` end
+   in a dot, so the same rule refuses them. */
+const UNPORTABLE = /[\u0000-\u001f\u007f\\:*?"<>|]/;
+const DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9]|conin\$|conout\$)(?:\.|$)/i;
+
+function portableSegment(segment: string): boolean {
+  /* A percent escape could hide a separator or a dot-only name from this check
+     and surface later in any layer that decodes — `%2e%2e` is `..`. Judge the
+     decoded form too; a malformed escape (`100%.png`) stays as written. */
+  let decoded = segment;
+  try { decoded = decodeURIComponent(segment); } catch { /* not an escape */ }
+  return segment.length > 0 && segment.length <= 100
+    && !UNPORTABLE.test(segment) && !UNPORTABLE.test(decoded)
+    && !/[. ]$/.test(decoded) && !/^\.{1,2}$/.test(decoded)
+    && !decoded.includes("/")
+    && !DEVICE_NAME.test(decoded);
+}
+
+/** `files/` followed by portable segments: 中文与 emoji 可以，`..` 与设备名不行。 */
+export function validStoredFilePath(value: string): boolean {
+  if (value.length > 320) return false;
+  const segments = value.split("/");
+  return segments[0] === "files" && segments.length >= 2 && segments.slice(1).every(portableSegment);
+}
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
 const MEDIA_TYPE = /^[\w.+-]{1,60}\/[\w.+-]{1,60}$/;
 
 function safePath(value: unknown): string | undefined {
-  return typeof value === "string" && FILE_PATH.test(value) && !value.split("/").includes("..") ? value : undefined;
+  return typeof value === "string" && validStoredFilePath(value) ? value : undefined;
 }
 
 function dimension(value: unknown): number | undefined {
