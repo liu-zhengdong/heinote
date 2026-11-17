@@ -21,6 +21,7 @@ import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { createId } from "../../core/ids";
+import { copyText } from "../../core/clipboard";
 import { pageTitleContent, titleFields } from "../../core/title";
 import { titleField } from "../../collaboration/protocol";
 import {
@@ -584,7 +585,7 @@ export function DocumentEditor({
   const linkHover = useLinkHover();
   const copyHoveredLink = (link: HoveredLink) => {
     linkHover.close();
-    void navigator.clipboard.writeText(link.href)
+    void copyText(link.href)
       .then(() => toast("Link copied", "success"))
       .catch(() => toast("Could not copy that link", "error"));
   };
@@ -1646,7 +1647,7 @@ export function DocumentEditor({
         execute(updateBlockFields(tree, block.id, { language }));
       },
       copyCode: (block) => {
-        void navigator.clipboard.writeText(inlinePlainText(block.content))
+        void copyText(inlinePlainText(block.content))
           .then(() => toast("Code copied", "success"))
           .catch(() => toast("Could not copy that code", "error"));
       },

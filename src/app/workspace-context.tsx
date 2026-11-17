@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { createId } from "../core/ids";
+import { createId, uuid } from "../core/ids";
 import { BLOCK_ORDER_STEP, isLoadedPage, linesFor, newPage, orderedBlocks, pageLine, pageName, relinkContent } from "../core/block-tree";
 import { emptyWorkspace } from "../core/workspace-state";
 import { newDatabaseConfig } from "../features/database/database-model";
@@ -944,7 +944,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       space = spacesRef.current[spaceId];
     }
     if (!space?.knowledgeBase || space.knowledgeBase.sort === sort) return;
-    const input = { requestId: crypto.randomUUID(), revision: space.knowledgeBase.revision, sort };
+    const input = { requestId: uuid(), revision: space.knowledgeBase.revision, sort };
     try { await knowledgeBases.update(spaceId, input); }
     catch (reason) {
       if (reason instanceof ApiError && reason.code === "result_unknown") unknownSort.current.set(spaceId, input);

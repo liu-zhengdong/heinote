@@ -1,6 +1,7 @@
 import { Copy, ExternalLink, Link, Plus } from "lucide-react";
 import { useState } from "react";
 import { useUi } from "../../app/ui-context";
+import { copyText } from "../../core/clipboard";
 import { api, errorMessage } from "../account/api";
 import { ListStatus } from "../account/ListStatus";
 import { formatDate, useAccountList } from "../account/useAccountList";
@@ -40,7 +41,7 @@ export function PublicLinks({ pageId }: { pageId: string }) {
   };
   const copy = async (url: string) => {
     const absolute = new URL(url, window.location.origin).href;
-    try { await navigator.clipboard.writeText(absolute); toast("链接已复制", "success"); }
+    try { await copyText(absolute); toast("链接已复制", "success"); }
     catch { toast("复制失败，请选中地址手动复制", "error"); }
   };
   return <section className="public-links" aria-label="公开只读链接" aria-busy={loading || Boolean(pending)}>

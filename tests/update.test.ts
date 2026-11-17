@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { existsSync, mkdtempSync, readdirSync, readlinkSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -25,7 +25,7 @@ const makeArchive = (dir: string, tag: string, version = tag.replace(/^v/i, ""))
   const staging = mkdtempSync(join(dir, `pkg-${tag}-`));
   for (const file of ["package.json", "package-lock.json", "runtime-manifest.json", "dist/app.js", "server/index.ts", "src/main.ts"]) {
     const path = join(staging, file);
-    spawnSync("mkdir", ["-p", dirname(path)]);
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, file === "runtime-manifest.json"
       ? JSON.stringify({ name: "heinote", version, files: ["package.json", "runtime-manifest.json", "dist/app.js"] })
       : `// ${file}`);
@@ -208,7 +208,7 @@ test("switchCurrent moves the link and keeps the previous version for rollback",
   t.after(() => rm(directory, { recursive: true, force: true }));
   for (const tag of ["v1", "v2"]) {
     const target = join(versionsDir(directory), tag);
-    spawnSync("mkdir", ["-p", target]);
+    mkdirSync(target, { recursive: true });
     writeFileSync(join(target, "package.json"), "{}");
     switchCurrent(directory, tag);
     assert.equal(readlinkSync(join(directory, "current")), target);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, readlinkSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, readlinkSync, unlinkSync, writeFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 /** One step of an update run; the runner reports these to state.json. */
@@ -85,7 +85,11 @@ export const switchCurrent = (dataDir: string, tag: string): { previous: string 
   const previous = existsSync(link) ? readlinkSync(link) : null;
   const staged = join(dir, `.current-${process.pid}`);
   rmSync(staged, { force: true });
-  symlinkSync(target, staged, "dir");
+  symlinkSync(target, staged, process.platform === "win32" ? "junction" : "dir");
+  // Windows refuses to rename onto an existing junction, so the link is removed
+  // first there. The staged link keeps the gap to one unlink; POSIX keeps the
+  // atomic rename.
+  if (process.platform === "win32" && existsSync(link)) unlinkSync(link);
   renameSync(staged, link);
   return { previous };
 };

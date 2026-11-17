@@ -1,4 +1,5 @@
 import * as Y from "yjs";
+import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
@@ -195,7 +196,7 @@ async function rebaseBatch(owner: AccountQueue, batch: SavedBatch): Promise<Save
     else if (resync.session.snapshot.generation === update.generation) textUpdates.push(update);
     else if (!resync.session.pendingText.length) return null; // The saved update cannot be replayed without its session.
   }
-  return { ...batch, requestId: crypto.randomUUID(), writes, textUpdates, expectedPages: [...expected.values()] };
+  return { ...batch, requestId: uuid(), writes, textUpdates, expectedPages: [...expected.values()] };
 }
 function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Promise<void> {
   const involved = scopes(batch);
@@ -276,7 +277,7 @@ function enqueue(pending: Pending): void {
       groups.at(-1)!.push(item); previous = key;
     }
     for (const items of groups) {
-      const batch = assemble(items, crypto.randomUUID());
+      const batch = assemble(items, uuid());
       if (!isCurrent(owner)) { preserveBatch(owner, batch, new Error("账号已切换。内容已保留为原账号草稿。")); cancelBatch(batch, items); continue; }
       owner.journal.set(batch.requestId, batch); persistJournal(owner); void runBatch(owner, batch, items);
     }

@@ -1,3 +1,5 @@
+import { uuid } from "../core/ids";
+
 export interface RecoveryDraft {
   id?: string;
   message: string;
@@ -54,7 +56,7 @@ export function addRecovery(userId: string, draft: RecoveryDraft): RecoveryEntry
       return existing;
     }
   }
-  const entry: RecoveryEntry = { ...draft, id: draft.id ?? crypto.randomUUID(), createdAt: draft.createdAt ?? new Date().toISOString(), persisted: false };
+  const entry: RecoveryEntry = { ...draft, id: draft.id ?? uuid(), createdAt: draft.createdAt ?? new Date().toISOString(), persisted: false };
   if (!userId || closing) return entry;
   entries.set(entry.id, entry);
   try {

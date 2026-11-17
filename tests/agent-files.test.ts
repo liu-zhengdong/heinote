@@ -123,7 +123,13 @@ async function makeToken(browser: Browser, access: "read" | "write") {
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Zl1sAAAAASUVORK5CYII=", "base64");
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
-const fileRows = (dataDir: string) => new DatabaseSync(join(dataDir, "notes.sqlite"), { readOnly: true }).prepare("SELECT * FROM files ORDER BY scope,path").all() as Json[];
+/* The handle is closed before returning: Windows keeps the file locked while
+   it is open, so a leaked reader makes the fixture cleanup rm EBUSY. */
+const fileRows = (dataDir: string) => {
+  const db = new DatabaseSync(join(dataDir, "notes.sqlite"), { readOnly: true });
+  try { return db.prepare("SELECT * FROM files ORDER BY scope,path").all() as Json[]; }
+  finally { db.close(); }
+};
 
 function storedFile(reply: Reply, user: Json): Json {
   const file = ok(reply, 201);

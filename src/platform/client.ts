@@ -1,5 +1,6 @@
 import type { AppBootstrap, CollaboratorPresence, Person, PresenceState, SidebarSort, SpaceMember, SpaceRoster, SpaceSummary } from "../core/types";
 import type { FileUrl } from "./schema";
+import { uuid } from "../core/ids";
 import { ApiError, poll, request } from "./http";
 import { configureCollaboration } from "../collaboration/client";
 
@@ -58,7 +59,7 @@ export async function createPlatformClient(knownUser?: Person | null): Promise<P
     if (!response.ok) throw Object.assign(new Error("无法读取附件。"), { status: response.status, code: response.status === 404 ? "not_found" : "forbidden" });
     return response.blob();
   };
-  const presenceId = crypto.randomUUID();
+  const presenceId = uuid();
   const presenceStates = new Map<string, PresenceState>();
   const heartbeat = setInterval(() => {
     for (const [spaceId, state] of presenceStates) void request(`/api/spaces/${spaceId}/presence`, json("POST", { state, clientId: presenceId })).catch(() => undefined);
