@@ -749,6 +749,75 @@ test("sharing and stopping a full tree migrate records atomically and revoke pen
   denied(await pendingUser.request(`/api/records/${scope}/pages`));
 });
 
+test("single-page reads follow an owner's sharing pointer for current content and history", async (t) => {
+  const f = await fixture(t);
+  const owner = f.browser(); const editor = f.browser(); const outsider = f.browser();
+  const ownerUser = await register(owner, "owner");
+  const editorUser = await register(editor, "editor");
+  const outsiderUser = await register(outsider, "outsider");
+  const ownerToken = await token(owner, "write"); const editorToken = await token(editor, "write"); const outsiderToken = await token(outsider, "write");
+  const parent = page("private_parent", ownerUser.id);
+  const root = page("pointer_root", ownerUser.id, { parent_id: parent.id });
+  const child = page("pointer_child", ownerUser.id, { parent_id: root.id });
+  await put(owner, "personal", "pages", parent.id, parent);
+  for (const item of [root, child]) {
+    await put(owner, "personal", "pages", item.id, item);
+    await put(owner, "personal", "blocks", `${item.id.length}_${item.id}_paragraph`, {
+      id: "paragraph", page: item.id, kind: "text", order: 1024, content: [{ text: `Body of ${item.id}` }],
+    });
+  }
+  const beforeShare = status(await owner.request(`/api/v1/pages/${root.id}/checkpoint`, { method: "POST", token: ownerToken.token }), 200);
+  const scope = status(await owner.request("/api/spaces", { method: "POST", body: { name: "Pointer collaboration" } }), 201).spaceId;
+  status(await owner.request(`/api/spaces/${scope}/invitations`, { method: "POST", body: { handle: "editor", role: "editor" } }), 200);
+  const invitation = status(await editor.request("/api/invitations"), 200)[0];
+  status(await editor.request(`/api/invitations/${invitation.id}`, { method: "POST", body: { accept: true } }), 200);
+  const writes: Json[] = [];
+  for (const collection of ["pages", "blocks", "versions"]) for (const row of status(await owner.request(`/api/records/personal/${collection}`), 200)) {
+    if (collection === "pages" ? ![root.id, child.id].includes(row.id) : ![root.id, child.id].includes(row.value.page)) continue;
+    const value = collection === "pages" && row.id === root.id ? { ...row.value, share_space_id: scope } : row.value;
+    const sharedValue = { ...value };
+    if (collection === "pages" && row.id === root.id) delete sharedValue.parent_id;
+    writes.push({ scope, collection, id: row.id, action: "put", value: sharedValue, base: null });
+    writes.push(collection === "pages" && row.id === root.id
+      ? { scope: "personal", collection, id: row.id, action: "put", value, base: row.value }
+      : { scope: "personal", collection, id: row.id, action: "delete", base: row.value });
+  }
+  status(await owner.structure("/api/records/batch", { method: "POST", body: { writes } }), 200);
+  const read = (browser: Browser, bearer: string, id = root.id) => browser.request(`/api/v1/pages/${id}`, { token: bearer });
+  const initial = status(await read(owner, ownerToken.token), 200);
+  assert.equal(initial.text, `Body of ${root.id}`, "the personal pointer must not replace the shared body with a blank root");
+  assert.equal(initial.page.parent_id, parent.id, "the owner's private placement must survive projection");
+  assert.equal(status(await read(owner, ownerToken.token, child.id), 200).text, `Body of ${child.id}`);
+  const shared = status(await read(editor, editorToken.token), 200);
+  const changed = status(await editor.request(`/api/v1/pages/${root.id}`, {
+    method: "PATCH", token: editorToken.token, body: { baseRevision: shared.revision, title: "Shared latest title", text: "Shared latest body" },
+  }), 200);
+  const current = status(await read(owner, ownerToken.token), 200);
+  assert.equal(current.title, changed.title);
+  assert.equal(current.text, changed.text);
+  assert.equal(current.page.updated_by, changed.page.updated_by);
+  assert.equal(current.page.parent_id, parent.id);
+  assert.equal(current.revision, changed.revision);
+  const checkpoint = status(await owner.request(`/api/v1/pages/${root.id}/checkpoint`, { method: "POST", token: ownerToken.token }), 200);
+  assert.equal(checkpoint.snapshot.title, changed.title);
+  assert.deepEqual(checkpoint.snapshot.block_tree, changed.page.block_tree);
+  const repeated = status(await owner.request(`/api/v1/pages/${root.id}/checkpoint`, { method: "POST", token: ownerToken.token }), 200);
+  assert.equal(repeated.id, checkpoint.id, "per-page projection must read the latest shared version instead of duplicating it");
+  const versions = status(await owner.request(`/api/v1/pages/${root.id}/versions`, { token: ownerToken.token }), 200);
+  assert.ok(versions.some((version: Json) => version.id === beforeShare.id));
+  assert.ok(versions.some((version: Json) => version.id === checkpoint.id));
+  denied(await read(outsider, outsiderToken.token));
+  // An unrelated personal record with the same ID must not import a foreign scope.
+  await put(outsider, "personal", "pages", root.id, page(root.id, outsiderUser.id));
+  await put(outsider, "personal", "blocks", `${root.id.length}_${root.id}_private`, {
+    id: "private", page: root.id, kind: "text", order: 1024, content: [{ text: "Outsider private body" }],
+  });
+  assert.equal(status(await read(outsider, outsiderToken.token), 200).text, "Outsider private body");
+  assert.deepEqual(status(await outsider.request(`/api/v1/pages/${root.id}/versions`, { token: outsiderToken.token }), 200), []);
+  status(await owner.request(`/api/spaces/${scope}/members/${editorUser.id}`, { method: "DELETE" }), 200);
+  denied(await read(editor, editorToken.token));
+});
+
 test("database restart preserves accounts, sessions, tokens, pages, and history", async (t) => {
   const f = await fixture(t);
   const browser = f.browser();

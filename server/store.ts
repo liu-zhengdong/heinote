@@ -344,22 +344,24 @@ export class Store {
   private pagePlanes(actor: Actor, pageId: string): Map<string, PlaneRecords> {
     const personal = `user:${actor.user.id}`;
     const spaces = this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id).map((row) => String(row.space_id));
-    // Find the page, then walk parent records up to the tree root. A
-    // shared page's paragraphs and history live in the space plane while
-    // the sharer's own plane keeps only its pages row — the same split the
-    // records mirror maintains — so ancestors land in whichever scope
-    // holds them.
-    const byId = new Map<string, { scope: string; value: Row }>();
-    let cursor: string | undefined = pageId;
+    // Keep both the owner's placement pointer and the shared page record.
+    // Projector selects the shared metadata/body while retaining the private
+    // parent. Follow both ancestor chains, using only current member scopes.
+    const byId = new Map<string, Array<{ scope: string; value: Row }>>();
+    const pending = [pageId];
     const seen = new Set<string>();
-    while (cursor && !seen.has(cursor)) {
-      seen.add(cursor);
-      const current: string = cursor;
-      const scope = [personal, ...spaces].find((scope) => this.record(scope, "pages", current));
-      if (!scope) break;
-      const value: Row = this.record(scope, "pages", current)!;
-      byId.set(current, { scope, value });
-      cursor = typeof value.parent_id === "string" ? value.parent_id : undefined;
+    for (let index = 0; index < pending.length; index++) {
+      const current = pending[index];
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const found: Array<{ scope: string; value: Row }> = [];
+      for (const scope of [personal, ...spaces]) {
+        const value = this.record(scope, "pages", current);
+        if (!value) continue;
+        found.push({ scope, value });
+        if (typeof value.parent_id === "string") pending.push(value.parent_id);
+      }
+      if (found.length) byId.set(current, found);
     }
     if (!byId.has(pageId)) return new Map();
     const planes = new Map<string, PlaneRecords>();
@@ -368,7 +370,9 @@ export class Store {
       if (!plane) planes.set(scope, plane = { pages: new Map(), blocks: new Map(), versions: new Map(), workspace_settings: new Map() });
       return plane;
     };
-    for (const [id, { scope, value }] of byId) {
+    // Match state()'s plane order so duplicate IDs keep the same precedence.
+    for (const scope of [personal, ...spaces]) planeOf(scope);
+    for (const [id, records] of byId) for (const { scope, value } of records) {
       const plane = planeOf(scope);
       (plane.pages as Map<string, RecordValue>).set(id, value);
       if (id !== pageId) continue;

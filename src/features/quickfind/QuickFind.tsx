@@ -14,6 +14,7 @@ import "./quickfind.css";
 import { useUi } from "../../app/ui-context";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { pageGlyph } from "../editor/block-registry";
+import { request } from "../../platform/http";
 
 export interface Hit {
   page: NotePage;
@@ -103,6 +104,8 @@ export function QuickFind() {
   const [active, setActive] = useState(0);
   const [scope, setScope] = useState<"current" | "all">("current");
   const resultsRef = useRef<HTMLDivElement>(null);
+  const searchKey = JSON.stringify([scope === "all" ? null : activeSpaceId, query.trim().toLowerCase()]);
+  const [remote, setRemote] = useState<{ key: string; hits: Array<{ id: string; crumb: string; excerpt?: string; space: string }> } | null>(null);
 
   useEffect(() => {
     if (quickFindOpen) {
@@ -112,7 +115,7 @@ export function QuickFind() {
     }
   }, [quickFindOpen]);
 
-  const hits = useMemo<Hit[]>(() => {
+  const localHits = useMemo<Hit[]>(() => {
     if (!allPages) return [];
     const results = quickFind(scope === "all" ? allPages : pagesInSpace(allPages, spaces, activeSpaceId), query);
     if (scope === "current") return results;
@@ -122,6 +125,32 @@ export function QuickFind() {
       return { ...hit, crumb: [name, hit.crumb].filter(Boolean).join(" / ") };
     });
   }, [allPages, query, scope, spaces, activeSpaceId]);
+
+  useEffect(() => {
+    if (!quickFindOpen || !query.trim()) return;
+    const controller = new AbortController();
+    const params = new URLSearchParams({ q: query.trim() });
+    if (scope === "current") params.set("space", activeSpaceId);
+    const timer = window.setTimeout(() => {
+      void request<{ hits: NonNullable<typeof remote>["hits"] }>(`/api/v1/search?${params}`, { signal: controller.signal })
+        .then((result) => { if (!controller.signal.aborted) setRemote({ key: searchKey, hits: result.hits }); })
+        .catch(() => { /* Cached text and unsaved local matches remain searchable offline. */ });
+    }, 120);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [quickFindOpen, query, scope, activeSpaceId, searchKey]);
+
+  const hits = useMemo<Hit[]>(() => {
+    if (!allPages || remote?.key !== searchKey || !query.trim()) return localHits;
+    // The server can search unopened bodies. Resolve results through the
+    // current directory so a revoked or removed page cannot reappear.
+    const found = remote.hits.flatMap((hit): Hit[] => {
+      const page = allPages[hit.id];
+      if (!page || inTrash(allPages, hit.id) || scope === "current" && navigationSpaceOf(allPages, spaces, hit.id) !== activeSpaceId) return [];
+      return [{ page, excerpt: hit.excerpt, crumb: scope === "all" ? [hit.space, hit.crumb].filter(Boolean).join(" / ") : hit.crumb }];
+    });
+    const included = new Set(found.map((hit) => hit.page.id));
+    return [...found, ...localHits.filter((hit) => !included.has(hit.page.id))].slice(0, 12);
+  }, [allPages, remote, searchKey, query, localHits, scope, spaces, activeSpaceId]);
 
   useEffect(() => {
     if (!quickFindOpen) return;

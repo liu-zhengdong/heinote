@@ -386,12 +386,14 @@ test("UC-13 browser: a late initial Plane 200 cannot resurrect a newly joined li
     await createPage(page, app, "personal", "原有个人入口", "个人正文保持可用");
     const kb = await createThroughUI(owner, app, "迟到响应知识库");
     await createPage(owner, app, kb.spaceId, "撤权后不可复现旧页面", "撤权后不可复现旧正文");
-    await page.route(`**/api/records/${kb.spaceId}/pages`, async (route) => {
+    await page.route((url) => url.pathname === `/api/records/${kb.spaceId}/pages` && url.searchParams.get("after") === "0", async (route) => {
       if (route.request().method() !== "GET" || captured) return route.continue();
       captured = true;
       const authorized = await route.fetch();
       expect(authorized.status()).toBe(200);
-      const oldBody = await authorized.text(); expect(oldBody).toContain("撤权后不可复现旧页面");
+      const oldBody = await authorized.text();
+      const initialDelta = JSON.parse(oldBody);
+      expect(initialDelta.rows.some((row: Json) => JSON.stringify(row.value).includes("撤权后不可复现旧页面"))).toBe(true);
       initialRead.release(); await release.promise;
       await route.fulfill({ response: authorized, body: oldBody }); delivered.release();
     });
@@ -409,7 +411,10 @@ test("UC-13 browser: a late initial Plane 200 cannot resurrect a newly joined li
     await openDrawer(page); await switcher(page).click();
     await expect(spaceMenu(page)).not.toContainText(kb.name); await page.keyboard.press("Escape");
     // Deliver the genuine pre-revocation response only after the app saw removal.
-    const nextPersonalPoll = page.waitForResponse((response) => response.url() === `${app.url}/api/records/personal/pages` && response.request().method() === "GET");
+    const nextPersonalPoll = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === "/api/records/personal/pages" && url.searchParams.has("after") && response.request().method() === "GET";
+    });
     release.release(); await delivered.promise; await nextPersonalPoll;
     await expect(files(page)).not.toContainText("撤权后不可复现旧页面");
     await expect(page.getByText("撤权后不可复现旧正文", { exact: true })).toHaveCount(0);
@@ -547,6 +552,8 @@ test("ISS-08 browser: full result lists keep text inside each row's padding", as
   ]) {
     await page.setViewportSize({ width: layout.width, height: layout.height });
     await page.evaluate((theme) => { document.documentElement.dataset.theme = theme; }, layout.theme);
+    // Resizing can leave the pointer over the same row without a new move.
+    await page.mouse.move(0, 0);
     await rows.last().hover();
     await expect(rows.last()).toHaveAttribute("aria-selected", "true");
     await screenshot(page, info, `quickfind-padding-${layout.name}`);
@@ -618,6 +625,31 @@ test("ISS-08 browser: long crumbs stay on one line beside a one-line excerpt", a
   const excerpt = hit.locator(".menu__description");
   await expect(excerpt).toHaveCSS("white-space", "nowrap");
   expect(itemBox!.height).toBeLessThan(55);
+});
+
+test("UC-48: a late body-search response cannot replace the current query", async ({ page, app }) => {
+  await register(page, app, "qf_late_body");
+  await api(page, app, "/api/v1/pages", "POST", { title: "旧查询结果", text: "old-body-match" }, 201);
+  await api(page, app, "/api/v1/pages", "POST", { title: "当前查询结果", text: "new-body-match" }, 201);
+  await page.reload(); await expect(switcher(page)).toBeVisible();
+  const requested = gate(); const release = gate(); const delivered = gate();
+  await page.route("**/api/v1/search?*", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") !== "old-body-match") return route.continue();
+    const response = await route.fetch(); expect(response.status()).toBe(200);
+    requested.release(); await release.promise;
+    await route.fulfill({ response }).catch(() => undefined); delivered.release();
+  });
+  try {
+    const dialog = await search(page, "old-body-match"); await requested.promise;
+    await dialog.getByRole("textbox", { name: "Search pages", exact: true }).fill("new-body-match");
+    await expect(dialog.getByRole("option")).toHaveCount(1);
+    await expect(dialog.getByRole("option")).toContainText("当前查询结果");
+    release.release(); await delivered.promise;
+    await expect(dialog.getByRole("option")).toHaveCount(1);
+    await expect(dialog.getByRole("option")).toContainText("当前查询结果");
+    await dialog.getByRole("option").click();
+    await expect(body(page)).toHaveText("new-body-match");
+  } finally { release.release(); }
 });
 
 // Direction A (docs/prototypes/quickfind/assets/proto.css) is the accepted
