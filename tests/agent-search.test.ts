@@ -224,3 +224,21 @@ test("UC-35: paginates with limit and offset", async (t) => {
   assert.equal(third.hasMore, false);
   assert.equal(third.nextOffset, null);
 });
+
+// Unicode compatibility: NFKC folds full/half width and NFC/NFD composition, so
+// the same text typed on another keyboard or copied from a document still matches.
+test("UC-35: folds width and composition before comparing", async (t) => {
+  const { agent } = await fixture(t);
+  await agent.makePage({ title: "全角检索页", text: "正文只有全角ＡＢＣ三个字母。" });
+  await agent.makePage({ title: "半角检索页", text: "正文只有半角ABC三个字母。" });
+  await agent.makePage({ title: "NFC 假名页", text: "正文有假名が。" });
+  await agent.makePage({ title: "NFD 假名页", text: "正文有假名か\u3099。" });
+  const titlesOf = (reply: Reply) => ok(reply).hits.map((hit: Json) => hit.title).sort();
+  assert.deepEqual(titlesOf(await agent.search("q=abc")), ["半角检索页", "全角检索页"].sort());
+  assert.deepEqual(titlesOf(await agent.search("q=ＡＢＣ")), ["半角检索页", "全角检索页"].sort());
+  assert.deepEqual(titlesOf(await agent.search("q=が")), ["NFD 假名页", "NFC 假名页"].sort());
+  assert.deepEqual(titlesOf(await agent.search("q=か\u3099")), ["NFD 假名页", "NFC 假名页"].sort());
+  // Folding must not merge unrelated text: the excerpt still comes from the page.
+  const excerpt = ok(await agent.search("q=abc")).hits.find((hit: Json) => hit.title === "全角检索页").excerpt;
+  assert.match(excerpt, /ＡＢＣ/);
+});

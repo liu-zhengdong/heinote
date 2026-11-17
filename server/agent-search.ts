@@ -8,6 +8,14 @@ import { inlinePlainText, inlineReadableText } from "../src/core/inline-content.
 import { tableCells, tableGrid } from "../src/core/simple-table.ts";
 import { readableDescriber } from "../src/core/export-markdown.ts";
 
+/** Comparison form for search text: NFKC folds width and composition — full-width
+ *  ＡＢＣ compares as ABC, half-width katakana as full width, and か + U+3099 as
+ *  the single kana が — then lower case makes Latin matching case-free. The excerpt keeps the
+ *  page's own text; only the comparison is folded. */
+function fold(text: string): string {
+  return text.normalize("NFKC").toLowerCase();
+}
+
 /** Mirrors the window's quick-find ranking: titles that start with the query,
  *  then titles holding it, then pages whose body holds it — newest first
  *  within each band, at most 12 by default. `space` limits the search to one
@@ -16,7 +24,7 @@ import { readableDescriber } from "../src/core/export-markdown.ts";
 export function attachAgentSearch(app: Express, store: Store, actor: (req: Request) => Actor): void {
   app.get("/api/v1/search", (req, res) => {
     const who = actor(req);
-    const q = typeof req.query.q === "string" ? req.query.q.trim().toLowerCase() : "";
+    const q = typeof req.query.q === "string" ? fold(req.query.q.trim()) : "";
     if (!q) fail(400, "请提供搜索关键词 q。", "bad_request");
 
     const spaceParam = typeof req.query.space === "string" ? req.query.space : undefined;
@@ -50,7 +58,7 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
       if (inTrash(pages, page.id)) continue;
       const scope = scopeOf(page);
       if (wanted && scope !== wanted) continue;
-      const title = pageName(page).toLowerCase();
+      const title = fold(pageName(page));
       let rank: number;
       let excerpt: string | undefined;
       if (title.startsWith(q)) rank = 0;
@@ -61,7 +69,7 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
           .map((block) => (block.kind === "table"
             ? tableCells(tableGrid(block.table)).flat().map(inlinePlainText).filter(Boolean).join(" · ")
             : inlineReadableText(block.content, readable)))
-          .find((line) => line.toLowerCase().includes(q));
+          .find((line) => fold(line).includes(q));
         if (!match) continue;
         excerpt = match.slice(0, 90);
       }
