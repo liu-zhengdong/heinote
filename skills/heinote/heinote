@@ -22,6 +22,21 @@ import sys
 import urllib.error
 import urllib.request
 
+# A Windows console and a pipe both default to GBK. Text that file cannot
+# encode — the ✓ in a page title, an emoji — makes print() raise
+# UnicodeEncodeError and aborts the command with a traceback; and the GBK bytes
+# a pipe receives are not what a caller expecting UTF-8 JSON decodes. So: when
+# the stream is not a terminal, write UTF-8; on a terminal keep its own encoding
+# and escape what it cannot encode as \uXXXX, which is readable in the status
+# lines and still a valid JSON escape inside the payload.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        if not _stream.isatty():
+            _stream.reconfigure(encoding="utf-8")
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError, OSError):
+        pass
+
 ENV_FILE = os.path.expanduser("~/.config/heinote/env")
 DEFAULT_URL = "http://localhost:3000"
 
