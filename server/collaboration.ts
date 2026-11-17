@@ -1,9 +1,10 @@
 import * as Y from "yjs";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { fieldAddress, fieldsInPage, setAt, structureOf, documentKey, isStructureChange, isObject, type DocumentSnapshot, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 import { readFields, seedFields, updateFields } from "../src/collaboration/text.ts";
 import type { RichText } from "../src/platform/schema.ts";
-import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { asAuthor, fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
 import schema from "../schema.ts";
 
 export const textUpdateSchema = z.object({ scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256), generation: z.string().min(1).max(100), update: z.string().max(8 * 1024 * 1024) });
@@ -243,11 +244,15 @@ export class CollaborationStore {
           const recordKey = `${address.collection}/${address.id}`;
           const current = nextRecords.get(recordKey)?.value ?? this.store.record(scope, address.collection, address.id);
           if (!current) fail(400, "文字字段缺少所属记录。");
+          const held = address.path.reduce<unknown>((record, part) => isObject(record) ? record[part] : undefined, current);
           nextRecords.set(recordKey, { collection: address.collection, id: address.id, value: setAt(current, address.path, runs) });
-          approved.add(JSON.stringify([scope, address.collection, address.id, address.path]));
+          // approved marks fields that changed: the timeline reads it as
+          // who did what, stripProjected as what a record write may keep.
+          if (!isDeepStrictEqual(held, runs)) approved.add(JSON.stringify([scope, address.collection, address.id, address.path]));
         }
         for (const record of nextRecords.values()) {
           const spec = schema.definition.collections[record.collection];
+          if (record.collection === "blocks") record.value = { ...record.value, edited_at: stamp(), edited_by: asAuthor(actor) };
           const valid = z.object(spec.fields).strict().parse(record.value) as Row;
           this.store.put(scope, record.collection, record.id, valid);
         }

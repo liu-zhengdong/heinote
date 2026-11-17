@@ -742,3 +742,22 @@ test("a peer typing in a shared database's name and a row's name draws a caret f
   }, { timeout: 15000, message: "The peer's caret lands on the row's name" }).toBe(true);
   await pair.owner.screenshot({ path: join(evidence, "remote-caret-database.png") });
 });
+
+test("a peer's edit lands on the page timeline and locating it flashes where it landed", async ({ app }) => {
+  const pair = await app.pair("定位基线");
+  await typeAt(pair, pair.peer, "协作者写的字");
+  await persisted(pair, "定位基线协作者写的字");
+  // The event must commit before the owner opens the panel.
+  await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/events`)).length).toBeGreaterThan(0);
+
+  await pair.owner.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await expect(panel).toBeVisible();
+  const event = panel.getByRole("button", { name: /peer/ });
+  await expect(event).toBeVisible();
+  await expect(event).toContainText("编辑了正文");
+  // Locating it flashes the block it touched, on the live page.
+  await event.click();
+  await expect(pair.owner.locator(`[data-block-id="${pair.blockId}"].history-flash`)).toBeVisible();
+});

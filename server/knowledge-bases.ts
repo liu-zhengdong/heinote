@@ -112,7 +112,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       store.db.prepare("INSERT INTO knowledge_bases(space_id,home_page_id,description,archived,sort,revision,created_at) VALUES(?,?,?,?,?,?,?)").run(spaceId, homePageId, input.description, 0, "name", 1, createdAt);
       const home = newPage(homePageId, "document", null, { author: who.user.id, now: createdAt }, id());
       home.title = input.name; home.share_space_id = spaceId;
-      store.savePage(spaceId, home);
+      store.savePage(spaceId, home, who, "创建了知识库首页");
       return summary(who, spaceId);
     });
     res.status(201).json(result);

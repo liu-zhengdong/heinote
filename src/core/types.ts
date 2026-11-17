@@ -16,6 +16,8 @@ export type PageRecord = RecordOf<typeof app.pages>;
 export type BlockRecord = RecordOf<typeof app.blocks>;
 /** A part of a page's checkpoint (platform/history-record.ts). */
 export type HistoryPart = RecordOf<typeof app.versions>;
+/** One committed edit on a page's timeline (schema.ts page_events). */
+export type EventRecord = RecordOf<typeof app.page_events>;
 /** The member's `preferences` and `roots`. */
 export type SettingsRecord = RecordOf<typeof app.workspace_settings>;
 
@@ -259,6 +261,23 @@ export interface PageVersion {
   restored?: boolean;
 }
 
+/** One committed edit on a page: who made it and what it touched — the
+ *  history panel's timeline entries between checkpoints. */
+export interface PageEvent {
+  id: string;
+  page_id: string;
+  author_id: string;
+  author_name: string;
+  author_avatar_url?: string | null;
+  /** What the edit did, in the app's words: "编辑了正文"、"修改了标题". */
+  label: string;
+  /** The blocks (or the page itself) it touched, for locating. */
+  targets: string[];
+  /** How many committed batches it holds: a merged entry's count. */
+  merged: number;
+  created_at: string;
+}
+
 export type ThemePreference = NonNullable<SettingsRecord["theme"]>;
 
 /** The page list's four views, as Obsidian's side panel switches between
@@ -293,6 +312,8 @@ export interface WorkspaceState {
   /** Each page's history: its versions, by id — each written, and kept or
    *  let go, on its own. */
   versions: Record<string, Record<string, PageVersion>>;
+  /** Each page's edit timeline between checkpoints: its events, by id. */
+  pageEvents: Record<string, Record<string, PageEvent>>;
   preferences: WorkspacePreferences;
 }
 

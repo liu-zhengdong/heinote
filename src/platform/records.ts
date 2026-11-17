@@ -5,9 +5,9 @@ import { spaceOfPage, withoutUnhomed } from "../core/page-tree";
 import { contentOfRuns, storedRuns } from "../core/stored-runs";
 import { pageTitleContent, titleHasLinks, titleRuns } from "../core/title";
 import { emptyWorkspace, readPreferences } from "../core/workspace-state";
-import type { Block, BlockRecord, HistoryPart, NotePage, PageRecord, PageVersion, SettingsRecord, SimpleTable, WorkspacePreferences, WorkspaceState } from "../core/types";
+import type { Block, BlockRecord, EventRecord, HistoryPart, NotePage, PageEvent, PageRecord, PageVersion, SettingsRecord, SimpleTable, WorkspacePreferences, WorkspaceState } from "../core/types";
 import { historyParts, versionOfParts } from "./history-record";
-import { blockRecordId, parseBlockRecordId, parseHistoryId } from "./record-ids";
+import { blockRecordId, parseBlockRecordId, parseEventId, parseHistoryId } from "./record-ids";
 
 /* What HeiNote keeps, as records — and the workspace they make.
 
@@ -29,11 +29,11 @@ import { blockRecordId, parseBlockRecordId, parseHistoryId } from "./record-ids"
    each space whose pages they read is another, the same collections' scope
    in that space, holding the shared page trees that live there. */
 
-export const COLLECTIONS = ["pages", "blocks", "versions", "workspace_settings"] as const;
+export const COLLECTIONS = ["pages", "blocks", "versions", "page_events", "workspace_settings"] as const;
 export type HeiNoteCollection = typeof COLLECTIONS[number];
 
 /** What a space's plane holds: its page trees. Settings are the member's own. */
-export const SPACE_COLLECTIONS = ["pages", "blocks", "versions"] as const satisfies readonly HeiNoteCollection[];
+export const SPACE_COLLECTIONS = ["pages", "blocks", "versions", "page_events"] as const satisfies readonly HeiNoteCollection[];
 
 /** The member's own plane; any other is a space's id. */
 export const PERSONAL = "personal";
@@ -43,6 +43,7 @@ interface NotesRecords {
   pages: PageRecord;
   blocks: BlockRecord;
   versions: HistoryPart;
+  page_events: EventRecord;
   workspace_settings: SettingsRecord;
 }
 
@@ -65,7 +66,7 @@ export const refKey = (ref: RecordRef) => `${ref.collection}/${ref.id}`;
 export type PlaneRecords = Readonly<Record<HeiNoteCollection, ReadonlyMap<string, RecordValue>>>;
 
 export const emptyPlane = (): PlaneRecords => ({
-  pages: new Map(), blocks: new Map(), versions: new Map(), workspace_settings: new Map(),
+  pages: new Map(), blocks: new Map(), versions: new Map(), page_events: new Map(), workspace_settings: new Map(),
 });
 
 /** One write of a record: made whole, changed field by field, or deleted.
@@ -81,6 +82,7 @@ export function pageOfRef(ref: RecordRef): string | undefined {
   if (ref.collection === "pages") return ref.id;
   if (ref.collection === "blocks") return parseBlockRecordId(ref.id)?.pageId;
   if (ref.collection === "versions") return parseHistoryId(ref.id)?.pageId;
+  if (ref.collection === "page_events") return parseEventId(ref.id)?.pageId;
   return undefined;
 }
 
@@ -175,6 +177,17 @@ function versionOf(state: WorkspaceState, ref: RecordRef): { version: PageVersio
   return version && parsed ? { version, part: parsed.part } : undefined;
 }
 
+/** An event's record: what the server wrote of it — the same fields the
+ *  state entry projects, so reads round-trip through rebase. */
+function eventRecord(event: PageEvent): EventRecord {
+  return {
+    page: event.page_id, event: event.id, created_at: event.created_at,
+    author_id: event.author_id, author_name: event.author_name,
+    ...(event.author_avatar_url ? { author_avatar_url: event.author_avatar_url } : {}),
+    label: event.label, targets: event.targets, merged: event.merged,
+  };
+}
+
 /** The value a record has in this workspace, or none. */
 export function recordValue(state: WorkspaceState, ref: RecordRef): RecordValue | undefined {
   switch (ref.collection) {
@@ -190,6 +203,11 @@ export function recordValue(state: WorkspaceState, ref: RecordRef): RecordValue 
     case "versions": {
       const found = versionOf(state, ref);
       return found ? historyParts(found.version)[found.part]?.value : undefined;
+    }
+    case "page_events": {
+      const parsed = parseEventId(ref.id);
+      const event = parsed && state.pageEvents[parsed.pageId]?.[parsed.eventId];
+      return event ? eventRecord(event) : undefined;
     }
     case "workspace_settings":
       if (ref.id === "preferences") return { ...state.preferences };
@@ -383,6 +401,7 @@ export class Projector {
     // Each plane's paragraphs and history, by page.
     const blocksByPage = new Map<string, Map<string, Array<[string, RecordValue]>>>();
     const partsByPage = new Map<string, Map<string, Map<string, Array<readonly [string, unknown]>>>>();
+    const eventsByPage = new Map<string, Map<string, Array<readonly [string, RecordValue]>>>();
     for (const [plane, records] of planes) {
       const blocks = new Map<string, Array<[string, RecordValue]>>();
       for (const [id, value] of records.blocks) {
@@ -404,6 +423,15 @@ export class Projector {
         else page.set(parsed.versionId, [[id, value]]);
       }
       partsByPage.set(plane, parts);
+      const events = new Map<string, Array<readonly [string, RecordValue]>>();
+      for (const [id, value] of records.page_events) {
+        const parsed = parseEventId(id);
+        if (!parsed) continue;
+        const list = events.get(parsed.pageId);
+        if (list) list.push([parsed.eventId, value]);
+        else events.set(parsed.pageId, [[parsed.eventId, value]]);
+      }
+      eventsByPage.set(plane, events);
     }
 
     const pages: Record<string, NotePage> = {};
@@ -462,6 +490,18 @@ export class Projector {
       }
     }
 
+    const pageEvents: WorkspaceState["pageEvents"] = {};
+    for (const [id, { plane }] of chosen) {
+      for (const [, value] of eventsByPage.get(plane)?.get(id) ?? []) {
+        const record = value as EventRecord;
+        (pageEvents[id] ??= {})[record.event] = {
+          id: record.event, page_id: id,
+          author_id: record.author_id, author_name: record.author_name, author_avatar_url: record.author_avatar_url ?? null,
+          label: record.label, targets: [...record.targets], merged: record.merged, created_at: record.created_at,
+        };
+      }
+    }
+
     const preferencesValue = personal.workspace_settings.get("preferences");
     const preferences = this.preferences && this.preferences.value === preferencesValue ? this.preferences.built : readPreferences(preferencesValue as SettingsRecord | undefined);
     this.preferences = { value: preferencesValue, built: preferences };
@@ -469,6 +509,6 @@ export class Projector {
     const roots = this.roots && this.roots.value === rootsValue ? this.roots.built : (rootsValue as SettingsRecord | undefined)?.roots ?? [];
     this.roots = { value: rootsValue, built: roots };
 
-    return withoutUnhomed({ ...emptyWorkspace(), pages, versions, roots, preferences });
+    return withoutUnhomed({ ...emptyWorkspace(), pages, versions, pageEvents, roots, preferences });
   }
 }

@@ -158,7 +158,7 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
           if (copy.app && targetScope !== source.scope) copy.app = { draft: copy.app.draft, enabled: copy.app.enabled };
           // A copied tree lands at the destination's top as a shared root.
           if (isRoot && !destination && !inPersonal) copy.share_space_id = targetScope;
-          store.savePage(targetScope, copy);
+          store.savePage(targetScope, copy, who, "复制了页面");
         }
 
         // Same as POST /pages: a child page also appears as an expanded link

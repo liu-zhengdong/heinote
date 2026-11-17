@@ -31,7 +31,7 @@ export function readPreferences(value: SettingsRecord | undefined): WorkspacePre
 }
 
 export function emptyWorkspace(): WorkspaceState {
-  return { pages: {}, roots: [], versions: {}, preferences: { ...DEFAULT_PREFERENCES } };
+  return { pages: {}, roots: [], versions: {}, pageEvents: {}, preferences: { ...DEFAULT_PREFERENCES } };
 }
 
 /** One version of a page, if it is one: its snapshot a page. */

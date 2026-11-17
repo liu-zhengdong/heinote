@@ -467,7 +467,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/records/:scope/:collection", (req, res) => {
     const who = actor(req); const scope = store.scope(who, text(req.params.scope)); const collection = text(req.params.collection);
-    if (!["pages", "blocks", "versions", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
+    if (!["pages", "blocks", "versions", "page_events", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
     if (collection === "workspace_settings" && !scope.startsWith("user:")) fail(403, "设置仅属于个人。");
     // ?after=<seq> asks for the delta since that watermark (ISS-12). Without
     // it the response stays the plain array older clients expect. ?pages=
@@ -718,7 +718,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text ?? "" }];
       }
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
-      store.savePage(scope, page);
+      store.savePage(scope, page, who, "创建了页面");
       // Mirrors the window's create_page: a child page also appears as an
       // expanded link at the end of its parent's words, when the parent has
       // a body to carry it (documents do; apps and databases don't).
@@ -810,7 +810,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         };
         if (input.app.draft === "") delete next.app.draft;
       }
-      store.savePage(scope, next);
+      store.savePage(scope, next, who, input.title !== undefined ? "修改了标题" : "修改了页面属性");
       recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId, pageTitle: next.title });
     }); res.json(store.pageDto(who, pageId));
   });
@@ -827,12 +827,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         store.checkpoint(who, page.id, "启用应用源码前");
         const next: LoadedNotePage = { ...page, block_tree: page.block_tree, updated_at: currentTime(), updated_by: asAuthor(who), app: { ...(page.app ?? {}), enabled: draft } };
         delete next.app!.draft;
-        store.savePage(scope, next);
+        store.savePage(scope, next, who, "启用了应用源码");
         recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: page.id, pageTitle: next.title });
         return { status: 200, body: store.pageDto(who, page.id), scope, pageIds: [page.id] };
       });
   });
   app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).versions[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
+  app.get("/api/v1/pages/:id/events", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).pageEvents[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
   app.post("/api/v1/pages/:id/checkpoint", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id);
     const version = store.transaction(() => {
@@ -852,7 +853,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       store.checkpoint(who, pageId, "恢复前", true);
       // A version's snapshot was written from a whole page: it keeps its body.
       const restored: LoadedNotePage = restoredPage(version.snapshot, page) as LoadedNotePage; restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
-      store.savePage(scope, restored);
+      store.savePage(scope, restored, who, "恢复了历史版本");
       store.collaboration.reset(scope, pageId);
       recordTokenEvent(store.db, who.tokenId, { action: "restore", pageId, pageTitle: restored.title, versionId: version.id });
     }); res.json(store.pageDto(who, pageId));

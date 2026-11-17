@@ -7,6 +7,7 @@ const HANDLES: Readonly<Record<HeiNoteCollection, CollectionHandle<RecordValue>>
   pages: app.pages,
   blocks: app.blocks,
   versions: app.versions,
+  page_events: app.page_events,
   workspace_settings: app.workspace_settings,
 };
 

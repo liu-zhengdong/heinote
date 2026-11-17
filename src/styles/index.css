@@ -9192,6 +9192,25 @@ button.db__th:hover,
   white-space: nowrap;
 }
 
+/* An event's label sits like a summary but names where it lands. */
+.history-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The flash over where a picked edit landed — the person's colour is the
+   accent, as a remote caret's is. */
+.history-flash {
+  animation: history-flash 1.6s var(--e-out);
+}
+
+@keyframes history-flash {
+  0% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  70% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  100% { background: transparent; box-shadow: inset 0 0 0 transparent; }
+}
+
 /* An older version, or a page you can only read, says so above the title and
    in the flow. It used to float over the head's air on a -44px margin, but the
    head gave that air back (28px, not 78px), and the notice sat on the title.

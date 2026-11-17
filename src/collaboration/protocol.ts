@@ -89,7 +89,14 @@ export function pageRevision(page: JsonRecord | undefined, blocks: Array<{ id: s
     return Object.fromEntries(Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => [key, normalize(value[key])]));
   };
   const { updated_at: _at, updated_by: _by, ...content } = page ?? {};
-  const bytes = new TextEncoder().encode(JSON.stringify(normalize([content, [...blocks].sort((a, b) => a.id.localeCompare(b.id))])));
+  // edited_at/edited_by are provenance stamps the server adds on top of a
+  // committed edit, not page content: the revision must match the content
+  // the collaborating client hashes.
+  const unsigned = (block: { id: string; value: JsonRecord }) => {
+    const { edited_at: _bAt, edited_by: _bBy, ...value } = block.value;
+    return { id: block.id, value };
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(normalize([content, blocks.map(unsigned).sort((a, b) => a.id.localeCompare(b.id))])));
   return Array.from(digest(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 export function bytesToBase64(bytes: Uint8Array): string {
