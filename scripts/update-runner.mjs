@@ -50,6 +50,33 @@ const logLine = (line) => {
   try { writeFileSync(logPath, text, { flag: "a" }); } catch { /* logging must not kill the update */ }
   process.stderr.write(text);
 };
+
+/** Two runners for the same tag race over versions/<tag>: one's rmSync
+ *  lands between the other's renameSync and health check and leaves an
+ *  empty install (the stat-dist ENOENT incident, ISS-13). The API-level
+ *  guard cannot see a runner spawned by docker exec, so the lock lives in
+ *  the data dir and every spawn path respects it. */
+const lockPath = join(logDir, "update.lock");
+const acquireLock = () => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      return true;
+    } catch (error) {
+      if (error?.code !== "EEXIST") throw error;
+      let pid = 0;
+      try { pid = Number(readFileSync(lockPath, "utf8")) || 0; } catch { /* unreadable — retry after break */ }
+      if (pid && pidAlive(pid)) {
+        console.error(`update-runner: another update (pid ${pid}) holds the lock`);
+        process.exit(3);
+      }
+      try { rmSync(lockPath, { force: true }); } catch { /* someone else cleared it — retry */ }
+    }
+  }
+  console.error("update-runner: could not acquire the update lock");
+  process.exit(3);
+};
+const releaseLock = () => { try { if (readFileSync(lockPath, "utf8") === String(process.pid)) rmSync(lockPath); } catch { /* best effort */ } };
 const state = (patch) => {
   let current = {};
   try { current = JSON.parse(readFileSync(statePath, "utf8")); } catch { /* torn or missing */ }
@@ -77,6 +104,8 @@ const pidAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch (error) { return error?.code === "EPERM"; }
 };
 const processAlive = (pid) => pidAlive(pid);
+acquireLock();
+process.on("exit", releaseLock);
 
 const waitForExit = async (pid, timeoutMs) => {
   const deadline = Date.now() + timeoutMs;
