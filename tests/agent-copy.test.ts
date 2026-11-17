@@ -160,6 +160,27 @@ test("copy: knowledge-base page copied to personal with attachment bytes", async
   assert.equal(sourceBlock.file.path, kbFile.path);
 });
 
+test("copy: personal page tree lands at a shared space's top level", async (t) => {
+  const { owner, request } = await fixture(t);
+  const space = ok(await owner.request("/api/spaces", { method: "POST", body: { name: "协作组" } }), 201);
+  const source = dto(ok(await request("/pages", { method: "POST", body: { title: "共享底稿", text: "正文" } }), 201));
+  const child = dto(ok(await request("/pages", { method: "POST", body: { title: "附录", parentId: source.id, text: "子" } }), 201));
+  const reply = dto(ok(await request(`/pages/${source.id}/copy`, {
+    method: "POST", body: { requestId: randomUUID(), spaceId: space.spaceId },
+  }), 201));
+  assert.equal(reply.scope, space.spaceId);
+  // The copy is the space's shared root: share_space_id marks it, and its
+  // children hang under it without that field.
+  assert.equal(reply.page.share_space_id, space.spaceId);
+  assert.equal(reply.page.parent_id ?? null, null);
+  const childCopyLink = blocks(reply).flatMap((block: Json) => block.content)
+    .find((run: Json) => run.mention?.kind === "page" && run.mention.page_id !== source.id);
+  const childCopy = dto(ok(await request(`/pages/${childCopyLink.mention.page_id}`)));
+  assert.equal(childCopy.scope, space.spaceId);
+  assert.equal(childCopy.page.share_space_id ?? null, null);
+  assert.equal(childCopy.page.parent_id, reply.id);
+});
+
 test("copy: replaying a request returns the stored copy", async (t) => {
   const { request } = await fixture(t);
   const source = dto(ok(await request("/pages", { method: "POST", body: { title: "x", text: "a" } }), 201));
