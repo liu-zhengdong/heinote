@@ -289,14 +289,84 @@ export class Store {
     for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) planes.set(String(member.space_id), this.plane(String(member.space_id)));
     return new Projector().project(planes) as LoadedWorkspaceState;
   }
-  page(actor: Actor, pageId: string): { page: LoadedNotePage; scope: string } {
-    const page = this.state(actor).pages[pageId];
-    if (!page) fail(404, "页面不存在。", "not_found");
-    let current = page;
+  /** The raw pages record wherever the member holds it: their own plane
+   *  first, then each space they belong to — the same visibility window
+   *  `state()` merged. A handful of primary-key reads, not a vault scan. */
+  pageRecord(actor: Actor, pageId: string): Row | undefined {
+    const own = this.record(`user:${actor.user.id}`, "pages", pageId);
+    if (own) return own;
+    for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) {
+      const found = this.record(String(member.space_id), "pages", pageId);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  /** One page and its ancestor chain as planes for the Projector — the
+   *  chain is what `withoutUnhomed` needs to keep the page, and its
+   *  `share_space_id` root is what names the page's scope. `state()` would
+   *  read and parse every record in the vault (~140k rows here) for one
+   *  page; per-page callers (checkpoint, pageDto, agent mutations) each
+   *  did that per request and melted the CPU (ISS-13). */
+  private pagePlanes(actor: Actor, pageId: string): Map<string, PlaneRecords> {
+    const personal = `user:${actor.user.id}`;
+    const spaces = this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id).map((row) => String(row.space_id));
+    // Find the page, then walk parent records up to the tree root. A
+    // shared page's paragraphs and history live in the space plane while
+    // the sharer's own plane keeps only its pages row — the same split the
+    // records mirror maintains — so ancestors land in whichever scope
+    // holds them.
+    const byId = new Map<string, { scope: string; value: Row }>();
+    let cursor: string | undefined = pageId;
     const seen = new Set<string>();
-    const pages = this.state(actor).pages;
-    while (!current.share_space_id && current.parent_id && !seen.has(current.id)) { seen.add(current.id); const parent = pages[current.parent_id]; if (!parent) break; current = parent; }
-    const scope = current.share_space_id ?? `user:${actor.user.id}`;
+    while (cursor && !seen.has(cursor)) {
+      seen.add(cursor);
+      const scope = [personal, ...spaces].find((scope) => this.record(scope, "pages", cursor));
+      if (!scope) break;
+      const value = this.record(scope, "pages", cursor)!;
+      byId.set(cursor, { scope, value });
+      cursor = typeof value.parent_id === "string" ? value.parent_id : undefined;
+    }
+    if (!byId.has(pageId)) return new Map();
+    const planes = new Map<string, PlaneRecords>();
+    const planeOf = (scope: string): PlaneRecords => {
+      let plane = planes.get(scope);
+      if (!plane) planes.set(scope, plane = { pages: new Map(), blocks: new Map(), versions: new Map(), workspace_settings: new Map() });
+      return plane;
+    };
+    for (const [id, { scope, value }] of byId) {
+      const plane = planeOf(scope);
+      (plane.pages as Map<string, RecordValue>).set(id, value);
+      if (id !== pageId) continue;
+      for (const row of this.blocksOf(scope, id)) (plane.blocks as Map<string, RecordValue>).set(row.id, row.value);
+      const prefix = `${id.length}_${id}_`;
+      for (const row of this.all("SELECT id,value FROM records WHERE scope=? AND collection='versions' AND id GLOB ?", scope, `${prefix}*`)) {
+        (plane.versions as Map<string, RecordValue>).set(String(row.id), JSON.parse(String(row.value)) as RecordValue);
+      }
+    }
+    // Projector treats the member's own rows under the "personal" key.
+    const out = new Map<string, PlaneRecords>();
+    for (const [scope, plane] of planes) out.set(scope === personal ? "personal" : scope, plane);
+    return out;
+  }
+  private pageProjection(actor: Actor, pageId: string): { projected: LoadedWorkspaceState; page: LoadedNotePage; scope: string } {
+    const projected = new Projector().project(this.pagePlanes(actor, pageId)) as LoadedWorkspaceState;
+    const page = projected.pages[pageId];
+    if (!page) fail(404, "页面不存在。", "not_found");
+    // The chain that decides scope: raw records are enough — the page and
+    // its ancestors' location markers, not their projected trees.
+    let current: Row = page;
+    const seen = new Set<string>();
+    while (!current.share_space_id && current.parent_id && !seen.has(String(current.id))) {
+      seen.add(String(current.id));
+      const parent = this.pageRecord(actor, String(current.parent_id));
+      if (!parent) break;
+      current = parent;
+    }
+    const scope = (current.share_space_id as string | undefined) ?? `user:${actor.user.id}`;
+    return { projected, page, scope };
+  }
+  page(actor: Actor, pageId: string): { page: LoadedNotePage; scope: string } {
+    const { page, scope } = this.pageProjection(actor, pageId);
     return { page, scope };
   }
   applyOnce(actor: Actor, requestId: string, writes: Write[], textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = []): Array<Row | null> { return this.apply(actor, writes, requestId, textUpdates, expectedPages); }
@@ -498,9 +568,9 @@ export class Store {
     }
   }
   checkpoint(actor: Actor, pageId: string, summary: string, restored = false): PageVersion {
-    const { page, scope } = this.page(actor, pageId);
+    const { projected, page, scope } = this.pageProjection(actor, pageId);
     this.scope(actor, scope.startsWith("user:") ? "personal" : scope, true);
-    const latest = Object.values(this.state(actor).versions[pageId] ?? {}).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    const latest = Object.values(projected.versions[pageId] ?? {}).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
     if (!restored && latest && isCurrent(latest, page)) return latest;
     const version: PageVersion = { id: id(), page_id: pageId, author_id: actor.user.id, author_name: asAuthor(actor), author_avatar_url: actor.avatar ?? null, summary, created_at: now(), snapshot: structuredClone(page), ...(restored ? { restored: true } : {}) };
     if (Buffer.byteLength(JSON.stringify(version)) > HISTORY_BUDGET_BYTES) fail(413, "此页面超过版本保存大小限制。", "too_large");

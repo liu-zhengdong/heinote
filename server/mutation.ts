@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import type { LoadedNotePage } from "../src/core/types.ts";
-import { fail, hash, type Actor, type Store } from "./store.ts";
+import { fail, hash, type Actor, type Row, type Store } from "./store.ts";
 
 /** Agent-facing HTTP writes share one shape: a `requestId` makes them
  *  idempotent, the replay re-checks that the pages it touched are still
@@ -15,8 +15,10 @@ export const externalScope = (scope: string) => scope.startsWith("user:") ? "per
 export function activePage(store: Store, who: Actor, pageId: string, write = false): { page: LoadedNotePage; scope: string } {
   const found = store.page(who, pageId);
   store.scope(who, externalScope(found.scope), write);
-  const pages = store.state(who).pages;
-  for (let page: LoadedNotePage | undefined = found.page; page; page = page.parent_id ? pages[page.parent_id] : undefined) {
+  // Archived ancestors block the write; raw records answer that without a
+  // vault-wide projection (ISS-13 follow-up: state() per request melted
+  // the server on large vaults).
+  for (let page: Row | undefined = found.page; page; page = page.parent_id ? store.pageRecord(who, String(page.parent_id)) : undefined) {
     if (page.archived) fail(409, "页面或父页面已归档。", "conflict");
   }
   return found;
