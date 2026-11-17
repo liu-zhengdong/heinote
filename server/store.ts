@@ -238,8 +238,13 @@ export class Store {
       // `page` field miss the index; the page-scoped id prefix finds them
       // without a full scan.
       const prefixes = pageIds.map((pageId) => `${pageId.length}_${pageId}_`);
-      const extra = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND (${prefixes.map(() => "id LIKE ?").join(" OR ")})`,
-        scope, collection, ...prefixes.map((prefix) => `${prefix}%`))
+      // GLOB, not LIKE: LIKE can't decompose 'p%' into a range scan unless
+      // case_sensitive_like is on, so SQLite scanned the whole partition
+      // (and visited every row for id) on every cold pull — 132k reads per
+      // request melted production (ISS-13). GLOB 'p*' uses the PK prefix
+      // index directly. `_` is not a GLOB metachar, prefixes need no escape.
+      const extra = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND (${prefixes.map(() => "id GLOB ?").join(" OR ")})`,
+        scope, collection, ...prefixes.map((prefix) => `${prefix}*`))
         .filter((row) => !new Set(found.map((found) => found.id)).has(String(row.id)))
         .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
       return { latest, rows: [...found, ...extra], deleted: [] };

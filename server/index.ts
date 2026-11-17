@@ -482,14 +482,17 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       });
       // One watermark for the whole page set: take the freshest page
       // response shape — the collection watermark — with rows of every
-      // group merged and ids deduped.
+      // group merged and ids deduped. Cold pages (since=0) share one query —
+      // each per-page call would scan its own partition otherwise (ISS-13).
       const rows = new Map<string, Row>(); const deleted = new Set<string>(); let latest = 0;
-      for (const group of groups) {
-        const delta = store.recordsSincePages(scope, collection, [group.pageId], group.since);
+      const merge = (delta: { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] }) => {
         latest = Math.max(latest, delta.latest);
         for (const row of delta.rows) rows.set(row.id, row.value);
         for (const id of delta.deleted) deleted.add(id);
-      }
+      };
+      const cold = groups.filter((group) => group.since <= 0).map((group) => group.pageId);
+      if (cold.length) merge(store.recordsSincePages(scope, collection, cold, 0));
+      for (const group of groups) if (group.since > 0) merge(store.recordsSincePages(scope, collection, [group.pageId], group.since));
       res.json({ latest, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
     }
     else if (after === undefined) res.json(store.records(scope, collection));
