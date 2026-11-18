@@ -412,6 +412,11 @@ export class WorkspaceDocument {
     return this.writing.size > 0;
   }
 
+  /** Where the writes stand now — the same status `onSyncStatus` reports. */
+  get status(): SyncStatus {
+    return this.syncStatus;
+  }
+
   onSyncStatus(listener: (status: SyncStatus) => void): () => void {
     this.syncListeners.add(listener);
     listener(this.syncStatus);

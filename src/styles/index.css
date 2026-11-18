@@ -724,22 +724,24 @@ kbd {
 
 /* ── Toasts ───────────────────────────────────────────────────────────── */
 
+/* Toasts live bottom-right — the same corner the save indicator and the
+   draft pill answer from — stacking upward, newest at the bottom. */
 .toast-stack {
   position: fixed;
-  z-index: 100;
+  z-index: 200;
+  right: 20px;
   bottom: 20px;
-  left: 50%;
   display: flex;
   flex-direction: column-reverse;
+  align-items: flex-end;
   gap: 8px;
-  transform: translateX(-50%);
 }
 
-/* Notion's toast: a short dark line, as wide as its words, centred at the
-   foot of the window — its mark, the words, and a quiet ×. It used to be the
-   icon and the words sharing the width half and half (a rule meant for the
-   words reached the icon's span too), which stranded the icon at one end and
-   broke short words over two lines. */
+/* Notion's toast: a short dark line, as wide as its words — its mark, the
+   words, and a quiet ×. It used to be the icon and the words sharing the
+   width half and half (a rule meant for the words reached the icon's span
+   too), which stranded the icon at one end and broke short words over two
+   lines. */
 .toast {
   display: flex;
   width: max-content;
@@ -748,7 +750,6 @@ kbd {
   gap: 8px;
   padding: 7px 6px 7px 12px;
   border-radius: var(--r-md);
-  margin-inline: auto;
   background: #2f2f2f;
   color: #ffffff;
   font-size: 13.5px;

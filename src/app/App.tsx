@@ -50,7 +50,7 @@ function AppPageShell({ pageId }: { pageId: string }) {
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace,
+    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast, adminOpen, setAdminOpen } = useUi();
@@ -108,8 +108,22 @@ export function App() {
      change nothing they could see. */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || imeComposing(event)) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
+      /* ⌘/Ctrl+S means "make sure it's saved", not the browser's page
+         download: wait on what is still in flight and say where it landed.
+         It is taken before the IME check — even mid-composition the system
+         save dialog must never open. */
+      if (key === "s") {
+        event.preventDefault();
+        void saveNow().then((status) => {
+          if (status === "saved") toast("已保存", "success");
+          else if (status === "refused") toast("部分更改未能保存，已保留为草稿", "error");
+          else toast("尚未全部保存，联网后会自动完成", "info");
+        });
+        return;
+      }
+      if (imeComposing(event)) return;
       if (key === "k" && !event.shiftKey) {
         // Words selected in a page took it for a link.
         if (event.defaultPrevented) return;
@@ -130,7 +144,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [createPage, drawerOpen, folded, preferences.sidebar_collapsed, setDrawerOpen, setPreference, setQuickFindOpen]);
+  }, [createPage, drawerOpen, folded, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, toast]);
 
   /* A page id in the fragment opens that page — the target of every "Copy
      link" in the app, a block's too: a block is a page. So does a place

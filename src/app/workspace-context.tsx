@@ -85,6 +85,9 @@ export interface WorkspaceContextValue {
   /** Pulls pages' bodies into the window (UC-48). Idempotent; safe to call
    *  from rendering code whenever a page is about to be shown or read. */
   loadPages(pageIds: readonly string[]): void;
+  /** ⌘/Ctrl+S: waits on every write so far, then answers where they stand —
+   *  "saved" only once the server really has them. */
+  saveNow(): Promise<SyncStatus>;
   /** Whether the page pane shows the graph instead of the selected page —
    *  opened there as a note opens there. Choosing a page, even the one that
    *  was open, or making one, puts the page back. */
@@ -1095,6 +1098,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [history]);
   const annotateHistory = useCallback((input: HistoryInput) => history.annotate(input), [history]);
 
+  const saveNow = useCallback(async (): Promise<SyncStatus> => {
+    if (!document) return "saved";
+    try { await document.flush(); }
+    catch { /* The status itself says what remains: in flight or refused. */ }
+    return document.status;
+  }, [document]);
+
   const value = useMemo<WorkspaceContextValue>(() => ({
     document,
     platform,
@@ -1111,6 +1121,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     knowledgeBases,
     selectPage,
     loadPages,
+    saveNow,
     graphOpen,
     openGraph,
     closeGraph,
@@ -1161,6 +1172,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     knowledgeBases,
     selectPage,
     loadPages,
+    saveNow,
     graphOpen,
     openGraph,
     closeGraph,
