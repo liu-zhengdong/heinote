@@ -52,11 +52,16 @@ import { pointRect } from "../../hooks/useAnchoredPosition";
  *  select the block, the shortcuts for marks and moves. */
 export function blockKeys(editor: Editor & BlockTyping) {
   const {
-    page, tree, rows, embed, blocksRef, slash, setSlash, slashIndex, setSlashIndex, slashDismissed, commands,
+    page, tree: renderTree, latestTree, rows, embed, blocksRef, slash, setSlash, slashIndex, setSlashIndex, slashDismissed, commands,
     mention, setMention, mentionIndex, setMentionIndex, mentionDismissed, mentionOptions, setFormat, resume,
     pendingTextSelection, checkpointHistory, execute, selectBlocks, runReplace, replaceSelection, nextEditable,
     moveCaret, applyBlockShortcut, runCommand, openMoveTo, closeMenus, chooseMention, applyMarkToBlocks, openLink,
   } = editor;
+
+  /* Key handlers close over the render-time tree, but a keystroke's record
+   *  write lands in the store before React renders it — Enter read through
+   *  the old tree would split last frame's text. Handlers read this. */
+  const liveTree = () => latestTree?.current ?? renderTree;
 
   /** One typed character over selected words, as Notion treats them: `` ` ``,
    *  `*`/`_`, `~` and their full-width kin mark the selection — across blocks
@@ -101,9 +106,9 @@ export function blockKeys(editor: Editor & BlockTyping) {
         : null;
     const mark = delimiterMark(ch);
     if (mark && spans
-      && spans.every((span) => tree.by_id[span.blockId] && tree.by_id[span.blockId].kind !== "code")
-      && spans.some((span) => inlinePlainText(tree.by_id[span.blockId]?.content ?? []).slice(span.start, span.end).trim().length > 0)) {
-      const enabled = spans.every((span) => rangeHasMark(tree.by_id[span.blockId].content, span.start, span.end, mark));
+      && spans.every((span) => liveTree().by_id[span.blockId] && liveTree().by_id[span.blockId].kind !== "code")
+      && spans.some((span) => inlinePlainText(liveTree().by_id[span.blockId]?.content ?? []).slice(span.start, span.end).trim().length > 0)) {
+      const enabled = spans.every((span) => rangeHasMark(liveTree().by_id[span.blockId].content, span.start, span.end, mark));
       applyMarkToBlocks(spans, mark, !enabled);
       return true;
     }
@@ -112,7 +117,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
       if (wordsCanQueryMention(words)) {
         const anchor = caretRect(element);
         checkpointHistory({ kind: "text", pageId: page.id, ranges: [{ blockId: block.id, start: spans[0].start, end: spans[0].start }] });
-        execute(updateBlockContent(tree, block.id, replaceRange(block.content, spans[0].start, spans[0].start, "[[")), {
+        execute(updateBlockContent(liveTree(), block.id, replaceRange(block.content, spans[0].start, spans[0].start, "[[")), {
           id: block.id, start: spans[0].start + 2 + words.length, force: true,
         });
         setMention({ blockId: block.id, from: spans[0].start, query: words, trigger: "[[", anchor: pointRect(anchor?.left ?? 0, anchor?.bottom ?? 0) });
@@ -133,6 +138,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
     data !== null && data.length <= 2 && delimitSelection(block, element, data);
 
   const onBlockKeyDown = (block: Block, event: KeyboardEvent<HTMLElement>) => {
+    const tree = liveTree();
     // Keys the input method owns are the input method's: the Enter that picks
     // a candidate must not split the block, nor its Backspace delete it.
     if (imeComposing(event)) return;

@@ -18,7 +18,11 @@ export function setTextHistoryView(view: string): void { historyView = view; }
 interface Session {
   snapshot: DocumentSnapshot; doc: Y.Doc; undo: Y.UndoManager; lastField: string; lastKind: string;
   /** Uncommitted local text changes, one entry per pending submission. */
-  pendingText: Array<{ keys: string[]; change?: LocalTextChange; update: TextUpdate; fields: Record<string, { base: RichText; next: RichText }> }>;
+  pendingText: Array<{ keys: string[]; change?: LocalTextChange; update: TextUpdate; external?: boolean; fields: Record<string, { base: RichText; next: RichText }> }>;
+  /* The last settled text each field was written to — kept so a late echo
+   *  of that write, arriving after the entry left `pendingText`, still
+   *  reads as ours instead of a phantom remote edit. */
+  recentEcho: Map<string, RichText[]>;
   fieldsByRecord: Map<string, Array<{ key: string; path: string[]; value: RichText }>> | null;
   projections: Map<string, { input: JsonRecord; output: JsonRecord }>;
   /** Per-field count of remote deltas applied to the document. A field's
@@ -66,7 +70,7 @@ function newSession(snapshot: DocumentSnapshot): Session {
   const undo = new Y.UndoManager(doc.getMap("fields"), { trackedOrigins: new Set([LOCAL_TEXT_ORIGIN]), captureTimeout: 1000 });
   undo.on("stack-item-added", ({ stackItem }) => { stackItem.meta.set("time", nextHistoryOrder()); stackItem.meta.set("view", historyView); });
   undo.on("stack-item-updated", ({ stackItem }) => { stackItem.meta.set("time", nextHistoryOrder()); stackItem.meta.set("view", historyView); });
-  const session: Session = { snapshot, doc, undo, lastField: "", lastKind: "", pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map() };
+  const session: Session = { snapshot, doc, undo, lastField: "", lastKind: "", pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map(), recentEcho: new Map() };
   doc.on("update", (_update: Uint8Array, origin: unknown, _doc: Y.Doc, transaction: Y.Transaction) => {
     session.fieldsByRecord = null; session.projections.clear();
     if (origin === REMOTE)
@@ -286,6 +290,15 @@ export function projectRecord(scope: string, collection: string, id: string, rec
      *  fragment alike. A mismatch without a remote delta newer than the
      *  write is that lag, not an edit: keep the record's text. */
     const have = Array.isArray(current) ? current : [];
+    /* A field already carrying the newest intent of an in-flight write —
+     *  undo/redo mutate the document without a record write, so they land
+     *  here as the chain head — is truth the record has not caught up to.
+     *  Project it regardless of revision bookkeeping. */
+    const onChain = session.pendingText.some((entry) => {
+      const held = entry.fields[field.key];
+      return held !== undefined && JSON.stringify(held.next) === JSON.stringify(field.value);
+    });
+    if (onChain) { projected = setAt(projected, field.path, field.value); continue; }
     const wrote = session.revAtWrite.get(field.key);
     const stale = wrote !== undefined && (session.fieldRevs.get(field.key) ?? 0) <= wrote;
     if (stale ? JSON.stringify(have) !== JSON.stringify(field.value) : !field.value.length && have.length) continue;
@@ -297,6 +310,56 @@ export function projectRecord(scope: string, collection: string, id: string, rec
 /** A locally-written field with no newer remote delta: its text is the
  *  writer's own, still traveling to the server and back. Anything the
  *  document shows for it meanwhile is a lagging echo, never an edit. */
+/** The field's current text sits on our own uncommitted write chain — it
+ *  equals the base or the result of a pending local write. Such a value is
+ *  our echo, never an outside edit, even though it arrived as a remote
+ *  delta: an earlier commit's acknowledgment can bump the revision after a
+ *  newer write has already left. `chain` carries the newest text the chain
+ *  reaches (the tail's `next`, or the matching entry's own `next` when the
+ *  field stopped mid-chain): it is what the element should show when the
+ *  record prop lags behind the writes already submitted. */
+/** Whether a value is the last text we wrote this field to and saw
+ *  acknowledged — the value a lagging echo can legitimately carry once
+ *  the pending entry is gone. Unlike `fieldIsOurs` this never consults
+ *  the in-flight chain: it answers "is this exact settled text ours". */
+/** The newest in-flight write touching this field came from outside the
+ *  element's input path — an undo, a redo, or recovered pending text —
+ *  so the DOM cannot know it happened. An auto-pair or a menu write goes
+ *  through the record like any keystroke and stays internal: the focused
+ *  element keeps its caret and the prop's next render draws it. */
+export function fieldChainExternal(pageId: string, key: string): boolean {
+  for (const session of sessions.values()) {
+    if (session.snapshot.pageId !== pageId) continue;
+    let external = false;
+    for (const entry of session.pendingText) if (entry.fields[key]) external = Boolean(entry.external);
+    return external;
+  }
+  return false;
+}
+export function fieldIsSettledEcho(pageId: string, key: string, value: RichText): boolean {
+  for (const session of sessions.values()) {
+    if (session.snapshot.pageId !== pageId) continue;
+    return (session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value));
+  }
+  return false;
+}
+export function fieldIsOurs(pageId: string, key: string, value: RichText, chain?: { next?: RichText }): boolean {
+  for (const session of sessions.values()) {
+    if (session.snapshot.pageId !== pageId) continue;
+    let tail: RichText | undefined;
+    let hit = false;
+    for (const entry of session.pendingText) {
+      const held = entry.fields[key];
+      if (!held) continue;
+      tail = held.next;
+      if (JSON.stringify(held.base) === JSON.stringify(value) || JSON.stringify(held.next) === JSON.stringify(value)) hit = true;
+    }
+    if (chain) chain.next = tail;
+    if (!hit && !(session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value))) return false;
+    return true;
+  }
+  return false;
+}
 export function fieldStale(pageId: string, key: string): boolean {
   for (const session of sessions.values()) {
     if (session.snapshot.pageId !== pageId) continue;
@@ -319,6 +382,23 @@ export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
  *  waits briefly for the snapshot to exist rather than leave a write doomed
  *  to fail. */
 function isOffline(): boolean { return globalThis.navigator?.onLine === false; }
+/* Opening a page whose record write has not committed yet: the document
+ *  initializes with that commit, so a 404 here means "not yet", not "never"
+ *  — keep asking while the page exists locally. Structural writes inside a
+ *  batch must not wait this long: they use awaitCollaborativeBasis. */
+export async function openWhenDocument(scope: string, pageId: string, timeoutMs = 15000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let delay = 150;
+  while (Date.now() < deadline) {
+    if (sessionFor(scope, pageId)) return;
+    const error = await openCollaborativePage(scope, pageId).then(() => undefined, (reason: unknown) => reason);
+    if (sessionFor(scope, pageId)) return;
+    if (error instanceof ApiError && error.status === 404 && !readRecords(scope, "pages").some((row) => row.id === pageId)) return;
+    if (isOffline()) return;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(500, delay * 1.5);
+  }
+}
 export async function awaitCollaborativeBasis(scope: string, pageId: string): Promise<void> {
   if (sessionFor(scope, pageId)) return;
   if (isOffline()) return;
@@ -327,12 +407,12 @@ export async function awaitCollaborativeBasis(scope: string, pageId: string): Pr
   while (Date.now() < deadline) {
     const error = await openCollaborativePage(scope, pageId).then(() => undefined, (reason: unknown) => reason);
     if (sessionFor(scope, pageId)) return;
-    /* A definitive 404 means the server has no record of the page at all —
-       a just-created one only gets its document from this write's own
-       commit, so waiting its full deadline would stall the queue 3s for
-       nothing. Transient errors (and 409 not_ready) can still yield a
-       document, so they keep retrying. */
-    if (error instanceof ApiError && error.status === 404) return;
+    /* A 404 with the page already held locally only means its document
+       has not initialized yet — it arrives with the next committed write.
+       The 404 of a page that truly does not exist (an agent's typo, a
+       deletion) still short-circuits: no local record, nothing to wait
+       for. */
+    if (error instanceof ApiError && error.status === 404 && !readRecords(scope, "pages").some((row) => row.id === pageId)) return;
     if (isOffline()) return;
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 800);
@@ -363,7 +443,9 @@ export function recordTextManaged(scope: string, collection: string, id: string,
 export function localRecordText(scope: string, collection: string, id: string, before: JsonRecord, after: JsonRecord): LocalTextChange | null {
   const pageId = collection === "pages" ? id : collection === "blocks" ? parseBlockRecordId(id)?.pageId : undefined;
   const session = pageId && sessionFor(scope, pageId);
-  if (!session || !session.snapshot.canEdit || collection !== "pages" && collection !== "blocks") return null;
+  if (!session || !session.snapshot.canEdit || collection !== "pages" && collection !== "blocks") {
+    return null;
+  }
   const changed = [...session.doc.getMap<Y.Text>("fields")].flatMap(([key, text]) => {
     const address = fieldAddress(key); if (address?.collection !== collection || address.id !== id) return [];
     const old = valueAt(before, address.path); const next = valueAt(after, address.path);
@@ -389,7 +471,24 @@ export function settleText(change: LocalTextChange): void {
   settledChanges.add(change);
   for (const session of sessions.values()) {
     const index = session.pendingText.findIndex((entry) => entry.change === change);
-    if (index >= 0) { session.pendingText.splice(index, 1); return; }
+    /* Removing the entry flips fieldIsOurs for that key: the field's text
+     *  stops matching the write chain, so the next projection and bound
+     *  read must see it as settled. Nothing else notifies at this point —
+     *  without this the element keeps the write's echo state forever. */
+    if (index >= 0) {
+      const [entry] = session.pendingText.splice(index, 1);
+      for (const [field, held] of Object.entries(entry.fields)) {
+        /* Echoes land out of order: an earlier write's delta can arrive
+         *  after a newer one settled, so the window keeps the last few
+         *  submitted values — a lagging `hello ` still reads as ours once
+         *  `hello world` owns the tail. */
+        const echoes = session.recentEcho.get(field) ?? [];
+        echoes.push(held.next);
+        session.recentEcho.set(field, echoes.slice(-16));
+      }
+      notify(session.snapshot.scope);
+      return;
+    }
   }
 }
 export async function resetRefusedText(address: DocumentAddress): Promise<void> {
@@ -406,7 +505,7 @@ export function restorePendingText(update: TextUpdate, change?: LocalTextChange)
   const after = readFields(session.doc);
   const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   const fields = Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }]));
-  session.pendingText.push({ keys, change, update, fields });
+  session.pendingText.push({ keys, change, update, external: true, fields });
   return keys;
 }
 function sessionForPage(pageId: string): Session | undefined { return [...sessions.values()].find((session) => session.snapshot.pageId === pageId); }
@@ -424,7 +523,7 @@ export function replayTextHistory(pageId: string, direction: "undo" | "redo"): P
   const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
   const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope: session.snapshot.scope, pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
   const fields = Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }]));
-  session.pendingText.push({ keys, change, update: change.update, fields });
+  session.pendingText.push({ keys, change, update: change.update, external: true, fields });
   return submitUndo(change.update).finally(() => settleText(change));
 }
 export function latestTextHistory(direction: "undo" | "redo"): { pageId: string; order: number; view: string } | null {
@@ -440,6 +539,14 @@ export function latestTextHistory(direction: "undo" | "redo"): { pageId: string;
 export function discardTextRedo(): void { for (const session of sessions.values()) session.undo.clear(false, true); }
 export function stopTextHistory(pageId?: string): void { for (const session of sessions.values()) if (!pageId || session.snapshot.pageId === pageId) session.undo.stopCapturing(); }
 export function connectedPage(pageId: string): boolean { return Boolean(sessionForPage(pageId)); }
+/** The page's session is being fetched right now — a write that reaches the
+ *  queue before it lands would bypass the document entirely. */
+/* Test/debug hooks: the page's session state, readable from a browser. */
+declare global { interface Window { __collabSession?: (pageId: string) => boolean; } }
+if (typeof window !== "undefined") window.__collabSession = (pageId) => Boolean(sessionForPage(pageId));
+export function collaborativePageOpening(scope: string, pageId: string): boolean {
+  return Boolean(sessionFor(scope, pageId)) || opening.has(documentKey({ scope, pageId }));
+}
 export function closeCollaboration(): void {
   lifecycle += 1; suspended = true; clearTimeout(reconnect); socket?.close(); socket = null;
   for (const session of sessions.values()) { session.undo.destroy(); session.doc.destroy(); }

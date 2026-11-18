@@ -3,7 +3,7 @@ import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
-import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
@@ -643,7 +643,8 @@ export class LiveCollection<R extends object> {
     /* A write on a page with no collaborative document yet opens it: pages
        not on screen were never opened at startup, and a just-made page can
        outrun its session. */
-    if (pageId && !basis) void openCollaborativePage(this.scope, pageId).catch(() => undefined);
+    if (pageId && !basis) void openWhenDocument(this.scope, pageId).catch(() => undefined);
+
     const observed = observedText();
     if (basis && observed && observed.field.pageId === pageId && observed.field.scope === this.scope && observed.field.revision) { basis.generation = observed.field.generation; basis.revision = observed.field.revision; }
     let change: LocalTextChange | undefined; let error: unknown;

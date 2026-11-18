@@ -37,6 +37,12 @@ async function openPage(page: Page, handle: string, title: string) {
   await page.getByRole("button", { name: "New page", exact: true }).first().click();
   const titleField = page.getByRole("textbox", { name: "Page title", exact: true });
   await titleField.fill(title);
+  /* The session opens after the editor mounts; keystrokes typed before it
+   *  lands ride the record path and can double-write with later deltas. */
+  await page.waitForFunction(() => {
+    const id = new URL(window.location.href).searchParams.get("page");
+    return id ? (window as { __collabSession?: (page: string) => boolean }).__collabSession?.(id) : false;
+  });
 }
 
 /** A DOM selection over a plain-text span of one editable. */
@@ -175,6 +181,10 @@ test("⌘Z undoes the mark in one step", async ({ page }) => {
   await selectIn(paragraph, 0, 7);
   await page.keyboard.type("`");
   await expect(paragraph.locator("code")).toHaveText("undo me");
+  /* The undo item must hold only the mark: the capture window is one
+   *  second, so a keystroke still merging would ride along — waiting past
+   *  the in-flight write's settle keeps the undo a single step. */
+  await page.waitForTimeout(1100);
   await page.keyboard.press("ControlOrMeta+z");
   await expect(paragraph.locator("code")).toHaveCount(0);
   await expect(paragraph).toHaveText("undo me please");

@@ -23,6 +23,7 @@ import { useUi } from "../../app/ui-context";
 import { createId } from "../../core/ids";
 import { copyText } from "../../core/clipboard";
 import { pageTitleContent, titleFields } from "../../core/title";
+import { stopTextHistory } from "../../collaboration/client";
 import { titleField } from "../../collaboration/protocol";
 import {
   blockOrderBetween,
@@ -293,6 +294,8 @@ export function DocumentEditor({
   const showInPlace = useCallback((_row: Block, target: NotePage) => readOnly || canEdit(target.id), [canEdit, readOnly]);
   const composite = useMemo(() => composeTree(pages, page, showInPlace), [page, pages, showInPlace]);
   const tree = composite.tree;
+  const latestTree = useRef(tree);
+  latestTree.current = tree;
   /* Pages shown in place arrive as their lines load them (UC-48): an
      expanded link's page is pulled in, then redrawn where it stands. */
   const { loadPages } = useWorkspace();
@@ -491,6 +494,10 @@ export function DocumentEditor({
 
   const execute = useCallback((change: EditorTransaction | null, focus?: PendingFocus, options: { cut?: readonly string[] } = {}) => {
     if (!change) return;
+    /* A transaction is its own undo step: without this the undo manager's
+     *  capture window folds a mark or a menu write into the keystrokes
+     *  still merging before it, and one ⌘Z takes the typing back too. */
+    stopTextHistory();
     if (focus) pendingFocus.current = focus;
     else if (change.focus) pendingFocus.current = { id: change.focus.id, start: change.focus.offset };
     write(change, options);
@@ -994,7 +1001,7 @@ export function DocumentEditor({
   const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, pickTarget, placeFiles, pickFile } = useMedia(editor);
   const typing = blockTyping({ ...editor, placeFiles });
   const { onBlockChange, chooseMention, onBlockPaste, nextEditable, runCommand } = typing;
-  const { onBlockKeyDown, onBlockBeforeInput } = blockKeys({ ...editor, ...typing });
+  const { onBlockKeyDown, onBlockBeforeInput } = blockKeys({ ...editor, ...typing, latestTree });
   useSelectedBlockKeys(editor);
 
   /** Follows a link — to a page, or to a block where it is now (found by its

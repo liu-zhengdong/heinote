@@ -12,7 +12,8 @@ import {
 import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, type DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { fieldStale } from "../../collaboration/client";
+import type { RichText } from "../../platform/schema";
+import { fieldChainExternal, fieldIsOurs, fieldIsSettledEcho, fieldStale } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import { editableHtml } from "./block-html";
@@ -181,21 +182,50 @@ export const InlineEditor = memo(function InlineEditor({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const boundContent = nextBound && !fieldStale(collaboration!.pageId, collaboration!.key) ? contentOfRuns(readText(nextBound.field.text)) : null;
+      /* A bound field may only rewrite the element when its text is outside
+       *  our own write chain: genuinely remote (past the latest delta for a
+       *  local write, and equal to neither the base nor the result of an
+       *  in-flight commit). Everything else — a stale seed, an older commit's
+       *  echo, the acknowledgment for the newest one — is our own text on
+       *  its way back, and the DOM already carries at least that. */
+      const boundRuns = nextBound ? readText(nextBound.field.text) : null;
+      const chain: { next?: RichText } = {};
+      const stale = boundRuns !== null && collaboration != null && fieldStale(collaboration.pageId, collaboration.key);
+      const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
+      /* While a write is in flight the field can only ever show chain
+       *  values or their echoes; a bound matching neither is not newer —
+       *  it is simply not ours, so the focused DOM stays ahead. A true
+       *  peer merge lands after the pending entries settle, when the
+       *  next projection renders it fresh again. */
+      const remote = boundRuns !== null && !stale && !ours && chain.next === undefined;
+      /* A bound behind the record prop is a lagging echo: the prop already
+       *  carries a newer value, so the echo may not overwrite it. A peer's
+       *  write lands in both at once, so a true remote still wins. */
+      const boundContent = remote && boundRuns && !sameInlineContent(contentOfRuns(boundRuns), block.content) ? null : remote && boundRuns ? contentOfRuns(boundRuns) : null;
       const showing = document.activeElement === element ? readDom(element) : null;
-      /* The record still showing our last commit cannot trump the DOM:
-       *  anything past it in the element is a keystroke whose write has not
-       *  landed — even the tick between keydown and input. A record pushed
-       *  past that commit (our own write landed, a remote merge, a
-       *  structural action) is ahead again and decides by itself.
-       *  And while that is so the bound field cannot win either: our own
-       *  committed delta echoes back with a remote revision bump, making a
-       *  field look fresh while it still runs behind the element's newest
-       *  keystroke. A genuine remote merge it carries is deferred to the
-       *  next commit, when the record stops being ours. */
-      const recordIsOurs = lastInput.current !== null && sameInlineContent(block.content, lastInput.current);
-      const recordAgrees = showing !== null ? inlinePlainText(showing) === inlinePlainText(block.content) : false;
-      const content = !recordIsOurs && boundContent && !recordAgrees ? boundContent : recordIsOurs && showing ? showing : block.content;
+      const chainHead = chain.next ? contentOfRuns(chain.next) : null;
+      /* Only a write that bypassed this element's input path — undo, redo,
+       *  recovered pending text — may replace what a focused element
+       *  shows. Auto-pairs and menu writes ride the same record path as a
+       *  keystroke; touching the focused DOM for them scrambles an input
+       *  method's caret, so they stay "internal" and the DOM wins. */
+      const moved = collaboration != null && fieldChainExternal(collaboration.pageId, collaboration.key);
+      /* The DOM shows a programmatic value — never an edit — while it
+       *  still equals the truth, the chain head, the last settled write's
+       *  echo, or the value it last submitted. Undo leaves an older
+       *  submitted value in the element: still ours, so the truth may
+       *  replace it. A DOM the user is typing into — or one paused at an
+       *  earlier chain member — matches none of these and keeps itself. */
+      /* The DOM shows a programmatic value — never an edit — while it
+       *  still equals the chain head, the last settled write's echo, or
+       *  the value it last submitted. Undo leaves an older submitted
+       *  value standing: still ours, so the chain head replaces it. */
+      const domIsOurs = moved && boundContent === null && showing !== null && (
+        chainHead !== null && sameInlineContent(showing, chainHead)
+        || collaboration != null && fieldIsSettledEcho(collaboration.pageId, collaboration.key, storedRuns(showing))
+        || lastInput.current !== null && sameInlineContent(showing, lastInput.current)
+      );
+      const content = boundContent ?? (domIsOurs && chainHead !== null ? chainHead : showing ?? chainHead ?? block.content);
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {

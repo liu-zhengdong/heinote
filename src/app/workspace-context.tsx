@@ -60,7 +60,7 @@ import { ApiError, request } from "../platform/http";
 import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
-import { collaborationAccount, openCollaborativePage } from "../collaboration/client";
+import { collaborationAccount, openWhenDocument } from "../collaboration/client";
 
 /** What changes rarely — the actions, the selection, the member's spaces
  *  and preferences — so a view reading it is not redrawn by every keystroke.
@@ -413,7 +413,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       /* Open the page's collaborative document now that it is on screen;
          startup no longer opens one for every page. */
       const scope = spaceOfPage(pages, pageId) ?? "personal";
-      void openCollaborativePage(scope, pageId).catch(() => undefined);
+      /* The document initializes on the page's first committed write; a
+         single GET before it lands 404s and no retry ever fires — the
+         session never opens. openWhenDocument keeps asking while the page
+         exists locally. */
+      void openWhenDocument(scope, pageId).catch(() => undefined);
     }
     // The page's body joins the mirror as it opens (UC-48).
     void document?.loadPages([pageId]).catch(() => undefined);

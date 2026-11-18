@@ -29,7 +29,8 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { fieldStale } from "../../collaboration/client";
+import type { RichText } from "../../platform/schema";
+import { fieldIsOurs, fieldStale } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
@@ -235,7 +236,16 @@ export function RichField({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const wantedContent = nextBound && !fieldStale(collaboration!.pageId, collaboration!.key) ? grammar.normalize(contentOfRuns(readText(nextBound.field.text))) : content;
+      /* Same rule as InlineEditor: a bound field only rewrites when it is
+       *  outside our own write chain; otherwise the newest in-flight commit
+       *  beats the possibly stale `content` prop. */
+      const boundRuns = nextBound ? readText(nextBound.field.text) : null;
+      const chain: { next?: RichText } = {};
+      const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
+      const remote = boundRuns !== null && collaboration != null && !fieldStale(collaboration.pageId, collaboration.key) && !ours && chain.next === undefined;
+      const chainHead = chain.next ? grammar.normalize(contentOfRuns(chain.next)) : null;
+      const remoteContent = remote && boundRuns ? grammar.normalize(contentOfRuns(boundRuns)) : null;
+      const wantedContent = remoteContent ?? chainHead ?? content;
       const html = grammar.html(wantedContent);
       if (document.activeElement !== element) {
         if (element.innerHTML !== html) element.innerHTML = html;

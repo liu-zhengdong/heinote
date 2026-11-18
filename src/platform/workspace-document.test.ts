@@ -14,7 +14,7 @@ vi.mock("../collaboration/client", () => ({
   openCollaborativePage: async () => {}, pageBasis: () => null,
   projectRecord: (_scope: string, _name: string, _id: string, record: object) => record,
   refreshCollaborativePage: async () => {}, registerPendingCommit: vi.fn(), releasePendingCommit: vi.fn(),
-  resetRefusedText: async () => {}, restorePendingText: () => false, settleText: vi.fn(),
+  resetRefusedText: async () => {}, restorePendingText: () => false, settleText: vi.fn(), openWhenDocument: async () => {},
   withStructureText: (action: () => void) => action(),
 }));
 vi.mock("../collaboration/binding", () => ({ observedText: () => null }));
