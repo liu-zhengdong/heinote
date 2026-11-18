@@ -23,6 +23,7 @@ import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store
 /* Sharing, page history and the graph are loaded the first time they are opened. */
 const ShareDialog = lazy(() => import("../features/share/ShareDialog").then((module) => ({ default: module.ShareDialog })));
 const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
+const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 
@@ -292,7 +293,11 @@ export function App() {
               </div>
             ) : null}
 
-            {selectedKind === "database" && !historyPreview ? (
+            {historyPreview && historyPreview.kind !== "document" ? (
+              /* A non-document checkpoint holds the page's definition, not
+                 a body: show what restoring it restores. */
+              <Suspense fallback={null}><SnapshotPreview page={historyPreview} /></Suspense>
+            ) : selectedKind === "database" && !historyPreview ? (
               <DatabasePage readOnly={Boolean(trashedAt)} />
             ) : selectedKind === "app" && !historyPreview ? (
               <AppPageShell pageId={selectedPageId} />

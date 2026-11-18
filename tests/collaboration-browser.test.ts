@@ -761,3 +761,32 @@ test("a peer's edit lands on the page timeline and locating it flashes where it 
   await event.click();
   await expect(pair.owner.locator(`[data-block-id="${pair.blockId}"].history-flash`)).toBeVisible();
 });
+
+test("a database page's checkpoint previews its definition, not an empty document", async ({ app }) => {
+  const pair = await app.pair();
+  const database = await createDatabaseIn(pair, "协作清单");
+  await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const version = await api(pair.ownerContext, pair.url, `/api/v1/pages/${database.id}/checkpoint`, { method: "POST", token: pair.token, data: { summary: "结构调整前" } });
+  expect(version.summary).toBe("结构调整前");
+  await openPage(pair, pair.owner, database.id);
+  // A checkpoint matching the current content is the current version, not a
+  // row of its own — rename once so the checkpoint stands in the past.
+  await pair.owner.locator(`article[data-page-id="${database.id}"] .doc__title.title-field`).click();
+  await pair.owner.keyboard.insertText("改名");
+  await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/v1/pages/${database.id}`, { token: pair.token })).title).toContain("改名");
+  await pair.owner.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await panel.getByRole("option", { name: /结构调整前/ }).click();
+  // The snapshot surface names the stored definition — its views at least —
+  // and says rows are out of the restore's reach. It must not render the
+  // blank DocumentEditor an old preview produced.
+  const preview = pair.owner.getByLabel("Version preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("协作清单");
+  await expect(preview).toContainText("全部");
+  await expect(pair.owner.locator(".snapshot-note")).toContainText("行数据");
+});

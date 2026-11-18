@@ -58,6 +58,17 @@ await p.screenshot({ path: ".evidence/history-timeline/timeline-panel@2x.png" })
 await p.getByRole("complementary", { name: "Page history" }).getByRole("button", { name: /编辑了正文/ }).first().click();
 await p.locator(".history-flash").waitFor();
 await p.screenshot({ path: ".evidence/history-timeline/timeline-locate@2x.png" });
+// ISS-19: a database page's checkpoint previews its stored definition.
+const dbPage = (await req("/api/v1/databases", { m: "POST", b: { requestId: randomUUID(), spaceId: space.spaceId, title: "项目库", database: { title_name: "名称", properties: [{ id: "p1", name: "状态", type: "select", options: ["进行中", "完成"] }, { id: "p2", name: "负责人", type: "person" }], views: [{ id: "v1", name: "全部", kind: "table" }, { id: "v2", name: "看板", kind: "board", group_by: "p1" }] } }, c })).j;
+await req(`/api/v1/pages/${dbPage.id}/checkpoint`, { m: "POST", b: { summary: "结构调整前" }, c });
+await req(`/api/records/${space.spaceId}/pages/${dbPage.id}`, { m: "POST", b: { action: "patch", base: { title_content: [{ text: "项目库" }] }, patch: { title_content: [{ text: "项目库（新）" }] } }, c });
+await p.goto(`${server.url}/?page=${dbPage.id}`);
+await p.locator(`article[data-page-id="${dbPage.id}"]`).waitFor();
+await p.getByRole("button", { name: "More page actions" }).click();
+await p.getByRole("menuitem", { name: "Page history" }).click();
+await p.getByRole("complementary", { name: "Page history" }).getByRole("option", { name: /结构调整前/ }).click();
+await p.getByLabel("Version preview").waitFor();
+await p.screenshot({ path: ".evidence/history-timeline/snapshot-preview-db@2x.png" });
 await browser.close();
 await server.close();
 console.log("screenshots written to .evidence/history-timeline/");

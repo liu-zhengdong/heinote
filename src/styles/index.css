@@ -10118,3 +10118,73 @@ button.db__th:hover,
 .dbv--readonly .view-tab--add {
   display: none;
 }
+
+/* A non-document checkpoint's preview: the page's definition, drawn in the
+   page's own column like `.doc`, so restoring a library or an app reads as
+   what it restores — structure, not a body that was never in the snapshot. */
+.snapshot-doc {
+  padding-top: 32px;
+}
+.snapshot-icon {
+  margin: 0 0 4px -2px;
+  color: var(--ink-2);
+}
+.snapshot-title {
+  margin-bottom: 24px;
+}
+.snapshot-section {
+  margin: 0 0 20px;
+}
+.snapshot-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+}
+.snapshot-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snapshot-item__meta {
+  color: var(--ink-4);
+  font-size: 12px;
+}
+.snapshot-item--empty {
+  color: var(--ink-4);
+  font-style: normal;
+}
+.snapshot-note {
+  margin: 24px 0 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--accent);
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+}
