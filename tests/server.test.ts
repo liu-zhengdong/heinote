@@ -174,6 +174,17 @@ async function agentPage(browser: Browser, bearer: string, title = "First title"
   return created;
 }
 
+test("the public version probe answers the deployed package identity without a session (UC-51)", async (t) => {
+  const f = await fixture(t);
+  const anonymous = f.browser();
+  const reply = await anonymous.request("/api/version");
+  assert.equal(reply.status, 200);
+  assert.equal(reply.headers.get("cache-control"), "no-store");
+  assert.equal(reply.body.name, "heinote");
+  assert.equal(reply.body.version, (await import("../package.json", { with: { type: "json" } })).default.version);
+  assert.ok(typeof reply.body.startedAt === "string" && !Number.isNaN(Date.parse(reply.body.startedAt)));
+});
+
 test("registration, session cookies, login, and logout invalidate the old session", async (t) => {
   const f = await fixture(t);
   const alice = f.browser();

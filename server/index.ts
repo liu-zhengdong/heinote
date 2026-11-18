@@ -180,6 +180,15 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     session: (req) => ({ user: sessionUser(req), key: cookie(req) ? hash(cookie(req)!) : undefined }),
   });
   app.get("/api/health", (_req, res) => { store.one("SELECT 1"); res.json({ status: "ok" }); });
+  /* UC-51: public identity probe. name/version come from the deployed
+     package.json (the same packageMeta the admin about page reads); startedAt
+     lets a caller tell this process — and therefore this build — restarted.
+     no-store: each answer must describe the process answering, not a cached
+     deployment that was since replaced. */
+  app.get("/api/version", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ name: packageMeta.name, version: packageMeta.version, startedAt: startedAt.toISOString() });
+  });
   app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled }));
   app.patch("/api/account/profile", (req, res) => {
     const who = actor(req); const { displayName } = parse(z.object({ displayName: z.string().trim().min(1).max(100) }).strict(), req.body);
