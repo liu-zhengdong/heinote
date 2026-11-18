@@ -183,16 +183,19 @@ export const InlineEditor = memo(function InlineEditor({
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
       const boundContent = nextBound && !fieldStale(collaboration!.pageId, collaboration!.key) ? contentOfRuns(readText(nextBound.field.text)) : null;
       const showing = document.activeElement === element ? readDom(element) : null;
-      /* A bound field whose text runs behind the record (document seeded
-       *  before the local write landed, or a structural delta still in
-       *  flight) is not proof the shown text is wrong. Neither is a record
-       *  that lags the focused DOM: the gap between a keystroke and its
-       *  committed write is the DOM showing the newer truth. Only when the
-       *  DOM neither matches the record nor the text it just committed can
-       *  the record win back the element. */
-      const domIsOurs = showing !== null && lastInput.current !== null && sameInlineContent(showing, lastInput.current);
+      /* The record still showing our last commit cannot trump the DOM:
+       *  anything past it in the element is a keystroke whose write has not
+       *  landed — even the tick between keydown and input. A record pushed
+       *  past that commit (our own write landed, a remote merge, a
+       *  structural action) is ahead again and decides by itself.
+       *  And while that is so the bound field cannot win either: our own
+       *  committed delta echoes back with a remote revision bump, making a
+       *  field look fresh while it still runs behind the element's newest
+       *  keystroke. A genuine remote merge it carries is deferred to the
+       *  next commit, when the record stops being ours. */
+      const recordIsOurs = lastInput.current !== null && sameInlineContent(block.content, lastInput.current);
       const recordAgrees = showing !== null ? inlinePlainText(showing) === inlinePlainText(block.content) : false;
-      const content = boundContent && !recordAgrees ? boundContent : domIsOurs && showing ? showing : block.content;
+      const content = !recordIsOurs && boundContent && !recordAgrees ? boundContent : recordIsOurs && showing ? showing : block.content;
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {
