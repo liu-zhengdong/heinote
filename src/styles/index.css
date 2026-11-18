@@ -737,11 +737,9 @@ kbd {
   gap: 8px;
 }
 
-/* Notion's toast: a short dark line, as wide as its words — its mark, the
-   words, and a quiet ×. It used to be the icon and the words sharing the
-   width half and half (a rule meant for the words reached the icon's span
-   too), which stranded the icon at one end and broke short words over two
-   lines. */
+/* A toast is a floating card of the theme, not a dark strip: the elevated
+   surface of menus and dialogs, its words in ink, only its mark carrying
+   the tone. */
 .toast {
   display: flex;
   width: max-content;
@@ -750,10 +748,11 @@ kbd {
   gap: 8px;
   padding: 7px 6px 7px 12px;
   border-radius: var(--r-md);
-  background: #2f2f2f;
-  color: #ffffff;
+  border: 1px solid var(--hairline);
+  background: var(--elevated);
+  color: var(--ink);
   font-size: 13.5px;
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--shadow-menu);
   opacity: 0;
   transform: translateY(8px) scale(0.98);
   transition: opacity var(--t-base) var(--e-out), transform var(--t-base) var(--e-pop);
@@ -775,26 +774,26 @@ kbd {
   display: grid;
   flex: none;
   place-items: center;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--ink-3);
 }
 
 .toast--success .toast__icon {
-  color: #6dd3a8;
+  color: var(--green);
 }
 
 .toast--error .toast__icon {
-  color: #ff8b82;
+  color: var(--danger);
 }
 
 .toast .icon-btn {
   width: 22px;
   height: 22px;
-  color: rgba(255, 255, 255, 0.55);
+  color: var(--ink-3);
 }
 
 .toast .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  background: var(--fill-hover);
+  color: var(--ink);
 }
 
 /* ── Avatars ──────────────────────────────────────────────────────────── */
