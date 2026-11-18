@@ -22,6 +22,7 @@ import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
 import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-requests.ts";
+import { attachAgentOnboarding } from "./agent-onboarding.ts";
 import { attachPublicApp } from "./public-app.ts";
 import { activePage, externalScope, mutation } from "./mutation.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
@@ -124,6 +125,14 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (importActive()) return fail(503, "导入进行中，请稍后再试。", "import_running");
     next();
   });
+  // UC-52: every /api/v1 response points back at the onboarding guide so an
+  // agent that lands on the API can still discover the skill and contract.
+  app.use("/api/v1", (_req, res, next) => {
+    res.set("Link", '</llms.txt>; rel="describedby"');
+    next();
+  });
+  // Public, anonymous agent self-onboarding docs (guide, skill, contract).
+  attachAgentOnboarding(app);
 
   const cookie = (req: Request) => /(?:^|;\s*)notes_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
   const sessionUser = (req: Request): User | undefined => {
