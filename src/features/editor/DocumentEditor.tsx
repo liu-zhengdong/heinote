@@ -442,16 +442,25 @@ export function DocumentEditor({
   /* A page you just made opens with the caret in its title, so naming it is
      the first thing that happens rather than a second click.
      A page created *to be shared* opens the Share dialog first — this waits
-     behind it, then takes the caret once that dialog closes. */
+     behind it, then takes the caret once that dialog closes.
+     The caret is only ever given once: any pointer-down or key press inside
+     the document claims it, and a late effect re-run — a permission flip,
+     a session landing — can never pull it back to the title. */
+  const caretClaimed = useRef(false);
   useEffect(() => {
     if (readOnly || embed || page.title || sharePageId || !page.block_tree) return;
+    if (caretClaimed.current) return;
     const blocks = Object.values(page.block_tree.by_id);
     if (blocks.length > 1 || blocks.some((block) => inlinePlainText(block.content))) return;
+    caretClaimed.current = true;
     titleRef.current?.focus();
     // Only when the page identity or the dialog above it changes — never on
     // every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page.id, readOnly, sharePageId]);
+  const claimCaret = useCallback(() => { caretClaimed.current = true; }, []);
+  /* A different page gets its own chance at the title caret. */
+  useEffect(() => { caretClaimed.current = false; }, [page.id]);
 
   /* Every change goes to the pages holding what it touches (composite.ts):
      a line written in a block to the block's page, a block made from lines
@@ -2577,6 +2586,8 @@ export function DocumentEditor({
       ref={articleRef}
       className={`doc ${cover ? "doc--covered" : ""} ${icon ? "doc--iconed" : ""} ${page.full_width ? "doc--full" : ""} ${font === "default" ? "" : `doc--font-${font}`}`}
       data-page-id={page.id}
+      onPointerDownCapture={claimCaret}
+      onKeyDownCapture={claimCaret}
       onPointerDown={beginMarquee}
       // A box selection must not start a text selection, nor take the caret.
       onMouseDown={(event) => { if (marqueeStart.current) event.preventDefault(); }}

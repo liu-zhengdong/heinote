@@ -29,6 +29,7 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
+import { fieldStale } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
@@ -234,7 +235,7 @@ export function RichField({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const wantedContent = nextBound ? grammar.normalize(contentOfRuns(readText(nextBound.field.text))) : content;
+      const wantedContent = nextBound && !fieldStale(collaboration!.pageId, collaboration!.key) ? grammar.normalize(contentOfRuns(readText(nextBound.field.text))) : content;
       const html = grammar.html(wantedContent);
       if (document.activeElement !== element) {
         if (element.innerHTML !== html) element.innerHTML = html;

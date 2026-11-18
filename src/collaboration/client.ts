@@ -19,8 +19,16 @@ interface Session {
   snapshot: DocumentSnapshot; doc: Y.Doc; undo: Y.UndoManager; lastField: string; lastKind: string;
   /** Uncommitted local text changes, one entry per pending submission. */
   pendingText: Array<{ keys: string[]; change?: LocalTextChange; update: TextUpdate; fields: Record<string, { base: RichText; next: RichText }> }>;
-  fieldsByRecord: Map<string, Array<{ path: string[]; value: RichText }>> | null;
+  fieldsByRecord: Map<string, Array<{ key: string; path: string[]; value: RichText }>> | null;
   projections: Map<string, { input: JsonRecord; output: JsonRecord }>;
+  /** Per-field count of remote deltas applied to the document. A field's
+   *  projection is only authoritative when it carries a remote edit the
+   *  record could not have; the number tells them apart. */
+  fieldRevs: Map<string, number>;
+  /** Field keys the local writer touched at the remote revision then held.
+   *  A mismatched field with no later remote delta is a lagging seed of the
+   *  writer's own text, not an edit — the record's word stands. */
+  revAtWrite: Map<string, number>;
 }
 export interface LocalTextChange { update: TextUpdate; sessionKey: string; keys?: string[] }
 const sessions = new Map<string, Session>();
@@ -58,8 +66,14 @@ function newSession(snapshot: DocumentSnapshot): Session {
   const undo = new Y.UndoManager(doc.getMap("fields"), { trackedOrigins: new Set([LOCAL_TEXT_ORIGIN]), captureTimeout: 1000 });
   undo.on("stack-item-added", ({ stackItem }) => { stackItem.meta.set("time", nextHistoryOrder()); stackItem.meta.set("view", historyView); });
   undo.on("stack-item-updated", ({ stackItem }) => { stackItem.meta.set("time", nextHistoryOrder()); stackItem.meta.set("view", historyView); });
-  const session: Session = { snapshot, doc, undo, lastField: "", lastKind: "", pendingText: [], fieldsByRecord: null, projections: new Map() };
-  doc.on("update", () => { session.fieldsByRecord = null; session.projections.clear(); notify(snapshot.scope); });
+  const session: Session = { snapshot, doc, undo, lastField: "", lastKind: "", pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map() };
+  doc.on("update", (_update: Uint8Array, origin: unknown, _doc: Y.Doc, transaction: Y.Transaction) => {
+    session.fieldsByRecord = null; session.projections.clear();
+    if (origin === REMOTE)
+      for (const [type] of transaction.changed) if (type instanceof Y.Text)
+        for (const [key, text] of session.doc.getMap<Y.Text>("fields")) if (text === type) { session.fieldRevs.set(key, (session.fieldRevs.get(key) ?? 0) + 1); break; }
+    notify(snapshot.scope);
+  });
   return session;
 }
 function destroySession(session: Session): void { session.undo.destroy(); session.doc.destroy(); }
@@ -260,24 +274,37 @@ export function projectRecord(scope: string, collection: string, id: string, rec
     for (const [key, value] of Object.entries(readFields(session.doc))) {
       const address = fieldAddress(key); if (!address) continue;
       const groupKey = JSON.stringify([address.collection, address.id]);
-      const fields = session.fieldsByRecord.get(groupKey) ?? []; fields.push({ path: address.path, value }); session.fieldsByRecord.set(groupKey, fields);
+      const fields = session.fieldsByRecord.get(groupKey) ?? []; fields.push({ key, path: address.path, value }); session.fieldsByRecord.set(groupKey, fields);
     }
   }
   let projected = record;
   for (const field of session.fieldsByRecord.get(recordKey) ?? []) {
     const current = valueAt(record, field.path);
     /* The document only learns a local text write when its batch commits,
-     *  so right after accept its field can lag the record it should have
-     *  received. A field strictly behind the record's text is stale, not
-     *  authoritative — a real remote clear or rewrite does not look like
-     *  a prefix of what was just written. */
+     *  so until the write's own delta echoes back the field lags the record
+     *  it should have received — an empty seed, a prefix, or a diverged
+     *  fragment alike. A mismatch without a remote delta newer than the
+     *  write is that lag, not an edit: keep the record's text. */
     const have = Array.isArray(current) ? current : [];
-    const plain = (runs: RichText) => runs.map((run) => run.text ?? "").join("");
-    if (have.length && plain(have).startsWith(plain(field.value)) && plain(have) !== plain(field.value)) continue;
+    const wrote = session.revAtWrite.get(field.key);
+    const stale = wrote !== undefined && (session.fieldRevs.get(field.key) ?? 0) <= wrote;
+    if (stale ? JSON.stringify(have) !== JSON.stringify(field.value) : !field.value.length && have.length) continue;
     projected = setAt(projected, field.path, field.value);
   }
   session.projections.set(recordKey, { input: record, output: projected });
   return projected;
+}
+/** A locally-written field with no newer remote delta: its text is the
+ *  writer's own, still traveling to the server and back. Anything the
+ *  document shows for it meanwhile is a lagging echo, never an edit. */
+export function fieldStale(pageId: string, key: string): boolean {
+  for (const session of sessions.values()) {
+    if (session.snapshot.pageId !== pageId) continue;
+    const wrote = session.revAtWrite.get(key);
+    if (wrote === undefined) continue;
+    return (session.fieldRevs.get(key) ?? 0) <= wrote;
+  }
+  return false;
 }
 export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
   const session = sessionFor(scope, pageId); if (!session) return null;
@@ -351,6 +378,7 @@ export function localRecordText(scope: string, collection: string, id: string, b
   const fields = Object.fromEntries(changed.map(({ key, text }) => [key, { base: readText(text), next: [] as RichText }]));
   session.doc.transact(() => { for (const change of changed) { const field = registeredField(session, change.key); if (field) editObservedField(field, change.next); } }, structureDepth ? STRUCTURAL : LOCAL_TEXT_ORIGIN);
   const keys = changed.map((item) => item.key);
+  for (const key of keys) session.revAtWrite.set(key, session.fieldRevs.get(key) ?? 0);
   const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope, pageId: session.snapshot.pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
   for (const { key, text } of changed) fields[key].next = readText(text);
   session.pendingText.push({ keys, change, update: change.update, fields });

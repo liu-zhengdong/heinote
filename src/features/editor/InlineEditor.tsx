@@ -12,6 +12,7 @@ import {
 import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, type DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
+import { fieldStale } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import { editableHtml } from "./block-html";
@@ -180,15 +181,18 @@ export const InlineEditor = memo(function InlineEditor({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const boundContent = nextBound ? contentOfRuns(readText(nextBound.field.text)) : null;
-      const showing = document.activeElement === element && !code ? inlineFromNodes(element) : null;
+      const boundContent = nextBound && !fieldStale(collaboration!.pageId, collaboration!.key) ? contentOfRuns(readText(nextBound.field.text)) : null;
+      const showing = document.activeElement === element ? readDom(element) : null;
       /* A bound field whose text runs behind the record (document seeded
        *  before the local write landed, or a structural delta still in
-       *  flight) is not proof the shown text is wrong: the record already
-       *  carries the pending overlay, so while the focused DOM agrees with
-       *  the record the DOM wins and the stale field may not tear the caret. */
+       *  flight) is not proof the shown text is wrong. Neither is a record
+       *  that lags the focused DOM: the gap between a keystroke and its
+       *  committed write is the DOM showing the newer truth. Only when the
+       *  DOM neither matches the record nor the text it just committed can
+       *  the record win back the element. */
+      const domIsOurs = showing !== null && lastInput.current !== null && sameInlineContent(showing, lastInput.current);
       const recordAgrees = showing !== null ? inlinePlainText(showing) === inlinePlainText(block.content) : false;
-      const content = boundContent && !recordAgrees ? boundContent : block.content;
+      const content = boundContent && !recordAgrees ? boundContent : domIsOurs && showing ? showing : block.content;
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {

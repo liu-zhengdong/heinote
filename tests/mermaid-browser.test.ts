@@ -84,8 +84,12 @@ test("a shared page shows the diagram to a guest", async ({ page, browser }) => 
   // server-side before sharing, or the guest reads a page with a
   // half-typed diagram. The block's DOM text is what pele drew, so the
   // record matching it means the shareable page is the drawn one.
-  const drawn = await code.locator('.block__editable[contenteditable="true"]').innerText();
+  // The DOM and the record converge as commits land — the fence residue
+  // of the ```mermaid conversion can still sit in the editable for a beat
+  // after the diagram is already drawn, so compare fresh reads on both
+  // sides until they agree instead of pinning one captured instant.
   await expect.poll(async () => {
+    const drawn = await code.locator('.block__editable[contenteditable="true"]').innerText();
     const rows = await (await page.request.get(`${server.url}/api/records/personal/blocks`)).json();
     return rows.some((row: { value: { kind?: string; language?: string; page?: string; content?: { text?: string }[] } }) =>
       row.value.page === pageId && row.value.kind === "code" && row.value.language === "mermaid" &&
