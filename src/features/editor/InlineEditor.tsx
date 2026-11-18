@@ -180,7 +180,15 @@ export const InlineEditor = memo(function InlineEditor({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const content = nextBound ? contentOfRuns(readText(nextBound.field.text)) : block.content;
+      const boundContent = nextBound ? contentOfRuns(readText(nextBound.field.text)) : null;
+      const showing = document.activeElement === element && !code ? inlineFromNodes(element) : null;
+      /* A bound field whose text runs behind the record (document seeded
+       *  before the local write landed, or a structural delta still in
+       *  flight) is not proof the shown text is wrong: the record already
+       *  carries the pending overlay, so while the focused DOM agrees with
+       *  the record the DOM wins and the stale field may not tear the caret. */
+      const recordAgrees = showing !== null ? inlinePlainText(showing) === inlinePlainText(block.content) : false;
+      const content = boundContent && !recordAgrees ? boundContent : block.content;
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {
@@ -190,7 +198,6 @@ export const InlineEditor = memo(function InlineEditor({
         lastInput.current = content;
         return;
       }
-      const showing = code ? null : inlineFromNodes(element);
       const shown = showing ? inlinePlainText(showing) : element.textContent ?? "";
       const wanted = inlinePlainText(content);
       const agree = showing

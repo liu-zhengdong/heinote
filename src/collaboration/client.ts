@@ -264,7 +264,18 @@ export function projectRecord(scope: string, collection: string, id: string, rec
     }
   }
   let projected = record;
-  for (const field of session.fieldsByRecord.get(recordKey) ?? []) projected = setAt(projected, field.path, field.value);
+  for (const field of session.fieldsByRecord.get(recordKey) ?? []) {
+    const current = valueAt(record, field.path);
+    /* The document only learns a local text write when its batch commits,
+     *  so right after accept its field can lag the record it should have
+     *  received. A field strictly behind the record's text is stale, not
+     *  authoritative — a real remote clear or rewrite does not look like
+     *  a prefix of what was just written. */
+    const have = Array.isArray(current) ? current : [];
+    const plain = (runs: RichText) => runs.map((run) => run.text ?? "").join("");
+    if (have.length && plain(have).startsWith(plain(field.value)) && plain(have) !== plain(field.value)) continue;
+    projected = setAt(projected, field.path, field.value);
+  }
   session.projections.set(recordKey, { input: record, output: projected });
   return projected;
 }

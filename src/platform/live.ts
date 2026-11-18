@@ -582,11 +582,19 @@ export class LiveCollection<R extends object> {
   private schedule(): void { if (!this.closed) this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200); }
   private values(): Map<string, R> {
     const values = new Map(this.remote);
+    const editing = new Set<string>();
     for (const write of this.pending) {
+      editing.add(write.id);
       if (write.action === "delete") values.delete(write.id);
       else values.set(write.id, (write.action === "put" ? write.value : merge((values.get(write.id) ?? {}) as Value, write.patch as Value)) as R);
     }
-    for (const [id, record] of values) values.set(id, projectRecord(this.scope, this.name, id, record as Value) as R);
+    const ours = (id: string) => editing.has(id);
+    for (const [id, record] of values)
+      /* Rows with a pending local write already carry the newest text in
+       *  their merged patch. Overlaying a document field that lags that
+       *  write — the server only learns it through this batch — rolls the
+       *  shown text back mid-typing and tears the caret. */
+      if (!ours(id)) values.set(id, projectRecord(this.scope, this.name, id, record as Value) as R);
     return values;
   }
   get records(): Array<{ id: string; value: R }> { return [...this.values()].map(([id, value]) => ({ id, value })); }
@@ -596,13 +604,18 @@ export class LiveCollection<R extends object> {
   /** Pull the row delta now — a committed push pokes this so structural
    *  changes land without waiting for the 1.2s poll. */
   refreshNow(): void { void this.refresh().catch(() => undefined); }
+  /** Rows this client committed a moment ago — the snapshot was fetched
+   *  while its write was in flight, so it may not know them yet. Touching
+   *  them would roll the DOM back past data the server already holds. */
+  private readonly settled = new Map<string, number>();
   applySnapshot(snapshot: DocumentSnapshot): void {
     if (!snapshot.records || this.closed) return;
     this.epoch += 1;
-    if (this.name === "pages") this.remote.set(snapshot.pageId, snapshot.records.page as R);
+    const fresh = (id: string) => (this.settled.get(id) ?? 0) + 30_000 > Date.now();
+    if (this.name === "pages") { if (!fresh(snapshot.pageId)) this.remote.set(snapshot.pageId, snapshot.records.page as R); }
     if (this.name === "blocks") {
-      for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId) this.remote.delete(id);
-      for (const row of snapshot.records.blocks) this.remote.set(row.id, row.value as R);
+      for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId && !fresh(id)) this.remote.delete(id);
+      for (const row of snapshot.records.blocks) if (!fresh(row.id)) this.remote.set(row.id, row.value as R);
       // A snapshot is authoritative page content: the page counts as loaded
       // even without an explicit subscription (UC-48).
       if (this.lazy && !this.pageWatermarks.has(snapshot.pageId))
@@ -612,7 +625,9 @@ export class LiveCollection<R extends object> {
   restoreWrite(write: Write): void { this.pending.push(write); this.emit(); }
   acceptWrite(write: Write, value: Value | null): void {
     this.epoch += 1; this.pending = this.pending.filter((item) => item !== write);
-    if (value) this.remote.set(write.id, value as R); else this.remote.delete(write.id); this.emit();
+    if (value) { this.remote.set(write.id, value as R); this.settled.set(write.id, Date.now()); }
+    else this.remote.delete(write.id);
+    this.emit();
   }
   refuseWrite(write: Write, _reason: unknown): void {
     this.pending = this.pending.filter((item) => item !== write); void this.refresh().catch(() => undefined); this.emit();
