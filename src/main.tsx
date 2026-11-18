@@ -7,8 +7,6 @@ import { ErrorBoundary } from "./app/ErrorBoundary";
 import { UiProvider } from "./app/ui-context";
 import { WorkspaceProvider } from "./app/workspace-context";
 import { AuthGate } from "./features/account/AuthGate";
-import { SaveRecovery } from "./features/account/SaveRecovery";
-import { SyncIndicator } from "./features/account/SyncIndicator";
 import { PublicShare } from "./features/share/PublicShare";
 import "./styles/index.css";
 import "./features/account/account.css";
@@ -27,8 +25,6 @@ createRoot(document.getElementById("root")!).render(
             <ErrorBoundary>
               <UiProvider>
                 <App />
-                <SyncIndicator />
-                <SaveRecovery />
               </UiProvider>
             </ErrorBoundary>
           </WorkspaceProvider>

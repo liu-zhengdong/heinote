@@ -59,19 +59,19 @@
 .save-recovery__foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
 .save-recovery__hint { margin: 0; color: var(--ink-3); font-size: 12px; line-height: 1.5; }
 .save-recovery__foot .btn { min-height: 30px; font-size: 13px; }
+/* Both pills are members of .corner-stack (see index.css): no fixed
+   position of their own — the stack places them and toasts push above. */
 .save-recovery-pill {
-  position: fixed; right: 20px; bottom: 20px; z-index: 190;
   display: inline-flex; align-items: center; gap: 8px;
-  min-height: 36px; padding: 0 14px; border-radius: 18px;
+  min-height: 30px; padding: 0 12px; border-radius: 15px;
   background: var(--paper); color: var(--ink);
   box-shadow: var(--shadow-menu);
-  font-family: var(--heinote-font-body); font-size: 13px; font-weight: 550;
+  font-family: var(--heinote-font-body); font-size: 12px; font-weight: 500;
 }
 .save-recovery-pill:hover { background: var(--fill-hover); }
 .save-recovery-pill svg { color: var(--yellow); }
 .save-recovery-pill--urgent svg { color: var(--danger); }
 .sync-indicator {
-  position: fixed; right: 20px; bottom: 20px; z-index: 180;
   display: inline-flex; align-items: center; gap: 8px;
   min-height: 30px; padding: 0 12px; border-radius: 15px;
   background: var(--paper); color: var(--ink-3);
@@ -157,11 +157,11 @@
 @keyframes proposal-spin { to { transform: rotate(360deg); } }
 @keyframes proposal-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 600px) {
+  .corner-stack { right: 12px; bottom: 12px; }
   .save-recovery-scrim { padding: 12px; }
   .save-recovery { max-height: calc(100dvh - 24px); padding: 20px 18px 14px; }
   .save-recovery__foot { flex-direction: column-reverse; align-items: stretch; }
   .save-recovery__foot .btn { justify-content: center; }
-  .save-recovery-pill { right: 12px; bottom: 12px; }
   .overlay__card.agent-proposals { max-height: calc(100dvh - 40px); margin-top: 0; }
   .agent-proposals__head { padding: 20px 18px 16px; }
   .agent-proposals__tools { padding: 0 18px 14px; }

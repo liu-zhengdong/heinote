@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import { createId } from "../core/ids";
-import { ToastStack, type ToastMessage, type ToastTone } from "../components/Toast";
+import { CornerStack, ToastStack, type ToastMessage, type ToastTone } from "../components/Toast";
+import { SaveRecovery } from "../features/account/SaveRecovery";
+import { SyncIndicator } from "../features/account/SyncIndicator";
 import { useWorkspace } from "./workspace-context";
 
 interface UiContextValue {
@@ -104,10 +106,15 @@ export function UiProvider({ children }: { children: ReactNode }) {
     [adminOpen, closePeek, closeShare, drawerOpen, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
   );
 
+  /* One corner, one stack: the activity pills (syncing, drafts awaiting a
+     decision) stay at the bottom and transient toasts push on top. They used
+     to be three elements fixed to the same point, covering each other. */
   return (
     <UiContext.Provider value={value}>
       {children}
-      <ToastStack toasts={toasts} onDismiss={dismiss} />
+      <CornerStack activity={<><SyncIndicator /><SaveRecovery /></>}>
+        <ToastStack toasts={toasts} onDismiss={dismiss} />
+      </CornerStack>
     </UiContext.Provider>
   );
 }

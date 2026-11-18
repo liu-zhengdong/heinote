@@ -727,9 +727,10 @@ kbd {
 
 /* ── Toasts ───────────────────────────────────────────────────────────── */
 
-/* Toasts live bottom-right — the same corner the save indicator and the
-   draft pill answer from — stacking upward, newest at the bottom. */
-.toast-stack {
+/* The corner's one stack: persistent activity pills (syncing, drafts
+   awaiting a decision) keep the bottom position and transient toasts push
+   on top — one container, not three elements fixed to the same point. */
+.corner-stack {
   position: fixed;
   z-index: 200;
   right: 20px;
