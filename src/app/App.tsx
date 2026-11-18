@@ -203,10 +203,22 @@ export function App() {
     if (here.href !== window.location.href) window.history.replaceState(window.history.state, "", here);
   }, [selectedPageId]);
 
+  /* A peeked row's history belongs to the row as a page: opening it selects
+     the row, and the page-change cleanup below then opens it — doing it in
+     the handler would race the same cleanup it must survive. */
+  const historyForRef = useRef<string | null>(null);
+
   /* Going to another page closes what belonged to this one: its history, the
-     drawer that led there, and the row open beside it. */
+     drawer that led there, and the row open beside it — unless the move was
+     the history itself reaching a peeked row. */
   useEffect(() => {
-    closeHistory();
+    if (historyForRef.current === selectedPageId) {
+      historyForRef.current = null;
+      setHistoryOpen(true);
+      setHistoryUsed(true);
+    } else {
+      closeHistory();
+    }
     setDrawerOpen(false);
     closePeek();
   }, [closeHistory, closePeek, selectedPageId, setDrawerOpen]);
@@ -335,7 +347,23 @@ export function App() {
         </div>
       </div>
 
-      <SidePeek docked={peek.docked} width={peek.width} pane={peek.pane} onResize={peek.resize} />
+      <SidePeek
+        docked={peek.docked}
+        width={peek.width}
+        pane={peek.pane}
+        onResize={peek.resize}
+        onHistory={() => {
+          if (!peekPageId) return;
+          if (peekPageId !== selectedPageId) {
+            historyForRef.current = peekPageId;
+            selectPage(peekPageId);
+          } else {
+            closePeek();
+            setHistoryOpen(true);
+            setHistoryUsed(true);
+          }
+        }}
+      />
       {historyUsed ? (
         <Suspense fallback={null}>
           <HistoryPanel

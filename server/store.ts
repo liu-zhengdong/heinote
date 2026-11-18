@@ -554,7 +554,7 @@ export class Store {
         result.push(next ?? null); scopes.add(scope);
         if (write.collection === "pages" || write.collection === "blocks") {
           const { eventPage, row } = write.collection === "pages"
-            ? this.eventPageOf(scope, write.id, { deleted: !next })
+            ? this.eventPageOf(scope, write.id, { deleted: !next, prior: current })
             : { eventPage: parseBlockRecordId(write.id)?.pageId ?? write.id, row: false };
           if (next) {
             if (write.collection === "pages") {
@@ -572,10 +572,15 @@ export class Store {
             const parsed = parseBlockRecordId(write.id)!;
             touch(scope, eventPage, parsed.blockId, "删除了段落");
           } else if (write.collection === "pages" && current) {
-            // The page itself is gone; mark it so its event names the act.
-            touched.get(`${scope}${write.id}`) ?? touched.set(`${scope}${write.id}`, { scope, pageId: write.id, targets: new Set(), labels: new Set(), deleted: true });
-            touched.get(`${scope}${write.id}`)!.deleted = true;
-            touch(scope, write.id, write.id, row ? "删除了一行" : "删除了页面");
+            // A deleted page's timeline dies with it — suppress its own
+            // entry. A row's lives on its database's, which outlives it.
+            if (row) {
+              touch(scope, eventPage, write.id, "删除了一行");
+            } else {
+              touched.get(`${scope}${write.id}`) ?? touched.set(`${scope}${write.id}`, { scope, pageId: write.id, targets: new Set(), labels: new Set(), deleted: true });
+              touched.get(`${scope}${write.id}`)!.deleted = true;
+              touch(scope, write.id, write.id, "删除了页面");
+            }
           }
         }
       }
@@ -611,10 +616,14 @@ export class Store {
   /** The page whose timeline an edit to `recordId` belongs to: a database
    *  row's edits name the database, so a row rename shows where the row
    *  lives. `deleted` reads the record before it went. */
-  private eventPageOf(scope: string, recordId: string, opts: { deleted?: boolean } = {}): { eventPage: string; row: boolean } {
-    const page = this.record(scope, "pages", recordId);
+  /** The timeline a pages-record write belongs to: a row's own record is a
+   *  column of its database, so its writes land on the database's timeline;
+   *  an ordinary page's land on its own. A deleted page's parent has to come
+   *  from the record as it was — the live read returns nothing once it's gone. */
+  private eventPageOf(scope: string, recordId: string, opts: { deleted?: boolean; prior?: Row } = {}): { eventPage: string; row: boolean } {
+    const page = opts.deleted ? opts.prior : this.record(scope, "pages", recordId);
     const parentId = page?.parent_id;
-    if (typeof parentId === "string" && !opts.deleted) {
+    if (typeof parentId === "string") {
       const parent = this.record(scope, "pages", parentId);
       if (parent?.kind === "database") return { eventPage: parentId, row: true };
     }

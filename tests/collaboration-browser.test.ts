@@ -790,3 +790,31 @@ test("a database page's checkpoint previews its definition, not an empty documen
   await expect(preview).toContainText("全部");
   await expect(pair.owner.locator(".snapshot-note")).toContainText("行数据");
 });
+
+test("a row's side peek offers Page history, which opens the row as a page with its own timeline", async ({ app }) => {
+  const pair = await app.pair();
+  const database = await createDatabaseIn(pair, "协作清单");
+  const row = await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const rowId = row.page.id as string;
+  const rowPage = await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}`, { token: pair.token });
+  await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}/operations`, {
+    method: "POST", token: pair.token,
+    data: { requestId: randomUUID(), generation: rowPage.collaboration.generation, baseRevision: rowPage.collaboration.revision, operations: [{ type: "insert_blocks", markdown: "行里的正文" }] },
+  });
+  await openPage(pair, pair.owner, database.id);
+  const rowTr = pair.owner.locator(`tr[data-page-id="${rowId}"]`);
+  await rowTr.hover();
+  await rowTr.locator(".db__open").click();
+  const peek = pair.owner.locator("aside.side-peek");
+  await peek.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  // History belongs to the row as a page: it selects, the peek leaves, and
+  // the panel shows what happened to the row itself.
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await expect(panel).toBeVisible();
+  await expect(pair.owner.locator(`article[data-page-id="${rowId}"]`)).toBeVisible();
+  await expect(panel.locator(".history-item", { hasText: "新增了段落" })).toBeVisible();
+});

@@ -146,11 +146,15 @@ export function SidePeek({
   width,
   pane,
   onResize,
+  onHistory,
 }: {
   docked: boolean;
   width: number;
   pane: number;
   onResize(width: number): void;
+  /** The peeked page's history: the caller decides where it opens — it
+   *  belongs to a row of the page the peek sits on, not that page. */
+  onHistory?(): void;
 }) {
   const { canEdit, selectPage, loadPages } = useWorkspace();
   const { peekPageId, closePeek } = useUi();
@@ -279,7 +283,7 @@ export function SidePeek({
             </button>
           </Tooltip>
           <span className="side-peek__spacer" />
-          <PageActions page={drawn} compact={width < COMPACT_BELOW} link />
+          <PageActions page={drawn} compact={width < COMPACT_BELOW} link onHistory={onHistory} />
         </header>
         <div ref={scrollRef} className="side-peek__scroll scroller">
           {/* A database is its views, an app its surface — never a page's words. */}
