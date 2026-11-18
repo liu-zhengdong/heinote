@@ -1480,6 +1480,67 @@ export function rowOrderAfter(rows: readonly NotePage[], rowId: string, now: num
   return next ? (key + rowKey(next)) / 2 : Math.max(now, key + 1);
 }
 
+/** A row being re-ordered: its new `row_order`, or a fresh `row_order` for
+ *  every row when the gap it landed in had worn too thin to split again. */
+export interface RowOrderMove {
+  /** The moved row's own `row_order`. */
+  row_order: number;
+  /** Every row's rewritten `row_order`, when `moveRowOrder` rebalanced;
+   *  absent on an ordinary midpoint write. */
+  rewrite?: Record<string, number>;
+}
+
+/** The gap between two row keys a midpoint can still split: below it the
+ *  float would land on a neighbour, so the whole order is rewritten on a
+ *  fresh spacing instead of writing a tie. */
+const ROW_ORDER_EPSILON = 0.001;
+
+/** The `row_order` a dragged row takes: the midpoint of the rows it lands
+ *  between — `before` the neighbour it was dropped before, `after` the one
+ *  it was dropped after. `boundaryId` of `null` lands the row last; the
+ *  dragged row itself is never a boundary. `rows` is the database's whole
+ *  sequence (what `databaseRows` returns), not what the view shows: the
+ *  keys of rows the view hides still bound where the drop lands, and a
+ *  rebalance rewrites all of them so every row keeps its relative place. */
+export function moveRowOrder(
+  rows: readonly NotePage[],
+  rowId: string,
+  boundaryId: string | null,
+  place: "before" | "after",
+  now: number,
+): RowOrderMove | null {
+  const rest = rows.filter((row) => row.id !== rowId);
+  if (rest.length === rows.length) return null;
+  if (boundaryId === rowId) return null;
+  const at = boundaryId === null ? -1 : rest.findIndex((row) => row.id === boundaryId);
+  if (boundaryId !== null && at < 0) return null;
+
+  /* The row ahead of the gap and the row behind it. `null` boundary is the
+     gap after the last row; a boundary's gap is before or behind it. */
+  const before = boundaryId === null ? rest[rest.length - 1] : place === "after" ? rest[at] : rest[at - 1];
+  const after = boundaryId === null ? undefined : place === "after" ? rest[at + 1] : rest[at];
+  const lo = before ? rowKey(before) : undefined;
+  const hi = after ? rowKey(after) : undefined;
+  if (lo !== undefined && hi !== undefined && hi <= lo) return null;
+
+  /* A gap worn too thin to split — after dozens of drops into the same
+     slot — is reset: every row's key is rewritten on the step spacing, in
+     the order it already stands, the dragged row included in the gap. */
+  if (lo !== undefined && hi !== undefined && hi - lo < ROW_ORDER_EPSILON) {
+    const sequence = [...rest];
+    sequence.splice(boundaryId === null ? rest.length : place === "after" ? at + 1 : at, 0, rows.find((row) => row.id === rowId)!);
+    const rewrite: Record<string, number> = {};
+    sequence.forEach((row, index) => { rewrite[row.id] = (index + 1) * 1024; });
+    return { row_order: rewrite[rowId], rewrite };
+  }
+
+  const row_order = lo === undefined && hi === undefined ? now
+    : lo === undefined ? Math.min(hi! - 1, hi! / 2)
+    : hi === undefined ? Math.max(now, lo + 1)
+    : lo + (hi - lo) / 2;
+  return { row_order };
+}
+
 /** Search, filter and sort a database's rows (`databaseRows`) the way
  *  `view` asks. `pageTitle` gives a page's name by id — a relation sorts by
  *  the title of its first link, the way a multi-select sorts by its first

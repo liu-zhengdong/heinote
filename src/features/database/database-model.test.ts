@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DatabaseConfig, DatabaseProperty } from "../../core/types";
-import { moveProperty } from "./database-model";
+import type { DatabaseConfig, DatabaseProperty, NotePage } from "../../core/types";
+import { moveProperty, moveRowOrder } from "./database-model";
 
 const prop = (id: string, type: DatabaseProperty["type"]): DatabaseProperty => ({ id, name: id, type });
 
@@ -81,5 +81,67 @@ describe("moveProperty", () => {
     };
     const next = moveProperty(start, "a", 1);
     expect(next.views).toEqual(start.views);
+  });
+});
+
+/** A row stub for `moveRowOrder`: only `id` and `row_order` are read. */
+const row = (id: string, order: number): NotePage =>
+  ({ id, row_order: order }) as unknown as NotePage;
+
+describe("moveRowOrder", () => {
+  const rows = [row("a", 1024), row("b", 2048), row("c", 3072)];
+  const NOW = 10_000;
+
+  it("lands a row at the midpoint of the gap it was dropped into", () => {
+    const moved = moveRowOrder(rows, "c", "a", "before", NOW);
+    expect(moved?.row_order).toBe(512);
+    expect(moved?.rewrite).toBeUndefined();
+  });
+
+  it("lands a row after its boundary", () => {
+    const moved = moveRowOrder(rows, "a", "b", "after", NOW);
+    expect(moved?.row_order).toBe(2560);
+  });
+
+  it("takes a key below the first row when dropped before it", () => {
+    const moved = moveRowOrder(rows, "c", "a", "before", NOW);
+    expect(moved!.row_order).toBeLessThan(1024);
+    expect(moved!.row_order).toBeGreaterThan(0);
+  });
+
+  it("takes a fresh key after the last row when dropped last", () => {
+    const moved = moveRowOrder(rows, "a", null, "after", NOW);
+    expect(moved!.row_order).toBeGreaterThanOrEqual(3073);
+  });
+
+  it("dropping a row onto itself or a missing boundary moves nothing", () => {
+    expect(moveRowOrder(rows, "a", "a", "after", NOW)).toBeNull();
+    expect(moveRowOrder(rows, "a", "gone", "after", NOW)).toBeNull();
+    expect(moveRowOrder(rows, "gone", "a", "after", NOW)).toBeNull();
+  });
+
+  it("moves nothing when the neighbours it lands between tie", () => {
+    /* Two rows holding one key have no gap to split — and nothing should
+       ever have made them tie, so the drop is refused rather than guessed. */
+    expect(moveRowOrder([row("a", 1), row("b", 1), row("c", 2)], "c", "a", "after", NOW)).toBeNull();
+  });
+
+  it("refuses a gap worn too thin and rewrites the whole order instead", () => {
+    const thin = [row("a", 1), row("b", 1 + 1e-6), row("c", 2)];
+    const moved = moveRowOrder(thin, "c", "a", "after", NOW);
+    expect(moved).not.toBeNull();
+    expect(moved!.rewrite).toBeDefined();
+    /* a, c, b — c spliced into the worn gap, all on fresh steps. */
+    expect(moved!.rewrite).toEqual({ a: 1024, c: 2048, b: 3072 });
+    expect(moved!.row_order).toBe(2048);
+  });
+
+  it("dropping last after thin rows still takes a fresh key, no rewrite", () => {
+    /* There is no gap to wear out after the last row — the drop lands at
+       `now`, past them. */
+    const thin = [row("a", 1), row("b", 1 + 1e-6)];
+    const moved = moveRowOrder(thin, "a", null, "after", NOW);
+    expect(moved!.rewrite).toBeUndefined();
+    expect(moved!.row_order).toBe(NOW);
   });
 });

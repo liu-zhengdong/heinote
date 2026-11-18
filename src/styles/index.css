@@ -6366,6 +6366,85 @@ button.db__th:hover,
   margin-left: auto;
 }
 
+/* A row's grip — the ⋮⋮ it is dragged by, quiet until the row (or the card)
+   is pointed at or the grip itself is focused. On a gallery card it is the
+   pencil's left-hand neighbour, floating over the card's corner. */
+.row-grip {
+  display: grid;
+  width: 18px;
+  height: 22px;
+  flex: none;
+  margin-left: -4px;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-4);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.row-grip:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.row-grip:active {
+  cursor: grabbing;
+}
+
+.db__table tr:hover .row-grip,
+.db-list__row:hover .row-grip,
+.db-card .row-grip:focus-visible,
+.row-grip:focus-visible,
+.db-list__row:focus-within .row-grip,
+.db__table tr:focus-within .row-grip {
+  opacity: 1;
+}
+
+.db-card > .row-grip {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  margin-left: 0;
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--ink-2);
+}
+
+.db-card:hover > .row-grip,
+.db-card:focus-within > .row-grip {
+  opacity: 1;
+}
+
+/* Where a dragged row would land: the same blue line a sort or a status
+   option wears — a row's top or bottom edge, a card's left or right. */
+.db__table tr.is-rdrop-before > td,
+.db-list__row.is-rdrop-before {
+  box-shadow: inset 0 2px 0 var(--blue);
+}
+
+.db__table tr.is-rdrop-after > td,
+.db-list__row.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.db-list__group.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.board__card.is-rdrop-before,
+.db-card.is-rdrop-before {
+  box-shadow: inset 2px 0 0 var(--blue), var(--shadow-card);
+}
+
+.board__card.is-rdrop-after,
+.db-card.is-rdrop-after {
+  box-shadow: inset -2px 0 0 var(--blue), var(--shadow-card);
+}
+
 .db__open {
   display: grid;
   width: 22px;
