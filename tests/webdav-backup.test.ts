@@ -119,14 +119,20 @@ async function davStub(directory: string): Promise<DavStub> {
       const out = createWriteStream(file);
       req.pipe(out);
       let received = 0;
+      let dropped = false;
       req.on("data", (chunk) => {
         received += chunk.length;
-        if (dropThis && received > stub.dropAfterBytes) {
+        // Destroy mid-stream and never answer: a drop must reliably abort the
+        // PUT, not race the (already-written) success path. A fast stub could
+        // otherwise receive the whole body and 201 before destroy() landed,
+        // making the run pass and the resume assertions unreachable (CI flake).
+        if (dropThis && !dropped && received > stub.dropAfterBytes) {
+          dropped = true;
           stub.drops += 1;
           req.socket.destroy();
         }
       });
-      out.on("finish", () => send(201));
+      out.on("finish", () => { if (!dropped) send(201); });
       req.on("error", () => undefined);
       out.on("error", () => undefined);
       return;
