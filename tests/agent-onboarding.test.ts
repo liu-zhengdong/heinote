@@ -39,6 +39,9 @@ test("UC-52: 三个公开文档匿名可读，markdown 类型且内容齐备", a
   assert.match(llmsBody, /api\/v1\/skill\.md/);
   assert.match(llmsBody, /api\/v1\/agent-api\.md/);
   assert.match(llmsBody, /auth\/requests/);
+  // 自举四步在导览里讲透：发请求 → verificationUrl 批准 → 轮询拿 token → Bearer。
+  assert.match(llmsBody, /verificationUrl/);
+  assert.match(llmsBody, /Bearer/);
 
   const skill = await get(server, "/api/v1/skill.md");
   assert.equal(skill.status, 200);
