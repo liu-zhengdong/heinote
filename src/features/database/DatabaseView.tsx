@@ -12,6 +12,7 @@ import {
   FileText,
   Check,
   Filter,
+  GripVertical,
   Layers,
   List,
   Lock,
@@ -101,6 +102,7 @@ import {
   localeWeekStart,
   monthGrid,
   moveProperty,
+  moveRowOrder,
   moveStatusOption,
   multiValues,
   PROPERTY_LABELS,
@@ -428,6 +430,58 @@ const renameOnFreeSpace = (
   onStartRename(row.id, "end");
 };
 
+/** The drag payload a database row carries — the board's already, kept for
+ *  the rows of the other views: a drag stays inside the view it began in
+ *  because every layout tracks its own dragged row. */
+const ROW_DRAG = "text/x-notes-row";
+
+/** A row's grip — Notion's ⋮⋮ — shown on hover, the handle the row is
+ *  dragged by. Only the grip is draggable: the row around it selects text
+ *  and takes clicks. Focused, its arrows step the row up or down by one —
+ *  the keyboard's own reorder, no pointer needed. `ghost` names the
+ *  element whose picture the drag carries (the whole row, not the grip). */
+function RowGrip({
+  row,
+  ghost,
+  onDragStart,
+  onDragEnd,
+  onMove,
+}: {
+  row: NotePage;
+  ghost: string;
+  onDragStart?(event: ReactDragEvent<HTMLElement>): void;
+  onDragEnd?(): void;
+  onMove(step: -1 | 1): void;
+}) {
+  return (
+    <button
+      type="button"
+      className="row-grip"
+      draggable
+      aria-label={`Reorder ${row.title || "Untitled"} — use arrow keys to move`}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData(ROW_DRAG, row.id);
+        const image = event.currentTarget.closest<HTMLElement>(ghost);
+        if (image) event.dataTransfer.setDragImage(image, 10, 10);
+        onDragStart?.(event);
+      }}
+      onDragEnd={() => onDragEnd?.()}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowUp") {
+          event.preventDefault();
+          onMove(-1);
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault();
+          onMove(1);
+        }
+      }}
+    >
+      <GripVertical size={14} />
+    </button>
+  );
+}
+
 /** What a row offers when it is pointed at: Notion's Open — the row as the
  *  page it is, beside, in the side peek; ⌘/Ctrl, whole. */
 function RowActions({ row, onOpen }: { row: NotePage; onOpen(pageId: string, full?: boolean): void }) {
@@ -453,6 +507,13 @@ interface LayoutProps {
   onAdd(values?: Record<string, string>): void;
   /** A viewer's copy: nothing in it adds, moves, renames or edits a cell. */
   readOnly: boolean;
+  /** Rows may be dragged into order: the view is writable and nothing — a
+   *  sort, a filter, a search — is choosing or hiding part of their order. */
+  reorderable: boolean;
+  /** A row dropped beside `boundaryId` (before or after it), or last when
+   *  `boundaryId` is null. `seed` gives the group the row landed in — its
+   *  property id and the value to write there — when the drop was into one. */
+  onReorderRow(rowId: string, boundaryId: string | null, place: "before" | "after", seed?: { propertyId: string; value: string }): void;
 }
 
 /** A column's head: its mark and its name. Pressed, it opens the column's
@@ -609,6 +670,8 @@ function TableLayout({
   onColumnMenu,
   onResize,
   onReorder,
+  onReorderRow,
+  reorderable,
   groups,
   groupedBy,
   onCalc,
@@ -729,14 +792,89 @@ function TableLayout({
     return next;
   });
 
+  /* A row being dragged and the gap it hovers over. Neither is state: the
+     body below is memoised (redrawing every cell for every hovered row is
+     what the memo is there to prevent), so the drag is tracked in refs and
+     the drop line is drawn by marking the hovered <tr> itself — a DOM mark
+     the next render does not disturb, cleared when the drag ends. */
+  const rowDrag = useRef<string | null>(null);
+  const rowSpot = useRef<{
+    el: HTMLElement;
+    rowId: string | null;
+    place: "before" | "after";
+    seed?: { propertyId: string; value: string };
+  } | null>(null);
+  const clearRowSpot = () => {
+    rowSpot.current?.el.classList.remove("is-rdrop-before", "is-rdrop-after");
+    rowSpot.current = null;
+  };
+  /* The value a row dropped in `group` should take from the property the
+     view groups by — its seed, or "" for the no-value group; undefined on a
+     flat view, where nothing is seeded. */
+  const seedOf = (group: ViewGroup | undefined): { propertyId: string; value: string } | undefined =>
+    groupedBy && group ? { propertyId: groupedBy.id, value: group.seed ?? "" } : undefined;
+  const markRowSpot = (el: HTMLElement, row: NotePage, group: ViewGroup | undefined, event: ReactDragEvent<HTMLElement>) => {
+    const place: "before" | "after" = event.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2 ? "before" : "after";
+    if (rowSpot.current?.rowId === row.id && rowSpot.current.place === place) return;
+    clearRowSpot();
+    el.classList.add(place === "before" ? "is-rdrop-before" : "is-rdrop-after");
+    rowSpot.current = { el, rowId: row.id, place, seed: seedOf(group) };
+  };
+  /* A group header takes a drop as "into the group, after its last row" —
+     the one way into an empty group, which has no row to land beside. */
+  const markGroupSpot = (el: HTMLElement, group: ViewGroup) => {
+    clearRowSpot();
+    el.classList.add("is-rdrop-after");
+    const last = group.rows[group.rows.length - 1];
+    rowSpot.current = { el, rowId: last ? last.id : null, place: "after", seed: seedOf(group) };
+  };
+  const rowOver = (row: NotePage, group: ViewGroup | undefined) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current || rowDrag.current === row.id) return;
+    event.preventDefault();
+    markRowSpot(event.currentTarget, row, group, event);
+  };
+  const headOver = (group: ViewGroup) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current) return;
+    event.preventDefault();
+    markGroupSpot(event.currentTarget, group);
+  };
+  const rowOut = () => {
+    if (rowDrag.current) clearRowSpot();
+  };
+  const rowDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current) return;
+    event.preventDefault();
+    const spot = rowSpot.current;
+    onReorderRow(rowDrag.current, spot?.rowId ?? null, spot?.place ?? "after", spot?.seed);
+    clearRowSpot();
+    rowDrag.current = null;
+  };
+  /* A row stepped by its focused grip: one place — before or after its
+     immediate neighbour — in the group it belongs to, or in the whole
+     list ungrouped. A row at the edge steps nowhere. */
+  const stepRow = (row: NotePage, group: ViewGroup | undefined, step: -1 | 1) => {
+    const sequence = groupedBy && group ? group.rows : rows;
+    const at = sequence.findIndex((item) => item.id === row.id);
+    const neighbour = sequence[at + step];
+    if (at < 0 || !neighbour) return;
+    onReorderRow(row.id, neighbour.id, step < 0 ? "before" : "after", seedOf(group));
+  };
+
   /* The rows, kept while only a width changes: a drag redraws the columns,
      never every cell. Grouped, each group opens with its header — chevron,
      value and count — and its rows fold under it; a column counting in the
      footer puts its own subtotal under each group. */
   const body = useMemo(() => {
     const keptToOneLine = new Set(oneLine.split("\n"));
-    const rowTr = (row: NotePage, foldedIn: string) => (
-      <tr key={`${foldedIn}${row.id}`} className={`${foldedIn ? "is-folded" : ""} ${peekId === row.id ? "is-peeked" : ""}`} data-page-id={row.id}>
+    const rowTr = (row: NotePage, group: ViewGroup | undefined, foldedIn: string) => (
+      <tr
+        key={`${foldedIn}${row.id}`}
+        className={`${foldedIn ? "is-folded" : ""} ${peekId === row.id ? "is-peeked" : ""}`}
+        data-page-id={row.id}
+        onDragOver={reorderable ? rowOver(row, group) : undefined}
+        onDragLeave={reorderable ? rowOut : undefined}
+        onDrop={reorderable ? rowDrop : undefined}
+      >
         {/* The name is a link to the page, as Notion's is; the cell
             around it is where the name is typed — all of it, below a
             short name in a row that another cell's words make tall too. */}
@@ -745,6 +883,15 @@ function TableLayout({
           onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
         >
           <div className={`db__row-name ${namesWrap ? "is-wrapped" : ""}`}>
+            {reorderable && row.id !== renamingId ? (
+              <RowGrip
+                row={row}
+                ghost="tr"
+                onDragStart={() => { rowDrag.current = row.id; }}
+                onDragEnd={() => { rowDrag.current = null; clearRowSpot(); }}
+                onMove={(step) => stepRow(row, group, step)}
+              />
+            ) : null}
             <RowName
               row={row}
               mark={minimal ? null : bare.has(row.id) ? <span className="db__row-icon" aria-hidden="true" /> : <RowPageMark row={row} className="db__row-icon" size={14} onOpen={onOpen} />}
@@ -788,7 +935,12 @@ function TableLayout({
               ? <><Avatar name={group.value} size={16} />{group.value}</>
               : groupedBy.type === "date" ? formatDay(group.value) : group.value;
       return (
-        <tr className="grp-row">
+        <tr
+          className="grp-row"
+          onDragOver={reorderable && groupedBy ? headOver(group) : undefined}
+          onDragLeave={reorderable && groupedBy ? rowOut : undefined}
+          onDrop={reorderable && groupedBy ? rowDrop : undefined}
+        >
           <td className="db__name">
             <div className="grp-h">
               <button
@@ -825,12 +977,14 @@ function TableLayout({
         {groups.length > 1 || groupedBy ? groups.map((group) => (
           <Fragment key={`${groupedBy?.id ?? ""}~${group.key}`}>
             {groupHead(group)}
-            {group.rows.map((row) => rowTr(row, foldedGroups.has(group.key) ? "1" : ""))}
+            {group.rows.map((row) => rowTr(row, group, foldedGroups.has(group.key) ? "1" : ""))}
           </Fragment>
-        )) : rows.map((row) => rowTr(row, ""))}
+        )) : rows.map((row) => rowTr(row, groups[0], ""))}
       </tbody>
     );
-  }, [bare, foldedGroups, groupedBy, groups, minimal, namesWrap, onAddInline, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, rows, titleLabel, view.calcs]);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps — the row drag
+       helpers are stable refs-and-callbacks closed over the render. */
+  }, [bare, foldedGroups, groupedBy, groups, minimal, namesWrap, onAddInline, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, reorderable, rows, titleLabel, view.calcs]);
 
   return (
     <div className="db__table-wrap scroller">
@@ -923,16 +1077,25 @@ function BoardLayout({
   properties,
   property,
   onOpen,
-  onMove,
   renamingId,
   onStartRename,
   onStopRename,
   onRename,
   onAddInline,
   readOnly,
-}: LayoutProps & CardEditing & { property: DatabaseProperty; onMove(row: NotePage, value: string): void }) {
+  reorderable,
+  onReorderRow,
+}: LayoutProps & CardEditing & { property: DatabaseProperty }) {
   const [dragRowId, setDragRowId] = useState<string | null>(null);
   const [dropColumn, setDropColumn] = useState<string | null>(null);
+  /* The card-to-card gap the drag hovers over, when the rows' own order is
+     free to be changed; marked on the card itself, kept in a ref so the
+     column needs no render for every hovered card. */
+  const cardSpot = useRef<{ el: HTMLElement; rowId: string; place: "before" | "after" } | null>(null);
+  const clearCardSpot = () => {
+    cardSpot.current?.el.classList.remove("is-rdrop-before", "is-rdrop-after");
+    cardSpot.current = null;
+  };
   const options = propertyOptions(property);
   // A select can be unset; a status cannot (it reads as its first option). The
   // "No value" column is drawn only while something is in it — an empty extra
@@ -940,12 +1103,32 @@ function BoardLayout({
   const unset = property.type === "select" ? rows.filter((row) => !propertyValue(row, property)) : [];
   const columns = unset.length ? ["", ...options] : options;
 
+  /* A drop ends one of two ways: beside a card — its place in the order and
+     the column's value — or on the column's own space — last in it, still
+     taking its value. Sorts or a filter make the in-between line a lie the
+     dragged card could never land on, so only the column takes the drop. */
+  const dropColumnSeed = (value: string) => ({ propertyId: property.id, value });
   const onDrop = (value: string) => (event: ReactDragEvent<HTMLElement>) => {
     event.preventDefault();
+    const spot = cardSpot.current;
     setDropColumn(null);
+    clearCardSpot();
     const row = rows.find((item) => item.id === dragRowId);
     setDragRowId(null);
-    if (row) onMove(row, value);
+    if (!row) return;
+    if (spot) onReorderRow(row.id, spot.rowId, spot.place, dropColumnSeed(value));
+    else if (reorderable) onReorderRow(row.id, null, "after", dropColumnSeed(value));
+    else onReorderRow(row.id, row.id, "after", dropColumnSeed(value));
+  };
+  const cardOver = (row: NotePage) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!dragRowId || dragRowId === row.id) return;
+    event.preventDefault();
+    const el = event.currentTarget;
+    const place: "before" | "after" = event.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2 ? "before" : "after";
+    if (cardSpot.current?.rowId === row.id && cardSpot.current.place === place) return;
+    clearCardSpot();
+    el.classList.add(place === "before" ? "is-rdrop-before" : "is-rdrop-after");
+    cardSpot.current = { el, rowId: row.id, place };
   };
 
   return (
@@ -989,10 +1172,15 @@ function BoardLayout({
                   draggable={!renaming && !readOnly}
                   onDragStart={(event) => {
                     event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("text/x-notes-row", row.id);
+                    event.dataTransfer.setData(ROW_DRAG, row.id);
                     setDragRowId(row.id);
                   }}
-                  onDragEnd={() => { setDragRowId(null); setDropColumn(null); }}
+                  onDragEnd={() => { setDragRowId(null); setDropColumn(null); clearCardSpot(); }}
+                  onDragOver={reorderable ? cardOver(row) : undefined}
+                  /* The column's drop would also see this one bubble up:
+                     stop it, or the card lands beside its neighbour and is
+                     then moved on to the column's end. */
+                  onDrop={reorderable ? (event) => { event.stopPropagation(); onDrop(value)(event); } : undefined}
                 >
                   <CardTitle
                     row={row}
@@ -1126,6 +1314,8 @@ function ListLayout({
   onAddInline,
   onRename,
   readOnly,
+  reorderable,
+  onReorderRow,
   titleLabel,
   groups,
   groupedBy,
@@ -1144,8 +1334,82 @@ function ListLayout({
     else next.add(key);
     return next;
   });
-  const listRow = (row: NotePage) => (
-    <div key={row.id} className={`db-list__row ${peekId === row.id ? "is-peeked" : ""}`} data-page-id={row.id}>
+
+  /* The table's own drag, row for row: the dragged row and the gap it
+     hovers over live in refs, the drop line is a class the hovered row is
+     marked with — nothing here is memoised, but rows still skip a render
+     for every hovered line this way. */
+  const rowDrag = useRef<string | null>(null);
+  const rowSpot = useRef<{
+    el: HTMLElement;
+    rowId: string | null;
+    place: "before" | "after";
+    seed?: { propertyId: string; value: string };
+  } | null>(null);
+  const clearRowSpot = () => {
+    rowSpot.current?.el.classList.remove("is-rdrop-before", "is-rdrop-after");
+    rowSpot.current = null;
+  };
+  const seedOf = (group: ViewGroup | undefined): { propertyId: string; value: string } | undefined =>
+    groupedBy && group ? { propertyId: groupedBy.id, value: group.seed ?? "" } : undefined;
+  const markRowSpot = (el: HTMLElement, row: NotePage, group: ViewGroup | undefined, event: ReactDragEvent<HTMLElement>) => {
+    const place: "before" | "after" = event.clientY < el.getBoundingClientRect().top + el.offsetHeight / 2 ? "before" : "after";
+    if (rowSpot.current?.rowId === row.id && rowSpot.current.place === place) return;
+    clearRowSpot();
+    el.classList.add(place === "before" ? "is-rdrop-before" : "is-rdrop-after");
+    rowSpot.current = { el, rowId: row.id, place, seed: seedOf(group) };
+  };
+  const markGroupSpot = (el: HTMLElement, group: ViewGroup) => {
+    clearRowSpot();
+    el.classList.add("is-rdrop-after");
+    const last = group.rows[group.rows.length - 1];
+    rowSpot.current = { el, rowId: last ? last.id : null, place: "after", seed: seedOf(group) };
+  };
+  const rowOver = (row: NotePage, group: ViewGroup | undefined) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current || rowDrag.current === row.id) return;
+    event.preventDefault();
+    markRowSpot(event.currentTarget, row, group, event);
+  };
+  const headOver = (group: ViewGroup) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current) return;
+    event.preventDefault();
+    markGroupSpot(event.currentTarget, group);
+  };
+  const rowOut = () => { if (rowDrag.current) clearRowSpot(); };
+  const rowDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!rowDrag.current) return;
+    event.preventDefault();
+    const spot = rowSpot.current;
+    onReorderRow(rowDrag.current, spot?.rowId ?? null, spot?.place ?? "after", spot?.seed);
+    clearRowSpot();
+    rowDrag.current = null;
+  };
+  const stepRow = (row: NotePage, group: ViewGroup | undefined, step: -1 | 1) => {
+    const sequence = groupedBy && group ? group.rows : rows;
+    const at = sequence.findIndex((item) => item.id === row.id);
+    const neighbour = sequence[at + step];
+    if (at < 0 || !neighbour) return;
+    onReorderRow(row.id, neighbour.id, step < 0 ? "before" : "after", seedOf(group));
+  };
+
+  const listRow = (row: NotePage, group: ViewGroup | undefined) => (
+    <div
+      key={row.id}
+      className={`db-list__row ${peekId === row.id ? "is-peeked" : ""}`}
+      data-page-id={row.id}
+      onDragOver={reorderable ? rowOver(row, group) : undefined}
+      onDragLeave={reorderable ? rowOut : undefined}
+      onDrop={reorderable ? rowDrop : undefined}
+    >
+      {reorderable && row.id !== renamingId ? (
+        <RowGrip
+          row={row}
+          ghost=".db-list__row"
+          onDragStart={() => { rowDrag.current = row.id; }}
+          onDragEnd={() => { rowDrag.current = null; clearRowSpot(); }}
+          onMove={(step) => stepRow(row, group, step)}
+        />
+      ) : null}
       <span
         className={`db-list__name ${readOnly ? "" : "is-renamable"}`}
         onClick={(event) => renameOnFreeSpace(event, row, readOnly, onStartRename)}
@@ -1180,7 +1444,12 @@ function ListLayout({
   const groupHead = (group: ViewGroup) => {
     const closed = folded.has(group.key);
     return (
-      <div className="db-list__group grp-h">
+      <div
+        className="db-list__group grp-h"
+        onDragOver={reorderable && groupedBy ? headOver(group) : undefined}
+        onDragLeave={reorderable && groupedBy ? rowOut : undefined}
+        onDrop={reorderable && groupedBy ? rowDrop : undefined}
+      >
         <button
           type="button"
           className="grp-h__toggle"
@@ -1205,9 +1474,9 @@ function ListLayout({
       {groupedBy ? groups.map((group) => (
         <Fragment key={`${groupedBy.id}~${group.key}`}>
           {groupHead(group)}
-          {folded.has(group.key) ? null : group.rows.map(listRow)}
+          {folded.has(group.key) ? null : group.rows.map((row) => listRow(row, group))}
         </Fragment>
-      )) : rows.map(listRow)}
+      )) : rows.map((row) => listRow(row, groups[0]))}
       <button type="button" className="db__add-row" onClick={() => onAddInline()}>
         <Plus size={15} />New
       </button>
@@ -1258,7 +1527,43 @@ function GalleryLayout({
   onRename,
   onAddInline,
   readOnly,
+  reorderable,
+  onReorderRow,
 }: LayoutProps & CardEditing & { preview: CardPreview }) {
+  /* The flat list's drag, card for card: the spot is a vertical edge marked
+     on the card it would land beside. */
+  const cardDrag = useRef<string | null>(null);
+  const cardSpot = useRef<{ el: HTMLElement; rowId: string; place: "before" | "after" } | null>(null);
+  const clearCardSpot = () => {
+    cardSpot.current?.el.classList.remove("is-rdrop-before", "is-rdrop-after");
+    cardSpot.current = null;
+  };
+  const cardOver = (row: NotePage) => (event: ReactDragEvent<HTMLElement>) => {
+    if (!cardDrag.current || cardDrag.current === row.id) return;
+    event.preventDefault();
+    const el = event.currentTarget;
+    const place: "before" | "after" = event.clientX < el.getBoundingClientRect().left + el.offsetWidth / 2 ? "before" : "after";
+    if (cardSpot.current?.rowId === row.id && cardSpot.current.place === place) return;
+    clearCardSpot();
+    el.classList.add(place === "before" ? "is-rdrop-before" : "is-rdrop-after");
+    cardSpot.current = { el, rowId: row.id, place };
+  };
+  const cardOut = () => { if (cardDrag.current) clearCardSpot(); };
+  const cardDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!cardDrag.current) return;
+    event.preventDefault();
+    const spot = cardSpot.current;
+    onReorderRow(cardDrag.current, spot?.rowId ?? null, spot?.place ?? "after");
+    clearCardSpot();
+    cardDrag.current = null;
+  };
+  const stepRow = (row: NotePage, step: -1 | 1) => {
+    const at = rows.findIndex((item) => item.id === row.id);
+    const neighbour = rows[at + step];
+    if (at < 0 || !neighbour) return;
+    onReorderRow(row.id, neighbour.id, step < 0 ? "before" : "after");
+  };
+
   return (
     <div className={`db-gallery ${preview.kind === "none" ? "db-gallery--bare" : ""}`}>
       {rows.map((row) => {
@@ -1268,7 +1573,19 @@ function GalleryLayout({
             key={row.id}
             className={`db-card ${peekId === row.id ? "is-peeked" : ""} ${renaming ? "is-renaming" : ""}`}
             data-page-id={row.id}
+            onDragOver={reorderable ? cardOver(row) : undefined}
+            onDragLeave={reorderable ? cardOut : undefined}
+            onDrop={reorderable ? cardDrop : undefined}
           >
+            {reorderable && !renaming ? (
+              <RowGrip
+                row={row}
+                ghost=".db-card"
+                onDragStart={() => { cardDrag.current = row.id; }}
+                onDragEnd={() => { cardDrag.current = null; clearCardSpot(); }}
+                onMove={(step) => stepRow(row, step)}
+              />
+            ) : null}
             <CardTop row={row} preview={preview} />
             <span className="db-card__body">
               <CardTitle
@@ -1672,6 +1989,32 @@ export function DatabaseView({
     saveConfig(moveProperty(config, propertyId, at + (place === "after" ? 1 : 0)));
   };
 
+  /* A dragged row lands between two neighbours: its `row_order` takes the
+     gap's midpoint — the whole database's rows bound the gap, so a row the
+     view hides still counts. A drop into a group — a board's column, or a
+     table's or list's group — writes the group's value to the row in the
+     same commit, so the move and the reseeding are one undo. */
+  const reorderRow = (rowId: string, boundaryId: string | null, place: "before" | "after", seed?: { propertyId: string; value: string }) => {
+    if (readOnly) return;
+    const moved = moveRowOrder(allRows, rowId, boundaryId, place, Date.now());
+    if (!moved && !seed) return;
+    const pages = document?.state.pages ?? {};
+    const patch: PagePatch = {};
+    if (seed) Object.assign(patch, rowValues(allRows.find((row) => row.id === rowId)!, { [seed.propertyId]: seed.value }));
+    if (moved) patch.row_order = moved.row_order;
+    const mutations = pagePatchMutations(pages, author, rowId, patch);
+    if (moved?.rewrite) {
+      for (const [id, order] of Object.entries(moved.rewrite)) {
+        if (id !== rowId) mutations.push(...pagePatchMutations(pages, author, id, { row_order: order }));
+      }
+    }
+    if (mutations.length) commitWrites(mutations);
+  };
+  /* A row may be dragged into order only while the view draws them all in
+     their own order: no sort to overrule it, no filter or search to hide
+     part of the sequence it would be dropped into. */
+  const reorderable = !readOnly && sorts.length === 0 && filters === 0 && !deferredQuery;
+
   const addView = (kind: DatabaseViewKind) => {
     const created = createView(createId("view"), kind, config, newPropertyId);
     saveConfig(created.config);
@@ -1968,7 +2311,7 @@ export function DatabaseView({
     selectPage(id);
     closePeek();
   };
-  const layoutProps: LayoutProps = { rows, properties, bare, peekId: peeked, onOpen: openRow, onAdd: addRow, readOnly };
+  const layoutProps: LayoutProps = { rows, properties, bare, peekId: peeked, onOpen: openRow, onAdd: addRow, readOnly, reorderable, onReorderRow: reorderRow };
 
   /* A row's own menu, from a right-click on it in any view: Open — the row
      as the page it is — and Delete. */
@@ -2068,7 +2411,6 @@ export function DatabaseView({
         {...layoutProps}
         {...cardEditing}
         property={board}
-        onMove={(row, value) => setProperty(row, board.id, value)}
       />
     );
   } else if (view.kind === "list") {
@@ -2114,6 +2456,8 @@ export function DatabaseView({
         onColumnMenu={(column, anchor) => setMenu({ kind: "column", column, anchor })}
         onResize={(column, width) => saveView(withColumnWidth(view, column, width))}
         onReorder={reorderProperty}
+        onReorderRow={reorderRow}
+        reorderable={reorderable}
       />
     );
   }
