@@ -2,8 +2,8 @@ import * as Y from "yjs";
 import { ApiError, request } from "../platform/http";
 import type { RichText } from "../platform/schema";
 import { parseBlockRecordId } from "../platform/record-ids";
-import { editObservedField, installTextLookup, type RegisteredField } from "./binding";
-import { captureText, editText, readFields, readText, rebaseText } from "./text";
+import { editObservedField, installTextLookup, observedText, type RegisteredField } from "./binding";
+import { basisText, captureText, editText, readFields, readText, rebaseText } from "./text";
 import { publishRecovery } from "./recovery";
 import { nextHistoryOrder } from "../core/history-clock";
 import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, fieldsInPage, pageRevision, setAt, valueAt, type CommitEvent, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "./protocol";
@@ -446,11 +446,23 @@ export function localRecordText(scope: string, collection: string, id: string, b
   if (!session || !session.snapshot.canEdit || collection !== "pages" && collection !== "blocks") {
     return null;
   }
+  const observed = observedText();
   const changed = [...session.doc.getMap<Y.Text>("fields")].flatMap(([key, text]) => {
     const address = fieldAddress(key); if (address?.collection !== collection || address.id !== id) return [];
     const old = valueAt(before, address.path); const next = valueAt(after, address.path);
-    const desired = Array.isArray(next) ? next as RichText : [];
-    return JSON.stringify(Array.isArray(old) ? old : []) !== JSON.stringify(desired) ? [{ key, text, next: desired }] : [];
+    let desired = Array.isArray(next) ? next as RichText : [];
+    const base = Array.isArray(old) ? old as RichText : [];
+    /* A DOM-driven write on an observed field may carry a stale view: the
+       shared text can hold words the DOM never drew (a peer's merge or a
+       reset seed). Re-basing the shown intent onto the live text merges
+       instead of silently re-removing them — the same migration resyncSession
+       runs for pending writes. Only the observed basis tells the DOM's view:
+       structural and non-observed writes keep their authored intent. */
+    if (observed?.field.text === text) {
+      const live = readText(text); const seen = basisText(observed.basis);
+      if (JSON.stringify(seen) !== JSON.stringify(live)) desired = rebaseText(seen, desired, live);
+    }
+    return JSON.stringify(base) === JSON.stringify(desired) ? [] : [{ key, text, next: desired }];
   });
   if (!changed.length) return null;
   const vector = Y.encodeStateVector(session.doc);

@@ -480,6 +480,23 @@ test("a real restore during native composition keeps the old DOM out of the new 
   await cdp.detach(); await openEditor(pair, pair.owner, "恢复目标");
 });
 
+test("the first edit after a peer's restore lands and keeps the restored words", async ({ app }) => {
+  const pair = await app.pair("协作测试页");
+  const version = await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/checkpoint`, { method: "POST", token: pair.token, data: { summary: "回归版本" } });
+  await focusEdge(title(pair), "end"); await pair.owner.keyboard.insertText("甲");
+  await expect.poll(async () => (await dto(pair)).title).toBe("协作测试页甲");
+  const baseline = await current(pair); const frame = pair.ownerWire.received.length;
+  await api(pair.peerContext, pair.url, `/api/v1/pages/${pair.pageId}/restore`, { method: "POST", token: pair.peerToken, data: { versionId: version.id } });
+  await pair.ownerWire.sawReset(pair.pageId, baseline.generation, frame);
+  /* Whichever side of the resync this keystroke lands on, the intent must
+     survive: a stale binding may not eat the input, and a stale-DOM commit
+     may not replay the pre-restore words over the restored ones. */
+  await focusEdge(title(pair), "end"); await pair.owner.keyboard.insertText("乙");
+  await expect.poll(async () => (await dto(pair)).title).toBe("协作测试页乙");
+  await expect(title(pair)).toHaveText("协作测试页乙"); await expect(title(pair, pair.peer)).toHaveText("协作测试页乙");
+  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
+});
+
 test("native Enter and Backspace retain structural undo and redo for split and merge", async ({ app }) => {
   const pair = await app.pair("前半后半");
   await focusEdge(body(pair), "start"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight");

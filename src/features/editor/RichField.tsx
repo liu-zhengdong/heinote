@@ -213,11 +213,24 @@ export function RichField({
     if (previous) {
       const current = refreshTextBinding(previous);
       if (!current) {
-        if (ref.current) saveDraft({ bound: previous, content: shownWords(ref.current, grammar) });
-        sync.current();
-        return false;
+        const live = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
+        if (live) {
+          /* A replaced generation whose seeded words differ from what the
+             DOM shows. Adopt the new field, re-sync the DOM to it and let
+             the action land — the commit path re-bases stale intent onto
+             the new text, and refused commits still reach the drafts. */
+          bound.current = live;
+          sync.current();
+          previous = bound.current;
+        } else {
+          /* No live shared field: the words run on the plain record path,
+             so nothing may eat this input. */
+          bound.current = null;
+          previous = null;
+        }
+      } else {
+        previous = current; bound.current = current;
       }
-      previous = current; bound.current = current;
     }
     const updated = withTextBasis(previous, action);
     if (bound.current === previous) bound.current = updated;
