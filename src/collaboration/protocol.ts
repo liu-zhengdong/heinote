@@ -70,7 +70,10 @@ export function hasMetadataChange(collection: string, before: JsonRecord | undef
   if (collection !== "pages" && collection !== "blocks") return false;
   if (!before || !after) return true;
   const strip = (record: JsonRecord): JsonRecord => {
-    const copy = { ...record }; delete copy.content; delete copy.title_content; delete copy.title; delete copy.updated_at; delete copy.updated_by;
+    /* Edit stamps move with every keystroke; treating them as metadata
+     *  would mark every plain write "mixed" and leave a record step behind
+     *  the text step — undoing either half then replays the other's words. */
+    const copy = { ...record }; delete copy.content; delete copy.title_content; delete copy.title; delete copy.updated_at; delete copy.updated_by; delete copy.edited_at; delete copy.edited_by;
     if (isObject(copy.table) && isObject(copy.table.rows)) copy.table = { ...copy.table, rows: Object.fromEntries(Object.entries(copy.table.rows).map(([id, row]) => { if (!isObject(row)) return [id, row]; const { cells: _cells, ...metadata } = row; return [id, metadata]; })) };
     return copy;
   };

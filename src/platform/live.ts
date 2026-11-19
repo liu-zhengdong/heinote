@@ -3,7 +3,7 @@ import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { parseBlockRecordId } from "./record-ids";
-import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, protectSettledRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
@@ -311,9 +311,16 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
        the server refuses without — and the session that names it only opens
        on demand now. Open it and attach the basis before the write goes. */
     const addressed = new Set(batch.expectedPages.map((basis) => documentKey(basis)));
+    /* A page this batch creates cannot have a collaborative document yet:
+     *  the document initializes with the page record's commit, which is this
+     *  very batch. Waiting for a session would deadlock the write, so a
+     *  `pages` write with no base marks the page as creation and skips the
+     *  basis entirely — the server asks for none on a page with no document. */
+    const creating = new Set(items.flatMap((item) => item.write?.collection === "pages" && item.write.action !== "delete" && !item.write.base ? [documentKey({ scope: item.write.scope, pageId: item.write.id })] : []));
     for (const item of items) {
       const pageId = item.write ? pageOf(item.write) : undefined;
       if (!item.structural || !item.write || !pageId || addressed.has(documentKey({ scope: item.write.scope, pageId }))) continue;
+      if (creating.has(documentKey({ scope: item.write.scope, pageId }))) { addressed.add(documentKey({ scope: item.write.scope, pageId })); continue; }
       await awaitCollaborativeBasis(item.write.scope, pageId);
       const basis = pageBasis(item.write.scope, pageId);
       if (basis) { batch.expectedPages.push(basis); addressed.add(documentKey(basis)); }
@@ -612,10 +619,10 @@ export class LiveCollection<R extends object> {
     if (!snapshot.records || this.closed) return;
     this.epoch += 1;
     const fresh = (id: string) => (this.settled.get(id) ?? 0) + 30_000 > Date.now();
-    if (this.name === "pages") { if (!fresh(snapshot.pageId)) this.remote.set(snapshot.pageId, snapshot.records.page as R); }
+    if (this.name === "pages") { if (!fresh(snapshot.pageId)) this.remote.set(snapshot.pageId, snapshot.records.page as R); else protectSettledRecord(snapshot.scope, "pages", snapshot.pageId); }
     if (this.name === "blocks") {
       for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId && !fresh(id)) this.remote.delete(id);
-      for (const row of snapshot.records.blocks) if (!fresh(row.id)) this.remote.set(row.id, row.value as R);
+      for (const row of snapshot.records.blocks) if (!fresh(row.id)) this.remote.set(row.id, row.value as R); else protectSettledRecord(snapshot.scope, "blocks", row.id);
       // A snapshot is authoritative page content: the page counts as loaded
       // even without an explicit subscription (UC-48).
       if (this.lazy && !this.pageWatermarks.has(snapshot.pageId))

@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ClipboardEvent,
   type CompositionEvent,
   type FormEvent,
@@ -13,7 +14,7 @@ import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, ty
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
 import type { RichText } from "../../platform/schema";
-import { fieldChainExternal, fieldIsOurs, fieldIsSettledEcho, fieldStale } from "../../collaboration/client";
+import { collaborationFieldTick, fieldIsOurs, fieldStale, subscribeCollaboration } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import { editableHtml } from "./block-html";
@@ -70,6 +71,14 @@ export const InlineEditor = memo(function InlineEditor({
   const lastInput = useRef<InlineContent | null>(null);
   const compositionTimer = useRef<number | null>(null);
   const compositionFrame = useRef<number | null>(null);
+  /* A collaborative change that never moves this block's record still has
+   *  to resync: the bound Y.Text lives outside the record prop, so without
+   *  a per-field subscription a remote delta under an unchanged record
+   *  leaves the DOM frozen at whatever the last render decided. */
+  const collaborationTick = useSyncExternalStore(
+    subscribeCollaboration,
+    () => collaboration ? collaborationFieldTick(collaboration.pageId, collaboration.key) : "none",
+  );
   const commit = useRef<(element: HTMLElement) => void>(() => {});
   const compositionDraft = useRef<{ bound: BoundText | null; content: InlineContent; address?: { pageId: string; key: string } } | null>(null);
   /** The HTML last written into a focused code block, to tell a redraw that
@@ -114,11 +123,16 @@ export const InlineEditor = memo(function InlineEditor({
     if (previous) {
       const current = refreshTextBinding(previous);
       if (!current) {
+        /* A dead binding (stale session, generation swap) must not swallow
+           the action: the event still has to reach onKeyDown/onPaste so the
+           record write lands. The binding itself stays dead — its DOM was
+           never drawn from the new document's atoms, so a commit authored
+           from it is refused into a draft instead of laundered into a
+           fresh-generation write over text it predates. */
         if (ref.current) saveDraft({ bound: previous, content: readDom(ref.current) });
-        sync.current(true);
-        return false;
+      } else {
+        previous = current; bound.current = current;
       }
-      previous = current; bound.current = current;
     }
     const updated = withTextBasis(previous, action);
     // A synchronous render may already have drawn and captured newer runs.
@@ -190,7 +204,13 @@ export const InlineEditor = memo(function InlineEditor({
        *  its way back, and the DOM already carries at least that. */
       const boundRuns = nextBound ? readText(nextBound.field.text) : null;
       const chain: { next?: RichText } = {};
-      const stale = boundRuns !== null && collaboration != null && fieldStale(collaboration.pageId, collaboration.key);
+      /* A bound equal to the record prop cannot be a lagging echo: both
+       *  mirror the same committed record, so the field already carries
+       *  current truth. Stale only matters while the field lags the
+       *  record — then redrawing it would tear the newer text. */
+      const stale = boundRuns !== null && collaboration != null
+        && !sameInlineContent(contentOfRuns(boundRuns), block.content)
+        && fieldStale(collaboration.pageId, collaboration.key);
       const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
       /* While a write is in flight the field can only ever show chain
        *  values or their echoes; a bound matching neither is not newer —
@@ -204,28 +224,16 @@ export const InlineEditor = memo(function InlineEditor({
       const boundContent = remote && boundRuns && !sameInlineContent(contentOfRuns(boundRuns), block.content) ? null : remote && boundRuns ? contentOfRuns(boundRuns) : null;
       const showing = document.activeElement === element ? readDom(element) : null;
       const chainHead = chain.next ? contentOfRuns(chain.next) : null;
-      /* Only a write that bypassed this element's input path — undo, redo,
-       *  recovered pending text — may replace what a focused element
-       *  shows. Auto-pairs and menu writes ride the same record path as a
-       *  keystroke; touching the focused DOM for them scrambles an input
-       *  method's caret, so they stay "internal" and the DOM wins. */
-      const moved = collaboration != null && fieldChainExternal(collaboration.pageId, collaboration.key);
-      /* The DOM shows a programmatic value — never an edit — while it
-       *  still equals the truth, the chain head, the last settled write's
-       *  echo, or the value it last submitted. Undo leaves an older
-       *  submitted value in the element: still ours, so the truth may
-       *  replace it. A DOM the user is typing into — or one paused at an
-       *  earlier chain member — matches none of these and keeps itself. */
-      /* The DOM shows a programmatic value — never an edit — while it
-       *  still equals the chain head, the last settled write's echo, or
-       *  the value it last submitted. Undo leaves an older submitted
-       *  value standing: still ours, so the chain head replaces it. */
-      const domIsOurs = moved && boundContent === null && showing !== null && (
-        chainHead !== null && sameInlineContent(showing, chainHead)
-        || collaboration != null && fieldIsSettledEcho(collaboration.pageId, collaboration.key, storedRuns(showing))
-        || lastInput.current !== null && sameInlineContent(showing, lastInput.current)
-      );
-      const content = boundContent ?? (domIsOurs && chainHead !== null ? chainHead : showing ?? chainHead ?? block.content);
+      /* The focused DOM shows a programmatic value — never an edit — while
+       *  it carries the same text the element last submitted and the chain
+       *  carries nothing different. A write that settles this field to
+       *  something other than the submitted text — a split truncating the
+       *  element, undo, redo, recovered pending text — outranks the DOM:
+       *  the submitted text is then simply an older value, not user intent.
+       *  Plain typing submits the same text the chain holds, so nothing
+       *  mid-typing ever tears. */
+      const wroteElsewhere = chainHead !== null && (lastInput.current === null || !sameInlineContent(chainHead, lastInput.current));
+      const content = boundContent ?? (wroteElsewhere ? chainHead : showing ?? chainHead ?? block.content);
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {
@@ -255,7 +263,8 @@ export const InlineEditor = memo(function InlineEditor({
       lastInput.current = content;
     };
     sync.current();
-  }, [block, code, coloured, describe, collaboration?.pageId, collaboration?.key]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [block, code, coloured, describe, collaboration?.pageId, collaboration?.key, collaborationTick]);
 
   return (
     <Tag
