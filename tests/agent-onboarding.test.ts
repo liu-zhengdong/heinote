@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { test, type TestContext } from "node:test";
 import { startServer } from "../server/index.ts";
@@ -78,7 +79,13 @@ test("UC-52: /api/v1 响应带 describedby Link 指回导览", async (t) => {
 });
 
 test("UC-52: 嵌入内容与源文件同步（漂移则失败）", () => {
-  const root = resolve(dirname(new URL(import.meta.url).pathname), "..");
-  const out = execFileSync("node", ["scripts/gen-agent-onboarding.mjs", "--check"], { cwd: root, encoding: "utf8" });
+  // fileURLToPath, not URL.pathname: on Windows the pathname keeps the leading
+  // slash ("/C:/..."), so the resolved directory does not exist and the spawn
+  // fails with ENOENT instead of reporting a stale guide.
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  // Run the interpreter that runs this test: a bare "node" is not resolvable
+  // on every PATH (Windows and version-managed runtimes), so the check would
+  // fail for reasons that have nothing to do with the guide being stale.
+  const out = execFileSync(process.execPath, ["scripts/gen-agent-onboarding.mjs", "--check"], { cwd: root, encoding: "utf8" });
   assert.match(out, /in sync/);
 });

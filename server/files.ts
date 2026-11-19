@@ -108,7 +108,14 @@ export class FileStore {
     const directory = join(this.directory, hash.slice(0, 2));
     const destination = join(directory, hash);
     if (!existsSync(destination)) {
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      try {
+        mkdirSync(directory, { recursive: true, mode: 0o700 });
+      } catch (error) {
+        // Two uploads of the same content can both pass the check above and
+        // race here. Windows rejects the loser with EEXIST even though the
+        // shard directory now exists, which is the outcome we wanted.
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
       const temporary = join(directory, `.${randomUUID()}.tmp`);
       try {
         const descriptor = openSync(temporary, "wx", 0o600);
