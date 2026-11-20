@@ -8,6 +8,7 @@ import { MermaidDiagram } from "../editor/MermaidDiagram";
 import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
 import { AppSurface } from "../artifact/AppSurface";
+import { PublicDatabase } from "./PublicDatabase";
 
 interface PublicDocument { title: string; pages: NotePage[] }
 interface ReaderContext { token: string; pages: Map<string, NotePage> }
@@ -266,10 +267,12 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               active.app?.enabled
                 ? <AppSurface page={active} shareToken={token} />
                 : <p className="account-muted">小应用尚未启用。</p>
+            ) : active.kind === "database" ? (
+              <PublicDatabase database={active} pages={document?.pages ?? []} context={{ token, pages: context.pages, pageHref, pageTitle: titleOf, pageIcon: (page) => <PublicPageIcon page={page} token={token} size={16} /> }} />
             ) : (
               <BlockChildren tree={active.block_tree!} context={context} />
             )}
-            {document ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
+            {document && active.kind !== "database" ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
               <a key={page.id} href={pageHref(page.id)}><PublicPageIcon page={page} token={token} size={16} />{titleOf(page)}</a>)}</nav> : null}
           </div>
         </article>
