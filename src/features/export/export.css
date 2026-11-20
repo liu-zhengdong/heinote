@@ -1,6 +1,6 @@
 /* The export dialog's own layout: format cards, then the actions. */
 
-.export-dialog { max-width: 400px; }
+.export-dialog { width: min(400px, calc(100vw - 40px)); padding: 18px 18px 16px; margin-top: min(10vh, 40px); }
 .export-dialog__title { margin: 0 0 14px; font-size: 17px; font-weight: 650; color: var(--ink); overflow-wrap: anywhere; }
 .export-dialog__formats { display: grid; gap: 8px; }
 .export-dialog__format {
