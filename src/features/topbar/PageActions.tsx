@@ -3,6 +3,7 @@ import {
   Copy,
   CornerDownRight,
   CornerUpLeft,
+  FileDown,
   FolderInput,
   Link,
   MoreHorizontal,
@@ -25,6 +26,7 @@ import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { LAND_EVENT, requestLanding } from "../editor/landing";
 import { MoveToMenu } from "../editor/MoveToMenu";
+import { ExportDialog } from "../export/ExportDialog";
 import { PAGE_FONTS, pageFont } from "../editor/page-decoration";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { sameItems, usePage, useWorkspaceState } from "../../app/workspace-store";
@@ -80,6 +82,7 @@ export function PageActions({
   const [moreAnchor, setMoreAnchor] = useState<AnchorRect | null>(null);
   const [moveAnchor, setMoveAnchor] = useState<AnchorRect | null>(null);
   const [copyAnchor, setCopyAnchor] = useState<AnchorRect | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   // Where the page may go, read only while the picker is open.
   const moveTargets = useWorkspaceState(
     (state) => (moveAnchor ? Object.values(state.pages).filter((candidate) => canMovePage(page.id, candidate.id)) : null),
@@ -279,6 +282,9 @@ export function PageActions({
           {onHistory ? (
             <MenuItem icon={<Clock3 size={16} />} label="Page history" onSelect={() => { setMoreAnchor(null); onHistory(); }} />
           ) : null}
+          {page.kind !== "app" ? (
+            <MenuItem icon={<FileDown size={16} />} label="导出…" onSelect={() => { setMoreAnchor(null); setExportOpen(true); }} />
+          ) : null}
           <MenuDivider />
           {/* Where Notion keeps Undo too: in the page's own menu, with the
               shortcut that does the same thing from anywhere. */}
@@ -340,6 +346,8 @@ export function PageActions({
           onClose={() => setCopyAnchor(null)}
         />
       ) : null}
+
+      {exportOpen ? <ExportDialog page={page} onClose={() => setExportOpen(false)} /> : null}
     </>
   );
 }

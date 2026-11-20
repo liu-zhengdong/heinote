@@ -1,0 +1,23 @@
+/* The export dialog's own layout: format cards, then actions. */
+
+.export-dialog { max-width: 420px; }
+.export-dialog__title { margin: 0 0 14px; font-size: 17px; font-weight: 650; color: var(--ink); overflow-wrap: anywhere; }
+.export-dialog__formats { display: grid; gap: 8px; }
+.export-dialog__format {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  border: 1px solid var(--hairline-strong); border-radius: var(--r-md);
+  background: var(--paper); color: var(--ink); text-align: left; cursor: pointer;
+  font: inherit; transition: background var(--t-fast), border-color var(--t-fast);
+}
+.export-dialog__format:hover { background: var(--fill-hover); }
+.export-dialog__format.is-on { border-color: var(--blue); background: var(--blue-tint); }
+.export-dialog__format svg { flex: none; color: var(--ink-3); }
+.export-dialog__format.is-on svg { color: var(--blue); }
+.export-dialog__format-label { flex: none; font-size: 14px; font-weight: 550; }
+.export-dialog__format-hint { font-size: 12px; color: var(--ink-3); }
+.export-dialog__view {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px;
+  font-size: 13px; color: var(--ink-2);
+}
+.export-dialog__view select { font: inherit; padding: 4px 8px; border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); }
+.export-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }

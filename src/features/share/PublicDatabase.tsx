@@ -19,14 +19,16 @@ import {
 } from "../database/database-model";
 import { formatDay, formatMoment, OptionTag, PropertyIcon, PropertyLink, TitleIcon } from "../database/properties";
 
-/** What the public database view needs of the reader that hosts it: the
- *  share's token for file URLs, its pages for relation names, and the link
- *  a page opens under (`#page=`). */
+/** What the public database view needs of the reader that hosts it: its
+ *  pages for relation names, the link a page opens under, and where a file
+ *  path's bytes live. The public share answers with its token and
+ *  `/api/public/…` addresses; an export answers with paths inside the zip. */
 interface PublicDbContext {
-  token: string;
   pages: Map<string, NotePage>;
-  pageHref(id: string): string;
+  pageHref(id: string): string | undefined;
   pageTitle(page: NotePage): string;
+  /** Where a stored file path's bytes live for this reader. */
+  fileHref(path: string): string;
   /** Renders a page's icon as the reader does (image file or emoji). */
   pageIcon?(page: NotePage): ReactNode;
 }
@@ -53,7 +55,7 @@ function PublicCell({ row, property, context }: { row: NotePage; property: Datab
         <span className="db__images" aria-label={property.name}>
           <span className="img-thumbs">{files.map((file) => (
             <span key={file.path} className="img-thumb">
-              <img src={`/api/public/${encodeURIComponent(context.token)}/files?path=${encodeURIComponent(file.preview ?? file.path)}`} alt={file.name} loading="lazy" />
+              <img src={context.fileHref(file.preview ?? file.path)} alt={file.name} loading="lazy" />
             </span>
           ))}</span>
         </span>
