@@ -33,13 +33,15 @@ interface PublicDbContext {
   pageIcon?(page: NotePage): ReactNode;
 }
 
-/** A row's name cell: its icon and title as the link to the page. */
+/** A row's name cell: its icon and title as the link to the page. An unnamed
+ *  row's resolved name is its first line or "无标题" — data-empty's "Untitled"
+ *  prefix is only for a row with no name at all, never before a fallback. */
 function NameCell({ row, context }: { row: NotePage; context: PublicDbContext }) {
   const title = context.pageTitle(row);
   return (
     <a className="db__row-name" href={context.pageHref(row.id)}>
       {context.pageIcon ? <span className="db__row-mark">{context.pageIcon(row)}</span> : null}
-      <span className="db__row-title" {...(row.title ? {} : { "data-empty": "" })}>{title}</span>
+      <span className="db__row-title" {...(title ? {} : { "data-empty": "" })}>{title}</span>
     </a>
   );
 }
