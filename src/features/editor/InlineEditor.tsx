@@ -75,9 +75,14 @@ export const InlineEditor = memo(function InlineEditor({
    *  to resync: the bound Y.Text lives outside the record prop, so without
    *  a per-field subscription a remote delta under an unchanged record
    *  leaves the DOM frozen at whatever the last render decided. */
+  const collaborationSnapshot = () => collaboration ? collaborationFieldTick(collaboration.pageId, collaboration.key) : "none";
   const collaborationTick = useSyncExternalStore(
     subscribeCollaboration,
-    () => collaboration ? collaborationFieldTick(collaboration.pageId, collaboration.key) : "none",
+    collaborationSnapshot,
+    /* read-only HTML is rendered off the DOM by react-dom/server, which
+       requires a server snapshot even though no store subscription is
+       ever useful there. */
+    collaborationSnapshot,
   );
   const commit = useRef<(element: HTMLElement) => void>(() => {});
   const compositionDraft = useRef<{ bound: BoundText | null; content: InlineContent; address?: { pageId: string; key: string } } | null>(null);

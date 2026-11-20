@@ -30,7 +30,9 @@ function subscribe(listener: () => void): () => void {
 /** The mark a column was given, once the marks are here; undefined until
  *  then, and for a key this build does not know. */
 export function useColumnIcon(key: string | undefined): LucideIcon | undefined {
-  const loaded = useSyncExternalStore(subscribe, () => registry);
+  /* The server snapshot exists for react-dom/server (the export path):
+     whatever the registry holds at render time is what the file gets. */
+  const loaded = useSyncExternalStore(subscribe, () => registry, () => registry);
   const wanted = Boolean(key) && !loaded;
   useEffect(() => {
     if (wanted) loading ??= import("./property-icons").then(provideIcons);

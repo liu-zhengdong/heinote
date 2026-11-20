@@ -109,6 +109,26 @@ describe("exportPages + buildExport", () => {
     expect(entries.get("父页/子页.md")).toContain("子页内容");
   });
 
+  it("an html export carries no react server-render error", async () => {
+    // A store read through useSyncExternalStore without getServerSnapshot
+    // makes react-dom/server embed "Missing getServerSnapshot" in the file.
+    const db = page({ id: "db1", kind: "database", title: "清单", database: {
+      title_name: "名称",
+      properties: [{ id: "status", name: "状态", type: "status" }],
+      views: [{ id: "v1", name: "全部", kind: "table", hidden: [] }],
+    } });
+    const row = page({ id: "d1", parent_id: "db1", title: "甲项",
+      block_tree: blockTree(textBlock("正文")), properties: { status: "In progress" } });
+    const dbSource: ExportSource = { ...source, pages: { db1: db, d1: row } };
+    const zipped = await buildExport(dbSource, await exportPages(dbSource, "db1"), "html", { viewId: "v1" });
+    const entries = zipEntries(await zipped.body.arrayBuffer());
+    for (const [name, html] of entries) {
+      expect(html, name).not.toMatch(/Missing getServerSnapshot|revert to client rendering|data-msg=/);
+    }
+    expect(entries.get("清单.html")).toContain("甲项");
+    expect(entries.get("清单/甲项.html")).toContain("正文");
+  });
+
   it("a missing attachment is listed, not fatal", async () => {
     const file = { path: "files/p1/f1/a.png", owner: "u", name: "a.png", size: 3, type: "image/png" } as StoredFile;
     const withImage = page({ id: "p2", title: "带图", block_tree: blockTree({ ...textBlock("x"), id: "b_img", kind: "file", file } as Block) });
