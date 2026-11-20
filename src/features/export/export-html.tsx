@@ -156,7 +156,11 @@ function escapeAttr(value: string): string {
 /** The document's own read-only face: cover, icon, title and blocks — the
  *  same surface the public reader's <article> shows. */
 function ReaderArticle({ page, context, children }: { page: NotePage; context: ReaderContext; children?: React.ReactNode }) {
-  const childPages = [...context.pages.values()].filter((item) => item.parent_id === page.id && !item.archived);
+  /* A database's children are its rows: the table already links to every
+     one, so the page keeps no children list — as the public reader draws
+     it. A document's children, the table cannot show, still get the nav. */
+  const childPages = page.kind === "database" ? []
+    : [...context.pages.values()].filter((item) => item.parent_id === page.id && !item.archived);
   return (
     <article className={`public-reader__document${page.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(page)}>
       {page.cover_image ? <img className="public-reader__cover" src={context.fileHref(page.cover_image)} alt="" /> : null}

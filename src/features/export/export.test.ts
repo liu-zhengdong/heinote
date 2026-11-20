@@ -127,6 +127,8 @@ describe("exportPages + buildExport", () => {
     }
     expect(entries.get("清单.html")).toContain("甲项");
     expect(entries.get("清单/甲项.html")).toContain("正文");
+    // The table already links to every row: no children nav under it.
+    expect(entries.get("清单.html")).not.toContain('<nav class="public-reader__children"');
   });
 
   it("a missing attachment is listed, not fatal", async () => {
