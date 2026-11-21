@@ -443,7 +443,7 @@ export function ImageProperty({
           }}
         />
       )}
-      <Popover open={open} anchor={anchor} placement="bottom-start" role="dialog" label={name} onDismiss={() => setAnchor(null)}>
+      <Popover open={open} anchor={anchor} placement="bottom-start" role="dialog" label={name} mobileSheet={{ title: name }} onDismiss={() => setAnchor(null)}>
         <div className={`img-prop ${dropping ? "is-drop" : ""}`} {...drop}>
           {files.length ? (
             <ul

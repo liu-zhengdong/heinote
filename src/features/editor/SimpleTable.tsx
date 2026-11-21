@@ -1,7 +1,9 @@
 import { AlignHorizontalJustifyCenter, AlignHorizontalJustifyEnd, AlignHorizontalJustifyStart, AlignLeft, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Baseline, ChevronDown, Combine, Copy, Eraser, GripHorizontal, GripVertical, Plus, Rows3, Columns3, Trash2, Ungroup } from "lucide-react";
 import {
   memo,
+  useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -10,11 +12,14 @@ import {
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { clearEditSurface, registerEditSurface } from "../../app/edit-surface";
+import { useWorkspace } from "../../app/workspace-context";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
+import { useFold } from "../../hooks/useFold";
 import { createId } from "../../core/ids";
-import { applyMarkToRange, inlinePlainText, rangeHasMark, type ToggleableMark } from "../../core/inline-content";
+import { applyMarkToRange, inlinePlainText, rangeColor, rangeHasMark, type ToggleableMark } from "../../core/inline-content";
 import { imeComposing } from "../../core/keyboard";
 import {
   alignOf,
@@ -52,7 +57,7 @@ import {
   type CellRect,
   type TableWrite,
 } from "../../core/simple-table";
-import type { Block, InlineContent } from "../../core/types";
+import type { Block, ContentColor, InlineContent } from "../../core/types";
 import { cellField } from "../../collaboration/protocol";
 import { blockRecordId } from "../../platform/record-ids";
 import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
@@ -61,8 +66,6 @@ import { focusRange, caretOnFirstLine, caretOnLastLine, caretOffset, placeCaretN
 import { gridFromClipboard, type ReadGrid } from "./table-clipboard";
 import { markForKey, MARKS } from "./marks";
 import { ColorMenu } from "./ColorMenu";
-import { rangeColor } from "../../core/inline-content";
-import type { ContentColor } from "../../core/types";
 
 /* A simple table — Notion's: a grid of cells in a page, drawn and edited in
    place (the model, and every way reading one can go wrong, head
@@ -228,17 +231,24 @@ export const SimpleTable = memo(function SimpleTable({
   block,
   owningPageId,
   readOnly,
+  surfaceContainer = "main",
   actions,
 }: {
   block: Block;
   owningPageId?: string;
   readOnly: boolean;
+  surfaceContainer?: "main" | "peek";
   actions: TableActions;
 }) {
+  const mobile = useFold();
+  const surfaceId = useId();
+  const { undo, redo, canUndo, canRedo } = useWorkspace();
   const grid = useMemo(() => tableGrid(block.table), [block.table]);
   const frameRef = useRef<HTMLDivElement | null>(null);
   const cells = useRef(new Map<string, HTMLElement>());
   const [range, setRange] = useState<CellRange | null>(null);
+  const [focusedCell, setFocusedCell] = useState<CellAt | null>(null);
+  const subOverlayOpenRef = useRef(false);
   const [menu, setMenu] = useState<TableMenu | null>(null);
   const [hover, setHover] = useState<{ row: number; column: number } | null>(null);
   const [moving, setMovingState] = useState<Moving | null>(null);
@@ -410,6 +420,7 @@ export const SimpleTable = memo(function SimpleTable({
   const selectCells = (next: CellRange | null) => {
     setRange(next);
     if (!next) return;
+    setFocusedCell(null);
     // The caret lets go; the keyboard is the table's.
     const active = document.activeElement;
     if (active instanceof HTMLElement && frameRef.current?.contains(active)) active.blur();
@@ -419,6 +430,8 @@ export const SimpleTable = memo(function SimpleTable({
 
   /* The selection always swallows whole spans — a merged cell is one cell. */
   const expandedRect = (): CellRect | null => range ? expandRectForSpans(grid, rectOfRange(range)) : null;
+  const activeRect = (): CellRect | null => expandedRect()
+    ?? (focusedCell ? expandRectForSpans(grid, { row: focusedCell.row, column: focusedCell.column, rows: 1, columns: 1 }) : null);
 
   const selectedCells = (): { rows: number[]; columns: number[] } => {
     const rect = expandedRect();
@@ -458,7 +471,7 @@ export const SimpleTable = memo(function SimpleTable({
   /** Every visible (non-phantom) cell the expanded selection covers, with
    *  its row — for marks and colours, which write whole rows. */
   const selectedVisibleCells = (): Array<{ row: number; column: number; content: InlineContent }> => {
-    const rect = expandedRect();
+    const rect = activeRect();
     if (!rect) return [];
     const all = tableCells(grid);
     const out: Array<{ row: number; column: number; content: InlineContent }> = [];
@@ -473,8 +486,8 @@ export const SimpleTable = memo(function SimpleTable({
   /** A colour over the selection: a text colour marks the visible cells'
    *  words (the mark the format bar paints), a background fills the cells
    *  themselves. */
-  const applyColorToSelected = (color: ContentColor | undefined, where: "text" | "background") => {
-    const rect = expandedRect();
+  const applyColorToSelected = (color: ContentColor | undefined, where: "text" | "background" = "text") => {
+    const rect = activeRect();
     if (where === "background") {
       if (!rect) return;
       write(setColors(grid, rect, color?.endsWith("_background") ? color.slice(0, -"_background".length) as CellColor : undefined));
@@ -546,7 +559,7 @@ export const SimpleTable = memo(function SimpleTable({
   /** Paint an alignment over the selection — both axes at once, like the
    *  Docs' 3×3 picker; { h: undefined, v: undefined } = back to default. */
   const applyAlign = (align: CellAlign) => {
-    const rect = expandedRect();
+    const rect = activeRect();
     if (!rect) return;
     write(setAligns(grid, rect, align));
   };
@@ -554,7 +567,7 @@ export const SimpleTable = memo(function SimpleTable({
   /** What the selection can do: a 2+ cell rectangle can Merge, a rectangle
    *  holding a merged cell can Split. */
   const selectionOps = () => {
-    const rect = expandedRect();
+    const rect = activeRect();
     if (!rect) return { mergeable: false, splittable: false };
     const touched = grid.spans.some((span) => {
       const anchor = grid.rows.findIndex((row) => row.id === span.row);
@@ -1054,13 +1067,79 @@ export const SimpleTable = memo(function SimpleTable({
     return { top: first.top, left: lefts[selRect.column], width: lefts[selRect.column + selRect.columns] - lefts[selRect.column], height: last.top + last.height - first.top };
   })();
 
+  const endCellEdit = useCallback(() => {
+    subOverlayOpenRef.current = false;
+    setFocusedCell(null);
+    setRange(null);
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && frameRef.current?.contains(active)) active.blur();
+    window.getSelection()?.removeAllRanges();
+    clearEditSurface(surfaceId);
+  }, [surfaceId]);
+
+  useEffect(() => () => clearEditSurface(surfaceId), [surfaceId]);
+
+  const cellOps = useRef<{
+    alignCell(h?: "left" | "center" | "right", v?: "top" | "middle" | "bottom"): void;
+    mergeCell(): void;
+    splitCell(): void;
+    setColor(color: ContentColor | undefined, where?: "text" | "background"): void;
+  }>({ alignCell: () => {}, mergeCell: () => {}, splitCell: () => {}, setColor: () => {} });
+  cellOps.current = {
+    alignCell: (h, v) => applyAlign({ h, v }),
+    mergeCell: mergeSelected,
+    splitCell: splitSelected,
+    setColor: (color, where) => applyColorToSelected(color, where),
+  };
+
+  useEffect(() => {
+    if (!mobile || readOnly || (!focusedCell && !range)) {
+      clearEditSurface(surfaceId);
+      return;
+    }
+    const ops = selectionOps();
+    registerEditSurface({
+      surfaceId,
+      mode: "cell",
+      container: surfaceContainer,
+      pageId: owningPageId ?? block.id,
+      blockId: block.id,
+      cellAlign: selectionAlign(),
+      color: selectedColor(),
+      backgroundColor: selectedFill(),
+      canMergeCell: ops.mergeable,
+      canSplitCell: ops.splittable,
+      canUndo: canUndo(),
+      canRedo: canRedo(),
+      subOverlayOpen: subOverlayOpenRef.current,
+      undo,
+      redo,
+      done: endCellEdit,
+      alignCell: (h, v) => cellOps.current.alignCell(h, v),
+      mergeCell: () => cellOps.current.mergeCell(),
+      splitCell: () => cellOps.current.splitCell(),
+      setColor: (color, where) => cellOps.current.setColor(color, where),
+      setSubOverlayOpen: (open) => {
+        subOverlayOpenRef.current = open;
+        if (!open && focusedCell) {
+          requestAnimationFrame(() => {
+            if (!frameRef.current?.contains(document.activeElement)) {
+              const el = cellElement(focusedCell);
+              if (el) focusRange(el, el.textContent?.length ?? 0);
+            }
+          });
+        }
+      },
+    });
+  }, [block, canRedo, canUndo, endCellEdit, focusedCell, mobile, owningPageId, range, readOnly, redo, surfaceContainer, surfaceId, undo]);
+
   return (
     <div
       className={`stbl ${readOnly ? "is-readonly" : ""}`}
       contentEditable={false}
       onMouseLeave={() => { if (!menu && !movingRef.current) setHover(null); }}
     >
-      <div className="stbl__scroll">
+      <div className="stbl__scroll" role="region" tabIndex={0} aria-label="Table">
         <div
           ref={frameRef}
           className="stbl__frame"
@@ -1157,7 +1236,20 @@ export const SimpleTable = memo(function SimpleTable({
                           pasteAt({ row: rowIndex, column: columnIndex }, pasted);
                           return true;
                         }}
-                        onFocus={() => { if (range) setRange(null); }}
+                        onFocus={() => {
+                          if (range) setRange(null);
+                          if (mobile && !readOnly) setFocusedCell({ row: rowIndex, column: columnIndex });
+                        }}
+                        onBlur={() => {
+                          if (!mobile || readOnly) return;
+                          requestAnimationFrame(() => {
+                            if (subOverlayOpenRef.current) return;
+                            const active = document.activeElement;
+                            if (active instanceof Element && (frameRef.current?.contains(active) || active.closest(".mobile-edit-bar, .bottom-sheet, .topbar--mobile, .side-peek__head--mobile"))) return;
+                            setFocusedCell(null);
+                            clearEditSurface(surfaceId);
+                          });
+                        }}
                       />
                     </td>
                     );
@@ -1354,7 +1446,7 @@ export const SimpleTable = memo(function SimpleTable({
           floats over the selection's top edge and never takes focus, so the
           blue range stays the selection. */}
       <Popover
-        open={Boolean(range) && !readOnly && !menu && !lifted}
+        open={Boolean(range) && !readOnly && !menu && !lifted && !mobile}
         anchor={rangeBox ? { top: tableAbsTop + rangeBox.top, left: tableAbsLeft + rangeBox.left, bottom: tableAbsTop + rangeBox.top + rangeBox.height, right: tableAbsLeft + rangeBox.left + rangeBox.width, width: rangeBox.width, height: rangeBox.height } : null}
         placement="top-start"
         role="toolbar"

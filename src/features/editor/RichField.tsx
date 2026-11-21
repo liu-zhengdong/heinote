@@ -35,6 +35,7 @@ import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, typ
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DismissReason } from "../../hooks/useDismiss";
+import { useFold } from "../../hooks/useFold";
 import { LinkForm, linkHref, selectedAddress } from "./FormatToolbar";
 import { inlineFromNodes, keptOffset } from "./rich-text";
 import { focusRange, selectionOffsets, selectionRect } from "./selection";
@@ -177,6 +178,7 @@ export function RichField({
   onBlur,
   onOpenPage,
 }: RichFieldProps) {
+  const mobile = useFold();
   const ref = useRef<HTMLElement | null>(null);
   const composing = useRef(false);
   const bound = useRef<BoundText | null>(null);
@@ -658,7 +660,7 @@ export function RichField({
           }, 0);
         }}
       />
-      {bar && !readOnly && !linkOpen ? (
+      {bar && !readOnly && !linkOpen && !(mobile && grammar.marks) ? (
         <Popover
           open
           anchor={bar.anchor}

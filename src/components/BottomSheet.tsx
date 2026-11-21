@@ -15,6 +15,11 @@ function firstFocusable(root: HTMLElement): HTMLElement | null {
   )].find((element) => element.tabIndex >= 0 && element.getClientRects().length > 0 && !element.closest("[inert]")) ?? null;
 }
 
+export interface BottomSheetHeaderControls {
+  expanded: boolean;
+  toggleExpanded(): void;
+}
+
 /** Unified bottom sheet container for mobile (<560px) drawers, menus, dialogs,
  *  history preview and row details. Self-contained with zero context coupling
  *  so public and auth routes can mount it too. */
@@ -37,7 +42,7 @@ export function BottomSheet({
   label: string;
   title?: ReactNode;
   /** Replaces the default title row when a surface supplies its own bar (e.g. SidePeek). */
-  header?: ReactNode;
+  header?: ReactNode | ((controls: BottomSheetHeaderControls) => ReactNode);
   headerActions?: ReactNode;
   size?: BottomSheetSize;
   className?: string;
@@ -50,6 +55,7 @@ export function BottomSheet({
 }) {
   const { mounted, shown } = useMountTransition(open, SHEET_EXIT_MS);
   const [expanded, setExpanded] = useState(false);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const sheetRef = useRef<HTMLDivElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const restoreFocusRef = useRef(restoreFocusTo);
@@ -65,11 +71,11 @@ export function BottomSheet({
     if (!open) return;
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => {
-      const sheet = sheetRef.current;
+      const wrap = wrapRef.current;
       const fallback = previousFocusRef.current;
       requestAnimationFrame(() => {
         const active = document.activeElement;
-        const focusWasInside = Boolean(sheet && active && sheet.contains(active));
+        const focusWasInside = Boolean(wrap && active && wrap.contains(active));
         const focusDropped = !active || active === document.body || active === document.documentElement;
         if (!focusWasInside && !focusDropped) return;
         const target = restoreFocusRef.current?.() ?? fallback;
@@ -100,7 +106,7 @@ export function BottomSheet({
   const stagedClass = size === "staged" ? (expanded ? "bottom-sheet--expanded" : "bottom-sheet--mid") : "";
 
   return createPortal(
-    <div className={`bottom-sheet-wrap bottom-sheet-wrap--${size} ${shown ? "is-shown" : ""}`}>
+    <div ref={wrapRef} className={`bottom-sheet-wrap bottom-sheet-wrap--${size} ${shown ? "is-shown" : ""}`}>
       <button
         type="button"
         tabIndex={-1}
@@ -119,7 +125,7 @@ export function BottomSheet({
         <div className="bottom-sheet__handle" aria-hidden="true">
           <span className="bottom-sheet__pill" />
         </div>
-        {header !== undefined ? header : (title || headerActions || size === "staged") ? (
+        {header !== undefined ? (typeof header === "function" ? header({ expanded, toggleExpanded: () => setExpanded((current) => !current) }) : header) : (title || headerActions || size === "staged") ? (
           <header className="bottom-sheet__head">
             <span className="bottom-sheet__title">{title}</span>
             <div className="bottom-sheet__head-actions">

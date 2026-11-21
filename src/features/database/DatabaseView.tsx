@@ -987,7 +987,7 @@ function TableLayout({
   }, [bare, foldedGroups, groupedBy, groups, minimal, namesWrap, onAddInline, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, reorderable, rows, titleLabel, view.calcs]);
 
   return (
-    <div className="db__table-wrap scroller">
+    <div className="db__table-wrap scroller" role="region" tabIndex={0} aria-label="Database table">
       <table className="db__table" style={{ width: tableWidth }}>
         <colgroup>
           <col style={{ width: title }} />
@@ -2648,6 +2648,7 @@ export function DatabaseView({
         anchor={menu?.kind === "row" ? menu.anchor : null}
         placement="bottom-start"
         label="Row"
+        mobileSheet={{ title: menuRow ? pageName(menuRow) || "行操作" : "行操作" }}
         onDismiss={() => setMenu(null)}
       >
         {menuRow ? (
@@ -2673,6 +2674,7 @@ export function DatabaseView({
         anchor={menu?.kind === "view" ? menu.anchor : null}
         placement="bottom-start"
         label="View settings"
+        mobileSheet={{ title: "视图设置" }}
         onDismiss={() => setMenu(null)}
       >
         {menuView ? (
@@ -2816,6 +2818,7 @@ export function DatabaseView({
         anchor={menu?.kind === "views" ? menu.anchor : null}
         placement="bottom-start"
         label="Views"
+        mobileSheet={{ title: "切换视图" }}
         onDismiss={() => setMenu(null)}
       >
         <MenuList label="Views" autoFocus>
@@ -2848,6 +2851,7 @@ export function DatabaseView({
         anchor={menu?.kind === "add-view" ? menu.anchor : null}
         placement="bottom-start"
         label="Add a view"
+        mobileSheet={{ title: "新建视图" }}
         onDismiss={() => setMenu(null)}
       >
         <MenuList label="Add a view" autoFocus>
@@ -2868,6 +2872,7 @@ export function DatabaseView({
         anchor={menu?.kind === "filter" ? menu.anchor : null}
         placement="bottom-end"
         label="Filter"
+        mobileSheet={{ title: "筛选" }}
         onDismiss={() => setMenu(null)}
       >
         <FilterPanel
@@ -2883,6 +2888,7 @@ export function DatabaseView({
         anchor={menu?.kind === "group" ? menu.anchor : null}
         placement="bottom-end"
         label="Group"
+        mobileSheet={{ title: "分组" }}
         onDismiss={() => setMenu(null)}
       >
         <MenuList label="Group by" autoFocus>
@@ -2911,6 +2917,7 @@ export function DatabaseView({
         anchor={menu?.kind === "columns" ? menu.anchor : null}
         placement="bottom-end"
         label="Columns"
+        mobileSheet={{ title: "列与属性" }}
         onDismiss={() => setMenu(null)}
       >
         <ColumnsPanel
@@ -2929,6 +2936,7 @@ export function DatabaseView({
         anchor={menu?.kind === "sort" ? menu.anchor : null}
         placement="bottom-end"
         label="Sort"
+        mobileSheet={{ title: "排序" }}
         onDismiss={() => setMenu(null)}
       >
         {/* Unsorted, Sort is the list of what to sort by; sorted, it is the
@@ -2955,6 +2963,7 @@ export function DatabaseView({
         anchor={menu?.kind === "property" ? menu.anchor : null}
         placement="bottom-start"
         label="Add property"
+        mobileSheet={{ title: "添加属性" }}
         onDismiss={() => setMenu(null)}
       >
         <MenuList label="Property type" autoFocus>
@@ -2976,6 +2985,7 @@ export function DatabaseView({
         anchor={menu?.kind === "relation-target" ? menu.anchor : null}
         placement="bottom-start"
         label="Link to database"
+        mobileSheet={{ title: "关联数据库" }}
         onDismiss={() => setMenu(null)}
       >
         <MenuList label="Databases" autoFocus>

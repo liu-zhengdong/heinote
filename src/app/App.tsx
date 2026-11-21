@@ -11,6 +11,8 @@ import { Sidebar } from "../features/sidebar/Sidebar";
 import { DeletePageConfirm } from "../features/sidebar/TrashView";
 import { TopBar } from "../features/topbar/TopBar";
 import { MobileDock } from "../features/mobile/MobileDock";
+import { MobileEditBar } from "../features/editor/MobileEditBar";
+import { getActiveEditSurface } from "./edit-surface";
 import { AccountSettings } from "../features/account/AccountSettings";
 import { useSession } from "../features/account/AuthGate";
 import { useFold } from "../hooks/useFold";
@@ -88,7 +90,15 @@ export function App() {
   const [historyPreview, setHistoryPreview] = useState<NotePage | null>(null);
   const [surfaceEl, setSurfaceEl] = useState<HTMLElement | null>(null);
   const mobile = useFold();
-  useVisualViewport(mobile);
+  const { keyboardOpen } = useVisualViewport(mobile);
+  const previousKeyboardOpen = useRef(false);
+  useEffect(() => {
+    const wasOpen = previousKeyboardOpen.current;
+    previousKeyboardOpen.current = keyboardOpen;
+    if (!mobile || !wasOpen || keyboardOpen) return;
+    const current = getActiveEditSurface();
+    if (current && !current.subOverlayOpen) current.done();
+  }, [keyboardOpen, mobile]);
   /* Same sum the Sidebar does. The shell only needs it for the width of the
      first track; on mobile there is no rail track at all. */
   const railed = !mobile && preferences.sidebar_collapsed;
@@ -417,6 +427,7 @@ export function App() {
       />
       <QuickFind />
       {mobile ? <MobileDock surface={surfaceEl} historyOpen={historyOpen} /> : null}
+      {mobile ? <MobileEditBar /> : null}
       {user && accountSettingsOpen ? (
         <AccountSettings
           key={`${user.id}:${accountSettingsNotice || "default"}`}

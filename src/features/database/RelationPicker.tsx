@@ -171,7 +171,7 @@ export function RelationPicker({
         data-history-field={`property:${property.id}`}
         readOnly
       />
-      <Popover open={open} anchor={anchor} placement="bottom-start" label="Link a page" role="listbox" onDismiss={close}>
+      <Popover open={open} anchor={anchor} placement="bottom-start" label="Link a page" role="listbox" mobileSheet={{ title: pageName(target) || "关联页面" }} onDismiss={close}>
         <div className="db-multi-menu">
           <input
             className="db-multi-menu__search"

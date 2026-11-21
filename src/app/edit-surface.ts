@@ -17,6 +17,8 @@ export interface ActiveEditSurface {
   subOverlayOpen?: boolean;
   link?: string;
   color?: ContentColor;
+  backgroundColor?: ContentColor;
+  cellAlign?: { h?: "left" | "center" | "right"; v?: "top" | "middle" | "bottom" };
   canMergeCell?: boolean;
   canSplitCell?: boolean;
   undo?: () => void;
@@ -27,8 +29,8 @@ export interface ActiveEditSurface {
   insertBlock?: (kind: BlockKind) => void;
   openLink?: () => void;
   setLink?: (href: string | undefined) => void;
-  setColor?: (color: ContentColor | undefined) => void;
-  alignCell?: (h: "left" | "center" | "right", v: "top" | "middle" | "bottom") => void;
+  setColor?: (color: ContentColor | undefined, where?: "text" | "background") => void;
+  alignCell?: (h?: "left" | "center" | "right", v?: "top" | "middle" | "bottom") => void;
   mergeCell?: () => void;
   splitCell?: () => void;
   setSubOverlayOpen?: (open: boolean) => void;

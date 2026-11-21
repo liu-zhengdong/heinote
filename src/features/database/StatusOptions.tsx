@@ -127,6 +127,7 @@ export function StatusOptionsMenu({
       placement="right-start"
       label="Edit property"
       group={popGroup}
+      mobileSheet={{ title: "编辑状态选项" }}
       onDismiss={() => {
         flush.current?.();
         onClose();
@@ -382,6 +383,7 @@ export function OptionsEditorMenu({
       placement="right-start"
       label="Edit property"
       group={popGroup}
+      mobileSheet={{ title: "编辑状态选项" }}
       onDismiss={() => {
         flush.current?.();
         onClose();

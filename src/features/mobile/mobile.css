@@ -132,3 +132,119 @@
     transition: none;
   }
 }
+
+/* Mobile keyboard-top formatting toolbar (ActiveEditSurface). */
+.mobile-edit-bar {
+  position: fixed;
+  z-index: 65;
+  left: 0;
+  right: 0;
+  bottom: var(--vv-keyboard, 0px);
+  display: flex;
+  align-items: center;
+  height: 46px;
+  padding: 0 6px;
+  border-top: 1px solid var(--hairline);
+  background: var(--elevated);
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+}
+
+.mobile-edit-bar__strip {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.mobile-edit-bar__strip::-webkit-scrollbar {
+  display: none;
+}
+
+.mobile-edit-bar__group {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  padding-right: 4px;
+  border-right: 1px solid var(--hairline);
+}
+
+.mobile-edit-bar__group:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+
+.mobile-edit-bar__btn,
+.mobile-edit-bar__chip {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 35px;
+  min-height: 40px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.mobile-edit-bar__chip {
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 8px;
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.mobile-edit-bar__btn:hover:not(:disabled),
+.mobile-edit-bar__btn:active:not(:disabled),
+.mobile-edit-bar__chip:hover:not(:disabled),
+.mobile-edit-bar__chip:active:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.mobile-edit-bar__btn.is-on {
+  background: var(--blue-tint);
+  color: var(--blue);
+}
+
+.mobile-edit-bar__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mobile-edit-bar__dismiss {
+  flex: none;
+  min-width: 40px;
+  margin-left: 6px;
+  box-shadow: -4px 0 0 -3px var(--hairline);
+  color: var(--ink-2);
+}
+
+.mobile-edit-sheet__pad {
+  padding: 12px 16px 16px;
+}
+
+.mobile-edit-sheet__pad .link-editor {
+  width: 100%;
+}
+
+.mobile-edit-sheet__pad .link-editor input {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.mobile-edit-sheet__pad .link-editor .btn {
+  min-height: 44px;
+}

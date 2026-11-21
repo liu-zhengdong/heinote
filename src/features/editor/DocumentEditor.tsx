@@ -4,6 +4,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -19,7 +20,9 @@ import {
 import { Popover } from "../../components/Popover";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
+import { clearEditSurface, registerEditSurface } from "../../app/edit-surface";
 import { useUi } from "../../app/ui-context";
+import { useFold } from "../../hooks/useFold";
 import { createId } from "../../core/ids";
 import { copyText } from "../../core/clipboard";
 import { pageTitleContent, titleFields } from "../../core/title";
@@ -43,13 +46,15 @@ import {
   TABLE_BYTE_BUDGET,
   tableBytes,
   tableFromCells,
+  newSimpleTable,
   type TableWrite,
 } from "../../core/simple-table";
+import { markFreshTable } from "./SimpleTable";
 import type { WorkspaceMutation } from "../../platform/workspace-document";
 import { readGrid } from "./table-clipboard";
 import { databaseFromList, databaseFromTable, isList, listRefusal, type ConversionIds } from "../database/convert";
 import { viewKindLabel } from "../database/database-model";
-import { markFresh } from "../database/fresh";
+import { consumeFresh, markFresh } from "../database/fresh";
 import {
   hasCjkItalic,
   inlinePlainText,
@@ -63,8 +68,9 @@ import {
   updateMentionAt,
   mentionFromAttributes,
   type ShownLink,
+  type ToggleableMark,
 } from "../../core/inline-content";
-import type { Block, BlockKind, BlockMutation, BlockTree, Embed, InlineContent, NotePage } from "../../core/types";
+import type { Block, BlockKind, BlockMutation, BlockTree, ContentColor, Embed, InlineContent, InlineMarks, NotePage } from "../../core/types";
 import { imeComposing } from "../../core/keyboard";
 import { CardOffer, LinkHoverCard, useLinkHover, type CardOfferState, type HoveredLink } from "./LinkHoverCard";
 import { readBlocks, textToBlocks, writeBlocks, type CopiedBlocks } from "./block-clipboard";
@@ -107,6 +113,7 @@ import {
 import { embedFromUrl, normalizeEmbed } from "../../core/embeds";
 import { readEmbedDetails } from "./embed-details";
 import { FormatToolbar, type FormatState } from "./FormatToolbar";
+import { MARKS } from "./marks";
 import { TitleField } from "./TitleField";
 import { layout, type Item, type Rendered } from "../../core/block-layout";
 import { PageFrame } from "./PageFrame";
@@ -134,6 +141,7 @@ import { composeTree, duplicateSelection, routeTransaction, storedFragment } fro
 import { coverId, pageCover, pageFont, pageIcon, randomCoverId, randomEmoji } from "./page-decoration";
 import { loadPageFonts } from "../../platform/fonts";
 import {
+  caretOffset,
   caretOnLastLine,
   caretPointFromViewport,
   caretPointNear,
@@ -245,6 +253,7 @@ export function DocumentEditor({
   historical = false,
   properties,
   embed,
+  surfaceContainer = "main",
 }: {
   page: NotePage;
   readOnly?: boolean;
@@ -261,6 +270,7 @@ export function DocumentEditor({
    *  the page being read, and the pages already shown around this one — never
    *  shown again inside it. */
   embed?: EmbedOptions;
+  surfaceContainer?: "main" | "peek";
 }) {
   const {
     annotateHistory,
@@ -280,8 +290,14 @@ export function DocumentEditor({
     canMovePage,
     canTrashPage,
     spaces,
+    undo,
+    redo,
+    canUndo,
+    canRedo,
   } = useWorkspace();
   const { sharePageId, toast, openPeek, requestShare } = useUi();
+  const mobile = useFold();
+  const surfaceId = useId();
   /* Mentions read the workspace as it is at the moment they are drawn: a
      title changed anywhere is redrawn in every mention of that page. What
      happens on a press reads it as it is then (`store.getState()`). */
@@ -333,6 +349,13 @@ export function DocumentEditor({
     anchor: AnchorRect | null;
   } | null>(null);
   const [format, setFormat] = useState<FormatState | null>(null);
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
+  const [editingMode, setEditingMode] = useState<"block" | "title" | null>(null);
+  const [caretMarks, setCaretMarks] = useState<Partial<Record<ToggleableMark, boolean>>>({});
+  const subOverlayOpenRef = useRef(false);
+  const savedBlockIdRef = useRef<string | null>(null);
+  const savedFormatRef = useRef<FormatState | null>(null);
+  const mountDocRef = useRef<HTMLDivElement | null>(null);
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [drop, setDrop] = useState<DropState | null>(null);
   const [picker, setPicker] = useState<PickerOpen | null>(null);
@@ -431,28 +454,38 @@ export function DocumentEditor({
     setMention(null);
     setBacklinksOpen(false);
     setFormat(null);
-  }, [page.id]);
+    setFocusedBlockId(null);
+    setEditingMode(null);
+    setCaretMarks({});
+    subOverlayOpenRef.current = false;
+    savedBlockIdRef.current = null;
+    savedFormatRef.current = null;
+    clearEditSurface(surfaceId);
+  }, [page.id, surfaceId]);
 
   /* A collapse holds only what is typed on from where it left the caret. A
      press anywhere lets go (and an arrow key, below), so coming back to the
-     end of the word later carries its mark on, as it does everywhere else. */
+     end of the word later carries its mark on, as it does everywhere else.
+     Mobile formatting controls live in `.mobile-edit-bar` and `.bottom-sheet`:
+     tapping them accumulates pending marks without wiping `resume`. */
   useEffect(() => {
-    const letGo = () => { resume.current = null; };
+    const letGo = (event: PointerEvent) => {
+      if ((event.target as Element | null)?.closest(".mobile-edit-bar, .bottom-sheet")) return;
+      resume.current = null;
+    };
     document.addEventListener("pointerdown", letGo, true);
     return () => document.removeEventListener("pointerdown", letGo, true);
   }, []);
 
   /* A page you just made opens with the caret in its title, so naming it is
-     the first thing that happens rather than a second click.
-     A page created *to be shared* opens the Share dialog first — this waits
-     behind it, then takes the caret once that dialog closes.
-     The caret is only ever given once: any pointer-down or key press inside
-     the document claims it, and a late effect re-run — a permission flip,
-     a session landing — can never pull it back to the title. */
+     the first thing that happens rather than a second click. On mobile only
+     newly created pages open the title caret so browsing existing untitled
+     notes does not immediately raise the soft keyboard. */
   const caretClaimed = useRef(false);
   useEffect(() => {
     if (readOnly || embed || page.title || sharePageId || !page.block_tree) return;
     if (caretClaimed.current) return;
+    if (mobile && !consumeFresh(page.id)) return;
     const blocks = Object.values(page.block_tree.by_id);
     if (blocks.length > 1 || blocks.some((block) => inlinePlainText(block.content))) return;
     caretClaimed.current = true;
@@ -460,7 +493,7 @@ export function DocumentEditor({
     // Only when the page identity or the dialog above it changes — never on
     // every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page.id, readOnly, sharePageId]);
+  }, [mobile, page.id, readOnly, sharePageId]);
   const claimCaret = useCallback(() => { caretClaimed.current = true; }, []);
   /* A different page gets its own chance at the title caret. */
   useEffect(() => { caretClaimed.current = false; }, [page.id]);
@@ -520,6 +553,228 @@ export function DocumentEditor({
     setFormat,
     execute,
   });
+
+  const marksAtBlockCaret = useCallback((block: Block, element: HTMLElement | null): Partial<Record<ToggleableMark, boolean>> => {
+    if (!element) return {};
+    const at = caretOffset(element);
+    const active = resume.current && resume.current.blockId === block.id && resume.current.at === at
+      ? (resume.current.marks ?? {})
+      : (at > 0 ? sliceInlineContent(block.content, at - 1, at)[0]?.marks ?? {} : {});
+    return Object.fromEntries(MARKS.map(({ mark }) => [mark, Boolean(active[mark])])) as Partial<Record<ToggleableMark, boolean>>;
+  }, []);
+
+  useEffect(() => {
+    if (!mobile || readOnly || editingMode !== "block" || !focusedBlockId) return;
+    let frame = 0;
+    const syncCaret = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (document.activeElement?.closest(".mobile-edit-bar, .bottom-sheet")) return;
+        const element = editableWithin(blocksRef.current, focusedBlockId);
+        const block = latestTree.current.by_id[focusedBlockId];
+        if (!block || !element || !element.contains(document.activeElement)) return;
+        setCaretMarks(marksAtBlockCaret(block, element));
+      });
+    };
+    document.addEventListener("selectionchange", syncCaret);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("selectionchange", syncCaret);
+    };
+  }, [editingMode, focusedBlockId, marksAtBlockCaret, mobile, readOnly]);
+
+  const mobileSurfaceActions = useRef({
+    done: () => {},
+    toggleMark: (_mark: ToggleableMark) => {},
+    turnInto: (_kind: BlockKind) => {},
+    insertBlock: (_kind: BlockKind) => {},
+    setLink: (_href: string | undefined) => {},
+    setColor: (_color: ContentColor | undefined) => {},
+    setSubOverlayOpen: (_open: boolean) => {},
+  });
+  mobileSurfaceActions.current = {
+    done: () => {
+      subOverlayOpenRef.current = false;
+      savedBlockIdRef.current = null;
+      savedFormatRef.current = null;
+      const root = embed ? mountDocRef.current : articleRef.current;
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && root?.contains(active)) active.blur();
+      window.getSelection()?.removeAllRanges();
+      setFormat(null);
+      setEditingMode(null);
+      setFocusedBlockId(null);
+      clearEditSurface(surfaceId);
+    },
+    toggleMark: (mark) => {
+      const activeFormat = format ?? savedFormatRef.current;
+      if (activeFormat?.ranges.length) {
+        applyMarkToBlocks(activeFormat.ranges, mark, !activeFormat.marks[mark]);
+        return;
+      }
+      const targetId = focusedBlockId ?? savedBlockIdRef.current;
+      if (!targetId) return;
+      const block = latestTree.current.by_id[targetId];
+      const element = editableWithin(blocksRef.current, targetId);
+      if (!block || !element || block.kind === "code") return;
+      const at = caretOffset(element);
+      const current = resume.current && resume.current.blockId === block.id && resume.current.at === at
+        ? (resume.current.marks ?? {})
+        : (at > 0 ? sliceInlineContent(block.content, at - 1, at)[0]?.marks ?? {} : {});
+      const next: InlineMarks = { ...current };
+      if (next[mark]) delete next[mark];
+      else next[mark] = true;
+      resume.current = {
+        blockId: block.id,
+        at,
+        content: block.content,
+        marks: Object.keys(next).length ? next : undefined,
+      };
+      setCaretMarks(Object.fromEntries(MARKS.map(({ mark: item }) => [item, Boolean(next[item])])) as Partial<Record<ToggleableMark, boolean>>);
+      if (document.activeElement !== element) focusRange(element, at, at);
+    },
+    turnInto: (kind) => {
+      const currentTree = latestTree.current;
+      const activeFormat = format ?? savedFormatRef.current;
+      if (activeFormat && activeFormat.ranges.length > 1) {
+        executeOnBlocks(convertBlocks(currentTree, activeFormat.ranges.map((range) => range.blockId), kind));
+        return;
+      }
+      const targetId = activeFormat?.ranges[0]?.blockId ?? savedBlockIdRef.current ?? focusedBlockId;
+      if (!targetId) return;
+      execute(convertBlock(currentTree, targetId, kind));
+      setFocusedBlockId(targetId);
+      setEditingMode("block");
+    },
+    insertBlock: (kind) => {
+      const currentTree = latestTree.current;
+      const afterId = savedBlockIdRef.current ?? focusedBlockId ?? rows.at(-1)?.block.id;
+      if (!afterId) return;
+      if (kind === "table") {
+        const tableId = createId("block");
+        const inserted = insertBlockAfter(currentTree, afterId, tableId, "table");
+        if (!inserted) return;
+        const made = (inserted.mutations[0] as Extract<BlockMutation, { action: "put" }>).block;
+        const mutations: BlockMutation[] = [
+          { action: "put", block: { ...made, table: newSimpleTable(3, 2, (part) => createId(part === "column" ? "col" : "row")) } },
+        ];
+        const placed = applyEditorTransaction(currentTree, { mutations });
+        const parentId = placed.by_id[tableId]?.parent_id ?? null;
+        if (orderedBlocks(placed, parentId).at(-1)?.id === tableId) {
+          const trailing = insertBlockAfter(placed, tableId, createId("block"));
+          if (trailing) mutations.push(...trailing.mutations);
+        }
+        markFreshTable(tableId);
+        execute({ mutations });
+        return;
+      }
+      if (kind === "divider") {
+        const dividerId = createId("block");
+        const inserted = insertBlockAfter(currentTree, afterId, dividerId, "divider");
+        if (!inserted) return;
+        const mutations: BlockMutation[] = [...inserted.mutations];
+        const nextId = createId("block");
+        const placed = applyEditorTransaction(currentTree, { mutations });
+        const trailing = insertBlockAfter(placed, dividerId, nextId, "text");
+        if (trailing) mutations.push(...trailing.mutations);
+        execute({ mutations }, { id: nextId, start: 0, force: true });
+        setFocusedBlockId(nextId);
+        setEditingMode("block");
+        return;
+      }
+      const nextId = createId("block");
+      const inserted = insertBlockAfter(currentTree, afterId, nextId, kind);
+      if (!inserted) return;
+      if (kind === "todo") {
+        const block = (inserted.mutations[0] as Extract<BlockMutation, { action: "put" }>).block;
+        block.checked = false;
+      }
+      execute(inserted, { id: nextId, start: 0, force: true });
+      setFocusedBlockId(nextId);
+      setEditingMode("block");
+    },
+    setLink: (href) => {
+      const activeFormat = format ?? savedFormatRef.current;
+      if (activeFormat?.ranges.length) applyMarkToBlocks(activeFormat.ranges, "link", href);
+    },
+    setColor: (color) => {
+      const activeFormat = format ?? savedFormatRef.current;
+      if (activeFormat?.ranges.length) {
+        applyMarkToBlocks(activeFormat.ranges, "color", color);
+        return;
+      }
+      const targetId = savedBlockIdRef.current ?? focusedBlockId;
+      if (targetId) execute(colorBlocks(latestTree.current, [targetId], color));
+    },
+    setSubOverlayOpen: (open) => {
+      if (open) {
+        savedBlockIdRef.current = focusedBlockId;
+        savedFormatRef.current = format;
+        subOverlayOpenRef.current = true;
+        return;
+      }
+      subOverlayOpenRef.current = false;
+      const savedRanges = savedFormatRef.current?.ranges;
+      const savedBlock = savedBlockIdRef.current;
+      requestAnimationFrame(() => {
+        if (savedRanges?.length) {
+          selectRanges(blocksRef.current, savedRanges);
+          return;
+        }
+        if (savedBlock) {
+          const element = editableWithin(blocksRef.current, savedBlock);
+          if (element && document.activeElement !== element) focusRange(element, caretOffset(element));
+        }
+      });
+    },
+  };
+
+  useEffect(() => () => clearEditSurface(surfaceId), [surfaceId]);
+
+  useEffect(() => {
+    if (!mobile || readOnly || !editingMode) {
+      clearEditSurface(surfaceId);
+      return;
+    }
+    const block = focusedBlockId ? tree.by_id[focusedBlockId] : undefined;
+    const isBlock = editingMode === "block" && Boolean(block);
+    registerEditSurface({
+      surfaceId,
+      mode: editingMode === "title" || !isBlock ? "title" : "block",
+      container: surfaceContainer,
+      pageId: page.id,
+      blockId: editingMode === "title" ? page.id : (block?.id ?? null),
+      blockKind: block?.kind,
+      marks: format ? format.marks : caretMarks,
+      link: format?.link,
+      color: format?.color ?? block?.color,
+      canUndo: canUndo(),
+      canRedo: canRedo(),
+      subOverlayOpen: subOverlayOpenRef.current,
+      undo,
+      redo,
+      done: () => mobileSurfaceActions.current.done(),
+      toggleMark: (mark) => mobileSurfaceActions.current.toggleMark(mark),
+      turnInto: (kind) => mobileSurfaceActions.current.turnInto(kind),
+      insertBlock: (kind) => mobileSurfaceActions.current.insertBlock(kind),
+      setLink: (href) => mobileSurfaceActions.current.setLink(href),
+      setColor: (color) => mobileSurfaceActions.current.setColor(color),
+      setSubOverlayOpen: (open) => mobileSurfaceActions.current.setSubOverlayOpen(open),
+    });
+  }, [canRedo, canUndo, caretMarks, editingMode, focusedBlockId, format, mobile, page.id, readOnly, redo, surfaceContainer, surfaceId, tree, undo]);
+
+  const handleContainerBlur = useCallback(() => {
+    if (!mobile || readOnly) return;
+    requestAnimationFrame(() => {
+      if (subOverlayOpenRef.current) return;
+      const active = document.activeElement;
+      const root = embed ? mountDocRef.current : articleRef.current;
+      if (active instanceof Element && (root?.contains(active) || active.closest(".mobile-edit-bar, .bottom-sheet, .topbar--mobile, .side-peek__head--mobile"))) return;
+      setEditingMode(null);
+      setFocusedBlockId(null);
+      clearEditSurface(surfaceId);
+    });
+  }, [embed, mobile, readOnly, surfaceId]);
 
   const titleOf = useCallback((pageId: string) => {
     const target = store.getState().pages[pageId];
@@ -1987,6 +2242,7 @@ export function DocumentEditor({
         readOnly={historical || handle.locked || !canEdit(target.id)}
         historical={historical}
         embed={{ topPageId: here, shownPages, mount: handle }}
+        surfaceContainer={surfaceContainer}
       />
     ));
   };
@@ -2065,6 +2321,7 @@ export function DocumentEditor({
       dragging={dragging.has(row.block.id)}
       dropEdge={drop?.id === row.block.id ? drop.edge : null}
       upload={uploads[row.block.id]}
+      surfaceContainer={surfaceContainer}
       slot={slash?.blockId === row.block.id ? (
         <Popover
           open
@@ -2165,6 +2422,20 @@ export function DocumentEditor({
       onPointerDown={(event) => {
         beginBlockMove(event);
         beginPointerSelection(event);
+      }}
+      onFocusCapture={(event) => {
+        if (!mobile || readOnly) return;
+        const target = event.target as HTMLElement | null;
+        if (!target || target.closest(".stbl, .mount, .block__code-bar, button")) return;
+        const editable = target.closest<HTMLElement>(".block__editable");
+        if (!editable) return;
+        const row = editable.closest<HTMLElement>("[data-block-id]");
+        const blockId = row?.dataset.blockId;
+        if (!blockId || row.closest(".blocks") !== blocksRef.current) return;
+        setFocusedBlockId(blockId);
+        setEditingMode("block");
+        const blk = latestTree.current.by_id[blockId];
+        if (blk) setCaretMarks(marksAtBlockCaret(blk, editable));
       }}
       onMouseDownCapture={onBlocksMouseDown}
       onCopy={onCopySelection}
@@ -2468,7 +2739,7 @@ export function DocumentEditor({
         />
       ) : null}
 
-      {format && !readOnly ? (
+      {format && !readOnly && !mobile ? (
         <FormatToolbar
           state={format}
           onToggleMark={(mark) => applyMark(mark, !format.marks[mark])}
@@ -2551,7 +2822,7 @@ export function DocumentEditor({
   if (embed) {
     const mount = embed.mount;
     return (
-      <div className="mount-doc" data-page-id={page.id}>
+      <div ref={mountDocRef} className="mount-doc" data-page-id={page.id} onBlurCapture={handleContainerBlur}>
         <PageFrame
           pageId={page.id}
           name={pageName(page)}
@@ -2595,6 +2866,7 @@ export function DocumentEditor({
       data-page-id={page.id}
       onPointerDownCapture={claimCaret}
       onKeyDownCapture={claimCaret}
+      onBlurCapture={handleContainerBlur}
       onPointerDown={beginMarquee}
       // A box selection must not start a text selection, nor take the caret.
       onMouseDown={(event) => { if (marqueeStart.current) event.preventDefault(); }}
@@ -2674,6 +2946,11 @@ export function DocumentEditor({
             readOnly={readOnly}
             placeholder={pageFirstLine(page, describeMention) || "Untitled"}
             onChange={(next) => updatePage(page.id, titleFields(next))}
+            onFocus={() => {
+              if (!mobile || readOnly) return;
+              setFocusedBlockId(null);
+              setEditingMode("title");
+            }}
             onBlur={() => checkpointPage(page.id, "Renamed page")}
             onOpenPage={(href, full) => {
               const target = linkedPageId(href, pagesRef.current);

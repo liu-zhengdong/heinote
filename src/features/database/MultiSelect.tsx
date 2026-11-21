@@ -123,6 +123,7 @@ export function MultiSelect({
         placement="bottom-start"
         label="Options"
         role="listbox"
+        mobileSheet={{ title: "选择选项" }}
         onDismiss={close}
       >
         <div className="db-multi-menu">

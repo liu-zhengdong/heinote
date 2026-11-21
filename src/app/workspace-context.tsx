@@ -43,6 +43,7 @@ import {
   revealBlocks,
 } from "../features/editor/history-cursor";
 import { databaseRows, rowKey, rowOrderAfter } from "../features/database/database-model";
+import { markFresh } from "../features/database/fresh";
 import { bodyPath, linkIntoParent, trashWrites } from "./page-rows";
 import { reidentify } from "../features/editor/editor-commands";
 import { selectionPoints } from "../features/editor/selection";
@@ -519,7 +520,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
     }
     commit(mutations);
-    if (options.select !== false) setSelectedPageId(id);
+    if (options.select !== false) {
+      markFresh(id);
+      setSelectedPageId(id);
+    }
     return id;
   }, [commit, document, platform, activeSpaceId]);
 

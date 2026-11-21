@@ -6,7 +6,6 @@ import { useWorkspace } from "../../app/workspace-context";
 import { BottomSheet } from "../../components/BottomSheet";
 import { MenuItem, MenuList } from "../../components/Menu";
 import type { PageKind } from "../../core/types";
-import { markFresh } from "../database/fresh";
 import "./mobile.css";
 
 /** Direction C floating bottom command pill on mobile (<560px). Holds the
@@ -65,10 +64,7 @@ export function MobileDock({
   const createIn = (kind: PageKind) => {
     if (!writable) return;
     const id = createPage(null, kind, { block: true });
-    if (id) {
-      markFresh(id);
-      if (preferences.sidebar_view !== "files") setPreference("sidebar_view", "files");
-    }
+    if (id && preferences.sidebar_view !== "files") setPreference("sidebar_view", "files");
     setNewSheetOpen(false);
   };
 

@@ -54,10 +54,9 @@ export function useFormatToolbar({ readOnly, tree, blocksRef, pointerDown, pendi
         setFormat(null);
         return;
       }
-      // Typing in the toolbar's own fields — the link being pasted in — takes
-      // the selection out of the page. The toolbar stays on the words it was
-      // opened for, or the link box would vanish with it at the first press.
-      if (document.activeElement?.closest('[data-pop-group="format"]')) return;
+      // Typing in the toolbar's own fields — or opening mobile bottom sheets
+      // from the formatting bar — moves focus out of the block temporarily.
+      if (document.activeElement?.closest('[data-pop-group="format"], .mobile-edit-bar, .bottom-sheet')) return;
       {
         const rect = selectionRect();
         const ranges = blocksRef.current ? selectedBlockRanges(blocksRef.current) : [];
