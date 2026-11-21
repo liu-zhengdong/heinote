@@ -238,6 +238,7 @@ export class Store {
       // `page` field miss the index; the page-scoped id prefix finds them
       // without a full scan.
       const prefixes = pageIds.map((pageId) => `${pageId.length}_${pageId}_`);
+      const foundIds = new Set(found.map((item) => item.id));
       // GLOB, not LIKE: LIKE can't decompose 'p%' into a range scan unless
       // case_sensitive_like is on, so SQLite scanned the whole partition
       // (and visited every row for id) on every cold pull — 132k reads per
@@ -245,7 +246,7 @@ export class Store {
       // index directly. `_` is not a GLOB metachar, prefixes need no escape.
       const extra = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND (${prefixes.map(() => "id GLOB ?").join(" OR ")})`,
         scope, collection, ...prefixes.map((prefix) => `${prefix}*`))
-        .filter((row) => !new Set(found.map((found) => found.id)).has(String(row.id)))
+        .filter((row) => !foundIds.has(String(row.id)))
         .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
       return { latest, rows: [...found, ...extra], deleted: [] };
     }
@@ -334,6 +335,19 @@ export class Store {
       if (found) return found;
     }
     return undefined;
+  }
+  /** Locate which scope and navigation space hold a page visible to `actor`
+   *  via O(M) primary-key lookups, so a deep link can activate just that space. */
+  locatePage(actor: Actor, pageId: string): { scope: string; spaceId: string } | null {
+    if (this.record(`user:${actor.user.id}`, "pages", pageId)) {
+      return { scope: "personal", spaceId: "personal" };
+    }
+    for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) {
+      const spaceId = String(member.space_id);
+      if (!this.record(spaceId, "pages", pageId)) continue;
+      return { scope: spaceId, spaceId: this.knowledgeBases.get(spaceId) ? spaceId : "personal" };
+    }
+    return null;
   }
   /** One page and its ancestor chain as planes for the Projector — the
    *  chain is what `withoutUnhomed` needs to keep the page, and its

@@ -15,9 +15,9 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
-export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, interval = 1500): () => void {
+export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, interval = 1500, options: { initial?: T } = {}): () => void {
   let closed = false;
-  let last = "";
+  let last = options.initial !== undefined ? JSON.stringify(options.initial) : "";
   let timer: ReturnType<typeof setTimeout>;
   const tick = async () => {
     try {
@@ -27,6 +27,7 @@ export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, in
     } catch { /* Keep the last successful snapshot during a connection gap. */ }
     if (!closed) timer = setTimeout(tick, interval);
   };
-  void tick();
+  if (options.initial !== undefined) timer = setTimeout(tick, interval);
+  else void tick();
   return () => { closed = true; clearTimeout(timer); };
 }

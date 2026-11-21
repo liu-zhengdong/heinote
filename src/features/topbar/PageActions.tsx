@@ -79,6 +79,7 @@ export function PageActions({
     canTrashPage,
     spaces,
     spaceOf,
+    ensureAllSpaces,
   } = useWorkspace();
   const { toast, sharePageId, requestShare, closeShare, closePeek } = useUi();
   const mobile = useFold();
@@ -86,6 +87,9 @@ export function PageActions({
   const [moveAnchor, setMoveAnchor] = useState<AnchorRect | null>(null);
   const [copyAnchor, setCopyAnchor] = useState<AnchorRect | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  useEffect(() => {
+    if (copyAnchor) void ensureAllSpaces();
+  }, [copyAnchor, ensureAllSpaces]);
   // Where the page may go, read only while the picker is open.
   const moveTargets = useWorkspaceState(
     (state) => (moveAnchor ? Object.values(state.pages).filter((candidate) => canMovePage(page.id, candidate.id)) : null),

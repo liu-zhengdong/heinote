@@ -483,6 +483,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const active = [...presence].filter(([key, item]) => key.startsWith(`${spaceId}:`) && store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, item.userId));
     res.json([...new Map(active.map(([, item]) => [item.userId, { userId: item.userId, state: item.state, online: true }])).values()]);
   });
+  app.get("/api/records/locate", (req, res) => {
+    const who = actor(req);
+    const pageId = parse(z.string().min(1).max(256), req.query.page);
+    const located = store.locatePage(who, pageId);
+    if (!located) fail(404, "页面不存在。", "not_found");
+    res.json(located);
+  });
   app.get("/api/records/:scope/:collection", (req, res) => {
     const who = actor(req); const scope = store.scope(who, text(req.params.scope)); const collection = text(req.params.collection);
     if (!["pages", "blocks", "versions", "page_events", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");

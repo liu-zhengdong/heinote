@@ -67,7 +67,7 @@ export function HistoryPanel({
   onClose(): void;
   onPreview(page: NotePage | null): void;
 }) {
-  const { restoreVersion, rosters } = useWorkspace();
+  const { restoreVersion, rosters, loadHistory } = useWorkspace();
   const { toast } = useUi();
   const mobile = useFold();
   const active = open && Boolean(pageId);
@@ -75,6 +75,7 @@ export function HistoryPanel({
   const page = useWorkspaceState((state) => (pageId ? state.pages[pageId] : undefined));
   const stored = useWorkspaceState((state) => (pageId ? state.versions[pageId] : undefined));
   const events = useWorkspaceState((state) => (pageId ? state.pageEvents[pageId] : undefined));
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const versions = useMemo(() => {
     const all = versionList(stored);
     const latest = all.at(-1);
@@ -84,10 +85,15 @@ export function HistoryPanel({
   const [selectedId, setSelectedId] = useState("");
   const selected = versions.find((version) => version.id === selectedId);
 
-  // It opens on the page as it is.
+  // Pull this page's history on demand and reset to the live page when opened.
   useEffect(() => {
-    if (open) setSelectedId("");
-  }, [open, pageId]);
+    if (!open || !pageId) { setLoadingHistory(false); return; }
+    setSelectedId("");
+    setLoadingHistory(true);
+    let alive = true;
+    void loadHistory([pageId]).finally(() => { if (alive) setLoadingHistory(false); });
+    return () => { alive = false; };
+  }, [loadHistory, open, pageId]);
 
   useEffect(() => {
     onPreview(open ? selected?.snapshot ?? null : null);
@@ -149,6 +155,9 @@ export function HistoryPanel({
       >
         <span className="history-item__time">Current version</span>
       </button>
+      {loadingHistory && !groups.length ? (
+        <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /></div>
+      ) : null}
       {groups.map(([group, items]) => (
         <section className="history-group" key={group}>
           <h3>{group}</h3>

@@ -61,7 +61,7 @@ function AppPageShell({ pageId }: { pageId: string }) {
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
+    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { user, githubOutcome, clearGithubOutcome } = useSession();
@@ -200,13 +200,23 @@ export function App() {
      back after they navigate away. */
   const openedFromHash = useRef("");
   const wantedPage = useRef<string | null>(new URLSearchParams(window.location.search).get("page"));
+  const locating = useRef(new Set<string>());
   useEffect(() => {
     const openWanted = () => {
       const wanted = wantedPage.current;
-      const id = wanted ? linkedPageId(wanted, store.getState().pages) : null;
-      if (!id) return;
-      wantedPage.current = null;
-      selectPage(id);
+      if (!wanted) return;
+      const id = linkedPageId(wanted, store.getState().pages);
+      if (id) {
+        wantedPage.current = null;
+        selectPage(id);
+        return;
+      }
+      if (!loading && !locating.current.has(wanted)) {
+        locating.current.add(wanted);
+        void openLocatedPage(wanted).then((opened) => {
+          if (opened && wantedPage.current === wanted) wantedPage.current = null;
+        });
+      }
     };
     const openFromHash = () => {
       const link = window.location.hash;
@@ -235,18 +245,19 @@ export function App() {
       stopRoutes();
       window.removeEventListener("hashchange", openFromHash);
     };
-  }, [selectPage, store]);
+  }, [loading, openLocatedPage, selectPage, store]);
 
   /* The address says which page is open — `?page=<id>`, the place a link or
      an agent's `open` brings the window back to — so the desktop can tell an
      agent where the window is (`whats_open`). Replaced, never pushed: it is
      no step of the browser's history. */
   useEffect(() => {
+    if (loading) return;
     const here = new URL(window.location.href);
     if (selectedPageId) here.searchParams.set("page", selectedPageId);
     else here.searchParams.delete("page");
     if (here.href !== window.location.href) window.history.replaceState(window.history.state, "", here);
-  }, [selectedPageId]);
+  }, [loading, selectedPageId]);
 
   /* A peeked row's history belongs to the row as a page: opening it selects
      the row, and the page-change cleanup below then opens it — doing it in

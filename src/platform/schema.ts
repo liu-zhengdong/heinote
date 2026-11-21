@@ -28,7 +28,7 @@ export const t = {
 export class CollectionHandle<R extends object> {
   constructor(readonly name: string, readonly fields: z.ZodType<R>, readonly scope = "personal") {}
   in(spaceId: string): CollectionHandle<R> { return new CollectionHandle(this.name, this.fields, spaceId); }
-  live(options: { lazy?: boolean } = {}): Promise<LiveCollection<R>> { return LiveCollection.open(this.name, this.scope, options); }
+  live(options: { lazy?: boolean; paused?: boolean; seedPageId?: string } = {}): Promise<LiveCollection<R>> { return LiveCollection.open(this.name, this.scope, options); }
 }
 
 type CollectionSpec = { fields: z.ZodRawShape; scopes?: string[]; agents?: string; retention?: unknown };

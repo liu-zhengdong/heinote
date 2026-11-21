@@ -559,4 +559,39 @@ describe("lazy collection pulls (UC-48)", () => {
     // Rows already mirrored count a page as loaded without a mark.
     expect(asked.every((path) => path.includes("?after=0&pages="))).toBe(true);
   });
+
+  it("tracks version and event ids as lazy pages, coalesces concurrent loads, and pauses/resumes polling", async () => {
+    const asked: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      asked.push(path);
+      if (asked.length === 1) await gate;
+      const pages = new URLSearchParams(path.split("?")[1]).get("pages") ?? "";
+      if (!pages) return json({ latest: 3, rows: [], deleted: [] });
+      const rows = pages.split(",").flatMap((spec) => {
+        const id = spec.split(":")[0];
+        return [{ id: `${id.length}_${id}_v1`, value: { id: "v1", page_id: id } }];
+      });
+      return json({ latest: 3, rows, deleted: [] });
+    }));
+    const versions = await live.LiveCollection.open<Record<string, unknown>>("versions", "personal", { lazy: true, paused: true });
+    opened.push(versions);
+    await flush();
+    expect(asked).toHaveLength(0);
+    const first = versions.loadPages(["alpha"]);
+    const second = versions.loadPages(["alpha"]);
+    expect(asked).toHaveLength(1);
+    const queued = versions.loadPages(["beta"]);
+    release();
+    await Promise.all([first, second, queued]);
+    expect(versions.hasSettledPages(["alpha", "beta"])).toBe(true);
+    expect(versions.loadedPageIds.has("alpha")).toBe(true);
+    expect(versions.loadedPageIds.has("beta")).toBe(true);
+    const callsBeforeResume = asked.length;
+    versions.resume();
+    await flush();
+    expect(asked.length).toBe(callsBeforeResume + 1);
+    versions.pause();
+  });
 });

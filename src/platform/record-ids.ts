@@ -17,6 +17,9 @@ function parsePageScopedId(id: string): { pageId: string; rest: string } | null 
 
 export const blockRecordId = (pageId: string, blockId: string) => pageScopedId(pageId, blockId);
 
+/** The owning page id of any page-scoped record id (block, version, or event). */
+export const pageOfRecordId = (id: string): string | null => parsePageScopedId(id)?.pageId ?? null;
+
 export function parseBlockRecordId(id: string): { pageId: string; blockId: string } | null {
   const parsed = parsePageScopedId(id);
   return parsed && { pageId: parsed.pageId, blockId: parsed.rest };

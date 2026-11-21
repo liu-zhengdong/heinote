@@ -293,6 +293,7 @@ export function Sidebar() {
     isFavorite,
     toggleFavorite,
     openGraph,
+    ensureAllSpaces,
   } = useWorkspace();
   const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast } = useUi();
   const folded = useFold();
@@ -303,6 +304,9 @@ export function Sidebar() {
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [copyPicker, setCopyPicker] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
+  useEffect(() => {
+    if (copyPicker) void ensureAllSpaces();
+  }, [copyPicker, ensureAllSpaces]);
   const [newMenu, setNewMenu] = useState<AnchorRect | null>(null);
   const [sortMenu, setSortMenu] = useState<AnchorRect | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);

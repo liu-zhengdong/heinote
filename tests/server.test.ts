@@ -849,3 +849,28 @@ test("database restart preserves accounts, sessions, tokens, pages, and history"
   status(await login.request("/api/auth/login", { method: "POST", body: { handle: "alice", password } }), 200);
   assert.equal(status(await login.request("/api/session"), 200).user.id, user.id);
 });
+
+test("lazy history pulls (?pages=) and /api/records/locate respect space isolation and membership (UC-56)", async (t) => {
+  const f = await fixture(t);
+  const alice = f.browser(); const bob = f.browser();
+  await register(alice, "alice_uc56");
+  await register(bob, "bob_uc56");
+  const bearer = await token(alice, "write");
+  const p1 = await agentPage(alice, bearer.token, "First history page", "Body 1");
+  const p2 = await agentPage(alice, bearer.token, "Second history page", "Body 2");
+  status(await alice.request(`/api/v1/pages/${p1.id}/checkpoint`, { method: "POST", token: bearer.token }), 200);
+  status(await alice.request(`/api/v1/pages/${p2.id}/checkpoint`, { method: "POST", token: bearer.token }), 200);
+  const vDelta = status(await alice.request(`/api/records/personal/versions?after=0&pages=${encodeURIComponent(p1.id)}:0`), 200);
+  assert.equal(vDelta.rows.length, 1);
+  assert.equal(vDelta.rows[0].value.page, p1.id);
+  const eDelta = status(await alice.request(`/api/records/personal/page_events?after=0&pages=${encodeURIComponent(p1.id)}:0`), 200);
+  assert.ok(eDelta.rows.every((row: Json) => row.value.page === p1.id));
+
+  const kb = status(await alice.request("/api/knowledge-bases", { method: "POST", body: { requestId: "11111111-1111-4111-8111-111111111111", name: "Locate KB" } }), 201);
+  const kbHome = kb.knowledgeBase.homePageId;
+  const locatedPersonal = status(await alice.request(`/api/records/locate?page=${encodeURIComponent(p1.id)}`), 200);
+  assert.deepEqual(locatedPersonal, { scope: "personal", spaceId: "personal" });
+  const locatedKb = status(await alice.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 200);
+  assert.deepEqual(locatedKb, { scope: kb.spaceId, spaceId: kb.spaceId });
+  status(await bob.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 404);
+});

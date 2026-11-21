@@ -79,6 +79,9 @@ export interface WorkspaceContextValue {
   activeSpace: SpaceSummary | null;
   sidebarSort: WorkspacePreferences["sidebar_sort"];
   switchSpace(spaceId: string): void;
+  activateSpace(spaceId: string, options?: { seedPageId?: string }): Promise<void>;
+  ensureAllSpaces(): Promise<void>;
+  openLocatedPage(wanted: string): Promise<boolean>;
   setSidebarSort(sort: WorkspacePreferences["sidebar_sort"]): Promise<void>;
   refreshSpaces(): Promise<void>;
   knowledgeBases: KnowledgeBaseClient;
@@ -86,6 +89,8 @@ export interface WorkspaceContextValue {
   /** Pulls pages' bodies into the window (UC-48). Idempotent; safe to call
    *  from rendering code whenever a page is about to be shown or read. */
   loadPages(pageIds: readonly string[]): void;
+  /** Pulls pages' version history and edit events on demand (UC-56). */
+  loadHistory(pageIds: readonly string[]): Promise<void>;
   /** ⌘/Ctrl+S: waits on every write so far, then answers where they stand —
    *  "saved" only once the server really has them. */
   saveNow(): Promise<SyncStatus>;
@@ -262,6 +267,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const presenceSpaceId = spaceOfPage(state.pages, selectedPageId);
   const [spaces, setSpaces] = useState<Record<string, SpaceSummary>>({});
   const spacesRef = useRef(spaces);
+  const initialSpacesRef = useRef<SpaceSummary[] | undefined>(undefined);
+  const rosterBookRef = useRef<SpaceRosters | null>(null);
+  const initialUrlPage = useRef(typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("page") : null).current;
   const setSpaceCatalog = useCallback((list: readonly SpaceSummary[]) => {
     const next = Object.fromEntries(list.map((space) => [space.spaceId, space]));
     spacesRef.current = next;
@@ -281,7 +289,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     void createPlatformClient(sessionUser)
       .then(async (client) => {
         const initialSpaces = await client.spaces.installations().catch(async (reason: unknown) => { await client.close(); throw reason; });
-        const next = await WorkspaceDocument.open(client, initialSpaces).catch(async (reason: unknown) => { await client.close(); throw reason; });
+        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
+        const remembered = readSpaceNavigation(client.bootstrap.user.id);
+        let initialSpaceId = catalog[remembered.spaceId]?.knowledgeBase ? remembered.spaceId : "personal";
+        if (initialUrlPage && remembered.pages[initialSpaceId] !== initialUrlPage) {
+          const located = await request<{ scope: string; spaceId: string }>(
+            `/api/records/locate?page=${encodeURIComponent(initialUrlPage)}`,
+          ).catch(() => null);
+          if (located && (located.spaceId === "personal" || catalog[located.spaceId]?.knowledgeBase)) {
+            initialSpaceId = located.spaceId;
+          }
+        }
+        const seedPageId = initialUrlPage ?? remembered.pages[initialSpaceId] ?? catalog[initialSpaceId]?.knowledgeBase?.homePageId;
+        initialSpacesRef.current = initialSpaces;
+        const next = await WorkspaceDocument.open(client, initialSpaces, { activeSpaceId: initialSpaceId, seedPageId })
+          .catch(async (reason: unknown) => { await client.close(); throw reason; });
         if (!active) {
           await next.close();
           await client.close();
@@ -311,11 +333,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // The member's first page — or, for someone whose pages are all
         // shared with them, the first of those.
         setSpaceCatalog(initialSpaces);
-        const remembered = readSpaceNavigation(client.bootstrap.user.id);
-        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
-        const initialSpaceId = catalog[remembered.spaceId]?.knowledgeBase ? remembered.spaceId : "personal";
         setEmptySpaceId(initialSpaceId);
-        setSelectedPageId(firstPageInSpace(next.state, catalog, initialSpaceId, remembered.pages[initialSpaceId]));
+        setSelectedPageId(firstPageInSpace(next.state, catalog, initialSpaceId, initialUrlPage ?? remembered.pages[initialSpaceId]));
         // The views read it now — after the first page is chosen, so a link
         // to a page in the address, read as the pages arrive, is chosen last.
         store.set(next.state);
@@ -421,7 +440,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       void openWhenDocument(scope, pageId).catch(() => undefined);
     }
     // The page's body joins the mirror as it opens (UC-48).
-    void document?.loadPages([pageId]).catch(() => undefined);
+    if (pageId) void document?.loadPages([pageId]).catch(() => undefined);
     setSelectedPageId(pageId);
     setGraphFor(null);
   }, [store, document]);
@@ -431,6 +450,39 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const loadPages = useCallback((pageIds: readonly string[]) => {
     void document?.loadPages(pageIds).catch(() => undefined);
   }, [document]);
+
+  /** UC-56 history pulls: fetch versions & edit events on panel/migration demand. */
+  const loadHistory = useCallback(async (pageIds: readonly string[]) => {
+    if (!document) return;
+    await document.loadHistory(pageIds).catch(() => undefined);
+  }, [document]);
+
+  const activateSpace = useCallback(async (spaceId: string, options: { seedPageId?: string } = {}) => {
+    if (!document) return;
+    await document.activateSpace(spaceId, options);
+  }, [document]);
+
+  const ensureAllSpaces = useCallback(async () => {
+    if (!document) return;
+    await document.ensureAllSpaces();
+  }, [document]);
+
+  const openLocatedPage = useCallback(async (wanted: string): Promise<boolean> => {
+    if (!document || !platform) return false;
+    const candidate = wanted.startsWith("#") ? wanted.slice(1) : wanted;
+    if (!candidate) return false;
+    if (document.state.pages[candidate]) { selectPage(candidate); return true; }
+    const located = await request<{ scope: string; spaceId: string }>(
+      `/api/records/locate?page=${encodeURIComponent(candidate)}`,
+    ).catch(() => null);
+    if (!located) return false;
+    if (located.spaceId !== "personal" && !spacesRef.current[located.spaceId]?.knowledgeBase) return false;
+    setEmptySpaceId(located.spaceId);
+    await document.activateSpace(located.spaceId, { seedPageId: candidate });
+    if (!document.state.pages[candidate]) return false;
+    selectPage(candidate);
+    return true;
+  }, [document, platform, selectPage]);
 
   const openGraph = useCallback(() => setGraphFor(selectedRef.current), []);
   const closeGraph = useCallback(() => setGraphFor(null), []);
@@ -675,9 +727,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
        same contract sharePageTree holds. */
     const crossing = parentId && spaceOfPage(document.state.pages, pageId) !== spaceOfPage(document.state.pages, parentId);
     if (crossing) {
-      const missing = [pageId, ...descendantPageIds(document.state.pages, pageId)].filter((id) => !isLoadedPage(document.state.pages[id]));
-      if (missing.length) {
-        void document.loadPages(missing).then(() => movePage(pageId, parentId)).catch(() => undefined);
+      const subtree = [pageId, ...descendantPageIds(document.state.pages, pageId)];
+      const missing = subtree.filter((id) => !isLoadedPage(document.state.pages[id]));
+      const needHistory = !document.hasHistoryLoaded(subtree);
+      if (missing.length || needHistory) {
+        void Promise.all([
+          missing.length ? document.loadPages(missing) : Promise.resolve(),
+          needHistory ? document.loadHistory(subtree) : Promise.resolve(),
+        ]).then(() => movePage(pageId, parentId)).catch(() => undefined);
         return;
       }
     }
@@ -813,6 +870,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
      own, read again only when that space says someone joined, left, was
      moved or was invited. The SDK catches up after a gap in the stream, so
      nothing is read again for a window coming back into focus. */
+  const followedRosterIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const space of Object.values(spaces)) {
+      if ((activeSpaceId === "personal" && !space.knowledgeBase)
+          || space.spaceId === activeSpaceId
+          || space.spaceId === presenceSpaceId) {
+        ids.add(space.spaceId);
+      }
+    }
+    return [...ids].sort();
+  }, [spaces, activeSpaceId, presenceSpaceId]);
+
   useEffect(() => {
     if (!platform || !document) return;
     let active = true;
@@ -820,14 +889,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const book = new SpaceRosters(platform.spaces.watchRoster, (next) => {
       if (active) setRosters(next);
     });
+    rosterBookRef.current = book;
     const apply = (list: SpaceSummary[]) => {
       if (!active) return;
       setSpaceCatalog(list);
-      book.follow(list.map((space) => space.spaceId));
       // The spaces read, and — moved to Can view — the ones written to no more.
       void document.refreshSpaces(list);
     };
-    void platform.spaces.watchInstallations(apply)
+    void platform.spaces.watchInstallations(
+      apply,
+      initialSpacesRef.current ? { initial: initialSpacesRef.current } : undefined,
+    )
       .then((unsubscribe) => {
         if (active) stop = unsubscribe;
         else unsubscribe();
@@ -835,10 +907,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined);
     return () => {
       active = false;
+      rosterBookRef.current = null;
       stop?.();
       book.close();
     };
   }, [document, platform, setSpaceCatalog]);
+
+  useEffect(() => {
+    rosterBookRef.current?.follow(followedRosterIds);
+  }, [followedRosterIds, platform, document]);
 
   const ensureShareSpace = useCallback(async (pageId: string) => {
     if (!document || !platform) throw new Error("HeiNote is still opening");
@@ -911,8 +988,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (spaceId !== "personal" && !catalog[spaceId]?.knowledgeBase) return;
     const remembered = readSpaceNavigation(platform.bootstrap.user.id);
     setEmptySpaceId(spaceId);
-    selectPage(firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]));
-    if (spaceId !== "personal") void document.addSpace(spaceId);
+    const pageId = firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]);
+    selectPage(pageId);
+    const seedPageId = pageId || remembered.pages[spaceId] || catalog[spaceId]?.knowledgeBase?.homePageId;
+    void document.activateSpace(spaceId, { seedPageId }).then(() => {
+      if (selectedRef.current) return;
+      const landed = firstPageInSpace(document.state, spacesRef.current, spaceId, remembered.pages[spaceId]);
+      if (landed) selectPage(landed);
+    }).catch(() => undefined);
     setPreference("sidebar_view", "files");
   }, [document, platform, selectPage, setPreference]);
 
@@ -1124,11 +1207,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     activeSpace,
     sidebarSort,
     switchSpace,
+    activateSpace,
+    ensureAllSpaces,
+    openLocatedPage,
     setSidebarSort,
     refreshSpaces,
     knowledgeBases,
     selectPage,
     loadPages,
+    loadHistory,
     saveNow,
     graphOpen,
     openGraph,
@@ -1175,11 +1262,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     activeSpace,
     sidebarSort,
     switchSpace,
+    activateSpace,
+    ensureAllSpaces,
+    openLocatedPage,
     setSidebarSort,
     refreshSpaces,
     knowledgeBases,
     selectPage,
     loadPages,
+    loadHistory,
     saveNow,
     graphOpen,
     openGraph,

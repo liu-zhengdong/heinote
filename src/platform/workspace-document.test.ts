@@ -116,8 +116,12 @@ function platform(initial: SpaceSummary[] = []): PlatformClient {
     close: vi.fn(),
   };
 }
-async function open(client = platform(), known?: readonly SpaceSummary[]): Promise<WorkspaceDocument> {
-  const document = await WorkspaceDocument.open(client, known); documents.push(document); return document;
+async function open(
+  client = platform(),
+  known?: readonly SpaceSummary[],
+  options: { activeSpaceId?: string; seedPageId?: string } = {},
+): Promise<WorkspaceDocument> {
+  const document = await WorkspaceDocument.open(client, known, options); documents.push(document); return document;
 }
 function track<T>(promise: Promise<T>): Promise<T> { work.push(promise); return promise; }
 async function drain(): Promise<void> { for (let index = 0; index < 30; index += 1) await Promise.resolve(); }
@@ -174,24 +178,33 @@ afterEach(async () => {
 });
 
 describe("workspace space subscriptions", () => {
-  it("uses supplied membership without another lookup and keeps personal records", async () => {
+  it("uses supplied membership without another lookup and activates KBs lazily on demand", async () => {
     seedPage("personal", "private"); seedPage("knowledge", "home", { share_space_id: "knowledge" });
     const client = platform(); const document = await open(client, [kb()]);
     expect(client.spaces.installations).not.toHaveBeenCalled();
+    expect(Object.keys(document.state.pages)).toEqual(["private"]);
+    expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes("/api/records/knowledge/"))).toBe(false);
+    await document.activateSpace("knowledge");
+    await drain();
     expect(Object.keys(document.state.pages).sort()).toEqual(["home", "private"]);
   });
 
-  it("discovers membership when no initial list is supplied", async () => {
+  it("discovers membership when no initial list is supplied and boots directly into active KB", async () => {
     seedPage("personal", "private"); seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const client = platform([kb()]); const document = await open(client);
+    const client = platform([kb()]); const document = await open(client, undefined, { activeSpaceId: "knowledge" });
     expect(client.spaces.installations).toHaveBeenCalledTimes(1);
+    expect(Object.keys(document.state.pages)).toEqual(["home"]);
+    expect(vi.mocked(fetch).mock.calls.some(([path]) => String(path).includes("/api/records/personal/pages"))).toBe(false);
+    await document.activateSpace("personal");
+    await drain();
     expect(Object.keys(document.state.pages).sort()).toEqual(["home", "private"]);
   });
 
   it("closes a late initial plane after membership is removed without projecting it", async () => {
     const watch = vi.spyOn(Plane.prototype, "watch"); const close = vi.spyOn(Plane.prototype, "close");
     const document = await open(); seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const held = holdPages("knowledge"); const loading = track(document.refreshSpaces([kb()])); await held.started;
+    await document.refreshSpaces([kb()]);
+    const held = holdPages("knowledge"); const loading = track(document.activateSpace("knowledge")); await held.started;
     await document.refreshSpaces([]); held.release(); await loading; await drain();
     expect(document.state.pages.home).toBeUndefined();
     expect(watch).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(1);
@@ -200,9 +213,11 @@ describe("workspace space subscriptions", () => {
   it("keeps a replacement opening when a removed opening finishes first", async () => {
     const document = await open(); seedPage("knowledge", "home", { share_space_id: "knowledge" });
     const old = holdPages("knowledge"); const next = holdPages("knowledge");
-    const first = track(document.refreshSpaces([kb()])); await old.started;
+    await document.refreshSpaces([kb()]);
+    const first = track(document.activateSpace("knowledge")); await old.started;
     await document.refreshSpaces([]);
-    const replacement = track(document.refreshSpaces([kb()])); await drain();
+    await document.refreshSpaces([kb()]);
+    const replacement = track(document.activateSpace("knowledge")); await drain();
     expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).startsWith("/api/records/knowledge/pages?"))).toHaveLength(2);
     old.release([{ ...rows("knowledge", "pages")[0], value: { ...rows("knowledge", "pages")[0].value, title_content: [{ text: "Old" }] } }]);
     await first;
@@ -214,10 +229,14 @@ describe("workspace space subscriptions", () => {
   });
 
   it("does not reopen later spaces from an obsolete multi-space refresh", async () => {
-    const document = await open(); seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    seedPage("second", "second-home", { share_space_id: "second" });
-    const held = holdPages("knowledge");
-    const loading = track(document.refreshSpaces([kb(), { ...kb(), spaceId: "second" }])); await held.started;
+    const ordinary = (spaceId: string): SpaceSummary => {
+      const { knowledgeBase: _kb, ...rest } = kb();
+      return { ...rest, spaceId, name: spaceId };
+    };
+    const document = await open(); seedPage("ordinary-1", "shared-1", { share_space_id: "ordinary-1" });
+    seedPage("ordinary-2", "shared-2", { share_space_id: "ordinary-2" });
+    const held = holdPages("ordinary-1");
+    const loading = track(document.refreshSpaces([ordinary("ordinary-1"), ordinary("ordinary-2")])); await held.started;
     await document.refreshSpaces([]); held.release(); await loading; await drain();
     expect(Object.keys(document.state.pages)).toEqual([]);
   });
@@ -225,7 +244,8 @@ describe("workspace space subscriptions", () => {
   it("invalidates a pending plane when the document closes", async () => {
     const watch = vi.spyOn(Plane.prototype, "watch"); const close = vi.spyOn(Plane.prototype, "close");
     const document = await open(); seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const held = holdPages("knowledge"); const loading = track(document.refreshSpaces([kb()])); await held.started;
+    await document.refreshSpaces([kb()]);
+    const held = holdPages("knowledge"); const loading = track(document.activateSpace("knowledge")); await held.started;
     await document.close(); held.release(); await loading; await drain();
     expect(document.state.pages.home).toBeUndefined();
     expect(watch).toHaveBeenCalledTimes(1); expect(close).toHaveBeenCalledTimes(2);
@@ -287,14 +307,14 @@ describe("background checkpoints and write dependencies", () => {
 describe("workspace read-only metadata", () => {
   it.each(["owner", "editor"] as const)("does not write initially archived knowledge for its %s", async (role) => {
     seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const summary = kb(true, role); const document = await open(platform([summary]));
+    const summary = kb(true, role); const document = await open(platform([summary]), undefined, { activeSpaceId: "knowledge" });
     document.transact([{ type: "set", path: ["pages", "home", "title"], value: "Blocked" }]); await document.flush();
     expect(sent).toEqual([]); expect(summary.role).toBe(role);
   });
 
   it("stops writes on archive and resumes after restoration without changing role", async () => {
     seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const document = await open(platform([kb()]));
+    const document = await open(platform([kb()]), undefined, { activeSpaceId: "knowledge" });
     document.transact([{ type: "set", path: ["pages", "home", "title"], value: "Before" }]); await document.flush();
     await document.refreshSpaces([kb(true)]);
     document.transact([{ type: "set", path: ["pages", "home", "title"], value: "Blocked" }]); await document.flush();
@@ -308,7 +328,7 @@ describe("workspace read-only metadata", () => {
 
   it("keeps an ordinary viewer read-only after membership refresh", async () => {
     seedPage("knowledge", "home", { share_space_id: "knowledge" });
-    const document = await open(platform([kb()]));
+    const document = await open(platform([kb()]), undefined, { activeSpaceId: "knowledge" });
     const { knowledgeBase: _metadata, ...ordinary } = kb(false, "viewer");
     await document.refreshSpaces([ordinary]);
     document.transact([{ type: "set", path: ["pages", "home", "title"], value: "Blocked" }]); await document.flush();

@@ -1846,9 +1846,9 @@ export function DatabaseView({
      a page elsewhere leaves every database as it is. */
   const database = usePage(databaseId);
   const allRows = useWorkspaceState((state) => databaseRows(state.pages, databaseId), sameItems);
-  /* A database's rows are its content: their bodies arrive with it (UC-48),
-     in one batched pull. */
-  useEffect(() => { if (allRows.length) loadPages(allRows.map((row) => row.id)); }, [allRows, loadPages]);
+  /* A database's visible rows load immediately; deeper slices pull on demand
+     when opened, peeked, or exported (UC-56). */
+  useEffect(() => { if (allRows.length) loadPages(allRows.slice(0, 40).map((row) => row.id)); }, [allRows, loadPages]);
   // The rows that are their values alone, which show no page mark.
   const bareIds = useWorkspaceState((state) => databaseRows(state.pages, databaseId).filter((row) => isBareRow(state.pages, row)).map((row) => row.id), sameItems);
   const bare = useMemo(() => new Set(bareIds), [bareIds]);

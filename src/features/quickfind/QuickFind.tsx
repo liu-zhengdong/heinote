@@ -20,6 +20,7 @@ export interface Hit {
   page: NotePage;
   crumb: string;
   excerpt?: string;
+  spaceId?: string;
 }
 
 /** The matched characters, marked — enough to see *where* a long title or
@@ -96,7 +97,7 @@ export function quickFind(allPages: Record<string, NotePage>, query: string): Hi
 /** ⌘K. Titles first, then the first line of body text that matches — enough to
  *  tell two similarly named pages apart without becoming a search product. */
 export function QuickFind() {
-  const { selectPage, activeSpaceId, activeSpace, spaces } = useWorkspace();
+  const { selectPage, activateSpace, activeSpaceId, activeSpace, spaces } = useWorkspace();
   const { quickFindOpen, setQuickFindOpen } = useUi();
   // Closed, it reads nothing — and is not redrawn as pages change.
   const allPages = useWorkspaceState((state) => (quickFindOpen ? state.pages : null));
@@ -105,7 +106,10 @@ export function QuickFind() {
   const [scope, setScope] = useState<"current" | "all">("current");
   const resultsRef = useRef<HTMLDivElement>(null);
   const searchKey = JSON.stringify([scope === "all" ? null : activeSpaceId, query.trim().toLowerCase()]);
-  const [remote, setRemote] = useState<{ key: string; hits: Array<{ id: string; crumb: string; excerpt?: string; space: string }> } | null>(null);
+  const [remote, setRemote] = useState<{
+    key: string;
+    hits: Array<{ id: string; title: string; spaceId: string; icon?: string; kind?: NotePage["kind"]; crumb: string; excerpt?: string; space: string }>;
+  } | null>(null);
 
   useEffect(() => {
     if (quickFindOpen) {
@@ -141,12 +145,34 @@ export function QuickFind() {
 
   const hits = useMemo<Hit[]>(() => {
     if (!allPages || remote?.key !== searchKey || !query.trim()) return localHits;
-    // The server can search unopened bodies. Resolve results through the
-    // current directory so a revoked or removed page cannot reappear.
+    const loadedSpaces = new Set(Object.values(allPages).map((entry) => navigationSpaceOf(allPages, spaces, entry.id)));
+    // Results in already-loaded spaces resolve through allPages so deleted or
+    // trashed items cannot reappear; unactivated authorized KBs synthesize rows.
     const found = remote.hits.flatMap((hit): Hit[] => {
+      const targetSpace = hit.spaceId || activeSpaceId;
+      if (scope === "current" && targetSpace !== activeSpaceId) return [];
       const page = allPages[hit.id];
-      if (!page || inTrash(allPages, hit.id) || scope === "current" && navigationSpaceOf(allPages, spaces, hit.id) !== activeSpaceId) return [];
-      return [{ page, excerpt: hit.excerpt, crumb: scope === "all" ? [hit.space, hit.crumb].filter(Boolean).join(" / ") : hit.crumb }];
+      const crumb = scope === "all" ? [hit.space, hit.crumb].filter(Boolean).join(" / ") : hit.crumb;
+      if (page) {
+        if (inTrash(allPages, hit.id)) return [];
+        return [{ page, excerpt: hit.excerpt, crumb, spaceId: targetSpace }];
+      }
+      const spaceLoaded = loadedSpaces.has(targetSpace) || targetSpace === activeSpaceId;
+      const authorized = targetSpace === "personal" || Boolean(spaces[targetSpace]);
+      if (spaceLoaded || scope !== "all" || !authorized) return [];
+      const placeholder: NotePage = {
+        id: hit.id,
+        kind: hit.kind ?? "document",
+        icon: hit.icon ?? "",
+        title: hit.title,
+        title_content: [{ text: hit.title }],
+        parent_id: null,
+        created_at: "",
+        updated_at: "",
+        created_by: "",
+        updated_by: "",
+      };
+      return [{ page: placeholder, excerpt: hit.excerpt, crumb, spaceId: targetSpace }];
     });
     const included = new Set(found.map((hit) => hit.page.id));
     return [...found, ...localHits.filter((hit) => !included.has(hit.page.id))].slice(0, 12);
@@ -158,9 +184,13 @@ export function QuickFind() {
       ?.scrollIntoView({ block: "nearest" });
   }, [active, hits, quickFindOpen]);
 
-  const open = (page: NotePage) => {
-    selectPage(page.id);
-    setQuickFindOpen(false);
+  const open = (hit: Hit) => {
+    const finish = () => {
+      selectPage(hit.page.id);
+      setQuickFindOpen(false);
+    };
+    if (allPages?.[hit.page.id] || !hit.spaceId) { finish(); return; }
+    void activateSpace(hit.spaceId, { seedPageId: hit.page.id }).then(finish).catch(() => undefined);
   };
 
   return (
@@ -183,7 +213,7 @@ export function QuickFind() {
             }
             if (event.key === "Enter" && hits[active]) {
               event.preventDefault();
-              open(hits[active].page);
+              open(hits[active]);
             }
           }}
         />
@@ -213,7 +243,7 @@ export function QuickFind() {
             aria-selected={index === active}
             className={`menu__item ${index === active ? "is-active" : ""}`}
             onPointerMove={() => setActive(index)}
-            onClick={() => open(hit.page)}
+            onClick={() => open(hit)}
           >
             <span className="menu__icon" aria-hidden="true">{pageGlyph(hit.page)}</span>
             <span className="menu__copy">

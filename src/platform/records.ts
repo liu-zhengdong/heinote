@@ -306,7 +306,12 @@ export function writeFor(ref: RecordRef, before: RecordValue | undefined, after:
   const { collection, id } = ref;
   if (!after) return before ? { action: "delete", collection, id } : null;
   if (!before) return { action: "put", collection, id, value: after };
-  const patch = mergePatch(before, after);
+  let base = before;
+  if (collection === "blocks" && ("edited_at" in before || "edited_by" in before)) {
+    const { edited_at: _at, edited_by: _by, ...comparable } = before;
+    base = comparable;
+  }
+  const patch = mergePatch(base, after);
   if (patch === null) return { action: "put", collection, id, value: after };
   if (!Object.keys(patch).length) return null;
   return { action: "patch", collection, id, patch };

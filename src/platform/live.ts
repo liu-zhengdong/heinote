@@ -2,7 +2,7 @@ import * as Y from "yjs";
 import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
-import { parseBlockRecordId } from "./record-ids";
+import { pageOfRecordId, parseBlockRecordId } from "./record-ids";
 import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, protectSettledRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
@@ -505,22 +505,30 @@ export class LiveCollection<R extends object> {
   /** The server's record changelog watermark this mirror reached (ISS-12).
    *  Polls send it as `after`; 0 means a cold pull of the whole collection. */
   private latest = 0;
-  /** Lazy collections (UC-48 blocks): each page's watermark, or 0 for a page
-   *  asked for but not pulled yet. Only these pages are mirrored; the poll
-   *  sends them as `pages=<id>:<seq>` specs instead of `after`. */
+  /** Lazy collections (UC-48 blocks, UC-56 history): each page's watermark,
+   *  or 0 for a page asked for but not pulled yet. Only these pages are
+   *  mirrored; the poll sends them as `pages=<id>:<seq>` specs instead of `after`. */
   private readonly pageWatermarks = new Map<string, number>();
+  private readonly settledPages = new Set<string>();
+  private paused: boolean;
+  private inFlight: Promise<void> | null = null;
+  private queuedRefresh = false;
   private stop: () => void;
-  private constructor(readonly name: string, readonly scope: string, private readonly lazy = false) {
+  private constructor(readonly name: string, readonly scope: string, private readonly lazy = false, paused = false) {
+    this.paused = paused;
     this.stop = onScopeChange(scope, () => {
       // Collaboration snapshots replace only page and block records.
       if (name === "pages" || name === "blocks") this.epoch += 1;
       this.emit();
     });
   }
-  static async open<R extends object>(name: string, scope: string, options: { lazy?: boolean } = {}): Promise<LiveCollection<R>> {
-    const live = new LiveCollection<R>(name, scope, options.lazy ?? false);
+  static async open<R extends object>(name: string, scope: string, options: { lazy?: boolean; paused?: boolean; seedPageId?: string } = {}): Promise<LiveCollection<R>> {
+    const live = new LiveCollection<R>(name, scope, options.lazy ?? false, options.paused ?? false);
     const key = collectionKey(scope, name); const group = collections.get(key) ?? new Set(); group.add(live as LiveCollection<object>); collections.set(key, group);
-    try { await live.refresh(); live.schedule(); return live; }
+    try {
+      if (!live.paused) { await live.refresh(); live.schedule(); }
+      return live;
+    }
     catch (error) { await live.close(); throw error; }
   }
   /** The pages this lazy mirror holds (or is pulling), for the projector's
@@ -529,21 +537,50 @@ export class LiveCollection<R extends object> {
   get loadedPageIds(): ReadonlySet<string> {
     const ids = new Set(this.pageWatermarks.keys());
     if (this.lazy) for (const [id, value] of this.remote) {
-      const parsed = parseBlockRecordId(id);
-      if (parsed) ids.add(parsed.pageId);
+      const pageId = pageOfRecordId(id);
+      if (pageId) ids.add(pageId);
       else if (typeof (value as Value).page === "string") ids.add((value as Value).page as string);
     }
     return ids;
+  }
+  /** True once every named page has completed at least one lazy pull. */
+  hasSettledPages(pageIds: readonly string[]): boolean {
+    return !this.lazy || pageIds.every((id) => this.settledPages.has(id));
+  }
+  /** Pause periodic delta polling while the owning space sits in the background. */
+  pause(): void {
+    this.paused = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+  /** Resume periodic delta polling and catch up immediately. */
+  resume(): void {
+    if (this.closed || !this.paused) return;
+    this.paused = false;
+    void this.refresh().catch(() => undefined).finally(() => this.schedule());
   }
   /** Subscribe a set of pages into a lazy mirror. New pages start at
    *  watermark 0 so the next pull carries their whole content. */
   async loadPages(pageIds: readonly string[]): Promise<void> {
     if (!this.lazy || this.closed) return;
     let added = false;
-    for (const pageId of pageIds) if (!this.pageWatermarks.has(pageId)) { this.pageWatermarks.set(pageId, 0); added = true; }
+    for (const pageId of pageIds) if (pageId && !this.pageWatermarks.has(pageId)) { this.pageWatermarks.set(pageId, 0); added = true; }
     if (added) await this.refresh().catch(() => undefined);
+    else if (this.inFlight) await this.inFlight.catch(() => undefined);
   }
-  private async refresh(): Promise<void> {
+  private refresh(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.inFlight) { this.queuedRefresh = true; return this.inFlight; }
+    const run = (async () => {
+      do {
+        this.queuedRefresh = false;
+        await this.pullOnce();
+      } while (this.queuedRefresh && !this.closed);
+    })().finally(() => { if (this.inFlight === run) this.inFlight = null; });
+    this.inFlight = run;
+    return run;
+  }
+  private async pullOnce(): Promise<void> {
     if (this.lazy) {
       // Nothing subscribed: no request at all — idle cost is zero.
       if (!this.pageWatermarks.size) return;
@@ -561,12 +598,14 @@ export class LiveCollection<R extends object> {
         for (const id of delta.deleted) { if (this.remote.delete(id)) changed = true; }
         for (const spec of chunk) {
           const pageId = spec.slice(0, spec.lastIndexOf(":"));
+          const firstLoad = !this.settledPages.has(pageId);
+          this.settledPages.add(pageId);
           const before = this.pageWatermarks.get(pageId);
-          if (before === undefined || before === delta.latest) continue;
+          if (before === undefined) continue;
           // A first pull is a load even when the page holds nothing: emit
-          // so its body can project (and its editor leave the loading row).
-          if (before === 0) changed = true;
-          this.pageWatermarks.set(pageId, delta.latest);
+          // so its body or empty history resolves waiting views.
+          if (firstLoad || (before === 0 && delta.latest !== before)) changed = true;
+          if (delta.latest !== before) this.pageWatermarks.set(pageId, delta.latest);
         }
       }
       if (changed) this.emit();
@@ -578,7 +617,7 @@ export class LiveCollection<R extends object> {
     const cold = this.latest === 0;
     const delta = await request<{ latest: number; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
     if (this.closed || epoch !== this.epoch) return;
-    if (delta.latest < this.latest) { this.latest = 0; void this.refresh().catch(() => undefined); return; }
+    if (delta.latest < this.latest) { this.latest = 0; this.queuedRefresh = true; return; }
     this.latest = delta.latest;
     if (cold) { this.remote = new Map(delta.rows.map((row) => [row.id, row.value])); this.emit(); return; }
     if (!delta.rows.length && !delta.deleted.length) return;
@@ -586,7 +625,13 @@ export class LiveCollection<R extends object> {
     for (const id of delta.deleted) this.remote.delete(id);
     this.emit();
   }
-  private schedule(): void { if (!this.closed) this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200); }
+  private schedule(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.closed && !this.paused) {
+      this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200);
+    }
+  }
   private values(): Map<string, R> {
     const values = new Map(this.remote);
     const editing = new Set<string>();

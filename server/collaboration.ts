@@ -278,6 +278,7 @@ export class CollaborationStore {
       if (fieldScope === scope && collection === write.collection && recordId === write.id) remove(patch, path);
     }
     if (write.collection === "pages" && approved.size) { delete patch.updated_at; delete patch.updated_by; }
+    if (write.collection === "blocks") { delete patch.edited_at; delete patch.edited_by; }
     return { ...write, patch };
   }
   fields(actor: Actor, scopeName: string, pageId: string): { doc: Y.Doc; generation: string; scope: string; fields: Record<string, RichText> } {
