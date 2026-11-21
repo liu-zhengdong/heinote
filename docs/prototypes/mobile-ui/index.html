@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>小黑笔记 · 手机端 UI 三方向原型</title>
+  <link rel="stylesheet" href="assets/proto.css" />
+</head>
+<body>
+  <header class="cmp">
+    <div class="cmp__inner">
+      <h1 class="cmp__title">小黑笔记 · 手机端 UI 三方向原型</h1>
+      <p class="cmp__sub">同一份笔记与数据库、同一台 390×844 手机壳。顶栏切换「现状」与三个结构不同的方案：顶栏侧滑抽屉（A）、底部四格 Tab 推进栈（B）与底部悬浮命令坞（C）。</p>
+      <p class="cmp__rec"><strong>推荐：方向 C · 底部悬浮命令坞。</strong>兼得全屏纸面阅读与大拇指单手热区，目录从底部拉起避开 iOS / Android 左边缘系统返回手势冲突，编辑态原位展开为贴键盘工具条。</p>
+    </div>
+  </header>
+
+  <div class="cmp__bar">
+    <div class="cmp__tabs" role="tablist" aria-label="手机端设计方向">
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="dir-cur" data-tab="cur">现状</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="dir-a" data-tab="a">A · 顶栏侧滑抽屉</button>
+      <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="dir-b" data-tab="b">B · 底部 Tab 推进栈</button>
+      <button type="button" class="tab-btn is-on" role="tab" aria-selected="true" aria-controls="dir-c" data-tab="c">C · 底部悬浮命令坞</button>
+    </div>
+    <button type="button" class="theme-btn" id="theme-toggle" aria-pressed="false">切换深色</button>
+  </div>
+
+  <main class="cmp__stage">
+    <section class="dir" id="dir-cur" role="tabpanel" hidden></section>
+    <section class="dir" id="dir-a" role="tabpanel" hidden></section>
+    <section class="dir" id="dir-b" role="tabpanel" hidden></section>
+    <section class="dir" id="dir-c" role="tabpanel"></section>
+  </main>
+
+  <script src="assets/proto.js"></script>
+</body>
+</html>
