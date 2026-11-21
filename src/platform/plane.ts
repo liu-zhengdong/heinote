@@ -30,6 +30,11 @@ async function openCollections(
       lazy: LAZY_COLLECTIONS.has(name),
       ...(options.paused !== undefined ? { paused: options.paused } : {}),
       ...(name === "pages" && options.seedPageId ? { seedPageId: options.seedPageId } : {}),
+    }).then((live) => {
+      if (name === "blocks" && options.seedPageId && !options.paused) {
+        void live.loadPages([options.seedPageId]).catch(() => undefined);
+      }
+      return live;
     }),
   ));
   const opened = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
@@ -78,6 +83,11 @@ export class Plane {
   /** True when this plane has opened its `pages` mirror (not settings-only). */
   get hasPages(): boolean {
     return this.live.has("pages");
+  }
+
+  /** True while cold `?ancestors=` opened the target page before `?after=0` settled. */
+  get directoryLoading(): boolean {
+    return Boolean(this.live.get("pages")?.directoryLoading);
   }
 
   /** Open any collections omitted at startup (when switching back into the

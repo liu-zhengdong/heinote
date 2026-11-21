@@ -127,7 +127,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
+    const userId = identity.current || undefined;
     await api("/api/auth/logout", { method: "POST" });
+    await import("../../platform/mirror").then((mirror) => mirror.clearUserMirror(userId)).catch(() => undefined);
     ++requestId.current;
     // A new page clears the previous account's module-level write queues.
     window.location.reload();

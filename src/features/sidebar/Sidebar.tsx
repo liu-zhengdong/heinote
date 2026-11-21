@@ -294,6 +294,7 @@ export function Sidebar() {
     toggleFavorite,
     openGraph,
     ensureAllSpaces,
+    directoryLoading,
   } = useWorkspace();
   const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast } = useUi();
   const folded = useFold();
@@ -809,11 +810,14 @@ export function Sidebar() {
           }}
         >
           {view === "files" ? (
-            tree.roots.length ? tree.roots.map((page) => branch(page, 0, tree)) : (
-              writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
-                <Plus size={15} />New page
-              </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
-            )
+            <>
+              {tree.roots.length ? tree.roots.map((page) => branch(page, 0, tree)) : !directoryLoading ? (
+                writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
+                  <Plus size={15} />New page
+                </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
+              ) : null}
+              {directoryLoading ? <div className="sidebar__empty" aria-busy="true"><p>正在加载目录…</p></div> : null}
+            </>
           ) : null}
 
           {view === "favorites" ? (

@@ -59,6 +59,7 @@ export class Store {
   readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
   readonly quotas!: Quotas;
+  readonly dbEpoch!: string;
   readonly dataDir: string;
   private transactionDepth = 0;
   /** The one-time collaboration rebuild at startup is not a user commit. */
@@ -103,6 +104,14 @@ export class Store {
     this.avatars = new AvatarStore(this.db, this.files);
     this.knowledgeBases = new KnowledgeBases(this);
     this.quotas = new Quotas(this, dataDir);
+    const existingEpoch = this.one("SELECT value FROM site_settings WHERE key='db_instance_id'");
+    if (existingEpoch) {
+      this.dbEpoch = String(existingEpoch.value);
+    } else {
+      const generated = id();
+      this.db.prepare("INSERT OR IGNORE INTO site_settings(key,value) VALUES('db_instance_id',?)").run(generated);
+      this.dbEpoch = String(this.one("SELECT value FROM site_settings WHERE key='db_instance_id'")?.value ?? generated);
+    }
     this.collaboration = new CollaborationStore(this);
     this.quotaSuspended = true;
     try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
@@ -200,9 +209,9 @@ export class Store {
    *  changed row under its record id, and each removed row's id under
    *  `deleted`. `after` 0 yields the whole collection (rows written before
    *  the changelog never entered it, so they're read from `records`). */
-  recordsSince(scope: string, collection: string, after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+  recordsSince(scope: string, collection: string, after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
     const latest = this.watermark(scope, collection);
-    if (after <= 0) return { latest, rows: this.records(scope, collection), deleted: [] };
+    if (after <= 0) return { latest, epoch: this.dbEpoch, rows: this.records(scope, collection), deleted: [] };
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
     const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
@@ -210,13 +219,28 @@ export class Store {
       if (Number(row.deleted) || row.value == null) deleted.push(String(row.id));
       else rows.push({ id: String(row.id), value: JSON.parse(String(row.value)) });
     }
-    return { latest, rows, deleted };
+    return { latest, epoch: this.dbEpoch, rows, deleted };
+  }
+  /** The page record plus its parent chain up to root for O(depth) cold open. */
+  pageAncestors(scope: string, pageId: string): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const latest = this.watermark(scope, "pages");
+    const rows: Array<{ id: string; value: Row }> = [];
+    const seen = new Set<string>();
+    let current: string | undefined = pageId;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const value = this.record(scope, "pages", current);
+      if (!value) break;
+      rows.push({ id: current, value });
+      current = typeof value.parent_id === "string" && value.parent_id ? value.parent_id : undefined;
+    }
+    return { latest, epoch: this.dbEpoch, rows, deleted: [] };
   }
   /** The same delta, limited to records that belong to one of `pageIds`:
    *  rows match through their `page` field (via the records_page index on a
    *  cold read) and tombstones through the page-scoped record id
    *  (`<len>_<pageId>_<rest>`). UC-48 lazy loading polls per loaded page. */
-  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
     const latest = this.watermark(scope, collection);
     const wanted = new Set(pageIds);
     const inPage = (id: string, value: Row | null): boolean => {
@@ -248,7 +272,7 @@ export class Store {
         scope, collection, ...prefixes.map((prefix) => `${prefix}*`))
         .filter((row) => !foundIds.has(String(row.id)))
         .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
-      return { latest, rows: [...found, ...extra], deleted: [] };
+      return { latest, epoch: this.dbEpoch, rows: [...found, ...extra], deleted: [] };
     }
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
@@ -259,7 +283,7 @@ export class Store {
       const value = JSON.parse(String(row.value)) as Row;
       if (inPage(id, value)) rows.push({ id, value });
     }
-    return { latest, rows, deleted };
+    return { latest, epoch: this.dbEpoch, rows, deleted };
   }
   /** Exact reads by record id — rebase needs just the rows a failed batch
    *  touched, not the whole collection (UC-48). */

@@ -4,6 +4,7 @@ import { storedRuns } from "../core/stored-runs";
 import type { SpaceSummary, WorkspaceMutation, WorkspaceState } from "../core/types";
 import type { PlatformClient } from "./client";
 import { Plane } from "./plane";
+import { deleteScopeMirror, setMirrorUser } from "./mirror";
 import { blockRecordId } from "./record-ids";
 import { restoreSavedWrites, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
@@ -139,6 +140,7 @@ export class WorkspaceDocument {
     known?: readonly SpaceSummary[],
     options: { activeSpaceId?: string; seedPageId?: string } = {},
   ): Promise<WorkspaceDocument> {
+    setMirrorUser(platform.bootstrap.user.id);
     const document = new WorkspaceDocument(platform);
     const spaceIds = await document.discoverSpaces(known);
     const initialSpace = options.activeSpaceId && document.knowledgeBaseIds.has(options.activeSpaceId)
@@ -248,6 +250,11 @@ export class WorkspaceDocument {
     return loaded;
   }
 
+  /** True while the active space's directory is streaming in the background. */
+  get directoryLoading(): boolean {
+    return Boolean(this.planes.get(this.activeSpaceId)?.directoryLoading);
+  }
+
   private async pullPages(
     pageIds: readonly string[],
     pull: (plane: Plane, ids: readonly string[]) => Promise<void>,
@@ -354,6 +361,7 @@ export class WorkspaceDocument {
     this.desired.delete(spaceId);
     this.opening.delete(spaceId);
     this.readOnly.delete(spaceId);
+    void deleteScopeMirror(spaceId);
     const plane = this.planes.get(spaceId);
     if (plane) {
       this.planes.delete(spaceId);

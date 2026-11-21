@@ -594,4 +594,53 @@ describe("lazy collection pulls (UC-48)", () => {
     expect(asked.length).toBe(callsBeforeResume + 1);
     versions.pause();
   });
+
+  it("resets on epoch mismatch and streams cold directory after fast ?ancestors= boot (UC-56)", async () => {
+    let phase: "ep1" | "ep2" = "ep1";
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((done) => { releaseFull = done; });
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      asked.push(path);
+      const query = new URLSearchParams(path.split("?")[1] ?? "");
+      if (query.has("ancestors")) {
+        return json({ latest: 10, epoch: "epoch-1", rows: [{ id: "seed", value: { id: "seed", title: "Seed" } }], deleted: [] });
+      }
+      if (path.includes("after=0") && phase === "ep1") {
+        await fullGate;
+        return json({
+          latest: 10, epoch: "epoch-1",
+          rows: [{ id: "seed", value: { id: "seed", title: "Seed" } }, { id: "other", value: { id: "other", title: "Other" } }],
+          deleted: [],
+        });
+      }
+      if (phase === "ep2" && path.includes("after=10")) {
+        return json({ latest: 50, epoch: "epoch-2", rows: [], deleted: [] });
+      }
+      return json({
+        latest: 2, epoch: "epoch-2",
+        rows: [{ id: "rebuilt", value: { id: "rebuilt", title: "Rebuilt" } }],
+        deleted: [],
+      });
+    }));
+
+    const pages = await live.LiveCollection.open<Record<string, unknown>>("pages", "personal", { seedPageId: "seed" });
+    opened.push(pages);
+    expect(pages.directoryLoading).toBe(true);
+    expect(pages.get("seed")).toBeTruthy();
+    expect(pages.get("other")).toBeUndefined();
+    releaseFull();
+    await flush();
+    expect(pages.directoryLoading).toBe(false);
+    expect(pages.get("other")).toBeTruthy();
+
+    phase = "ep2";
+    pages.refreshNow();
+    await flush();
+    const mismatchIdx = asked.findIndex((x) => x.includes("after=10"));
+    expect(mismatchIdx).toBeGreaterThanOrEqual(0);
+    expect(asked.slice(mismatchIdx + 1).some((p) => p.includes("after=0"))).toBe(true);
+    expect(pages.get("seed")).toBeUndefined();
+    expect(pages.get("rebuilt")).toBeTruthy();
+  });
 });

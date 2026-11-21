@@ -873,4 +873,16 @@ test("lazy history pulls (?pages=) and /api/records/locate respect space isolati
   const locatedKb = status(await alice.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 200);
   assert.deepEqual(locatedKb, { scope: kb.spaceId, spaceId: kb.spaceId });
   status(await bob.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 404);
+
+  const root = await agentPage(alice, bearer.token, "Ancestor root", "Root");
+  const mid = status(await alice.request("/api/v1/pages", { method: "POST", token: bearer.token, body: { title: "Ancestor mid", text: "Mid", parentId: root.id } }), 201);
+  const leaf = status(await alice.request("/api/v1/pages", { method: "POST", token: bearer.token, body: { title: "Ancestor leaf", text: "Leaf", parentId: mid.id } }), 201);
+  const anc = status(await alice.request(`/api/records/personal/pages?ancestors=${encodeURIComponent(leaf.id)}`), 200);
+  assert.ok(typeof anc.epoch === "string" && anc.epoch.length > 0);
+  assert.deepEqual(anc.rows.map((row: Json) => row.id), [leaf.id, mid.id, root.id]);
+  const deltaBeforeRestart = status(await alice.request("/api/records/personal/pages?after=0"), 200);
+  assert.equal(deltaBeforeRestart.epoch, anc.epoch);
+  await f.restart();
+  const deltaAfterRestart = status(await alice.request("/api/records/personal/pages?after=0"), 200);
+  assert.equal(deltaAfterRestart.epoch, anc.epoch);
 });

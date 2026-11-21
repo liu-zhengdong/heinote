@@ -501,7 +501,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const after = req.query.after === undefined ? undefined : parse(z.number().int().min(0), Number(req.query.after));
     const ids = typeof req.query.ids === "string" && req.query.ids ? req.query.ids.split(",") : undefined;
     const pageSpecs = typeof req.query.pages === "string" && req.query.pages ? req.query.pages.split(",") : undefined;
-    if (ids) res.json(store.recordsByIds(scope, collection, ids));
+    const ancestors = typeof req.query.ancestors === "string" && req.query.ancestors ? text(req.query.ancestors) : undefined;
+    if (ancestors) {
+      if (collection !== "pages") fail(400, "只有页面支持祖先路径查询。");
+      res.json(store.pageAncestors(scope, ancestors));
+    }
+    else if (ids) res.json(store.recordsByIds(scope, collection, ids));
     else if (pageSpecs && after !== undefined) {
       const groups = pageSpecs.map((spec) => {
         const [pageId, since = "0"] = spec.split(":", 2);
@@ -520,7 +525,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const cold = groups.filter((group) => group.since <= 0).map((group) => group.pageId);
       if (cold.length) merge(store.recordsSincePages(scope, collection, cold, 0));
       for (const group of groups) if (group.since > 0) merge(store.recordsSincePages(scope, collection, [group.pageId], group.since));
-      res.json({ latest, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
+      res.json({ latest, epoch: store.dbEpoch, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
     }
     else if (after === undefined) res.json(store.records(scope, collection));
     else res.json(store.recordsSince(scope, collection, after));

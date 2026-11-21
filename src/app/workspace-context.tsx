@@ -73,6 +73,7 @@ export interface WorkspaceContextValue {
   platform: PlatformClient | null;
   selectedPageId: string;
   loading: boolean;
+  directoryLoading: boolean;
   error: string | null;
   preferences: WorkspacePreferences;
   activeSpaceId: string;
@@ -255,6 +256,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     : platformClient, [platformClient, sessionUser]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SyncStatus>("saved");
   const [presence, setPresence] = useState<CollaboratorPresence[]>([]);
@@ -313,6 +315,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setPlatform(client);
         setDocument(next);
         setState(next.state);
+        setDirectoryLoading(next.directoryLoading);
         const stopSync = next.onSyncStatus(setSaveStatus);
         // Hidden or closing, the window saves at once rather than after the
         // usual pause; a tab closed with writes still unsaved asks first.
@@ -345,6 +348,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           // replaced.
           store.set(nextState);
           setState(nextState);
+          setDirectoryLoading(next.directoryLoading);
         });
         unsubscribe = () => {
           stopChanges();
@@ -1201,6 +1205,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     platform,
     selectedPageId,
     loading,
+    directoryLoading,
     error,
     preferences: state.preferences,
     activeSpaceId,
@@ -1256,6 +1261,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     platform,
     selectedPageId,
     loading,
+    directoryLoading,
     error,
     state.preferences,
     activeSpaceId,
