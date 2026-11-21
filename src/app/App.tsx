@@ -1,8 +1,6 @@
 import { CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { routes } from "../platform/schema";
-import { DatabasePage } from "../features/database/DatabasePage";
-import { AppPage } from "../features/artifact/AppPage";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
 import { DocumentEditor } from "../features/editor/DocumentEditor";
 import { linkedPageId } from "../features/editor/mentions";
@@ -13,7 +11,6 @@ import { TopBar } from "../features/topbar/TopBar";
 import { MobileDock } from "../features/mobile/MobileDock";
 import { MobileEditBar } from "../features/editor/MobileEditBar";
 import { getActiveEditSurface } from "./edit-surface";
-import { AccountSettings } from "../features/account/AccountSettings";
 import { useSession } from "../features/account/AuthGate";
 import { useFold } from "../hooks/useFold";
 import { useVisualViewport } from "../hooks/useVisualViewport";
@@ -26,7 +23,11 @@ import { pageAncestry } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
 
-/* Sharing, page history and the graph are loaded the first time they are opened. */
+/* Sharing, page history, the graph, databases, apps, settings and the admin
+   console are loaded the first time they are opened. */
+const DatabasePage = lazy(() => import("../features/database/DatabasePage").then((module) => ({ default: module.DatabasePage })));
+const AppPage = lazy(() => import("../features/artifact/AppPage").then((module) => ({ default: module.AppPage })));
+const AccountSettings = lazy(() => import("../features/account/AccountSettings").then((module) => ({ default: module.AccountSettings })));
 const ShareDialog = lazy(() => import("../features/share/ShareDialog").then((module) => ({ default: module.ShareDialog })));
 const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
 const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
@@ -51,7 +52,11 @@ function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: Note
 function AppPageShell({ pageId }: { pageId: string }) {
   const page = usePage(pageId);
   if (!page) return null;
-  return <AppPage page={page} />;
+  return (
+    <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+      <AppPage page={page} />
+    </Suspense>
+  );
 }
 
 export function App() {
@@ -364,7 +369,9 @@ export function App() {
                  a body: show what restoring it restores. */
               <Suspense fallback={null}><SnapshotPreview page={historyPreview} /></Suspense>
             ) : selectedKind === "database" && !historyPreview ? (
-              <DatabasePage readOnly={Boolean(trashedAt)} />
+              <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+                <DatabasePage readOnly={Boolean(trashedAt)} />
+              </Suspense>
             ) : selectedKind === "app" && !historyPreview ? (
               <AppPageShell pageId={selectedPageId} />
             ) : selectedKind ? (
@@ -429,17 +436,19 @@ export function App() {
       {mobile ? <MobileDock surface={surfaceEl} historyOpen={historyOpen} /> : null}
       {mobile ? <MobileEditBar /> : null}
       {user && accountSettingsOpen ? (
-        <AccountSettings
-          key={`${user.id}:${accountSettingsNotice || "default"}`}
-          notice={accountSettingsNotice}
-          onClose={() => {
-            closeAccountSettings();
-            requestAnimationFrame(() => {
-              const trigger = document.querySelector<HTMLElement>('.sidebar [aria-label="设置"], .rail [aria-label="设置"]');
-              if (trigger?.getClientRects().length && !trigger.closest("[inert]")) trigger.focus({ preventScroll: true });
-            });
-          }}
-        />
+        <Suspense fallback={null}>
+          <AccountSettings
+            key={`${user.id}:${accountSettingsNotice || "default"}`}
+            notice={accountSettingsNotice}
+            onClose={() => {
+              closeAccountSettings();
+              requestAnimationFrame(() => {
+                const trigger = document.querySelector<HTMLElement>('.sidebar [aria-label="设置"], .rail [aria-label="设置"]');
+                if (trigger?.getClientRects().length && !trigger.closest("[inert]")) trigger.focus({ preventScroll: true });
+              });
+            }}
+          />
+        </Suspense>
       ) : null}
       {adminOpen ? (
         <Suspense fallback={null}>

@@ -894,8 +894,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     vite = server; app.use(server.middlewares);
   } else if (options.serveStatic !== false) {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "../dist");
-    app.use(express.static(root, { index: false }));
-    app.get("/{*path}", (_req, res) => res.sendFile(resolve(root, "index.html")));
+    app.use("/assets", express.static(resolve(root, "assets"), { index: false, maxAge: "1y", immutable: true }));
+    app.use(express.static(root, { index: false, maxAge: "1d" }));
+    app.get("/{*path}", (_req, res) => {
+      res.setHeader("Cache-Control", "no-cache");
+      res.sendFile(resolve(root, "index.html"));
+    });
   }
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof z.ZodError) {

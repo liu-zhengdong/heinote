@@ -4,8 +4,7 @@
    Page controls appear on hover or focus. The concrete data-theme owns dark
    colours; motion tokens govern feedback and panel transitions. */
 
-/* Font stacks come from standalone.css. macOS uses the same system sans
-   and PingFang as Notion; other systems retain the bundled Noto Sans SC. */
+/* Font stacks come from standalone.css, using each OS's built-in sans, serif and CJK faces. */
 :root {
   color-scheme: light dark;
 

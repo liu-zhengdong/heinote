@@ -1,5 +1,7 @@
 import { ChevronsDown, ChevronsRight, ChevronsUp, Maximize2, Redo2, Undo2, X } from "lucide-react";
 import {
+  Suspense,
+  lazy,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -17,9 +19,10 @@ import type { NotePage } from "../../core/types";
 import { useWorkspace, type PagePatch } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { DocumentEditor } from "../editor/DocumentEditor";
-import { AppPage } from "../artifact/AppPage";
 import { PageActions } from "../topbar/PageActions";
-import { DatabaseSheet } from "./DatabasePage";
+
+const AppPage = lazy(() => import("../artifact/AppPage").then((module) => ({ default: module.AppPage })));
+const DatabaseSheet = lazy(() => import("./DatabasePage").then((module) => ({ default: module.DatabaseSheet })));
 import { PropertyEditor, PropertyIcon } from "./properties";
 import { propertyName, rowValues } from "./database-model";
 import { relationPeerMutations } from "./relation";
@@ -233,9 +236,9 @@ export function SidePeek({
 
   const peekBody = drawn ? (
     drawn.kind === "database" ? (
-      <DatabaseSheet database={drawn} surfaceContainer={mobile ? "peek" : "main"} />
+      <Suspense fallback={null}><DatabaseSheet database={drawn} surfaceContainer={mobile ? "peek" : "main"} /></Suspense>
     ) : drawn.kind === "app" ? (
-      <AppPage page={drawn} />
+      <Suspense fallback={null}><AppPage page={drawn} /></Suspense>
     ) : drawn.block_tree === undefined ? (
       <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>
     ) : (

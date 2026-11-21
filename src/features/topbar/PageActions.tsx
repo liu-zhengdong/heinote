@@ -14,7 +14,7 @@ import {
   Undo2,
   UserPlus,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
@@ -27,10 +27,11 @@ import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { LAND_EVENT, requestLanding } from "../editor/landing";
 import { MoveToMenu } from "../editor/MoveToMenu";
-import { ExportDialog } from "../export/ExportDialog";
 import { PAGE_FONTS, pageFont } from "../editor/page-decoration";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { sameItems, usePage, useWorkspaceState } from "../../app/workspace-store";
+
+const ExportDialog = lazy(() => import("../export/ExportDialog").then((module) => ({ default: module.ExportDialog })));
 
 /* What a page's bar offers for the page it names: Share, the star, and the
    ··· menu — the same wherever the page is shown, full-page or in the side
@@ -356,7 +357,7 @@ export function PageActions({
         />
       ) : null}
 
-      {exportOpen ? <ExportDialog page={page} onClose={() => setExportOpen(false)} /> : null}
+      {exportOpen ? <Suspense fallback={null}><ExportDialog page={page} onClose={() => setExportOpen(false)} /></Suspense> : null}
     </>
   );
 }

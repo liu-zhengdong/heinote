@@ -64,6 +64,7 @@ async function agent(token: string, method: string, path: string, body?: unknown
  *  row sits under a folded branch, `under` expands that parent first. */
 async function exportFormat(page: Page, title: string, format: string, under?: string): Promise<string> {
   if (under) {
+    await expect(page.locator(".tree-row__main").filter({ hasText: under }).first()).toBeVisible();
     const expand = page.getByRole("button", { name: `Expand ${under}`, exact: true });
     if (await expand.count()) await expand.click();
   }

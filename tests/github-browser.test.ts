@@ -82,7 +82,7 @@ test("GitHub sign-in follows real redirects, retains its account and protects it
   await expectIdentity(page, "GitHub 笔记用户");
   const first = (await session(page)).user;
   await methods(page);
-  await expect(page.getByText("browser-octocat", { exact: false })).toBeVisible();
+  await expect(page.getByRole("region", { name: "登录方式", exact: true }).getByText("browser-octocat", { exact: false })).toBeVisible();
   await expect(page.getByRole("button", { name: "解除绑定", exact: true })).toHaveCount(0);
   await expect(page.getByText("GitHub 是该账号目前唯一的登录方式，不能解除绑定。", { exact: true })).toBeVisible();
   await photo(page, "only-github-mobile@2x.png");
