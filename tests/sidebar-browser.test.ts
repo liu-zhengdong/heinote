@@ -487,7 +487,7 @@ test("touch drawer keeps tools visible and saves a new page", async ({ browser }
     await createButton(page).tap();
     await expect(newMenu(page)).toBeVisible();
     await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeHidden();
     await page.getByLabel("Page title", { exact: true }).fill("Mobile document");
     await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Mobile document"]);
     await page.reload();
