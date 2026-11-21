@@ -1,0 +1,134 @@
+/* Direction C floating bottom command dock for mobile (<560px). */
+
+.mobile-dock-wrap {
+  position: fixed;
+  z-index: 32;
+  left: 14px;
+  right: 14px;
+  bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  transition: transform var(--t-base) var(--e-pop), opacity var(--t-fast) var(--e-out);
+}
+
+.mobile-dock-wrap.is-condensed {
+  justify-content: flex-end;
+}
+
+.mobile-dock-wrap.is-hidden:not(:focus-within) {
+  opacity: 0;
+  transform: translateY(16px);
+  pointer-events: none;
+}
+
+.mobile-dock-wrap.is-hidden .mobile-dock {
+  pointer-events: none;
+}
+
+.mobile-dock {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 362px;
+  height: 50px;
+  padding: 4px 5px 4px 6px;
+  border-radius: 999px;
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  transition: width var(--t-base) var(--e-pop), padding var(--t-base) var(--e-pop);
+}
+
+.mobile-dock-wrap.is-condensed .mobile-dock {
+  width: auto;
+  padding: 4px 5px 4px 6px;
+}
+
+.mobile-dock__nav,
+.mobile-dock__search,
+.mobile-dock__icon-search,
+.mobile-dock__add {
+  flex: none;
+  min-height: 42px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--t-fast) var(--e-out), color var(--t-fast) var(--e-out);
+}
+
+.mobile-dock__nav {
+  gap: 6px;
+  padding: 0 12px;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 550;
+}
+
+.mobile-dock__nav:hover,
+.mobile-dock__nav:active,
+.mobile-dock__icon-search:hover,
+.mobile-dock__icon-search:active {
+  background: var(--fill-hover);
+}
+
+.mobile-dock__search {
+  flex: 1;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 7px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 12px;
+  background: var(--fill);
+  color: var(--ink-3);
+  font-size: 13.5px;
+  text-align: left;
+}
+
+.mobile-dock__search:hover,
+.mobile-dock__search:active {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.mobile-dock__search span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-dock__icon-search {
+  min-width: 42px;
+  color: var(--ink-2);
+}
+
+.mobile-dock__add {
+  width: 42px;
+  height: 42px;
+  background: var(--blue);
+  color: var(--blue-ink);
+}
+
+.mobile-dock__add:hover:not(:disabled),
+.mobile-dock__add:active:not(:disabled) {
+  background: var(--blue-press);
+}
+
+.mobile-dock__add:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-dock-wrap,
+  .mobile-dock,
+  .mobile-dock__nav,
+  .mobile-dock__search,
+  .mobile-dock__icon-search,
+  .mobile-dock__add {
+    transition: none;
+  }
+}

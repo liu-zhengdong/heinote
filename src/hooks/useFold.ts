@@ -22,12 +22,9 @@ function isFolded(): boolean {
   return window.matchMedia(`(max-width: ${FOLD - 0.02}px)`).matches;
 }
 
-/** True while the window is too narrow to hold the list and the page at once.
- *
- *  An app is handed its window's content box as its viewport, so this is the
- *  WINDOW's width, not the screen's: on a desk where every window opens at
- *  640×460 and can be pulled to 400×300, folded is an ordinary state and not
- *  a phone. */
+/** True while the viewport is narrower than 560px: uses the mobile shell
+ *  (borderless top bar, floating bottom MobileDock, and BottomSheet overlays)
+ *  instead of the desktop sidebar or 46px desktop rail. */
 export function useFold(): boolean {
   return useSyncExternalStore(subscribe, isFolded, () => false);
 }

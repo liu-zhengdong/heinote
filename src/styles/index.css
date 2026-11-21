@@ -887,6 +887,26 @@ kbd {
   grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
 }
 
+.app-shell--mobile {
+  --pane-left: 0px;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.app-shell--mobile .app-main {
+  grid-area: 1 / 1;
+}
+
+.app-shell--mobile .page-surface {
+  padding-top: calc(46px + env(safe-area-inset-top, 0px));
+  scroll-padding-top: calc(54px + env(safe-area-inset-top, 0px));
+  scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+.app-shell--mobile :is(.doc, .db) {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
 /* The seam follows the pointer, not an easing curve. */
 .app-shell.is-resizing {
   transition: none;
@@ -2196,6 +2216,72 @@ kbd {
   gap: 3px;
   padding: 0 12px;
   background: var(--paper);
+}
+
+.topbar--mobile {
+  height: auto;
+  min-height: calc(44px + env(safe-area-inset-top, 0px));
+  justify-content: space-between;
+  padding: max(4px, env(safe-area-inset-top, 0px)) 10px 4px 12px;
+}
+
+.topbar--mobile .icon-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.topbar__space-badge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.topbar__space-dot {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--ink-soft);
+}
+
+.topbar__space-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__back {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.topbar__back > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__done {
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--blue);
+  font-weight: 600;
 }
 
 .topbar__actions .icon-btn > svg,
@@ -9942,6 +10028,16 @@ button.db__th:hover,
 @media (max-width: 559.98px) {
   .sidebar__collapse {
     display: none;
+  }
+
+  .trash-banner {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-block: 8px;
+  }
+
+  .trash-banner .btn {
+    min-height: 44px;
   }
 }
 

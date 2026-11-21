@@ -35,6 +35,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { BottomSheet } from "../../components/BottomSheet";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
@@ -367,8 +368,9 @@ export function Sidebar() {
   const linked = linkedFromOutside(pages);
   const linkedPage = useCallback((page: NotePage) => linked.has(page.id), [linked]);
 
-  const railed = folded || preferences.sidebar_collapsed;
-  const drawered = railed && drawerOpen;
+  const mobile = folded;
+  const railed = !mobile && preferences.sidebar_collapsed;
+  const drawered = !mobile && railed && drawerOpen;
 
   useEffect(() => {
     if (!folded && drawerOpen) setDrawerOpen(false);
@@ -945,31 +947,45 @@ export function Sidebar() {
         </nav>
       ) : null}
 
-      <aside
-        ref={asideRef}
-        className={[
-          "sidebar",
-          railed ? "sidebar--drawer" : "",
-          drawered ? "is-open" : "",
-          resizing ? "is-resizing" : "",
-        ].filter(Boolean).join(" ")}
-        aria-label="Pages"
-        role={drawered ? "dialog" : undefined}
-        aria-modal={drawered ? true : undefined}
-        aria-hidden={railed && !drawered ? true : undefined}
-        inert={railed && !drawered ? true : undefined}
-      >
-        {list}
-        {!railed ? (
-          <div
-            className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
-            role="separator"
-            aria-label="Resize the page list"
-            aria-orientation="vertical"
-            onPointerDown={onResizeStart}
-          />
-        ) : null}
-      </aside>
+      {mobile ? (
+        <BottomSheet
+          open={drawerOpen}
+          label="Pages"
+          size="tall"
+          className="sidebar sidebar--sheet"
+          scrimLabel="Close the page list"
+          restoreFocusTo={() => document.querySelector<HTMLElement>('.mobile-dock [aria-label="All pages"]')}
+          onClose={() => setDrawerOpen(false)}
+        >
+          {list}
+        </BottomSheet>
+      ) : (
+        <aside
+          ref={asideRef}
+          className={[
+            "sidebar",
+            railed ? "sidebar--drawer" : "",
+            drawered ? "is-open" : "",
+            resizing ? "is-resizing" : "",
+          ].filter(Boolean).join(" ")}
+          aria-label="Pages"
+          role={drawered ? "dialog" : undefined}
+          aria-modal={drawered ? true : undefined}
+          aria-hidden={railed && !drawered ? true : undefined}
+          inert={railed && !drawered ? true : undefined}
+        >
+          {list}
+          {!railed ? (
+            <div
+              className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
+              role="separator"
+              aria-label="Resize the page list"
+              aria-orientation="vertical"
+              onPointerDown={onResizeStart}
+            />
+          ) : null}
+        </aside>
+      )}
 
       {drawered ? (
         <button type="button" tabIndex={-1} className="sidebar__scrim is-shown" aria-label="Close the page list" onClick={() => setDrawerOpen(false)} />
@@ -981,6 +997,7 @@ export function Sidebar() {
         placement="bottom-start"
         role="presentation"
         group="sidebar-new"
+        mobileSheet={{ title: "新建" }}
         onDismiss={(reason) => {
           setNewMenu(null);
           if (reason === "escape") newTriggerRef.current?.focus({ preventScroll: true });
@@ -993,7 +1010,7 @@ export function Sidebar() {
         </MenuList>
       </Popover>
 
-      <Popover open={Boolean(sortMenu)} anchor={sortMenu} placement="bottom-start" label="Sort" onDismiss={() => setSortMenu(null)}>
+      <Popover open={Boolean(sortMenu)} anchor={sortMenu} placement="bottom-start" label="Sort" mobileSheet={{ title: "排序" }} onDismiss={() => setSortMenu(null)}>
         <MenuList label="Sort" autoFocus>
           {SORTS.map((sort, index) => (
             <div key={sort}>
@@ -1017,6 +1034,7 @@ export function Sidebar() {
         anchor={rowMenu?.anchor ?? null}
         placement="bottom-start"
         label="Page actions"
+        mobileSheet={{ title: menuPage ? pageName(menuPage) || "页面操作" : "页面操作" }}
         onDismiss={() => setRowMenu(null)}
       >
         {menuPage ? (

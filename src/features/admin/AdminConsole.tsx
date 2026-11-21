@@ -1,5 +1,6 @@
 import { AlertTriangle, ArrowLeft, ArrowUpCircle, BookMarked, CheckCircle2, CloudUpload, Code2, DatabaseBackup, ExternalLink, HardDrive, Info, RefreshCw, Search, Settings2, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLayer } from "../../components/layer-stack";
 import { Select } from "../../components/Select";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { useUi } from "../../app/ui-context";
@@ -69,15 +70,13 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
 
   useEffect(() => {
     root.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      if (confirm) setConfirm(null);
-      else if (detail) setDetail(false);
-      else onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [confirm, detail, onClose]);
+  }, []);
+
+  useLayer(true, () => {
+    if (confirm) setConfirm(null);
+    else if (detail) setDetail(false);
+    else onClose();
+  }, { phase: "capture" });
 
   const doConfirm = async () => {
     if (!confirm) return;

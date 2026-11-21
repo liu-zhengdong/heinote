@@ -1,5 +1,6 @@
 import { Download, FilePlus2, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useLayer } from "../../components/layer-stack";
 import { useWorkspace } from "../../app/workspace-context";
 import { addRecovery, clearRecovery, getRecovery, type RecoveryDraft, type RecoveryEntry } from "../../collaboration/recovery";
 import { request } from "../../platform/http";
@@ -89,12 +90,7 @@ export function SaveRecovery() {
   // Drafts that only live in memory open the dialog immediately; everything
   // else stays a quiet pill until the user chooses to deal with it.
   useEffect(() => { if (volatile) setExpanded(true); }, [volatile]);
-  useEffect(() => {
-    if (!hasEntries || !expanded || volatile) return;
-    const key = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [hasEntries, expanded, volatile]);
+  useLayer(hasEntries && expanded && !volatile, () => setExpanded(false), { phase: "capture" });
 
   if (!hasEntries || !userId) return null;
   const preview = previewOf(entries);

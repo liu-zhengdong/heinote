@@ -1,6 +1,8 @@
 import { LocateFixed, RotateCcw, X } from "lucide-react";
-import { imeComposing } from "../../core/keyboard";
 import { useEffect, useMemo, useState } from "react";
+import { BottomSheet } from "../../components/BottomSheet";
+import { useLayer } from "../../components/layer-stack";
+import { useFold } from "../../hooks/useFold";
 import { useMountTransition } from "../../hooks/useMountTransition";
 import type { NotePage, PageEvent, PageVersion } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
@@ -67,7 +69,9 @@ export function HistoryPanel({
 }) {
   const { restoreVersion, rosters } = useWorkspace();
   const { toast } = useUi();
-  const { mounted, shown } = useMountTransition(open && Boolean(pageId), PANEL_EXIT_MS);
+  const mobile = useFold();
+  const active = open && Boolean(pageId);
+  const { mounted, shown } = useMountTransition(active && !mobile, PANEL_EXIT_MS);
   const page = useWorkspaceState((state) => (pageId ? state.pages[pageId] : undefined));
   const stored = useWorkspaceState((state) => (pageId ? state.versions[pageId] : undefined));
   const events = useWorkspaceState((state) => (pageId ? state.pageEvents[pageId] : undefined));
@@ -122,21 +126,9 @@ export function HistoryPanel({
 
   const member = (userId: string) => Object.values(rosters).flatMap((space) => space.members).find((item) => item.id === userId);
 
-  /* Escape closes it, like every other layer in the app. Without this the only
-     way out of the panel is the mouse, which is a strange thing to say about a
-     surface you reach from a keyboard-driven menu. */
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || imeComposing(event)) return;
-      event.stopPropagation();
-      onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+  useLayer(active && !mobile, onClose, { phase: "capture" });
 
-  if (!mounted || !pageId) return null;
+  if (!pageId) return null;
 
   const authorOf = (authorId: string, name: string, avatarUrl: string | null | undefined) => {
     const author = member(authorId);
@@ -145,6 +137,77 @@ export function HistoryPanel({
       avatar: avatarUrl || author?.avatarUrl,
     };
   };
+
+  const body = (
+    <div className="panel__body scroller" role="listbox" aria-label="Versions">
+      <button
+        type="button"
+        role="option"
+        aria-selected={!selected}
+        className={`history-item history-item--current ${selected ? "" : "is-selected"}`}
+        onClick={() => setSelectedId("")}
+      >
+        <span className="history-item__time">Current version</span>
+      </button>
+      {groups.map(([group, items]) => (
+        <section className="history-group" key={group}>
+          <h3>{group}</h3>
+          {items.map((entry) => entry.kind === "version" ? (
+            <VersionItem
+              key={`v-${entry.version.id}`}
+              version={entry.version}
+              selected={selected?.id === entry.version.id}
+              author={authorOf(entry.version.author_id, entry.version.author_name, entry.version.author_avatar_url)}
+              onPick={() => setSelectedId(entry.version.id)}
+            />
+          ) : (
+            <EventItem
+              key={`e-${entry.event.id}`}
+              event={entry.event}
+              author={authorOf(entry.event.author_id, entry.event.author_name, entry.event.author_avatar_url)}
+              onPick={() => locate(entry.event)}
+            />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+
+  const foot = (
+    <footer className="panel__foot">
+      <button
+        type="button"
+        className="btn btn--primary"
+        disabled={!selected}
+        onClick={() => {
+          if (!selected) return;
+          restoreVersion(pageId, selected);
+          toast("Version restored", "success");
+          onClose();
+        }}
+      >
+        <RotateCcw size={15} />Restore
+      </button>
+    </footer>
+  );
+
+  if (mobile) {
+    return (
+      <BottomSheet
+        open={active}
+        label="Page history"
+        title="Page history"
+        size="peek"
+        scrimLabel="Close page history"
+        onClose={onClose}
+      >
+        {body}
+        {foot}
+      </BottomSheet>
+    );
+  }
+
+  if (!mounted) return null;
 
   return (
     <>
@@ -156,55 +219,8 @@ export function HistoryPanel({
             <X size={17} />
           </button>
         </header>
-
-        <div className="panel__body scroller" role="listbox" aria-label="Versions">
-          <button
-            type="button"
-            role="option"
-            aria-selected={!selected}
-            className={`history-item history-item--current ${selected ? "" : "is-selected"}`}
-            onClick={() => setSelectedId("")}
-          >
-            <span className="history-item__time">Current version</span>
-          </button>
-          {groups.map(([group, items]) => (
-            <section className="history-group" key={group}>
-              <h3>{group}</h3>
-              {items.map((entry) => entry.kind === "version" ? (
-                <VersionItem
-                  key={`v-${entry.version.id}`}
-                  version={entry.version}
-                  selected={selected?.id === entry.version.id}
-                  author={authorOf(entry.version.author_id, entry.version.author_name, entry.version.author_avatar_url)}
-                  onPick={() => setSelectedId(entry.version.id)}
-                />
-              ) : (
-                <EventItem
-                  key={`e-${entry.event.id}`}
-                  event={entry.event}
-                  author={authorOf(entry.event.author_id, entry.event.author_name, entry.event.author_avatar_url)}
-                  onPick={() => locate(entry.event)}
-                />
-              ))}
-            </section>
-          ))}
-        </div>
-
-        <footer className="panel__foot">
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={!selected}
-            onClick={() => {
-              if (!selected) return;
-              restoreVersion(pageId, selected);
-              toast("Version restored", "success");
-              onClose();
-            }}
-          >
-            <RotateCcw size={15} />Restore
-          </button>
-        </footer>
+        {body}
+        {foot}
       </aside>
     </>
   );

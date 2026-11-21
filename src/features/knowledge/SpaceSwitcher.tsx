@@ -43,7 +43,8 @@ export function SpaceSwitcher({ compact = false, onSwitch }: { compact?: boolean
       <ChevronDown className="space-switcher__chevron" size={12} aria-hidden="true" />
     </button>
     <Popover open={Boolean(anchor)} anchor={anchor} placement="top-start" role="presentation" label="切换空间"
-      className="space-switcher-popover" group={group} onDismiss={(reason) => { setAnchor(null); if (reason === "escape") focusTrigger(); }}>
+      className="space-switcher-popover" group={group} mobileSheet={{ title: "切换空间" }}
+      onDismiss={(reason) => { setAnchor(null); if (reason === "escape") focusTrigger(); }}>
       <div id={`${id}-menu`}>
         <MenuList label="切换空间" autoFocus>
           <div className="menu__section-title">个人空间</div>

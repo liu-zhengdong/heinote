@@ -71,7 +71,7 @@ export function MoveToMenu({
   }, [active]);
 
   return (
-    <Popover open anchor={anchor} placement="bottom-start" role="dialog" label={label ?? "Move to"} onDismiss={onClose}>
+    <Popover open anchor={anchor} placement="bottom-start" role="dialog" label={label ?? "Move to"} mobileSheet={{ title: label ?? "移动到…" }} onDismiss={onClose}>
       <div className="move-to">
         <input
           autoFocus

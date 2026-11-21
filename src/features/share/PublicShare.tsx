@@ -1,5 +1,7 @@
-import { Globe } from "lucide-react";
+import { Globe, Menu } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { BottomSheet } from "../../components/BottomSheet";
+import { useFold } from "../../hooks/useFold";
 import type { NotePage } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
 import { buildTree, type PageTree } from "../sidebar/tree";
@@ -62,8 +64,13 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const [unavailable, setUnavailable] = useState(false);
   const [revision, setRevision] = useState(0);
   const [pageId, setPageId] = useState(selectedPage);
+  const [navOpen, setNavOpen] = useState(false);
+  const mobile = useFold();
   useEffect(() => {
-    const changed = () => setPageId(selectedPage());
+    const changed = () => {
+      setPageId(selectedPage());
+      setNavOpen(false);
+    };
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
@@ -121,10 +128,10 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>
       : !active ? <p className="public-reader__status account-muted">暂无公开内容</p>
       : <div className={`public-reader__layout${listedCount > 1 ? " public-reader__layout--with-nav" : ""}`}>
-        {tree && listedCount > 1 ? <nav className="public-reader__nav" aria-label="公开页面">
+        {tree && listedCount > 1 && !mobile ? <nav className="public-reader__nav" aria-label="公开页面">
           <NavBranch pages={tree.roots} tree={tree} active={active.id} context={context} />
         </nav> : null}
-        <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(active)}>
+        <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
           {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
           <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
             {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
@@ -142,6 +149,27 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               <a key={page.id} href={pageHref(page.id)}><ReaderPageIcon page={page} context={context} size={16} />{titleOf(page)}</a>)}</nav> : null}
           </div>
         </article>
+        {mobile && tree && listedCount > 1 ? (
+          <>
+            <div className="public-mobile-pill-wrap">
+              <button
+                type="button"
+                className="public-mobile-pill"
+                aria-label="打开公开页面目录"
+                aria-expanded={navOpen}
+                onClick={() => setNavOpen(true)}
+              >
+                <Menu size={16} aria-hidden="true" />
+                <span>目录 · {document?.title || titleOf(active)}</span>
+              </button>
+            </div>
+            <BottomSheet open={navOpen} label="公开页面" title={document?.title || "公开页面"} size="tall" onClose={() => setNavOpen(false)}>
+              <nav className="public-reader__nav public-reader__nav--sheet" aria-label="公开页面" onClick={() => setNavOpen(false)}>
+                <NavBranch pages={tree.roots} tree={tree} active={active.id} context={context} />
+              </nav>
+            </BottomSheet>
+          </>
+        ) : null}
       </div>}
   </main>;
 }

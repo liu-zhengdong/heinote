@@ -19,6 +19,7 @@ import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { useFold } from "../../hooks/useFold";
 import { imeComposing } from "../../core/keyboard";
 import type { NotePage } from "../../core/types";
 import { lineLink, pageName } from "../../core/block-tree";
@@ -79,6 +80,7 @@ export function PageActions({
     spaceOf,
   } = useWorkspace();
   const { toast, sharePageId, requestShare, closeShare, closePeek } = useUi();
+  const mobile = useFold();
   const [moreAnchor, setMoreAnchor] = useState<AnchorRect | null>(null);
   const [moveAnchor, setMoveAnchor] = useState<AnchorRect | null>(null);
   const [copyAnchor, setCopyAnchor] = useState<AnchorRect | null>(null);
@@ -162,7 +164,7 @@ export function PageActions({
 
   return (
     <>
-      {compact ? (
+      {mobile ? null : compact ? (
         <Tooltip label={shareLabel}>
           <button
             type="button"
@@ -184,7 +186,7 @@ export function PageActions({
           {shareLabel}
         </button>
       )}
-      {link ? (
+      {link && !mobile ? (
         <Tooltip label="Copy link">
           <button type="button" className="icon-btn" aria-label="Copy link" onClick={copyLink}>
             <Link size={16} />
@@ -219,9 +221,16 @@ export function PageActions({
         anchor={moreAnchor}
         placement="bottom-end"
         label="Page actions"
+        mobileSheet={{ title: pageName(page) || "页面操作" }}
         onDismiss={() => setMoreAnchor(null)}
       >
         <MenuList label="Page actions" className="menu--page" autoFocus>
+          {mobile ? (
+            <>
+              <MenuItem icon={<UserPlus size={16} />} label={shareLabel} onSelect={() => { setMoreAnchor(null); toggleShare(); }} />
+              <MenuDivider />
+            </>
+          ) : null}
           {/* Notion opens this menu on the page's font. A pick leaves the
               menu open, so the page can be seen changing behind it. */}
           {editable && page.kind === "document" ? (

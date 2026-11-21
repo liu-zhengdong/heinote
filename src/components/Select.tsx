@@ -76,8 +76,11 @@ export function Select<const T extends string>({
 
   useEffect(() => {
     if (!open) return;
+    const openWidth = window.innerWidth;
     const dismiss = (event: Event) => {
       if (event.type === "scroll" && event.target instanceof Node && popup.current?.contains(event.target)) return;
+      // Soft keyboards only shrink height; keep Select open unless horizontal width changed.
+      if (event.type === "resize" && Math.abs(window.innerWidth - openWidth) <= 1) return;
       popup.current?.hidePopover();
       setAnchor(null);
     };

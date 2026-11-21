@@ -157,7 +157,7 @@
 @keyframes proposal-spin { to { transform: rotate(360deg); } }
 @keyframes proposal-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 600px) {
-  .corner-stack { right: 12px; bottom: 12px; }
+  .corner-stack { right: 12px; bottom: var(--mobile-bottom-offset, 12px); }
   .save-recovery-scrim { padding: 12px; }
   .save-recovery { max-height: calc(100dvh - 24px); padding: 20px 18px 14px; }
   .save-recovery__foot { flex-direction: column-reverse; align-items: stretch; }

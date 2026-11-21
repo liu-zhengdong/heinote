@@ -352,7 +352,7 @@ export function ImageViewer({
   };
 
   return (
-    <Modal open label={file.name} className="viewer" onClose={requestClose}>
+    <Modal open label={file.name} className="viewer" mobilePresentation="fullscreen" onClose={requestClose}>
       <div className="viewer__bar">
         <span className="viewer__name">{file.name}</span>
         {browse && browse.count > 1 ? <span className="viewer__count">{browse.index + 1} of {browse.count}</span> : null}

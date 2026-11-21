@@ -173,6 +173,17 @@
   .ac-qrow__side { flex-direction: row; align-items: center; }
 }
 
+@media (max-width: 559.98px) {
+  .admin__top { padding: max(10px, env(safe-area-inset-top, 0px)) 14px 10px; }
+  .admin__tabs { padding: 0 12px; overflow-x: auto; scrollbar-width: none; white-space: nowrap; }
+  .admin__tabs::-webkit-scrollbar { display: none; }
+  .admin__tab { flex: none; min-height: 44px; }
+  .ac-overview, .ac-quotas { padding: 18px 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
+  .ac-ins__inner { padding: 18px 14px calc(24px + env(safe-area-inset-bottom, 0px)); }
+  .ac-queue__row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .ac-edit__row { flex-wrap: wrap; }
+}
+
 /* ————— update row (UC-32) ————— */
 .ac-update { align-items: start; }
 .ac-update dt { padding-top: 1px; }

@@ -133,13 +133,15 @@ async function expectNavigationLayout(page: Page) {
   expect(top).not.toBeNull();
   let previousBottom = top!.y + top!.height;
   let previousX: number | undefined;
+  const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   for (const view of views) {
     const tab = tabs.getByRole("tab", { name: view.name, exact: true });
     await expect(tab).toContainText(view.label);
     const box = await tab.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
-    expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
+    if (mobile) expect(box!.height).toBeGreaterThanOrEqual(42);
+    else expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
     if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
     previousX = box!.x;
     previousBottom = box!.y + box!.height;
@@ -287,16 +289,19 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await expect(newMenu(page)).toBeHidden();
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".rail")).toHaveCount(0);
   const allPages = page.getByRole("button", { name: "All pages", exact: true });
   await expect(allPages).toHaveAttribute("aria-expanded", "false");
   await allPages.click();
-  await expect(allPages).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
   await expectToolbarLayout(filesToolbar(page));
   await createButton(page).click();
   const menu = newMenu(page);
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库", "小应用"]);
+  const sheet = page.locator(".bottom-sheet.pop--sheet.is-shown");
+  await expect(sheet).toBeVisible();
+  await sheet.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
   const bounds = await menu.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -306,8 +311,9 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   const drawerShot = testInfo.outputPath("sidebar-menu-light-mobile-drawer.png");
   await page.screenshot({ path: drawerShot, animations: "disabled" });
   await testInfo.attach("Light mobile drawer and creation menu (2x)", { path: drawerShot, contentType: "image/png" });
-  await page.getByRole("button", { name: "Close the page list", exact: true }).click({ position: { x: 330, y: 700 } });
+  await page.getByRole("button", { name: "关闭 新建 浮层", exact: true }).click({ position: { x: 195, y: 40 } });
   await expect(menu).toBeHidden();
+  await page.getByRole("button", { name: "Close the page list", exact: true }).click({ position: { x: 195, y: 40 } });
   await expect(allPages).toHaveAttribute("aria-expanded", "false");
   expect(await savedPages(page)).toEqual([]);
 });
@@ -473,7 +479,7 @@ test("touch drawer keeps tools visible and saves a new page", async ({ browser }
     await register(page, "sidebar_touch");
     const allPages = page.getByRole("button", { name: "All pages", exact: true });
     await allPages.tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
     await expectNavigationLayout(page);
     const toolbar = filesToolbar(page);
     await expect.poll(() => effectiveOpacity(toolbar.getByRole("button", { name: "Change sort order", exact: true }))).toBe(1);
@@ -488,7 +494,7 @@ test("touch drawer keeps tools visible and saves a new page", async ({ browser }
     await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Mobile document");
     await page.emulateMedia({ colorScheme: "dark" });
     await allPages.tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
     await attachLayout(page, testInfo, "dark-touch-drawer");
   } finally {
     await context.close();

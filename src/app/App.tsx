@@ -10,7 +10,11 @@ import { QuickFind } from "../features/quickfind/QuickFind";
 import { Sidebar } from "../features/sidebar/Sidebar";
 import { DeletePageConfirm } from "../features/sidebar/TrashView";
 import { TopBar } from "../features/topbar/TopBar";
+import { MobileDock } from "../features/mobile/MobileDock";
+import { AccountSettings } from "../features/account/AccountSettings";
+import { useSession } from "../features/account/AuthGate";
 import { useFold } from "../hooks/useFold";
+import { useVisualViewport } from "../hooks/useVisualViewport";
 import type { NotePage } from "../core/types";
 import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
 import { imeComposing } from "../core/keyboard";
@@ -53,20 +57,46 @@ export function App() {
     selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
-  const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast, adminOpen, setAdminOpen } = useUi();
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const { user, githubOutcome, clearGithubOutcome } = useSession();
+  const {
+    setQuickFindOpen,
+    drawerOpen,
+    setDrawerOpen,
+    sharePageId,
+    closeShare,
+    peekPageId,
+    openPeek,
+    closePeek,
+    toast,
+    adminOpen,
+    setAdminOpen,
+    historyOpen,
+    setHistoryOpen,
+    accountSettingsOpen,
+    accountSettingsNotice,
+    openAccountSettings,
+    closeAccountSettings,
+  } = useUi();
+
+  useEffect(() => {
+    if (!user || !githubOutcome) return;
+    openAccountSettings(githubOutcome);
+    clearGithubOutcome();
+  }, [clearGithubOutcome, githubOutcome, openAccountSettings, user]);
   /* Opened once, the panel stays mounted, so it can slide out as it closes. */
   const [historyUsed, setHistoryUsed] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<NotePage | null>(null);
-  const folded = useFold();
+  const [surfaceEl, setSurfaceEl] = useState<HTMLElement | null>(null);
+  const mobile = useFold();
+  useVisualViewport(mobile);
   /* Same sum the Sidebar does. The shell only needs it for the width of the
-     first track; what goes IN that track is the Sidebar's business. */
-  const railed = folded || preferences.sidebar_collapsed;
+     first track; on mobile there is no rail track at all. */
+  const railed = !mobile && preferences.sidebar_collapsed;
 
   /* The side peek is laid out by the shell: docked beside the page when the
      page pane holds both, over it when it does not. */
   const [shell, setShell] = useState<HTMLDivElement | null>(null);
-  const peek = usePeekLayout(shell, railed ? SIDEBAR_RAIL_WIDTH : preferences.sidebar_width);
+  const peek = usePeekLayout(shell, mobile ? 0 : railed ? SIDEBAR_RAIL_WIDTH : preferences.sidebar_width);
   /* What the shell draws of the workspace — the open page's kind, whether
      the row in the peek is still there, whether sharing still follows the
      page — each read on its own, so typing redraws none of it. */
@@ -99,7 +129,7 @@ export function App() {
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     setHistoryPreview(null);
-  }, []);
+  }, [setHistoryOpen]);
 
   /* Workspace-level shortcuts. ⌘K opens Quick Find, ⌘\ folds the list and
      ⌘⇧N starts a page — the three Notion reaches for without a menu. On a
@@ -133,7 +163,7 @@ export function App() {
       }
       if (key === "\\") {
         event.preventDefault();
-        if (folded) setDrawerOpen(!drawerOpen);
+        if (mobile) setDrawerOpen(!drawerOpen);
         else setPreference("sidebar_collapsed", !preferences.sidebar_collapsed);
         return;
       }
@@ -144,7 +174,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [createPage, drawerOpen, folded, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, toast]);
+  }, [createPage, drawerOpen, mobile, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, toast]);
 
   /* A page id in the fragment opens that page — the target of every "Copy
      link" in the app, a block's too: a block is a page. So does a place
@@ -262,7 +292,7 @@ export function App() {
   return (
     <div
       ref={setShell}
-      className={`app-shell ${railed ? "app-shell--railed" : ""} ${peekOpen && peek.docked ? "app-shell--peek" : ""}`}
+      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && peekOpen && peek.docked ? "app-shell--peek" : ""}`}
       style={{ ["--sidebar-w" as string]: `${preferences.sidebar_width}px`, ["--peek-w" as string]: `${peek.width}px` }}
     >
       <Sidebar />
@@ -283,7 +313,7 @@ export function App() {
           {/* The graph, opened as a page of its own: its dots open beside
               it, in the side peek — or in its place with ⌘/Ctrl. */}
           {graphOpen ? (
-            <main className="page-surface page-surface--graph">
+            <main ref={setSurfaceEl} className="page-surface page-surface--graph">
               <Suspense fallback={<div className="graph graph--page" aria-busy="true" />}>
                 <GraphView
                   variant="page"
@@ -293,7 +323,7 @@ export function App() {
               </Suspense>
             </main>
           ) : (
-          <main className="page-surface scroller">
+          <main ref={setSurfaceEl} className="page-surface scroller">
             {historyPreview ? (
               <div className="history-banner" role="status">
                 <Clock3 size={14} />
@@ -386,6 +416,20 @@ export function App() {
         onConfirm={() => void removeTrashedPage()}
       />
       <QuickFind />
+      {mobile ? <MobileDock surface={surfaceEl} historyOpen={historyOpen} /> : null}
+      {user && accountSettingsOpen ? (
+        <AccountSettings
+          key={`${user.id}:${accountSettingsNotice || "default"}`}
+          notice={accountSettingsNotice}
+          onClose={() => {
+            closeAccountSettings();
+            requestAnimationFrame(() => {
+              const trigger = document.querySelector<HTMLElement>('.sidebar [aria-label="设置"], .rail [aria-label="设置"]');
+              if (trigger?.getClientRects().length && !trigger.closest("[inert]")) trigger.focus({ preventScroll: true });
+            });
+          }}
+        />
+      ) : null}
       {adminOpen ? (
         <Suspense fallback={null}>
           <AdminConsole onClose={() => {
