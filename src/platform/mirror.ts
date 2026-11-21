@@ -41,6 +41,7 @@ export type MirrorPayload =
 let activeUserId: string | null = null;
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingEntries = new Map<string, MirrorEntry>();
 
 const mirrorKey = (userId: string, scope: string, collection: string) => `${userId}\0${scope}\0${collection}`;
 
@@ -117,13 +118,11 @@ async function writeMirrorNow(entry: MirrorEntry): Promise<void> {
   });
 }
 
-/** Debounced persistence of a collection snapshot or LRU block set for the active account. */
+/** Trailing-throttled persistence of a collection snapshot or LRU block set for the active account. */
 export function scheduleWriteMirror(scope: string, collection: string, payload: MirrorPayload): void {
   const userId = activeUserId;
   if (!userId || !MIRRORED_COLLECTIONS.has(collection) || typeof indexedDB === "undefined") return;
   const key = mirrorKey(userId, scope, collection);
-  const prior = pendingTimers.get(key);
-  if (prior) clearTimeout(prior);
   const entry = {
     ...payload,
     userId,
@@ -131,10 +130,14 @@ export function scheduleWriteMirror(scope: string, collection: string, payload: 
     collection,
     updatedAt: Date.now(),
   } as MirrorEntry;
+  pendingEntries.set(key, entry);
+  if (pendingTimers.has(key)) return;
   const timer = setTimeout(() => {
     pendingTimers.delete(key);
-    if (activeUserId !== userId) return;
-    void writeMirrorNow(entry);
+    const latest = pendingEntries.get(key);
+    pendingEntries.delete(key);
+    if (!latest || activeUserId !== userId) return;
+    void writeMirrorNow(latest);
   }, WRITE_DEBOUNCE_MS);
   pendingTimers.set(key, timer);
 }
@@ -147,6 +150,7 @@ export async function deleteScopeMirror(scope: string): Promise<void> {
     const key = mirrorKey(userId, scope, collection);
     const timer = pendingTimers.get(key);
     if (timer) { clearTimeout(timer); pendingTimers.delete(key); }
+    pendingEntries.delete(key);
   }
   const db = await openMirrorDb();
   if (!db) return;
@@ -171,6 +175,9 @@ export async function clearUserMirror(userId?: string): Promise<void> {
   const prefix = `${target}\0`;
   for (const [key, timer] of pendingTimers) {
     if (key.startsWith(prefix)) { clearTimeout(timer); pendingTimers.delete(key); }
+  }
+  for (const key of pendingEntries.keys()) {
+    if (key.startsWith(prefix)) pendingEntries.delete(key);
   }
   if (activeUserId === target) activeUserId = null;
   const db = await openMirrorDb();

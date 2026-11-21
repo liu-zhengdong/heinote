@@ -643,4 +643,49 @@ describe("lazy collection pulls (UC-48)", () => {
     expect(pages.get("seed")).toBeUndefined();
     expect(pages.get("rebuilt")).toBeTruthy();
   });
+
+  it("immediately re-pulls when applySnapshot bumps epoch during an in-flight delta refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const secondStarted = deferred<void>();
+      const secondGate = deferred<void>();
+      let pullCount = 0;
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        pullCount += 1;
+        if (pullCount === 1) {
+          return json({ latest: 1, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 1 } }], deleted: [] });
+        }
+        if (pullCount === 2) {
+          secondStarted.resolve();
+          await secondGate.promise;
+          return json({ latest: 2, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 2 } }], deleted: [] });
+        }
+        return json({ latest: 2, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 2 } }], deleted: [] });
+      }));
+
+      const pages = await live.LiveCollection.open<{ id: string; row_order: number }>("pages", "personal");
+      opened.push(pages);
+      expect(pages.get("row1")?.row_order).toBe(1);
+
+      pages.refreshNow();
+      await secondStarted.promise;
+      // Snapshot on another page bumps collection epoch while delta pull #2 is in flight.
+      pages.applySnapshot({
+        scope: "personal",
+        pageId: "db1",
+        generation: "g1",
+        state: "",
+        revision: "r1",
+        canEdit: true,
+        seq: 1,
+        records: { page: { id: "db1", kind: "database" }, blocks: [] },
+      });
+      secondGate.resolve();
+      await flush();
+      expect(pullCount).toBe(3);
+      expect(pages.get("row1")?.row_order).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

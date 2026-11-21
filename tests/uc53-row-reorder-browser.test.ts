@@ -255,7 +255,7 @@ test("rows reorder by drag and keyboard, rest under sorts and search", async ({ 
   await page.reload();
   await page.locator(".tree-row__main").filter({ hasText: "任务" }).first().click();
   await expect(page.locator("table.db__table")).toBeVisible();
-  expect(await tableOrder(page)).toEqual(["Alpha", "Omega", "Gamma", "Beta", "Delta"]);
+  await expect.poll(() => tableOrder(page)).toEqual(["Alpha", "Omega", "Gamma", "Beta", "Delta"]);
 });
 
 test("board drops between cards order the column", async ({ page }) => {

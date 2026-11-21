@@ -734,7 +734,8 @@ export class LiveCollection<R extends object> {
       for (const chunk of chunks) {
         const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
           `/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=0&pages=${chunk.map((spec) => encodeURIComponent(spec)).join(",")}`);
-        if (this.closed || epoch !== this.epoch) return;
+        if (this.closed) return;
+        if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
         const epochMismatch = Boolean(delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch);
         const rewound = chunk.some((spec) => {
           const since = Number(spec.slice(spec.lastIndexOf(":") + 1));
@@ -774,7 +775,8 @@ export class LiveCollection<R extends object> {
     // backup, fresh database) clears the cache and re-pulls cold with after=0.
     const cold = this.latest === 0;
     const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
-    if (this.closed || epoch !== this.epoch) return;
+    if (this.closed) return;
+    if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
     if ((delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch) || delta.latest < this.latest) {
       this.latest = 0;
       this.serverEpoch = delta.epoch ?? "";
