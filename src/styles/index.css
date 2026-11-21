@@ -1410,6 +1410,11 @@ kbd {
   flex-direction: column;
 }
 
+.tree-spacer {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
 .tree-row {
   position: relative;
   display: flex;

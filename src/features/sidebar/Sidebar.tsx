@@ -265,6 +265,39 @@ const TreeRow = memo(function TreeRow({
   );
 });
 
+const ROW_HEIGHT_DESKTOP = 31;
+const ROW_HEIGHT_MOBILE = 44;
+const TREE_OVERSCAN = 20;
+const TREE_STEP = 10;
+
+interface TreeMetrics {
+  counts: Map<string, number>;
+  rowIndex: Map<string, number>;
+  totalRows: number;
+}
+
+function measureTree(tree: PageTree, expanded: ReadonlySet<string>): TreeMetrics {
+  const counts = new Map<string, number>();
+  const rowIndex = new Map<string, number>();
+  let cursor = 0;
+  const walk = (page: NotePage): number => {
+    const start = cursor;
+    cursor += 1;
+    rowIndex.set(page.id, start);
+    let size = 1;
+    if (expanded.has(page.id)) {
+      const children = tree.children.get(page.id);
+      if (children) {
+        for (const child of children) size += walk(child);
+      }
+    }
+    counts.set(page.id, size);
+    return size;
+  };
+  for (const root of tree.roots) walk(root);
+  return { counts, rowIndex, totalRows: cursor };
+}
+
 export function Sidebar() {
   const {
     platform,
@@ -302,6 +335,7 @@ export function Sidebar() {
   const asideRef = useRef<HTMLElement | null>(null);
   const newTriggerRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledRef = useRef("");
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [copyPicker, setCopyPicker] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
@@ -376,6 +410,24 @@ export function Sidebar() {
   const mobile = folded;
   const railed = !mobile && preferences.sidebar_collapsed;
   const drawered = !mobile && railed && drawerOpen;
+  const rowHeight = mobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
+  const [scrollBucket, setScrollBucket] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+  const treeMetrics = useMemo(() => measureTree(tree, expanded), [tree, expanded]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.clientHeight > 0) setViewportHeight(el.clientHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (el.clientHeight > 0) setViewportHeight(el.clientHeight);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [railed, drawered, view]);
+
+  const prevScopeViewRef = useRef(`${activeSpaceId}:${view}`);
 
   useEffect(() => {
     if (!folded && drawerOpen) setDrawerOpen(false);
@@ -440,9 +492,35 @@ export function Sidebar() {
   }, [pages, selectedPageId, updateExpanded]);
 
   useLayoutEffect(() => {
+    const scopeKey = `${activeSpaceId}:${view}`;
+    if (prevScopeViewRef.current !== scopeKey) {
+      prevScopeViewRef.current = scopeKey;
+      setScrollBucket(0);
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }
     if (!selectedPageId) return;
+    const key = `${activeSpaceId}:${view}:${selectedPageId}`;
+    if (lastScrolledRef.current === key) return;
+    if (view === "files") {
+      const idx = treeMetrics.rowIndex.get(selectedPageId);
+      if (idx === undefined) return;
+      lastScrolledRef.current = key;
+      const el = scrollRef.current;
+      if (!el) return;
+      const h = el.clientHeight || viewportHeight;
+      const rowTop = idx * rowHeight;
+      const rowBottom = rowTop + rowHeight;
+      if (rowTop < el.scrollTop || rowBottom > el.scrollTop + h) {
+        const target = Math.max(0, Math.round(rowTop - h / 2 + rowHeight / 2));
+        el.scrollTop = target;
+        const nextBucket = Math.floor(target / (rowHeight * TREE_STEP)) * TREE_STEP;
+        setScrollBucket((current) => (current === nextBucket ? current : nextBucket));
+      }
+      return;
+    }
+    lastScrolledRef.current = key;
     scrollRef.current?.querySelector(`[data-page-id="${CSS.escape(selectedPageId)}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [selectedPageId, view]);
+  }, [activeSpaceId, rowHeight, selectedPageId, treeMetrics, view, viewportHeight]);
 
   /* Dragging the seam writes straight to the DOM variable and only commits the
      preference on release, so a resize never round-trips through the operation
@@ -588,8 +666,37 @@ export function Sidebar() {
     drop: (target, event) => handlers.current?.drop(target, event),
   }), []);
 
+  const winStart = Math.max(0, scrollBucket - TREE_OVERSCAN);
+  const winEnd = Math.min(treeMetrics.totalRows, scrollBucket + Math.ceil(viewportHeight / rowHeight) + TREE_STEP + TREE_OVERSCAN);
+
+  const renderList = (items: readonly NotePage[], depth: number, startRow: number): ReactNode => {
+    let cursor = startRow;
+    let topSkip = 0;
+    let bottomSkip = 0;
+    const visible: ReactNode[] = [];
+    for (const page of items) {
+      const size = treeMetrics.counts.get(page.id) ?? 1;
+      const end = cursor + size;
+      if (end <= winStart) {
+        topSkip += size;
+      } else if (cursor >= winEnd) {
+        bottomSkip += size;
+      } else {
+        visible.push(branch(page, depth, tree, cursor));
+      }
+      cursor = end;
+    }
+    return (
+      <>
+        {topSkip > 0 ? <div className="tree-spacer" style={{ height: topSkip * rowHeight }} aria-hidden="true" /> : null}
+        {visible}
+        {bottomSkip > 0 ? <div className="tree-spacer" style={{ height: bottomSkip * rowHeight }} aria-hidden="true" /> : null}
+      </>
+    );
+  };
+
   /** A block's row, in the tree or in Favorites. */
-  const branch = (page: NotePage, depth: number, source: PageTree): ReactNode => {
+  const branch = (page: NotePage, depth: number, source: PageTree, startRow?: number): ReactNode => {
     // A page holds pages — its blocks among them, a block being a page —
     // listed under it; a database, its rows.
     const children = source.children.get(page.id) ?? [];
@@ -613,7 +720,7 @@ export function Sidebar() {
         />
         {open && children.length > 0 ? (
           <div className="tree-children" style={{ "--tree-depth": depth } as CSSProperties}>
-            {children.map((child) => branch(child, depth + 1, source))}
+            {startRow !== undefined ? renderList(children, depth + 1, startRow + 1) : children.map((child) => branch(child, depth + 1, source))}
           </div>
         ) : null}
       </div>
@@ -796,6 +903,11 @@ export function Sidebar() {
           className={`sidebar__scroll scroller ${rootDrop ? "is-drop-target" : ""}`}
           role={view === "trash" ? undefined : "tree"}
           aria-label={capitalized(view)}
+          onScroll={(event) => {
+            if (view !== "files") return;
+            const next = Math.floor(event.currentTarget.scrollTop / (rowHeight * TREE_STEP)) * TREE_STEP;
+            setScrollBucket((current) => (current === next ? current : next));
+          }}
           onDragOver={(event) => {
             if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
             event.preventDefault();
@@ -811,7 +923,7 @@ export function Sidebar() {
         >
           {view === "files" ? (
             <>
-              {tree.roots.length ? tree.roots.map((page) => branch(page, 0, tree)) : !directoryLoading ? (
+              {tree.roots.length ? renderList(tree.roots, 0, 0) : !directoryLoading ? (
                 writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
                   <Plus size={15} />New page
                 </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>

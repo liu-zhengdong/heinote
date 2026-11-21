@@ -57,7 +57,7 @@ import { hasMetadataChange, isStructureChange } from "../collaboration/protocol"
 import { publishRecovery } from "../collaboration/recovery";
 import { pageOfRef, recordValue, recordsOfPath, refKey } from "../platform/records";
 import { withStrictRecordReplay } from "../platform/live";
-import { ApiError, request } from "../platform/http";
+import { ApiError, consumePrefetchedSpaces, request } from "../platform/http";
 import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
@@ -290,17 +290,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     let unsubscribe = () => {};
     void createPlatformClient(sessionUser)
       .then(async (client) => {
-        const initialSpaces = await client.spaces.installations().catch(async (reason: unknown) => { await client.close(); throw reason; });
-        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
         const remembered = readSpaceNavigation(client.bootstrap.user.id);
+        const spacesPromise = consumePrefetchedSpaces<SpaceSummary[]>(client.bootstrap.user.id) ?? client.spaces.installations();
+        const locatePromise = initialUrlPage && remembered.pages[remembered.spaceId] !== initialUrlPage
+          ? request<{ scope: string; spaceId: string }>(`/api/records/locate?page=${encodeURIComponent(initialUrlPage)}`).catch(() => null)
+          : Promise.resolve(null);
+        const [initialSpaces, located] = await Promise.all([spacesPromise, locatePromise])
+          .catch(async (reason: unknown) => { await client.close(); throw reason; });
+        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
         let initialSpaceId = catalog[remembered.spaceId]?.knowledgeBase ? remembered.spaceId : "personal";
-        if (initialUrlPage && remembered.pages[initialSpaceId] !== initialUrlPage) {
-          const located = await request<{ scope: string; spaceId: string }>(
-            `/api/records/locate?page=${encodeURIComponent(initialUrlPage)}`,
-          ).catch(() => null);
-          if (located && (located.spaceId === "personal" || catalog[located.spaceId]?.knowledgeBase)) {
-            initialSpaceId = located.spaceId;
-          }
+        if (located && (located.spaceId === "personal" || catalog[located.spaceId]?.knowledgeBase)) {
+          initialSpaceId = located.spaceId;
         }
         const seedPageId = initialUrlPage ?? remembered.pages[initialSpaceId] ?? catalog[initialSpaceId]?.knowledgeBase?.homePageId;
         initialSpacesRef.current = initialSpaces;

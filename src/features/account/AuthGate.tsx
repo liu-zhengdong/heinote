@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import type { Person } from "../../core/types";
 import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { api, errorMessage } from "./api";
+import { clearPrefetchedSpaces, prefetchSpaces } from "../../platform/http";
 import { AgentAuthRequest } from "./AgentAuthRequest";
 import { GithubMark, GithubSignupChoice } from "./Github";
 
@@ -23,7 +24,10 @@ let pendingInitialSession: Promise<SessionResponse> | null = (() => {
   if (typeof window === "undefined" || typeof fetch !== "function" || window.location.pathname.startsWith("/s/")) return null;
   const promise = api<SessionResponse>("/api/session");
   promise.then((data) => {
-    if (data.user) void import("../../app/WorkspaceShell");
+    if (data.user) {
+      prefetchSpaces(data.user.id);
+      void import("../../app/WorkspaceShell");
+    }
   }).catch(() => undefined);
   return promise;
 })();
@@ -128,6 +132,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     const userId = identity.current || undefined;
+    clearPrefetchedSpaces();
     await api("/api/auth/logout", { method: "POST" });
     await import("../../platform/mirror").then((mirror) => mirror.clearUserMirror(userId)).catch(() => undefined);
     ++requestId.current;
@@ -156,6 +161,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       if (!next.user) throw new Error("登录未完成，请重试");
       ++requestId.current;
       identity.current = next.user.id;
+      prefetchSpaces(next.user.id);
       setSession(next);
       setPassword("");
       setPasswordVisible(false);
@@ -185,6 +191,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       if (reply?.user) {
         ++requestId.current;
         identity.current = reply.user.id;
+        prefetchSpaces(reply.user.id);
         setSession((previous) => ({
           user: reply.user!,
           registrationOpen: previous?.registrationOpen ?? false,
