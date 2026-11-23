@@ -85,11 +85,11 @@ function createButton(page: Page) {
 }
 
 const views = [
-  { name: "Files", label: "全部页面" },
-  { name: "Favorites", label: "收藏夹" },
-  { name: "Shared", label: "已分享" },
-  { name: "Graph", label: "关系图谱" },
-  { name: "Trash", label: "回收站" },
+  { name: "Files", label: "全部页面", mobileLabel: "全部" },
+  { name: "Favorites", label: "收藏夹", mobileLabel: "收藏" },
+  { name: "Shared", label: "已分享", mobileLabel: "已分享" },
+  { name: "Graph", label: "关系图谱", mobileLabel: "图谱" },
+  { name: "Trash", label: "回收站", mobileLabel: "回收站" },
 ] as const;
 
 async function expectToolbarLayout(toolbar: Locator) {
@@ -112,13 +112,15 @@ async function expectToolbarLayout(toolbar: Locator) {
 }
 
 async function expectNavigationLayout(page: Page) {
+  const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   const sidebar = page.locator(".sidebar");
   await sidebar.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
   const topbar = sidebar.locator(".sidebar__topbar");
   const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
-  await expect(tabs).toHaveAttribute("aria-orientation", "vertical");
+  await expect(tabs).toHaveAttribute("aria-orientation", mobile ? "horizontal" : "vertical");
   await expect(tabs.getByRole("tab")).toHaveCount(5);
   await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+  await expect(topbar.locator("kbd")).toHaveCount(mobile ? 0 : 1);
   await expect(createButton(page)).toBeVisible();
   await expect(createButton(page)).toHaveText("");
   await expect(createButton(page).locator("svg")).toHaveCount(1);
@@ -131,33 +133,51 @@ async function expectNavigationLayout(page: Page) {
   expect(searchStyle.shadow).toBe("none");
   const top = await topbar.boundingBox();
   expect(top).not.toBeNull();
-  let previousBottom = top!.y + top!.height;
+  const topBottom = top!.y + top!.height;
+  let previousBottom = topBottom;
+  let previousRight: number | undefined;
+  let firstY: number | undefined;
   let previousX: number | undefined;
-  const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   for (const view of views) {
     const tab = tabs.getByRole("tab", { name: view.name, exact: true });
-    await expect(tab).toContainText(view.label);
+    await expect(tab).toContainText(mobile ? view.mobileLabel : view.label);
     const box = await tab.boundingBox();
     expect(box).not.toBeNull();
-    expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
-    if (mobile) expect(box!.height).toBeGreaterThanOrEqual(42);
-    else expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
-    if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
-    previousX = box!.x;
-    previousBottom = box!.y + box!.height;
+    if (mobile) {
+      expect(box!.y).toBeGreaterThanOrEqual(topBottom - 1);
+      expect(box!.height).toBeGreaterThanOrEqual(42);
+      if (firstY !== undefined) expect(Math.abs(box!.y - firstY)).toBeLessThanOrEqual(1);
+      else firstY = box!.y;
+      if (previousRight !== undefined) expect(box!.x).toBeGreaterThanOrEqual(previousRight - 1);
+      previousRight = box!.x + box!.width;
+    } else {
+      expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
+      expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
+      if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
+      previousX = box!.x;
+      previousBottom = box!.y + box!.height;
+    }
   }
+  const tabsBox = await tabs.boundingBox();
+  expect(tabsBox).not.toBeNull();
+  if (mobile) expect(tabsBox!.height).toBeLessThanOrEqual(52);
   const bar = await filesToolbar(page).boundingBox();
   expect(bar).not.toBeNull();
-  expect(bar!.y).toBeGreaterThanOrEqual(previousBottom - 1);
+  expect(bar!.y).toBeGreaterThanOrEqual(mobile ? tabsBox!.y + tabsBox!.height - 1 : previousBottom - 1);
   // The resize handle extends 3px beyond the sidebar by design. Check the
   // content regions and control bounds, rather than that intentional handle.
   const sidebarBox = await sidebar.boundingBox();
   expect(sidebarBox).not.toBeNull();
-  for (const region of [sidebar.locator(".sidebar__head"), topbar, tabs]) {
+  for (const region of mobile ? [sidebar.locator(".sidebar__head"), topbar] : [sidebar.locator(".sidebar__head"), topbar, tabs]) {
     expect(await region.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+  for (const region of [sidebar.locator(".sidebar__head"), topbar, tabs]) {
     const bounds = await region.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(sidebarBox!.x);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+  }
+  if (mobile) {
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
   await expectToolbarLayout(filesToolbar(page));
 }

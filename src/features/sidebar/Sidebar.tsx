@@ -92,6 +92,7 @@ const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites:
    member-shared trees and public read-only links. "空间" stays with
    knowledge bases — the only real space the member navigates between. */
 const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "已分享", graph: "关系图谱", trash: "回收站" };
+const MOBILE_VIEW_LABELS: Record<SidebarView, string> = { files: "全部", favorites: "收藏", shared: "已分享", graph: "图谱", trash: "回收站" };
 const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "已分享", graph: "知识拓扑", trash: "回收站" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
@@ -335,6 +336,7 @@ export function Sidebar() {
   const asideRef = useRef<HTMLElement | null>(null);
   const newTriggerRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const viewsRef = useRef<HTMLDivElement | null>(null);
   const lastScrolledRef = useRef("");
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
@@ -364,6 +366,10 @@ export function Sidebar() {
      tab is meaningless — nothing there may be shared — so fall back to the
      page list and hide the tab below. */
   const inLibrary = Boolean(activeSpace?.knowledgeBase);
+  const visibleViews = useMemo(
+    () => SIDEBAR_VIEWS.filter((value) => !(inLibrary && value === "shared")),
+    [inLibrary],
+  );
   const view: SidebarView = inLibrary && preferences.sidebar_view === "shared" ? "files" : preferences.sidebar_view;
   const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
@@ -432,6 +438,38 @@ export function Sidebar() {
   useEffect(() => {
     if (!folded && drawerOpen) setDrawerOpen(false);
   }, [drawerOpen, folded, setDrawerOpen]);
+
+  useEffect(() => {
+    if (!mobile || !drawerOpen) return;
+    const strip = viewsRef.current;
+    if (!strip || strip.scrollWidth <= strip.clientWidth) return;
+    const activeTab = strip.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]');
+    activeTab?.scrollIntoView({ block: "nearest", inline: "nearest", container: "nearest" } as ScrollIntoViewOptions);
+  }, [mobile, drawerOpen, view, visibleViews.length]);
+
+  useEffect(() => {
+    if (!mobile || !drawerOpen) return;
+    const strip = viewsRef.current;
+    if (!strip) return;
+    if (typeof CSS !== "undefined" && CSS.supports("animation-timeline", "scroll()")) return;
+    const [first, last] = [strip.firstElementChild, strip.lastElementChild];
+    if (!first || !last || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const { target, intersectionRatio } of entries) {
+          if (target === first) strip.classList.toggle("more-start", intersectionRatio < 1);
+          if (target === last) strip.classList.toggle("more-end", intersectionRatio < 1);
+        }
+      },
+      { root: strip, threshold: 1, rootMargin: "1px" },
+    );
+    observer.observe(first);
+    observer.observe(last);
+    return () => {
+      observer.disconnect();
+      strip.classList.remove("more-start", "more-end");
+    };
+  }, [mobile, drawerOpen, visibleViews.length]);
 
   useEffect(() => {
     if (!drawered) return;
@@ -781,7 +819,7 @@ export function Sidebar() {
           <button type="button" className="sidebar__search" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
             <Search size={15} aria-hidden="true" />
             <span>搜索或跳转…</span>
-            <kbd>⌘K</kbd>
+            {!mobile ? <kbd>⌘K</kbd> : null}
           </button>
           <Tooltip label="新建页面或数据库">
             <button
@@ -811,9 +849,10 @@ export function Sidebar() {
             </Tooltip>
           ) : null}
         </div>
-        <div className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation="vertical">
-          {SIDEBAR_VIEWS.filter((value) => !(inLibrary && value === "shared")).map((value) => {
+        <div ref={viewsRef} className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation={mobile ? "horizontal" : "vertical"}>
+          {visibleViews.map((value) => {
             const Icon = VIEW_ICONS[value];
+            const count = viewCounts[value];
             return (
               <button
                 key={value}
@@ -825,23 +864,30 @@ export function Sidebar() {
                 className={`sidebar__view ${view === value ? "is-active" : ""}`}
                 onClick={() => setPreference("sidebar_view", value)}
                 onKeyDown={(event) => {
-                  const index = SIDEBAR_VIEWS.indexOf(value);
-                  const next = event.key === "ArrowDown" ? (index + 1) % SIDEBAR_VIEWS.length
-                    : event.key === "ArrowUp" ? (index + SIDEBAR_VIEWS.length - 1) % SIDEBAR_VIEWS.length
+                  const index = visibleViews.indexOf(value);
+                  if (index < 0) return;
+                  const nextKey = mobile ? "ArrowRight" : "ArrowDown";
+                  const prevKey = mobile ? "ArrowLeft" : "ArrowUp";
+                  const next = event.key === nextKey ? (index + 1) % visibleViews.length
+                    : event.key === prevKey ? (index + visibleViews.length - 1) % visibleViews.length
                     : event.key === "Home" ? 0
-                    : event.key === "End" ? SIDEBAR_VIEWS.length - 1
+                    : event.key === "End" ? visibleViews.length - 1
                     : null;
                   if (next === null) return;
                   event.preventDefault();
-                  setPreference("sidebar_view", SIDEBAR_VIEWS[next]);
+                  setPreference("sidebar_view", visibleViews[next]);
                   event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
                 }}
               >
                 <span className={`sidebar__view-icon sidebar__view-icon--${value}`}><Icon size={15} aria-hidden="true" /></span>
-                <span className="sidebar__view-label">{VIEW_LABELS[value]}</span>
-                {viewCounts[value] !== undefined ? (
-                  <span className="sidebar__view-count" aria-hidden="true">{viewCounts[value]}</span>
-                ) : <span className="sidebar__view-dot" aria-hidden="true" />}
+                <span className="sidebar__view-label">{mobile ? MOBILE_VIEW_LABELS[value] : VIEW_LABELS[value]}</span>
+                {!mobile ? (
+                  count !== undefined ? (
+                    <span className="sidebar__view-count" aria-hidden="true">{count}</span>
+                  ) : <span className="sidebar__view-dot" aria-hidden="true" />
+                ) : count !== undefined && count > 0 ? (
+                  <span className="sidebar__view-count" aria-hidden="true">{count}</span>
+                ) : null}
               </button>
             );
           })}

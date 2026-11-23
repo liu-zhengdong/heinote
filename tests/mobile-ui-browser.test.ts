@@ -88,6 +88,20 @@ test("UC-55 AC-01: 手机阅读态无窄条、悬浮命令坞与抽屉/搜索/�
   const lines = Array.from({ length: 24 }, (_, idx) => `第 ${idx + 1} 段用于测试移动端沉浸阅读与底部命令坞随滚动收起。`).join("\n\n");
   const parent = await (await api(page, "/api/v1/pages", "POST", { title: "移动端架构指南", text: lines })).json();
   await api(page, "/api/v1/pages", "POST", { title: "交互细则", parentId: parent.id, text: "子页面正文" });
+  const extraTitles = [
+    "设计系统原则",
+    "周会纪要",
+    "阅读清单",
+    "架构草图",
+    "需求拆解",
+    "发布检查单",
+    "知识库索引",
+    "快捷键速查",
+    "旅行计划",
+  ];
+  for (const title of extraTitles) {
+    await api(page, "/api/v1/pages", "POST", { title, text: `${title} 正文` });
+  }
 
   await page.goto(`${server.url}?page=${parent.id}`);
   await expect(page.getByRole("textbox", { name: "Page title", exact: true })).toHaveText("移动端架构指南");
@@ -104,14 +118,39 @@ test("UC-55 AC-01: 手机阅读态无窄条、悬浮命令坞与抽屉/搜索/�
   await surface.evaluate((el) => { el.scrollTop = 0; el.dispatchEvent(new Event("scroll")); });
   await expect(page.locator(".mobile-dock-wrap")).not.toHaveClass(/is-condensed/);
 
-  // Open All pages BottomSheet and verify 44px touch targets + zero overflow.
+  // Open All pages BottomSheet and verify single-row 44px tab strip + breathing room + zero overflow.
   const allPages = page.getByRole("button", { name: "All pages", exact: true });
   await allPages.tap();
   const sheet = await waitSheetReady(page, ".bottom-sheet.sidebar--sheet.is-shown");
-  const tabHeights = await sheet.getByRole("tab").evaluateAll((tabs) => tabs.map((t) => t.getBoundingClientRect().height));
-  for (const h of tabHeights) expect(h).toBeGreaterThanOrEqual(42);
+  const tabs = sheet.getByRole("tablist", { name: "Page list", exact: true });
+  await expect(tabs).toHaveAttribute("aria-orientation", "horizontal");
+  const tabsBox = await tabs.boundingBox();
+  expect(tabsBox).not.toBeNull();
+  expect(tabsBox!.height).toBeLessThanOrEqual(52);
+  const tabRects = await tabs.getByRole("tab").evaluateAll((elements) => elements.map((el) => {
+    const r = el.getBoundingClientRect();
+    return { y: r.y, height: r.height };
+  }));
+  for (const r of tabRects) expect(r.height).toBeGreaterThanOrEqual(42);
+  expect(Math.max(...tabRects.map((r) => r.y)) - Math.min(...tabRects.map((r) => r.y))).toBeLessThanOrEqual(1);
+  await expect(sheet.locator(".sidebar__search kbd")).toHaveCount(0);
+  const scrollBox = await sheet.locator(".sidebar__scroll").boundingBox();
+  expect(scrollBox).not.toBeNull();
+  expect(scrollBox!.height).toBeGreaterThanOrEqual(420);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await saveShot(page, "02-nav-sheet.png");
+
+  // Tapping the rightmost tab activates it and reveals it within the strip; return to Files afterward.
+  const trashTab = tabs.getByRole("tab", { name: "Trash", exact: true });
+  await trashTab.tap();
+  await expect(trashTab).toHaveAttribute("aria-selected", "true");
+  const trashBox = await trashTab.boundingBox();
+  expect(trashBox).not.toBeNull();
+  expect(trashBox!.x).toBeGreaterThanOrEqual(tabsBox!.x - 1);
+  expect(trashBox!.x + trashBox!.width).toBeLessThanOrEqual(tabsBox!.x + tabsBox!.width + 1);
+  const filesTab = tabs.getByRole("tab", { name: "Files", exact: true });
+  await filesTab.tap();
+  await expect(filesTab).toHaveAttribute("aria-selected", "true");
 
   // Dismiss drawer via top scrim and confirm focus restores to All pages trigger.
   await page.getByRole("button", { name: "Close the page list", exact: true }).click({ position: { x: 195, y: 40 } });
