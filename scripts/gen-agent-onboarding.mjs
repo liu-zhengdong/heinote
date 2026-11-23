@@ -10,7 +10,10 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "server/agent-onboarding-content.ts");
 
-const read = (p) => readFileSync(join(root, p), "utf8");
+// Normalize line endings: a Windows checkout with core.autocrlf hands back CRLF,
+// which would embed \r\n in the generated file and make --check fail on a tree
+// that is in fact in sync.
+const read = (p) => readFileSync(join(root, p), "utf8").replace(/\r\n/g, "\n");
 const stripFrontmatter = (md) => md.replace(/^---\n[\s\S]*?\n---\n+/, "");
 
 const skillBody = stripFrontmatter(read("skills/heinote/SKILL.md")).trim();
