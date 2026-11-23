@@ -9,7 +9,8 @@
 - `npm test` 运行原有核心回归及 HTTP 验收。
 - `npm run test:e2e` 运行真实浏览器流程，使用临时数据库。
 - 测试必须保持全绿。交付前运行相关测试；UI 改动同步更新受其影响的用例；发现主干红时先修复再合入。
-- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/heinote/SKILL.md`。改动 `skills/heinote/SKILL.md` 或 `docs/agent-api.md` 后必须运行 `node scripts/gen-agent-onboarding.mjs` 重新生成嵌入内容并一并提交，`--check` 会校验同步。
+- 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/heinote/SKILL.md`。
+- 提交代码改动前必须检查对外面是否仍然准确：`docs/agent-api.md`（API 契约）、`skills/heinote/SKILL.md` 及其助手脚本、导览模板（`scripts/gen-agent-onboarding.mjs` 中的 `llmsTxt`）。改动了行为或接口就要同步更新对应文档；改动 `SKILL.md`、`heinote` 脚本、`docs/agent-api.md` 或导览模板后必须运行 `node scripts/gen-agent-onboarding.mjs` 重新生成嵌入内容并一并提交，`--check` 会校验同步。
 - 系统说明以代码与测试为准；历史 Atlas 文档已归档至 Obsidian `设计/atlas 归档/`，不再在仓库内维护。
 - 共编架构见 [ADR-002](docs/adr/0002-realtime-collaboration.md)。富文本二进制、SQL 投影与权限必须在同一事务提交。
 - 普通文字只走一套历史。新字段未建立 Y.Text 时使用受控记录历史；结构补偿不得部分执行。
