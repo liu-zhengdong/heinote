@@ -1,3 +1,714 @@
+/* ============================================================================
+   Sidebar
+   ========================================================================== */
+
+/* The list: Notion's warm grey pane, set against the white page by its
+   colour and a seam you only notice when it is missing. */
+.sidebar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  grid-area: 1 / 1;
+  background: var(--sidebar);
+  box-shadow: inset -1px 0 0 rgba(55, 53, 47, 0.06);
+  font-size: 14px;
+}
+
+/* The rail is the list folded: the same pane, 46px of it. Search, the list
+   itself, and one new page; then the pages that were named on purpose; then
+   the account's own controls at the foot. It sits ABOVE the drawer so the
+   drawer can slide out from behind it. */
+.rail {
+  position: relative;
+  z-index: var(--z-rail);
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: 5px 0 6px;
+  grid-area: 1 / 1;
+  background: var(--sidebar);
+  box-shadow: inset -1px 0 0 rgba(55, 53, 47, 0.06);
+}
+
+.rail__group {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.rail__group--pages {
+  min-height: 0;
+  flex: 1;
+  padding: 5px 0;
+  margin-top: 5px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  box-shadow: inset 0 0.5px 0 var(--hairline);
+}
+
+.rail__group--pages::-webkit-scrollbar {
+  display: none;
+}
+
+/* Nothing starred yet: a hairline around an empty band reads as a section
+   that failed to load, so with nothing in it the band is just space. */
+.rail__group--pages:empty {
+  margin-top: 0;
+  box-shadow: none;
+}
+
+.rail__group--foot {
+  padding-top: 5px;
+  box-shadow: inset 0 0.5px 0 var(--hairline);
+}
+
+.rail__btn {
+  width: 32px;
+  height: 30px;
+}
+
+/* The page you are on, in the same grey a selected row wears in the list, so
+   the rail and the list agree about what "here" looks like. */
+.rail__btn.is-current,
+.rail__btn.is-current:hover {
+  background: var(--fill-active);
+  color: var(--ink);
+}
+
+/* The drawer: the same list, raised over the page beside the rail for as long
+   as it is being read, and gone the moment a page is chosen — Notion's hover
+   sidebar, but on a press rather than a reach for the edge. */
+.sidebar--drawer {
+  position: absolute;
+  z-index: var(--z-drawer);
+  top: 0;
+  bottom: 0;
+  left: var(--sidebar-rail);
+  width: var(--sidebar-drawer);
+  max-width: calc(100% - var(--sidebar-rail) - 40px);
+  background: var(--sidebar);
+  box-shadow: var(--shadow-pop);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform var(--t-base) var(--e-out), visibility 0s linear var(--t-base);
+}
+
+.sidebar--drawer.is-open {
+  transform: none;
+  visibility: visible;
+  transition: transform var(--t-base) var(--e-out), visibility 0s;
+}
+
+/* The seam. It is the list's right edge, and it is draggable — the width of
+   the navigator is the one layout decision that is genuinely the reader's. */
+.sidebar__resize {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar__resize::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: var(--blue);
+  content: "";
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.sidebar__resize:hover::after,
+.sidebar__resize.is-dragging::after {
+  opacity: 1;
+}
+
+.sidebar.is-resizing,
+.sidebar.is-resizing * {
+  transition: none !important;
+}
+
+.sidebar__head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 10px 6px;
+}
+
+.sidebar__topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.sidebar__search {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  border-radius: 7px;
+  color: var(--ink-3);
+  font-size: 13px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.sidebar__search:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.sidebar__search > svg,
+.sidebar__search > kbd {
+  flex: none;
+}
+
+.sidebar__search > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__search > kbd {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.sidebar__new {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+  transition: box-shadow var(--t-fast) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.sidebar__new:hover,
+.sidebar__new.is-active {
+  box-shadow: var(--shadow-card-hover);
+  color: var(--blue);
+}
+
+/* An empty section is the one place nothing can be hovered and no row can be
+   acted on, so the create affordance becomes visible there and only there. */
+.rail-invite {
+  display: flex;
+  width: 100%;
+  min-height: 27px;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 14px;
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.rail-invite:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.sidebar__collapse {
+  flex: none;
+  opacity: 0.45;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.sidebar:hover .sidebar__collapse,
+.sidebar__collapse:focus-visible {
+  opacity: 1;
+}
+
+.sidebar__views {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar__view {
+  display: flex;
+  min-width: 0;
+  height: 32px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 9px;
+  border-radius: 7px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.sidebar__view:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.sidebar__view.is-active {
+  background: var(--fill-active);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+.sidebar__view-icon {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+.sidebar__view.is-active .sidebar__view-icon--files { color: var(--blue); }
+.sidebar__view.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
+.sidebar__view.is-active .sidebar__view-icon--shared { color: var(--green); }
+.sidebar__view.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
+.sidebar__view.is-active .sidebar__view-icon--trash { color: var(--danger); }
+
+.sidebar__view-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar__view-count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+}
+
+.sidebar__view-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ink-4);
+}
+
+.sidebar__tools {
+  display: flex;
+  min-height: 24px;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  margin: 6px 10px 0;
+  padding: 0 4px 0 8px;
+}
+
+.sidebar__section-title {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.sidebar__section-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0.25;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.sidebar__tools:hover .sidebar__section-actions,
+.sidebar__section-actions:focus-within,
+.sidebar__section-actions.is-active {
+  opacity: 1;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar__section-actions,
+  .sidebar__collapse {
+    opacity: 1;
+  }
+}
+
+.sidebar__tools .icon-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  color: var(--ink-3);
+}
+
+.sidebar__tools .icon-btn:hover,
+.sidebar__tools .icon-btn.is-active {
+  color: var(--ink);
+}
+
+.sidebar__scroll {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 10px 24px;
+  border-radius: var(--r-sm);
+}
+
+/* Dropped here, a page goes to the top of the tree. */
+.sidebar__scroll.is-drop-target {
+  box-shadow: inset 0 0 0 2px var(--blue-tint);
+}
+
+/* ── The file tree ────────────────────────────────────────────────────── */
+
+/* Keep the tree aligned with the vertical navigation. */
+.sidebar {
+  --tree-inset: 6px;
+  --tree-indent: 18px;
+  --tree-mark: 24px;
+}
+
+.tree-branch {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree-spacer {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.tree-row {
+  position: relative;
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 1px;
+  padding-right: 4px;
+  padding-left: calc(var(--tree-inset) + var(--depth, 0) * var(--tree-indent));
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.tree-row:hover {
+  background: var(--fill-hover);
+}
+
+.tree-row.is-selected,
+.tree-row.is-selected:hover {
+  background: var(--fill-active);
+  color: var(--ink);
+}
+
+.tree-row.is-drop-target {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+/* A row's mark: its icon at rest, and — when it holds anything — the arrow
+   that opens it while the row is under the pointer, as the page's own marks
+   do. Every row has one, so every name lines up with its siblings'. */
+.tree-row__mark {
+  display: grid;
+  width: var(--tree-mark);
+  height: 24px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.tree-row__mark > * {
+  grid-area: 1 / 1;
+  transition: opacity var(--t-fast) var(--e-out), transform var(--t-fast) var(--e-out);
+}
+
+.tree-row__arrow {
+  opacity: 0;
+}
+
+.tree-row__mark.is-open .tree-row__arrow {
+  transform: rotate(90deg);
+}
+
+.tree-row:hover .tree-row__mark.is-branch .tree-row__glyph,
+.tree-row__mark.is-branch:focus-visible .tree-row__glyph {
+  opacity: 0;
+}
+
+.tree-row:hover .tree-row__mark.is-branch .tree-row__arrow,
+.tree-row__mark.is-branch:focus-visible .tree-row__arrow {
+  opacity: 1;
+}
+
+.tree-row__mark.is-branch:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+
+.tree-row__main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 2px 5px 4px;
+  color: inherit;
+  font-size: 14px;
+  line-height: 21px;
+  text-align: left;
+}
+
+.tree-row.is-selected .tree-row__main {
+  font-weight: 500;
+}
+
+.tree-row__glyph {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tree-row__glyph > svg {
+  width: 18px;
+  height: 18px;
+}
+
+.tree-row__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Something links to it: a small link mark right after its name. */
+.tree-row__linked {
+  flex: none;
+  color: var(--ink-4);
+}
+
+.tree-row__rename {
+  min-width: 0;
+  flex: 1;
+  padding: 1px 4px;
+  margin: 1px 0;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--blue);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 21px;
+  outline: 0;
+}
+
+/* Who a shared page is shared with: their faces, small, at the row's end —
+   giving way to the row's actions under the pointer. */
+.tree-row__people {
+  flex: none;
+  padding-right: 2px;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.tree-row__people .avatar + .avatar,
+.tree-row__people .avatar + .tree-row__more {
+  margin-left: -5px;
+  box-shadow: 0 0 0 1.5px var(--sidebar);
+}
+
+.tree-row__more {
+  display: inline-grid;
+  height: 16px;
+  min-width: 16px;
+  padding: 0 3px;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--fill-strong);
+  color: var(--ink-2);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.tree-row__actions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.tree-row:hover .tree-row__actions,
+.tree-row:focus-within .tree-row__actions,
+.tree-row.is-menu-open .tree-row__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tree-row:hover .tree-row__people,
+.tree-row:focus-within .tree-row__people,
+.tree-row.is-menu-open .tree-row__people {
+  opacity: 0;
+}
+
+/* The row's own tools take the end of the row under the pointer: the name
+   and its link mark give them room rather than slide under them. */
+.tree-row:hover .tree-row__main,
+.tree-row:focus-within .tree-row__main,
+.tree-row.is-menu-open .tree-row__main {
+  padding-right: 44px;
+}
+
+.tree-row__actions .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+
+@media (hover: none) {
+  .tree-row__actions {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+
+/* Obsidian's indent guides: one hairline down from each open page's arrow,
+   so the nesting reads at any depth without deep indents. */
+.tree-children {
+  position: relative;
+}
+
+.tree-children::before {
+  position: absolute;
+  top: 0;
+  bottom: 2px;
+  left: calc(var(--tree-inset) + var(--tree-depth, 0) * var(--tree-indent) + var(--tree-mark) / 2 - 0.5px);
+  width: 1px;
+  background: var(--hairline);
+  content: "";
+  pointer-events: none;
+}
+
+.sidebar__group {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+
+.sidebar__group + .sidebar__group {
+  margin-top: 14px;
+}
+
+.sidebar__group-title {
+  display: flex;
+  height: 24px;
+  align-items: center;
+  padding: 0 6px;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sidebar__group-title > span {
+  flex: 1;
+}
+
+.sidebar__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 8px;
+  color: var(--ink-3);
+}
+
+.sidebar__empty p {
+  margin: 4px 0 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+/* Workspace-level chrome, not content: centring it stops the row reading as
+   the bottom of the page list. */
+/* Workspace-level chrome, not content. A hairline above it says so, and stops
+   three loose icons reading as the end of the page list. */
+.sidebar__foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 5px 8px 6px;
+  box-shadow: inset 0 0.5px 0 var(--hairline);
+}
+
+/* Who you are sits with the other account-level chrome, as an avatar only.
+   The name is one hover away. */
+.sidebar__me {
+  display: inline-grid;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  place-items: center;
+}
+
+/* The scrim starts where the rail ends. The rail is never behind it, because
+   the rail is what you press to put the drawer away. */
+.sidebar__scrim {
+  position: absolute;
+  z-index: calc(var(--z-drawer) - 1);
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: var(--sidebar-rail);
+  border: 0;
+  background: var(--scrim);
+  opacity: 0;
+  animation: scrim-in var(--t-base) var(--e-out) forwards;
+}
+
+@keyframes scrim-in {
+  to { opacity: 1; }
+}
+
+@media (max-width: 559.98px) {
+  .sidebar__collapse {
+    display: none;
+  }
+}
+
 /* Keep the existing navigator layout and use its tokens for the new footer. */
 .sidebar__foot > .space-switcher { flex: 1; }
 .sidebar__foot > .icon-btn { flex: none; }

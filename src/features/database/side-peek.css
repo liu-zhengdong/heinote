@@ -1,0 +1,233 @@
+/* ============================================================================
+   Side peek
+
+   A database row opens as a page on the right, beside the database it came
+   from, as Notion's side peek does: the page is the real editor with the
+   page's own bar, and the page it came from stays open and live beside it.
+   Docked, it takes the right of the window and the page pane gives it room;
+   too narrow for two pages side by side, it lies over the page, leaving a
+   strip of it to press to go back. It sits below the drawer, the side panel
+   and popovers — the page inside it opens menus of its own.
+   ========================================================================== */
+
+.app-shell--peek .app-main {
+  margin-right: var(--peek-w);
+}
+
+.side-peek {
+  position: absolute;
+  z-index: var(--z-peek);
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  background: var(--paper);
+  opacity: 0;
+  outline: 0;
+  transform: translateX(24px);
+  transition: opacity var(--t-fast) var(--e-out), transform var(--t-base) var(--e-out);
+}
+
+.side-peek.is-shown {
+  opacity: 1;
+  transform: none;
+}
+
+/* Docked: a hairline between the two pages, as between the list and the
+   page. */
+.side-peek--docked {
+  width: var(--peek-w);
+  box-shadow: inset 1px 0 0 var(--hairline);
+}
+
+/* Over the page: lifted off it, the strip of page beside it dimmed. */
+.side-peek--over {
+  left: calc(var(--pane-left) + 44px);
+  box-shadow: var(--shadow-panel);
+}
+
+.side-peek__strip {
+  position: absolute;
+  z-index: calc(var(--z-peek) - 1);
+  top: 0;
+  bottom: 0;
+  left: var(--pane-left);
+  width: 44px;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--t-base) var(--e-out);
+}
+
+.side-peek__strip.is-shown {
+  opacity: 1;
+}
+
+/* Its bar is the page bar's twin, at the same height on the same line. */
+.side-peek__bar {
+  display: flex;
+  height: var(--topbar-h);
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 0 7px 0 8px;
+}
+
+.side-peek__spacer {
+  flex: 1;
+}
+
+/* The same container the page pane is, so the page inside the peek sets its
+   gutter, its title and its reading scale exactly as it would full-page. */
+.side-peek__scroll {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  container: page / inline-size;
+}
+
+/* The seam between the two pages: drag it to give either more room. */
+.side-peek__seam {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.side-peek__seam::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition: background var(--t-fast) var(--e-out);
+}
+
+.side-peek__seam:hover::after,
+.app-shell.is-resizing-peek .side-peek__seam::after {
+  background: var(--blue);
+}
+
+/* The seam follows the pointer, and nothing else answers it meanwhile. */
+.app-shell.is-resizing-peek {
+  cursor: col-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.app-shell.is-resizing-peek .side-peek,
+.app-shell.is-resizing-peek .page-surface {
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .side-peek,
+  .side-peek__strip {
+    transform: none;
+    transition: none;
+  }
+}
+
+/* A database page's properties, between its title and its body — each a
+   name on the left and a value you edit in place on the right. */
+.page-props {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 10px;
+}
+
+.page-props__row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 4px;
+}
+
+.page-props__name {
+  display: flex;
+  width: 150px;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.page-props__value {
+  min-width: 0;
+  flex: 1;
+  border-radius: var(--r-sm);
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.page-props__value:hover {
+  background: var(--fill-hover);
+}
+
+/* Pictures and words wrap onto more lines than one, and their name stays by
+   the first of them, as Notion's does, rather than drifting to the middle. */
+.page-props__row:is([data-type="image"], [data-type="text"]) {
+  align-items: flex-start;
+}
+
+.page-props__row[data-type="image"] .page-props__name {
+  min-height: 34px;
+}
+
+.page-props__row[data-type="text"] .page-props__name {
+  min-height: var(--db-row, 33px);
+}
+
+@container page (max-width: 460px) {
+  .page-props__name {
+    width: 112px;
+  }
+}
+
+@media (max-width: 559.98px) {
+  .side-peek--sheet .side-peek__scroll {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .side-peek--sheet :is(.doc, .db) {
+    padding-inline: 18px;
+    padding-top: 12px;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .side-peek__head--mobile {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 46px;
+    padding: 0 10px 6px 12px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .side-peek__head--mobile .icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .side-peek__head-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
+}

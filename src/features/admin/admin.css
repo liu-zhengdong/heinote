@@ -1,6 +1,6 @@
 /* UC-16 admin console: top tabs + master list and inspector (direction C). */
 .admin {
-  position: fixed; inset: 0; z-index: 40;
+  position: fixed; inset: 0; z-index: var(--z-drawer);
   display: flex; flex-direction: column;
   background: var(--paper, #fff); color: var(--ink, #37352f);
   font-size: 14px; outline: none;
@@ -155,7 +155,7 @@
 .ac-about__foot { margin: 18px 0 0; }
 
 /* ————— confirm ————— */
-.ac-confirm-scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(15,15,15,.4); }
+.ac-confirm-scrim { position: fixed; inset: 0; z-index: var(--z-panel); display: grid; place-items: center; background: rgba(15,15,15,.4); }
 .ac-confirm { width: min(440px, calc(100vw - 40px)); background: var(--paper, #fff); border-radius: 12px; box-shadow: var(--shadow-pop, 0 8px 32px rgba(15,15,15,.2)); padding: 22px 24px; }
 .ac-confirm h2 { margin: 0 0 8px; font-size: 16px; }
 .ac-confirm p { margin: 0; color: var(--ink-2, rgba(55,53,47,.65)); line-height: 1.6; }

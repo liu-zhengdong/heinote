@@ -1,0 +1,275 @@
+/* ============================================================================
+   Share
+   ========================================================================== */
+
+.share {
+  width: min(500px, calc(100vw - 40px));
+  margin-top: min(12vh, 48px);
+}
+
+.share__head {
+  display: flex;
+  align-items: center;
+  padding: 6px 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.share__title {
+  margin: 0;
+  padding: 0 10px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 34px;
+}
+
+.share__head .icon-btn {
+  margin-left: auto;
+}
+
+.share__body {
+  padding: 14px;
+}
+
+.share__invite {
+  position: relative;
+  display: flex;
+  gap: 6px;
+}
+
+.share__field {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-3);
+  transition: box-shadow var(--t-fast) var(--e-out);
+}
+
+.share__field:focus-within {
+  box-shadow: inset 0 0 0 1px var(--blue);
+}
+
+.share__field input {
+  min-width: 0;
+  flex: 1;
+  height: 32px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 14px;
+  outline: 0;
+}
+
+.share__error {
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  margin-top: 10px;
+  background: var(--danger-tint);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.share__section {
+  margin-top: 18px;
+}
+
+.share__section h2 {
+  margin: 0 0 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.share__member {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.share__member-identity {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.share__member-identity strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share__member-identity small {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.share__pending,
+.share__role {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.share__you {
+  color: var(--ink-3);
+  font-weight: 400;
+}
+
+/* The page's sharing state, said in one line at the top — private, shared
+   with members, or open through a public link — so the two kinds of sharing
+   below never blur together. */
+.share__status {
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.share__section .share__note {
+  margin-bottom: 8px;
+}
+
+/* A page inside a shared page is shared through it: said once, above the
+   people it is shared with. */
+.share__inherited {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.share__inherited span {
+  min-width: 0;
+  flex: 1;
+}
+
+.share__inherited .btn {
+  flex: none;
+  height: 26px;
+}
+
+.share__note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* The suggestion list is a floating Popover under the invite field, so it
+   never pushes the member roster down; .pop owns the surface, this owns the
+   rows inside it. */
+.share__suggestions {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+.share__suggestion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.share__suggestion:hover,
+.share__suggestion[aria-selected="true"] {
+  background: var(--fill-hover);
+}
+
+.share__suggestions-empty {
+  padding: 7px 8px;
+}
+
+.share__exit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.share__exit-copy {
+  min-width: 0;
+  flex: 1;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.share__exit-button {
+  color: var(--ink-3);
+}
+
+.share__exit-button:hover {
+  color: var(--danger);
+}
+
+.share__access {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px;
+  border-top: 1px solid var(--hairline);
+}
+
+.public-links {
+  font-family: var(--heinote-font-body, "Mona Sans VF", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Noto Sans Backtick Fix", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji");
+  color: var(--ink);
+}
+
+.public-links { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline); }
+.public-links__head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.public-links__head h2 { display: flex; align-items: center; gap: 7px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 550; line-height: 22px; }
+.public-links__description { margin: 4px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
+.public-links__create { flex: none; height: 30px; padding-inline: 9px; background: var(--fill); color: var(--ink-2); }
+.public-links__list { display: grid; gap: 12px; list-style: none; margin: 14px 0 0; padding: 0; }
+.public-links__list:empty { display: none; }
+.public-links__item { min-width: 0; }
+.public-links__address { display: flex; min-width: 0; height: 40px; align-items: center; gap: 4px; padding: 4px 6px 4px 12px; border-radius: var(--r-sm); background: var(--fill); }
+.public-links__input { min-width: 0; width: 0; flex: 1; padding: 2px 0; border: 0; border-radius: 2px; background: transparent; color: var(--ink); font-family: inherit; font-size: 13px; line-height: 20px; }
+.public-links__input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.public-links__url { flex: none; width: 28px; height: 28px; color: var(--ink-2); text-decoration: none; }
+.public-links__copy { flex: none; height: 28px; padding-inline: 9px; gap: 5px; border-radius: 4px; background: var(--fill-active); color: var(--ink); }
+.public-links__copy:hover:not(:disabled) { background: var(--hairline-strong); }
+.public-links__meta { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 12px; padding-left: 1px; }
+.public-links__meta small { color: var(--ink-2); font-size: 11.5px; line-height: 18px; }
+.public-links__revoke { height: 28px; padding-inline: 6px; color: var(--ink-2); font-size: 12px; }
+.public-links__revoke:hover:not(:disabled) { background: var(--danger-tint); color: var(--danger); }
+.public-links__confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; padding-top: 4px; }
+.public-links__confirm p { flex: 1 1 180px; margin: 0; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
+.public-links .account-empty { margin: 16px 0 0; text-align: left; font-size: 13px; }
+.share:has(.public-links) { display: flex; max-height: calc(100dvh - 90px); flex-direction: column; }
+.share:has(.public-links) > .share__body { overflow-y: auto; min-height: 0; }
+.share:has(.public-links) > :is(.share__head, .share__access, .share__exit) { flex: none; }
+
+@media (max-width: 559.98px) {
+  .share:has(.public-links) { max-height: calc(100dvh - 64px); margin-top: 0; }
+}
+
+@media (max-height: 420px) {
+  .share {
+    margin-top: 12px;
+  }
+}

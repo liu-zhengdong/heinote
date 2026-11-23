@@ -1,4 +1,5 @@
 import { Search, Shuffle } from "lucide-react";
+import "../editor/picker.css";
 import { useMemo, useState } from "react";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";

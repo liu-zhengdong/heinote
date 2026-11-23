@@ -1,0 +1,611 @@
+/* ============================================================================
+   Shell
+   ========================================================================== */
+
+/* One split at every size, and never one pane. The first track belongs to the
+   navigator — the list at the width its reader chose, or the rail — and the
+   second belongs to the page. There is no width at which either is missing.
+
+   The TRACK is what animates, not the variable feeding it: a registered
+   custom property carrying a transition silently swallows an inline override,
+   which is exactly what the seam drag writes. (Chats paid for that one.) */
+.app-shell {
+  /* Where the page pane begins. A fixed-position panel is placed against the
+     viewport but still INHERITS from here, which is how the side panels know
+     not to cover the navigator. */
+  --pane-left: var(--sidebar-w);
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--paper);
+  transition: grid-template-columns var(--t-base) var(--e-out);
+}
+
+.app-shell--railed {
+  --pane-left: var(--sidebar-rail);
+  grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
+}
+
+.app-shell--mobile {
+  --pane-left: 0px;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.app-shell--mobile .app-main {
+  grid-area: 1 / 1;
+}
+
+.app-shell--mobile .page-surface {
+  padding-top: calc(46px + env(safe-area-inset-top, 0px));
+  scroll-padding-top: calc(54px + env(safe-area-inset-top, 0px));
+  scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+.app-shell--mobile :is(.doc, .db) {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+/* The seam follows the pointer, not an easing curve. */
+.app-shell.is-resizing {
+  transition: none;
+}
+
+.app-main {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  grid-area: 1 / 2;
+}
+
+.app-workspace {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+/* The page scrolls under the top bar, which is opaque paper like Notion's; its
+   height is paid as padding here so the first line still starts below it. */
+.page-surface {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+  padding-top: var(--topbar-h);
+  overflow: auto;
+  background: var(--paper);
+  container: page / inline-size;
+  scroll-padding-top: calc(var(--topbar-h) + 8px);
+}
+
+.empty-page {
+  display: grid;
+  height: 100%;
+  gap: 4px;
+  place-content: center;
+  place-items: center;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.empty-page h1 {
+  margin: 10px 0 14px;
+  color: var(--ink-2);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   Top bar
+   ========================================================================== */
+
+/* The page bar matches Notion's 44px height. */
+.topbar {
+  position: absolute;
+  z-index: var(--z-topbar);
+  top: 0;
+  right: 0;
+  left: 0;
+  display: flex;
+  height: var(--topbar-h);
+  align-items: center;
+  gap: 3px;
+  padding: 0 12px;
+  background: var(--paper);
+}
+
+.topbar--mobile {
+  height: auto;
+  min-height: calc(44px + env(safe-area-inset-top, 0px));
+  justify-content: space-between;
+  padding: max(4px, env(safe-area-inset-top, 0px)) 10px 4px 12px;
+}
+
+.topbar--mobile .icon-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.topbar__space-badge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.topbar__space-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.topbar__space-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__back {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.topbar__back > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__done {
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--blue);
+  font-weight: 600;
+}
+
+.topbar__actions .icon-btn > svg,
+.topbar__actions .proposal-entry > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.topbar__actions .proposal-entry {
+  font-size: 14px;
+}
+
+.topbar__share.is-on {
+  background-color: var(--fill-active);
+  color: var(--ink);
+}
+
+.topbar__crumbs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 1px;
+  overflow: hidden;
+}
+
+/* `display: contents` on a keyed wrapper leaves the separator and the crumb as
+   independent flex items, which is what lets a long trail shrink one crumb at
+   a time instead of shrinking the whole group. */
+.crumb__slot {
+  display: contents;
+}
+
+.crumb {
+  display: flex;
+  min-width: 0;
+  max-width: 220px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 20px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+/* The page you are on gets the room; its ancestors give theirs up first. */
+.crumb.is-current {
+  flex: 0 1 auto;
+}
+
+.crumb:not(.is-current) {
+  flex: 0 1 auto;
+  min-width: 34px;
+}
+
+.crumb__icon {
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.crumb:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.crumb.is-current {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.crumb__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb__sep {
+  flex: none;
+  padding: 0 1px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.topbar__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A favourite is starred in Notion's yellow — the one place a colour means
+   "you chose this", and it is not the accent. */
+.topbar__star.is-on {
+  color: var(--yellow);
+}
+
+/* Saving is a state, not news. At rest it is nothing at all; in flight it is
+   one dot breathing; failing it holds amber and says why on hover. The words
+   "Saving…" cost a third of this bar's width to report something that is true
+   for a second at a time. */
+.save-state {
+  width: 0;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 0;
+  background: var(--ink-4);
+  opacity: 0;
+  transition: opacity var(--t-base) var(--e-out), width var(--t-base) var(--e-out),
+    margin-right var(--t-base) var(--e-out);
+}
+
+.save-state--saving,
+.save-state--offline,
+.save-state--refused {
+  width: 7px;
+  margin-right: 5px;
+  opacity: 1;
+}
+
+.save-state--saving {
+  animation: breathe 1.4s var(--e-out) infinite;
+}
+
+.save-state--offline {
+  background: var(--yellow);
+  animation: none;
+}
+
+/* Some changes were refused for good (too large to store, or not a shape the
+   platform takes): they are undone, and the dot stays until the window is
+   reloaded, so it is not missed. */
+.save-state--refused {
+  background: var(--danger);
+  animation: none;
+}
+
+/* The flash over where a picked edit landed — the person's colour is the
+   accent, as a remote caret's is. */
+.history-flash {
+  animation: history-flash 1.6s var(--e-out);
+}
+
+@keyframes history-flash {
+  0% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  70% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  100% { background: transparent; box-shadow: inset 0 0 0 transparent; }
+}
+
+/* An older version, or a page you can only read, says so above the title and
+   in the flow. It used to float over the head's air on a -44px margin, but the
+   head gave that air back (28px, not 78px), and the notice sat on the title.
+
+   Its edges are the words' edges. It takes the page's own margins and measure
+   (set beside `.doc`'s), and each margin gets half of whatever room the
+   measure leaves between them: `.doc`'s padding and `.doc__inner`'s auto
+   margins, worked out for one box. */
+.history-banner {
+  --slack: max(0px, 100% - var(--gutter-start) - var(--gutter-end) - var(--column));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  margin: 12px calc(var(--gutter-end) + var(--slack) / 2) 0
+    calc(var(--gutter-start) + var(--slack) / 2);
+  background: var(--blue-tint);
+  color: var(--blue);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+/* A page read from the trash says so, with the two ways out of it. */
+.trash-banner {
+  padding-block: 5px;
+  background: var(--danger-tint);
+  color: var(--danger);
+}
+
+.trash-banner > span {
+  flex: 1;
+}
+
+.trash-banner .btn {
+  min-height: 26px;
+  font-size: 13px;
+}
+
+.trash-banner .btn--outline {
+  background: var(--paper);
+}
+
+/* A full-page database fills the pane (min-height: 100%). Under the notice it
+   fills what is LEFT, or every view-only database scrolled by the notice. */
+.page-surface:has(> .history-banner + .db) {
+  display: flex;
+  flex-direction: column;
+}
+
+.page-surface:has(> .history-banner + .db) > .db {
+  flex: 1 0 auto;
+  min-height: 0;
+}
+
+/* A cover drawn straight under the notice would touch it. */
+.history-banner + .doc--covered {
+  margin-top: 12px;
+}
+
+/* ── Move to ─────────────────────────────────────────────────────────────
+   Notion's page picker for sending blocks elsewhere: a search field, then the
+   pages, each with the path above it so two of the same name can be told
+   apart. Sized for the 640-wide window. */
+.move-to {
+  display: flex;
+  width: min(300px, calc(100vw - 32px));
+  flex-direction: column;
+  padding: 6px;
+}
+
+.move-to__search {
+  min-width: 0;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 14px;
+  outline: 0;
+}
+
+.move-to__list {
+  max-height: min(260px, 50vh);
+  margin-top: 4px;
+  overflow-y: auto;
+}
+
+.move-to__item {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  text-align: left;
+}
+
+/* The trash is the same list, a little wider, each row with when it went
+   there — or, under the pointer, Restore and Delete permanently. */
+.trash {
+  width: min(380px, calc(100vw - 32px));
+}
+
+.trash .move-to__list {
+  max-height: min(420px, 60vh);
+}
+
+.trash__item {
+  cursor: pointer;
+}
+
+.trash__when,
+.trash__actions {
+  flex: none;
+  margin-left: auto;
+}
+
+.trash__when {
+  color: var(--ink-4);
+  font-size: 12px;
+}
+
+.trash__actions {
+  display: none;
+  gap: 2px;
+}
+
+.trash__item:is(:hover, :focus-within) .trash__when {
+  display: none;
+}
+
+.trash__item:is(:hover, :focus-within) .trash__actions {
+  display: flex;
+}
+
+.move-to__item.is-active {
+  background: var(--fill-hover);
+}
+
+.move-to__icon {
+  display: grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-3);
+  font-size: 15px;
+}
+
+.move-to__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.move-to__title,
+.move-to__crumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.move-to__title {
+  font-size: 13.5px;
+}
+
+.move-to__crumb {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.move-to__shared {
+  display: grid;
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-3);
+  place-items: center;
+}
+
+.move-to__empty {
+  padding: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+/* ============================================================================
+   Responsive
+
+   Two authorities, and they answer different questions.
+
+   THE WINDOW decides how many panes there are. `--fold` (560px) is the width
+   below which the list and the page can no longer both be a usable size, and
+   it is the only media query in this file that matters, because `src/hooks/
+   useFold.ts` holds the same number: below it the rail draws DIFFERENT
+   controls, not smaller ones, so React has to know too.
+
+   THE COLUMN decides everything about the document. How wide the gutter is,
+   whether the block controls fit beside the text, how big a title should be —
+   these are questions about the measure the page is set on, and that measure
+   changes when the list folds while the window does not move at all. So they
+   are container queries on `.page-surface`, not media queries on the window.
+   ========================================================================== */
+
+@container page (min-width: 900px) {
+  .doc,
+  .db,
+  .history-banner {
+    --gutter: 96px;
+  }
+}
+
+@container page (max-width: 640px) {
+  .doc,
+  .db,
+  .history-banner {
+    --gutter: 40px;
+  }
+}
+
+/* Narrow, the margins keep just the room they need: the left one the "+"
+   (see `.doc`), the right one little. */
+@container page (max-width: 520px) {
+  .doc {
+    --head-top: 40px;
+  }
+
+  .doc__title {
+    font-size: 32px;
+  }
+
+  .doc,
+  .db,
+  .history-banner {
+    --gutter: 26px;
+  }
+
+  .doc--full,
+  .history-banner:has(+ :where(.doc--full)) {
+    --gutter: 26px;
+  }
+
+  .doc,
+  .history-banner {
+    --gutter-end: 12px;
+  }
+}
+
+/* At the very bottom the right margin all but goes; the left keeps what the
+   "+" needs. */
+@container page (max-width: 380px) {
+  .doc,
+  .db,
+  .history-banner {
+    --gutter: 22px;
+  }
+
+  .doc,
+  .history-banner {
+    --gutter-end: 10px;
+  }
+}
+
+@media (max-width: 559.98px) {
+  .trash-banner {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-block: 8px;
+  }
+
+  .trash-banner .btn {
+    min-height: 44px;
+  }
+}

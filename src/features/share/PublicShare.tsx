@@ -1,5 +1,5 @@
 import { Globe, Menu } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { BottomSheet } from "../../components/BottomSheet";
 import { useFold } from "../../hooks/useFold";
 import type { NotePage } from "../../core/types";
@@ -7,8 +7,10 @@ import { pageIcon } from "../editor/page-decoration";
 import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
 import { AppSurface } from "../artifact/AppSurface";
-import { PublicDatabase } from "./PublicDatabase";
 import { ReaderBlocks, ReaderInline, ReaderPageIcon, titleOf, type ReaderContext } from "./reader";
+import "./public-reader.css";
+
+const PublicDatabase = lazy(() => import("./PublicDatabase").then((module) => ({ default: module.PublicDatabase })));
 
 interface PublicDocument { title: string; pages: NotePage[] }
 function pageHref(id: string): string { return `#page=${encodeURIComponent(id)}`; }
@@ -155,7 +157,9 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
               <h1>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</h1>
               {active.kind === "database" ? (
-                <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />
+                <Suspense fallback={<p className="account-muted" role="status">正在加载数据库…</p>}>
+                  <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />
+                </Suspense>
               ) : (
                 active.block_tree ? <ReaderBlocks tree={active.block_tree} context={context} /> : null
               )}

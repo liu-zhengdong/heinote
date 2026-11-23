@@ -4,7 +4,7 @@
 
 .bottom-sheet-wrap {
   position: fixed;
-  z-index: 80;
+  z-index: var(--z-modal);
   inset: 0;
   display: flex;
   flex-direction: column;

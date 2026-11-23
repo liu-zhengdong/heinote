@@ -1,4 +1,5 @@
 import { ArrowUpRight, LocateFixed, Maximize, Orbit, Settings2, Waypoints } from "lucide-react";
+import "./graph.css";
 import {
   useCallback,
   useEffect,

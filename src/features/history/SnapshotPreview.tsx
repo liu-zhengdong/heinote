@@ -1,3 +1,4 @@
+import "./history.css";
 import { Code2, Database, Table2 } from "lucide-react";
 import type { NotePage } from "../../core/types";
 import { PageIconMark } from "../editor/PageIcon";

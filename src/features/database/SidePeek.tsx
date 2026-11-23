@@ -1,3 +1,4 @@
+import "./side-peek.css";
 import { ChevronsDown, ChevronsRight, ChevronsUp, Maximize2, Redo2, Undo2, X } from "lucide-react";
 import {
   Suspense,

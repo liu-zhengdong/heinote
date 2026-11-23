@@ -1,4 +1,5 @@
 import { Image as ImageIcon, Shuffle, Trash2, Upload } from "lucide-react";
+import "./picker.css";
 import { useMemo, useRef, useState, type DragEvent } from "react";
 import { Popover } from "../../components/Popover";
 import { useWorkspace } from "../../app/workspace-context";

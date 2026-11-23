@@ -1,3 +1,4 @@
+import "./share.css";
 import {
   ChevronDown,
   Copy,

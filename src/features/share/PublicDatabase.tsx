@@ -1,3 +1,4 @@
+import "../database/database.css";
 import { Check, FileText, Lock } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
 import { inTrash } from "../../core/page-tree";

@@ -1,3 +1,4 @@
+import "./database.css";
 import {
   ArrowDown,
   ArrowDownAZ,

@@ -1,3 +1,74 @@
+/* ============================================================================
+   Quick Find
+   ========================================================================== */
+
+.quickfind {
+  display: flex;
+  width: min(520px, calc(100vw - 40px));
+  max-height: min(460px, calc(100vh - 80px));
+  flex-direction: column;
+  margin-top: min(12vh, 56px);
+}
+
+.quickfind__input {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 9px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-3);
+}
+
+.quickfind__input input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 15px;
+  outline: 0;
+}
+
+.quickfind__input input::placeholder {
+  color: var(--ink-4);
+}
+
+/* Direction A in docs/prototypes/quickfind is the accepted baseline: a
+   520px sheet, 36px result rows, 3px between a result's title and excerpt,
+   and no gap between result rows. Keep these values in sync with proto.css. */
+.quickfind .menu {
+  max-height: none;
+  padding: 5px;
+}
+
+.quickfind .menu__item {
+  /* Scroll the list when it fills; shrinking a two-line row eats its padding. */
+  flex-shrink: 0;
+  min-height: 36px;
+  padding: 5px 8px;
+}
+
+.quickfind .menu__copy { gap: 3px; }
+.quickfind .menu__label { font-size: 14px; }
+.quickfind .menu__description { font-size: 12.5px; line-height: 1.4; }
+
+.quickfind__crumb {
+  flex: none;
+  max-width: 42%;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quickfind .menu__description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Scope as a segment in the input row — the list keeps its one-level shape:
    input, then results. The same inset pill the app uses for grouped choices. */
 .quickfind__seg { display:flex; flex:none; gap:1px; padding:2px; border-radius:999px; background:var(--fill); }
@@ -11,3 +82,9 @@
 /* The matched text itself: blue marks where the query won, kept to the
    characters so the row's greyscale hierarchy is untouched. */
 .quickfind mark { background:none; color:var(--blue); font-weight:600; }
+
+@media (max-height: 420px) {
+  .quickfind {
+    margin-top: 12px;
+  }
+}

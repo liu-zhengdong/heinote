@@ -1,0 +1,259 @@
+/* ── Emoji picker ─────────────────────────────────────────────────────── */
+
+.picker {
+  width: 340px;
+}
+
+.picker__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.picker__head input {
+  min-width: 0;
+  flex: 1;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  font-size: 14px;
+  outline: 0;
+}
+
+.picker__body {
+  max-height: 300px;
+  padding: 4px 8px 10px;
+  overflow-y: auto;
+}
+
+/* The jump-to-a-group chips — a category's name and one of its emoji — that
+   stay put while the grid scrolls. */
+.picker__cats {
+  position: sticky;
+  z-index: 1;
+  top: -4px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin: 0 -8px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  background: var(--elevated);
+}
+
+.picker__cats::-webkit-scrollbar {
+  display: none;
+}
+
+.picker__cat {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.picker__cat:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.picker__group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
+.picker__cell--img {
+  font-size: 0;
+}
+
+.picker__cell--img img {
+  border-radius: 3px;
+}
+
+.picker__group-title {
+  padding: 8px 4px 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.picker__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 2px;
+}
+
+.picker__cell {
+  display: grid;
+  height: 34px;
+  place-items: center;
+  border-radius: var(--r-sm);
+  font-size: 20px;
+  line-height: 1;
+  transition: background var(--t-tap) var(--e-out), transform var(--t-fast) var(--e-pop);
+}
+
+.picker__cell:hover {
+  background: var(--fill-hover);
+  transform: scale(1.12);
+}
+
+.picker__covers {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  padding: 8px;
+  gap: 6px;
+}
+
+.picker__cover {
+  height: 44px;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  transition: transform var(--t-fast) var(--e-pop);
+}
+
+.picker__cover:hover {
+  transform: scale(1.05);
+}
+
+.picker__cover.is-selected {
+  box-shadow: 0 0 0 2px var(--blue);
+}
+
+/* A column's mark picker: Notion's single "Icon" tab with Remove beside it,
+   a filter with a shuffle, then the marks — drawn in the ink the column's
+   head wears them in, never enlarged on approach as an emoji is. */
+.picker__tabs {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  padding: 4px 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.picker__tab-group {
+  display: flex;
+  gap: 14px;
+}
+
+.picker__headactions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-bottom: 4px;
+}
+
+.picker__tab {
+  padding: 6px 2px 8px;
+  color: var(--ink-3);
+  font-size: 14px;
+  font-weight: 500;
+  transition: color var(--t-tap) var(--e-out);
+}
+
+.picker__tab:hover {
+  color: var(--ink-2);
+}
+
+.picker__tab.is-active {
+  box-shadow: inset 0 -2px 0 var(--ink);
+  color: var(--ink);
+}
+
+/* A cover's Upload: the button, and the same place to drop a picture onto —
+   marked, while one is over it, by the blue drop line. */
+.picker__upload {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 16px 14px 14px;
+  border-radius: var(--r-sm);
+  margin: 8px;
+  text-align: center;
+  transition: box-shadow var(--t-tap) var(--e-out);
+}
+
+.picker__upload.is-dropping {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+.picker__upload-button {
+  width: 100%;
+}
+
+.picker__hint {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.picker__remove {
+  padding: 4px 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 14px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.picker__remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.picker__filter {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink-3);
+}
+
+.picker__filter:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.picker__head .picker__filter input {
+  padding: 5px 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+}
+
+.picker__shuffle {
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.picker__grid--icons {
+  grid-template-columns: repeat(auto-fill, minmax(30px, 1fr));
+}
+
+.picker__grid--icons .picker__cell {
+  height: 30px;
+  color: var(--ink-2);
+}
+
+.picker__grid--icons .picker__cell:hover {
+  color: var(--ink);
+  transform: none;
+}
+
+.picker__grid--icons .picker__cell.is-selected {
+  background: var(--fill-active);
+  color: var(--ink);
+}

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import type { Person } from "../../core/types";
 import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { api, errorMessage } from "./api";
+import "./account.css";
 import { clearPrefetchedSpaces, prefetchSpaces } from "../../platform/http";
 import { AgentAuthRequest } from "./AgentAuthRequest";
 import { GithubMark, GithubSignupChoice } from "./Github";

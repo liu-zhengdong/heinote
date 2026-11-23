@@ -2,12 +2,12 @@ import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import { NotebookPen } from "lucide-react";
 import { ErrorBoundary } from "./app/ErrorBoundary";
-import { AuthGate } from "./features/account/AuthGate";
 import "./styles/index.css";
-import "./features/account/account.css";
 import "./styles/standalone.css";
 
+const isPublicShare = window.location.pathname.startsWith("/s/");
 const PublicShare = lazy(() => import("./features/share/PublicShare").then((module) => ({ default: module.PublicShare })));
+const AuthGate = lazy(() => import("./features/account/AuthGate").then((module) => ({ default: module.AuthGate })));
 const WorkspaceShell = lazy(() => import("./app/WorkspaceShell").then((module) => ({ default: module.WorkspaceShell })));
 
 const loadingScreen = (
@@ -24,14 +24,16 @@ const loadingScreen = (
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
-      {window.location.pathname.startsWith("/s/") ? (
+      {isPublicShare ? (
         <Suspense fallback={loadingScreen}><PublicShare /></Suspense>
       ) : (
-        <AuthGate>
-          <Suspense fallback={loadingScreen}>
-            <WorkspaceShell />
-          </Suspense>
-        </AuthGate>
+        <Suspense fallback={loadingScreen}>
+          <AuthGate>
+            <Suspense fallback={loadingScreen}>
+              <WorkspaceShell />
+            </Suspense>
+          </AuthGate>
+        </Suspense>
       )}
     </ErrorBoundary>
   </StrictMode>,

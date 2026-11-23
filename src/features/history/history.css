@@ -1,0 +1,218 @@
+/* ============================================================================
+   Side panel — page history
+   ========================================================================== */
+
+/* History is read BESIDE the page it previews, so the panel takes at most
+   half of the page pane: a list of versions you cannot see next to the page
+   is a list of timestamps. `min(480px, 100vw)` used to take 480 of a 640
+   window and the whole of a 400 one. */
+.panel {
+  position: fixed;
+  z-index: var(--z-panel);
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  width: min(340px, max(176px, calc((100vw - var(--pane-left, 0px)) * 0.5)));
+  flex-direction: column;
+  background: var(--elevated);
+  box-shadow: var(--shadow-panel);
+  transform: translateX(100%);
+  transition: transform var(--t-slow) var(--e-out);
+}
+
+.panel.is-shown {
+  transform: none;
+}
+
+/* A side panel previews the page it sits beside — the database row you peeked
+   at, the version you are considering — so its catcher stays transparent. Only
+   modal dialogs dim what is behind them. */
+.panel__scrim {
+  position: fixed;
+  z-index: calc(var(--z-panel) - 1);
+  inset: 0;
+  border: 0;
+  background: transparent;
+}
+
+.panel__head {
+  display: flex;
+  height: var(--topbar-h);
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.panel__head h2 {
+  flex: 1;
+  margin: 0;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.panel__body {
+  min-height: 0;
+  flex: 1;
+  padding: 8px 0;
+  overflow-y: auto;
+}
+
+.panel__foot {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  padding: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.panel__foot .btn {
+  flex: 1;
+}
+
+/* History */
+
+.history-group h3 {
+  padding: 14px 14px 4px;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.history-item {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 14px;
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.history-item:hover {
+  background: var(--fill-hover);
+}
+
+.history-item.is-selected {
+  background: var(--blue-tint);
+}
+
+.history-item__line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.history-item__time {
+  flex: none;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.history-item__author {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.history-item__author > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-item__summary {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An event's label sits like a summary but names where it lands. */
+.history-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A non-document checkpoint's preview: the page's definition, drawn in the
+   page's own column like `.doc`, so restoring a library or an app reads as
+   what it restores — structure, not a body that was never in the snapshot. */
+.snapshot-doc {
+  padding-top: 32px;
+}
+.snapshot-icon {
+  margin: 0 0 4px -2px;
+  color: var(--ink-2);
+}
+.snapshot-title {
+  margin-bottom: 24px;
+}
+.snapshot-section {
+  margin: 0 0 20px;
+}
+.snapshot-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+}
+.snapshot-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snapshot-item__meta {
+  color: var(--ink-4);
+  font-size: 12px;
+}
+.snapshot-item--empty {
+  color: var(--ink-4);
+  font-style: normal;
+}
+.snapshot-note {
+  margin: 24px 0 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--accent);
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+}

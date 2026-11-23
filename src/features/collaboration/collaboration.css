@@ -1,7 +1,7 @@
 /* Save recovery uses the guided "crash-recovery" surface approved in
    .visual-design/draft-recovery: one dialog, one primary way out. */
 .save-recovery-scrim {
-  position: fixed; inset: 0; z-index: 200;
+  position: fixed; inset: 0; z-index: var(--z-toast);
   display: grid; place-items: center; padding: 20px;
   background: var(--scrim);
 }

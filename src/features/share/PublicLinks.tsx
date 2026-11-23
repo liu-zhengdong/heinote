@@ -1,3 +1,4 @@
+import "./share.css";
 import { Copy, ExternalLink, Link, Plus } from "lucide-react";
 import { useState } from "react";
 import { useUi } from "../../app/ui-context";

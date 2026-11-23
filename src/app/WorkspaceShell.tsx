@@ -1,5 +1,6 @@
 // The app's collections, declared before anything opens one.
 import "../../schema";
+import "./workspace.css";
 import { App } from "./App";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { UiProvider } from "./ui-context";

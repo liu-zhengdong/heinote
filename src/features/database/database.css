@@ -1,0 +1,3469 @@
+/* ============================================================================
+   Database
+
+   A database is the same page model in a grid. The chrome above it is a toolbar
+   of quiet text buttons; the rows underneath are hairlines, never boxes.
+   ========================================================================== */
+
+.db {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  padding: 0 var(--gutter) 24px;
+}
+
+/* The notice over a database page stands on the database's margins, not a
+   text column's (see `.history-banner`). It outweighs `.history-banner`, so
+   the text column's margins never reach it, at any width. */
+.history-banner:has(+ .db) {
+  --gutter-start: var(--gutter);
+  --gutter-end: var(--gutter);
+  --column: 100%;
+}
+
+/* A full-page database aligns its title with the grid, not with a text
+   column — the table is the content here. */
+.db__head {
+  padding-top: 28px;
+  padding-bottom: 4px;
+}
+
+/* Compact, as a table among words should be (Winston: "make it more compact,
+   remove unnecessary gaps"): the name's row is 34px, the tabs' 32px, and
+   neither keeps a gap under its rule. `--bar-h` is the row's height, which
+   the open tab's underline reads to sit on the rule. */
+.db__toolbar {
+  --bar-h: 34px;
+
+  display: flex;
+  height: var(--bar-h);
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--paper);
+}
+
+/* An inline database's name, and — under it, once there is a second view —
+   its tabs: the rule runs under whichever row is last. */
+.db__title {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+
+.db__tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+}
+
+.db__toolbar:has(+ .db__toolbar--tabs) {
+  border-bottom: 0;
+  margin-bottom: 0;
+}
+
+.db__toolbar--tabs {
+  --bar-h: 32px;
+}
+
+/* On a database's own page the toolbar stays in reach while the rows scroll.
+   It sticks under the top bar, not to the scrollport's edge, because the bar
+   floats over the page and would otherwise cover it. Inline in a document it
+   scrolls away with the database it belongs to — a toolbar parked at the top
+   of a meeting note, for a table you scrolled past, belongs to nothing. */
+.dbv--page > .db__toolbar {
+  position: sticky;
+  z-index: 12;
+  top: var(--topbar-h);
+}
+
+/* The strip scrolls sideways when there are more views than room, and a
+   scroll container clips to its padding box — so the padding is what gives the
+   underline, which hangs below each tab, somewhere to be drawn. Without it the
+   open view was marked by ink weight alone. */
+.db__views {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  align-self: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.db__views::-webkit-scrollbar {
+  display: none;
+}
+
+.view-tab {
+  position: relative;
+  display: flex;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.view-tab__name {
+  max-width: 128px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The add button is a tab-shaped control, not a tab: no underline, no
+   selected state, just the next thing the strip can hold. */
+.view-tab--add {
+  width: 28px;
+  justify-content: center;
+  padding: 0;
+}
+
+.view-tab--add::after {
+  display: none;
+}
+
+/* The narrow database's one view control: the view you are on, and a chevron
+   that says the others are a press away. Hidden until the container asks. */
+.db__view-switch {
+  display: none;
+  min-width: 0;
+  height: 26px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  margin-right: auto;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.db__view-switch:hover {
+  background: var(--fill-hover);
+}
+
+.db__view-switch > svg:last-child {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.view-tab:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.view-tab.is-active {
+  color: var(--ink);
+}
+
+/* The underline slides between tabs instead of cutting; it is the only place
+   in the app where an indicator travels. */
+.view-tab::after {
+  position: absolute;
+  right: 4px;
+  /* On the row's rule: half the room the 26px tab leaves in its row. */
+  bottom: calc((var(--bar-h, 34px) - 27px) / -2);
+  left: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: "";
+  transform: scaleX(0);
+  transition: transform var(--t-base) var(--e-out);
+}
+
+.view-tab.is-active::after {
+  transform: scaleX(1);
+}
+
+.db__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+/* Each tool is its mark; a filter or a sort in force adds what it is — the
+   value, the column — and turns blue, the way Notion's chip does. */
+.db__tool {
+  display: inline-flex;
+  min-width: 26px;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.db__tool:hover,
+.db__tool.is-open {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__tool.is-on {
+  color: var(--blue);
+}
+
+/* In a document a database is read more than it is arranged: its tools come
+   with the pointer (or the keyboard), and stay while one is in use — a
+   filter or sort in force, the search open, a menu out. A touch screen has
+   no pointer to bring them, so there they always show. */
+@media (hover: hover) {
+  .dbv--inline > .db__toolbar:not(.is-held) > .db__tools {
+    opacity: 0;
+  }
+
+  .dbv--inline:is(:hover, :focus-within) > .db__toolbar > .db__tools {
+    opacity: 1;
+  }
+}
+
+.db__search {
+  width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  font-size: 13px;
+  opacity: 0;
+  outline: 0;
+  transition: width var(--t-base) var(--e-out), opacity var(--t-base) var(--e-out),
+    padding var(--t-base) var(--e-out);
+}
+
+.db__search.is-open {
+  width: 160px;
+  padding: 5px 8px;
+  opacity: 1;
+}
+
+/* Its scrollbar waits for the pointer, so the table says itself that there is
+   more of it: the far edge fades while columns are past it, and the name
+   column draws its edge once columns have gone under it — the table's own
+   borders scroll away with them. Both follow the scroll; a table that fits
+   has no scroll timeline, and neither. Where the browser has no scroll
+   timelines, the wrap's tableEdges ref (table-edges.ts) writes the same two
+   properties instead; the fade tracks the scroll pixel for pixel, so only
+   the name edge keeps a short transition. */
+@property --table-fade {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --name-edge {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+.db__table-wrap {
+  overflow-x: auto;
+  mask-image: linear-gradient(to left, transparent, #000 var(--table-fade));
+  transition: --name-edge 150ms var(--e-out);
+}
+
+@supports (animation-timeline: scroll()) {
+  .db__table-wrap {
+    /* The duration says "auto" out loud, and in its own longhand: written
+       inside the shorthand the minifier expands it to 0s, and a
+       scroll-driven animation with a time duration counts as finished at
+       once — progress pinned at 1, the name edge drawn at scroll zero. */
+    animation: table-fade linear both, name-edge linear both;
+    animation-duration: auto, auto;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - 48px) 100%, 0 16px;
+  }
+
+  @keyframes table-fade {
+    from { --table-fade: 48px; }
+    to { --table-fade: 0px; }
+  }
+
+  @keyframes name-edge {
+    to { --name-edge: var(--hairline-strong); }
+  }
+}
+
+/* Every column is as wide as its view says — `table-layout: fixed`, the
+   widths on the <col>s and the table's own width from TableLayout — so what
+   a cell holds never pushes its column wider. Names and Text values wrap
+   onto the lines below instead and the row grows to hold them, as Notion's
+   do; a column whose "Wrap text" is off cuts them off at its edge. */
+.db__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: calc(var(--read) * 0.92);
+  table-layout: fixed;
+}
+
+.db__table th,
+.db__table td {
+  height: var(--db-row, 33px);
+  padding: 0;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: middle;
+}
+
+/* A row taller than one line — words wrapping in one of its cells — keeps
+   every cell's first line level at its top, as Notion's rows do. */
+.db__table td {
+  overflow: hidden;
+  vertical-align: top;
+}
+
+.db__table th {
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+/* The name column's head is already placed (it stays put, below); every
+   other head is the place its edge's handle hangs from. */
+.db__table th:not(.db__name) {
+  position: relative;
+}
+
+/* A column's edge, dragged to size it. The handle straddles the line
+   between two heads; a blue line (Notion's) says it is held or can be. */
+.db__resize {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.db__resize::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+  border-radius: 1.5px;
+  background: var(--blue);
+  content: "";
+  opacity: 0;
+  transition: opacity var(--t-tap) var(--e-out);
+}
+
+.db__resize:hover::after,
+.db__resize.is-active::after {
+  opacity: 1;
+}
+
+/* The table's last edge has no neighbour to straddle: it stays inside. */
+.db__table th:last-child .db__resize {
+  right: 0;
+}
+
+.db__table th:last-child .db__resize::after {
+  left: auto;
+  right: 0;
+}
+
+/* While a column is being sized, the pointer says so wherever it goes and
+   nothing it passes is selected. */
+html.is-resizing-column,
+html.is-resizing-column * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* A column's head is its menu's button (a label for a reader who may only
+   look): its mark and its name, the name cut short rather than wrapped so a
+   long one cannot make the header row two lines tall. */
+.db__th {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: var(--db-row, 33px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.db__th > svg {
+  flex: none;
+}
+
+/* The name column's label stands over the names: its mark takes the room a
+   row's page mark and its gap do (18px and 7px against 14px and 6px). */
+.db__table th.db__name .db__th {
+  gap: 11px;
+}
+
+.db__th-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.db__th:hover,
+.db__th.is-open {
+  background: var(--fill-hover);
+}
+
+/* A column head held by its name is picked up like a panel row's by its
+   grip: its own column fades to a ghost, and the gap it lands in gets a
+   blue edge and a wash down the whole column, so the rows read where it
+   goes before it is let go. */
+.db__table col.is-col-dragging {
+  opacity: 0.4;
+}
+
+.db__table col.is-col-spot {
+  background: var(--blue-tint);
+}
+
+.db__table th.is-col-drop-before::before,
+.db__table th.is-col-drop-after::after {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 2px;
+  background: var(--blue);
+  content: "";
+}
+
+.db__table th.is-col-drop-before::before {
+  left: 0;
+}
+
+.db__table th.is-col-drop-after::after {
+  right: 0;
+}
+
+.db__table tbody tr {
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.db__table tbody tr:hover {
+  background: var(--fill);
+}
+
+.db__table tbody tr.is-peeked {
+  background: var(--blue-tint);
+}
+
+/* The name is what a row IS, so it stays put while the properties scroll past
+   it. In a 424px pane the properties are ALWAYS off to the right, and a table
+   you can scroll sideways out of its own subject is a table you cannot read.
+   Its width is its <col>'s (TableLayout's TITLE_DEFAULT_WIDTH until it is
+   dragged). */
+.db__name {
+  position: sticky;
+  z-index: 3;
+  left: 0;
+  background: var(--paper);
+  box-shadow: inset -1px 0 0 var(--name-edge);
+}
+
+.db__table tbody tr:hover .db__name {
+  background: color-mix(in srgb, var(--ink) 4%, var(--paper));
+}
+
+.db__table tbody tr.is-peeked .db__name {
+  background: color-mix(in srgb, var(--blue) 12%, var(--paper));
+}
+
+.db__add-property > button {
+  display: flex;
+  width: 36px;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-4);
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.db__add-property > button:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__row-name {
+  display: flex;
+  width: 100%;
+  min-height: var(--db-row, 33px);
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px;
+  color: var(--ink);
+  font-size: 14px;
+  text-align: left;
+}
+
+/* A row's name is a value typed where it stands, in the cell (or the list's
+   line), so the whole of it wears the text cursor; only the page mark of a
+   row with anything in it wears the hand. */
+.db__name.is-renamable,
+.db-list__name.is-renamable {
+  cursor: text;
+}
+
+/* A name at rest clips at the column's edge with an ellipsis — unless its
+   column wraps (below) — the padding the room its letters' descenders keep
+   inside the clip. */
+:is(.db__row-name, .db-list__name) > :is(.db__row-title, .db-list__title):where(:not([data-empty], .title-field)) {
+  overflow: hidden;
+  min-width: 0;
+  padding-block: 0.2em;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The page mark of a row with anything in it — its icon, or a page's —
+   which opens it. */
+.db__row-mark {
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.db__row-mark:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__row-mark:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+/* An untitled row has no name to follow: its "Untitled" is quiet, is not a
+   link, and a click on it types the name. */
+:is(.db__row-title, .db-list__title)[data-empty] {
+  min-width: 0;
+  flex: 1;
+  color: var(--ink-4);
+  font-weight: 500;
+}
+
+:is(.db__row-title, .db-list__title)[data-empty]::before {
+  content: "Untitled";
+}
+
+/* The name being typed, in its own cell. It takes the cell's width rather
+   than setting it: a text field's own width (twenty characters) made the name
+   column 273px in a 346px table at the window's default size, so the column
+   stood over "Add property" however far the table was scrolled. The column's
+   width is `.db__name`'s to say. */
+.db__row-title.title-field {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  height: var(--db-row, 33px);
+  padding: calc((var(--db-row, 33px) - 20px) / 2) 0;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: pre;
+}
+
+/* A name in a column that wraps — every column, until its "Wrap text" is
+   turned off — runs on to the lines below instead of ending in "…", and the
+   row grows to hold it, as Notion's does. Its first line stays exactly where
+   a one-line name sits (the padding is what centring left above it), and
+   the mark and the row's pencil and Open stand level with that line. */
+.db__row-name.is-wrapped {
+  align-items: flex-start;
+  padding-block: calc((var(--db-row, 33px) - 1lh) / 2 - 0.2em);
+}
+
+.db__row-name.is-wrapped .db__row-icon,
+.db__row-name.is-wrapped > .db__row-actions {
+  height: calc(1lh + 0.4em);
+}
+
+.db__row-name.is-wrapped > .db__row-title:not([data-empty]):not(.title-field) {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.db__row-name.is-wrapped > .db__row-title[data-empty] {
+  padding-block: 0.2em;
+}
+
+/* Typed, a wrapping name keeps the lines it has at rest. */
+.db__row-name.is-wrapped .db__row-title.title-field {
+  height: auto;
+  padding-block: 0.2em;
+  line-height: inherit;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* What a row offers when it is pointed at: the pencil that types its name
+   and Open. */
+.db__row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* A row's grip — the ⋮⋮ it is dragged by, quiet until the row (or the card)
+   is pointed at or the grip itself is focused. On a gallery card it is the
+   pencil's left-hand neighbour, floating over the card's corner. */
+.row-grip {
+  display: grid;
+  width: 18px;
+  height: 22px;
+  flex: none;
+  margin-left: -4px;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-4);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.row-grip:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.row-grip:active {
+  cursor: grabbing;
+}
+
+.db__table tr:hover .row-grip,
+.db-list__row:hover .row-grip,
+.db-card .row-grip:focus-visible,
+.row-grip:focus-visible,
+.db-list__row:focus-within .row-grip,
+.db__table tr:focus-within .row-grip {
+  opacity: 1;
+}
+
+.db-card > .row-grip {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  margin-left: 0;
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--ink-2);
+}
+
+.db-card:hover > .row-grip,
+.db-card:focus-within > .row-grip {
+  opacity: 1;
+}
+
+/* Where a dragged row would land: the same blue line a sort or a status
+   option wears — a row's top or bottom edge, a card's left or right. */
+.db__table tr.is-rdrop-before > td,
+.db-list__row.is-rdrop-before {
+  box-shadow: inset 0 2px 0 var(--blue);
+}
+
+.db__table tr.is-rdrop-after > td,
+.db-list__row.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.db-list__group.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.board__card.is-rdrop-before,
+.db-card.is-rdrop-before {
+  box-shadow: inset 2px 0 0 var(--blue), var(--shadow-card);
+}
+
+.board__card.is-rdrop-after,
+.db-card.is-rdrop-after {
+  box-shadow: inset -2px 0 0 var(--blue), var(--shadow-card);
+}
+
+.db__open {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  cursor: pointer;
+  color: var(--ink-2);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.db__open:hover {
+  background: var(--fill-hover);
+}
+
+.db__table tr:hover .db__open,
+.db__open:focus-visible {
+  opacity: 1;
+}
+
+/* Where a pointer can hover, a row's pencil and Open float over the end of
+   its name when the row is pointed at, as Notion's Open does, rather than
+   keeping a gap at the end of every name: hidden, Open still took ~60px from
+   the name, so a column dragged narrow cut "Grace" to "G…" with room to
+   spare. A touch screen, where they always show, keeps them beside the
+   name. */
+@media (hover: hover) {
+  .db__row-name {
+    position: relative;
+  }
+
+  .db__row-name > .db__row-actions {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    margin-left: 0;
+    transform: translateY(-50%);
+  }
+
+  .db__row-name.is-wrapped > .db__row-actions {
+    top: calc((var(--db-row, 33px) - 1lh) / 2 - 0.2em);
+    transform: none;
+  }
+
+  .db__row-name > .db__row-actions .db__open {
+    background: var(--paper);
+    box-shadow: var(--shadow-card);
+  }
+
+  .db__row-name > .db__row-actions .db__open:hover {
+    background: color-mix(in srgb, var(--ink) 6%, var(--paper));
+  }
+}
+
+.db__cell {
+  width: 100%;
+  height: var(--db-row, 33px);
+  padding: 0 8px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 14px;
+  outline: 0;
+  transition: box-shadow var(--t-fast) var(--e-out);
+}
+
+.db__cell:focus {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+/* A Text value (TextValue): its words wrap and the cell grows to hold them,
+   as Notion's does. A textarea cannot grow to its words in every browser, so
+   it shares one grid cell with an unseen copy of them, which sets the
+   height; the two share every measure that decides where a line breaks. A
+   one-line value's words sit where they always have, centred in the row. */
+.db__text {
+  display: grid;
+  min-width: 0;
+}
+
+/* `* { box-sizing }` never reaches a pseudo-element: without its own, the
+   copy's padding went on top of its min-height and a one-line cell stood
+   16px taller than its words. */
+.db__text::after {
+  box-sizing: border-box;
+  content: attr(data-value) " ";
+  visibility: hidden;
+}
+
+.db__text > .db__cell,
+.db__text::after {
+  min-width: 0;
+  height: auto;
+  min-height: var(--db-row, 33px);
+  padding: calc((var(--db-row, 33px) - 1lh) / 2) 8px;
+  font-size: 14px;
+  grid-area: 1 / 1;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.db__text > .db__cell {
+  display: block;
+  overflow: hidden;
+  appearance: none;
+  resize: none;
+}
+
+/* A column whose "Wrap text" is off: one line, cut off at its edge. The line
+   is the row's whole height, as an input's is, so a value holding a line
+   break shows its first line alone — padding would let the next one peek in
+   under it. */
+.db__text.is-one-line::after {
+  content: none;
+}
+
+.db__text.is-one-line > .db__cell {
+  height: var(--db-row, 33px);
+  padding-block: 0;
+  line-height: var(--db-row, 33px);
+  overflow-wrap: normal;
+  white-space: pre;
+}
+
+.db__cell--select {
+  position: relative;
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  padding: 0 8px;
+}
+
+.db__cell-select { width: 100%; min-width: 0; }
+
+/* The single-line values: number, url, email and phone type in one input
+   on the row's line. A number stands right-aligned in tabular figures, the
+   way Notion's does, so a column of them lines up. */
+.db__line {
+  display: block;
+  min-width: 0;
+}
+
+.db__cell--line {
+  height: var(--db-row, 33px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__cell--number {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A set address reads as the link it is — the same ink at 70% over a 40%
+   underline the words' own links wear — and, where the cell cannot be
+   typed, is the link, so it can be followed. */
+.db__link,
+.db__cell--link {
+  color: inherit;
+  opacity: 0.7;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-decoration-thickness: max(1px, 0.05em);
+  text-underline-offset: 0.2em;
+}
+
+.db__link {
+  display: inline-block;
+  height: var(--db-row, 33px);
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: pointer;
+  line-height: var(--db-row, 33px);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__line > .db__link {
+  height: auto;
+  max-width: 160px;
+  padding: 0;
+  line-height: inherit;
+}
+
+/* A checkbox is its box — the to-do block's, so the app has one kind of
+   tick — on the row's line. */
+.db__check {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  padding-left: 8px;
+}
+
+/* The meta columns read the row's own record; they are drawn as words, not
+   inputs — nothing writes them. */
+.db__meta {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  color: var(--ink-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__meta[data-meta="id"] .db__meta-value {
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.db__meta-value:empty::after {
+  color: var(--ink-4);
+  content: "Empty";
+}
+
+/* A multi-select is its options as pills, the ones it holds — as many as
+   fit, the list a click away. */
+.db__multi {
+  display: block;
+  min-width: 0;
+}
+
+.db__multi-cell {
+  display: flex;
+  width: 100%;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  overflow: hidden;
+  cursor: default;
+}
+
+.db__multi-pills {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.db__multi-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.db__multi-remove {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+}
+
+.db__multi-remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.db__multi-empty {
+  color: var(--ink-4);
+}
+
+/* The multi-select's own menu: a filter at the top, the offered options —
+   picked ones marked — under it, and the quiet note that options are born
+   in the column's menu. */
+.db-multi-menu {
+  width: 220px;
+  padding: 6px;
+}
+
+.db-multi-menu__search {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+.db-multi-menu__list {
+  margin-top: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.db-multi-menu__option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-2);
+  font-size: 13px;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.db-multi-menu__option:hover,
+.db-multi-menu__option.is-active {
+  background: var(--fill-hover);
+}
+
+.db-multi-menu__option > svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-multi-menu__empty,
+.db-multi-menu__none {
+  padding: 5px 8px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.db-multi-menu__hint {
+  display: flex;
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-4);
+  font-size: 11px;
+  gap: 12px;
+}
+
+.db-multi-menu__hint svg {
+  vertical-align: -1px;
+}
+
+/* A range is the two days with an arrow between; the end field joins once
+   a start is set, the way Notion's "End date" does. */
+.db__date:not(.is-empty) {
+  display: flex;
+  align-items: center;
+}
+
+.db__date > .db__cell {
+  flex: 1;
+  min-width: 0;
+}
+
+.db__date-arrow {
+  padding: 0 2px;
+  color: var(--ink-4);
+}
+
+.db__person {
+  display: flex;
+  height: var(--db-row, 33px);
+  align-items: center;
+  gap: 6px;
+  padding-left: 8px;
+}
+
+.db__person input {
+  min-width: 0;
+  flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  outline: 0;
+}
+
+/* Empty cells stay empty. The placeholder is a hint on approach, not a value. */
+.db__cell::placeholder,
+.db__person input::placeholder {
+  color: transparent;
+  transition: color var(--t-fast) var(--e-out);
+}
+
+.db__table tr:hover .db__cell::placeholder,
+.db__table tr:hover .db__person input::placeholder,
+.db__cell:focus::placeholder,
+.db__person input:focus::placeholder,
+.page-props__row .db__cell::placeholder,
+.page-props__row .db__person input::placeholder {
+  color: var(--ink-4);
+}
+
+.db__add-row {
+  display: flex;
+  width: 100%;
+  height: var(--db-row, 30px);
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 13.5px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.db__add-row:hover {
+  background: var(--fill);
+  color: var(--ink-2);
+}
+
+/* A minimal table keeps to its grid: its New row comes with the pointer. */
+.dbv--minimal .db__add-row {
+  border-bottom: 0;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.dbv--minimal:is(:hover, :focus-within) .db__add-row {
+  opacity: 1;
+}
+
+/* ── One database, two places ─────────────────────────────────────────── */
+
+/* The database is its own container, so its toolbar answers to the width it
+   was actually given — a database inline in a 372px column and the same one
+   full-page in a 900px window are different problems. */
+.dbv {
+  --db-row: 30px;
+
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
+  container: dbv / inline-size;
+}
+
+/* ── Minimal mode ─────────────────────────────────────────────────────── */
+
+/* A table drawn as a plain Markdown table: the names in a closed hairline
+   grid, the head row set apart by weight and the faintest wash, and rows
+   five pixels shorter. Everything that is the database's own furniture —
+   marks, row icons, "Add property", "New page", the page count — is not
+   drawn at all (DatabaseView leaves it out), so nothing here hides it. */
+.dbv--minimal {
+  --db-row: 26px;
+}
+
+.dbv--minimal > .db__toolbar {
+  border-bottom: 0;
+}
+
+.dbv--minimal .db__table th {
+  border-top: 1px solid var(--hairline);
+  /* Opaque, because the name column's head stays put while the rest of the
+     row scrolls under it. */
+  background: color-mix(in srgb, var(--ink) 3%, var(--paper));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.dbv--minimal .db__table .db__name {
+  border-left: 1px solid var(--hairline);
+}
+
+.dbv--minimal .db__row-title.db__row-title {
+  font-weight: 400;
+}
+
+/* Inline in a document, a minimal table's tools wait until the table is
+   approached (rule 4), so at rest the page reads as words and a table. The
+   toolbar keeps its height, so nothing moves when they appear; the view's
+   name stays, since it says which table this is. The keyboard approaches it
+   too — but a button keeps the focus a click gave it, so it is keyboard
+   focus (`:focus-visible`), not any focus, that holds the tools up. */
+.dbv--quiet .db__tools,
+.dbv--quiet .view-tab--add {
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.dbv--quiet:hover .db__tools,
+.dbv--quiet:has(:focus-visible) .db__tools,
+.dbv--quiet:hover .view-tab--add,
+.dbv--quiet:has(:focus-visible) .view-tab--add {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .dbv--quiet .db__tools,
+  .dbv--quiet .view-tab--add {
+    opacity: 1;
+  }
+}
+
+/* Inline, it is a block of the document: full column width, a name you can
+   type into, and room above and below so it reads as an object set into the
+   text rather than as more text. */
+/* A database is drawn as a page shown in place: its mark at the start of its
+   title, its views one step in. Folded, it is its row. */
+.db-frame {
+  padding-top: 6px;
+  padding-bottom: 2px;
+}
+
+/* A database's head is its toolbar's row, its name in the middle of it; it
+   draws its own edges, so it hangs no line down the side as a group does.
+   It stands in the page's text column, as Notion's does — its table's edge
+   where the words' is (Winston: "should we somehow align them?") — its icon
+   before its name (`.dbv-inline__icon`) rather than in a column of its own,
+   so the frame keeps no room for a mark and draws none. */
+.page-frame[data-head-kind="database"] {
+  --head-center: 17px;
+
+  padding-left: 0;
+}
+
+.page-frame[data-head-kind="database"]::before,
+.page-frame[data-head-kind="database"] > .page-frame__mark {
+  display: none;
+}
+
+.dbv-inline__icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  margin-right: 4px;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  place-items: center;
+}
+
+.block.is-selected > .db-frame {
+  border-radius: var(--r-xs);
+  background: var(--block-selected);
+}
+
+/* Where a database's views will be, while they load the first time: the
+   room a table of a few rows takes, so the page does not jump. */
+.dbv-loading {
+  min-height: 96px;
+}
+
+.dbv-inline {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
+}
+
+/* A table wider than the words' column scrolls on into the page's right
+   margin, as Notion's does, instead of stopping at an edge nothing on the
+   page draws. Its tools and its first column stay in the column. The margin
+   is measured (InlineDatabase): a container query's width counts the page's
+   scrollbar, and the table would push the page sideways by half of it. */
+.dbv--inline .db__table-wrap {
+  padding-right: var(--bleed-end, 0px);
+  margin-right: calc(-1 * var(--bleed-end, 0px));
+}
+
+/* Full-page, the margin is the page's gutter. */
+.dbv--page .db__table-wrap {
+  padding-right: var(--gutter);
+  margin-right: calc(-1 * var(--gutter));
+}
+
+/* Its name starts where the words of what holds it do. */
+.dbv-inline__title {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: calc(var(--read) * 1.125);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  outline: 0;
+}
+
+.dbv-inline__title::placeholder {
+  color: var(--ink-4);
+}
+
+.dbv-missing {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  color: var(--ink-3);
+  font-size: calc(var(--read) * 0.92);
+}
+
+/* The one view a linked view draws, named where the tabs would stand: a
+   label, not a tab — it does not switch and does not show the active mark. */
+.view-tab--pinned {
+  color: var(--ink-2);
+  cursor: default;
+}
+
+.view-tab--pinned:hover {
+  background: none;
+}
+
+.view-tab--pinned::after {
+  display: none;
+}
+
+/* A linked view's caption: what it is — a link, to this database, of this
+   view — and the way out of it to the database itself. */
+.block-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap svg {
+  flex: none;
+  color: var(--ink-4);
+}
+
+.block-cap__text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.block-cap__open {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.block-cap__open:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* A filter value or a sort name can be long; the button keeps its size. */
+.db__tool-label {
+  max-width: 104px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In a narrow database the tools keep their marks and give up their words.
+   The tooltip and the accessible name still say what each one is doing. */
+/* Below this the tab strip cannot show the open view and its neighbours and
+   the tools at once, so it becomes the switcher. */
+@container dbv (max-width: 520px) {
+  .db__views {
+    display: none;
+  }
+
+  .db__view-switch {
+    display: inline-flex;
+  }
+}
+
+@container dbv (max-width: 480px) {
+  .db__tool {
+    width: 28px;
+    padding: 0;
+  }
+
+  .db__tool-label {
+    display: none;
+  }
+
+  .db__search.is-open {
+    width: 112px;
+  }
+
+  .view-tab__name {
+    max-width: 88px;
+  }
+}
+
+/* The view's own settings. Its name is typed straight into the top of the
+   menu, the way Notion's is — rename is not a separate trip. */
+.view-menu {
+  display: flex;
+  min-width: 224px;
+  flex-direction: column;
+}
+
+.view-menu__name {
+  padding: 6px 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  margin: 7px 7px 1px;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink);
+  font-size: 13.5px;
+  outline: 0;
+}
+
+.view-menu__name:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.view-menu .menu {
+  padding-top: 2px;
+}
+
+/* A column's menu: its mark and its name at the top, the name typed straight
+   in, as the view's is. */
+.prop-menu {
+  display: flex;
+  min-width: 248px;
+  flex-direction: column;
+}
+
+.prop-menu__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 7px 7px 1px;
+}
+
+/* The column's mark, pressed to choose another (Notion's icon picker). */
+.prop-menu__glyph {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink-2);
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.prop-menu__glyph:hover,
+.prop-menu__glyph.is-open {
+  background: var(--fill-hover);
+}
+
+.prop-menu__name {
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink);
+  font-size: 13.5px;
+  outline: 0;
+}
+
+.prop-menu__name:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.prop-menu .menu {
+  padding-top: 2px;
+}
+
+/* "Change type" says the type it is now, beside the arrow to the others. */
+.prop-menu__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* A Status's options (its column's "Edit property"): To-do, In progress and
+   Complete, each with "+" at its head; every option a pill on a row that
+   drags by its grip and opens its own menu. */
+.status-menu {
+  display: flex;
+  width: 264px;
+  max-height: min(70vh, 420px);
+  flex-direction: column;
+  padding: 5px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.status-menu__group + .status-menu__group {
+  margin-top: 4px;
+}
+
+.status-menu__head {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 0 9px;
+}
+
+.status-menu__title {
+  position: relative;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-menu__option {
+  position: relative;
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  border-radius: var(--r-sm);
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.status-menu__option:hover,
+.status-menu__option:has(.status-menu__open.is-open) {
+  background: var(--fill-hover);
+}
+
+.status-menu__option.is-dragging {
+  opacity: 0.4;
+}
+
+.status-menu__grip {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-4);
+  cursor: grab;
+}
+
+.status-menu__open {
+  display: flex;
+  min-width: 0;
+  height: 30px;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 2px;
+  text-align: left;
+}
+
+.status-menu__default {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.status-menu__chevron {
+  flex: none;
+  margin-left: auto;
+  color: var(--ink-3);
+}
+
+.status-menu__default + .status-menu__chevron {
+  margin-left: 0;
+}
+
+/* Where a dragged option or sort would land: Notion's blue drop line. */
+.status-menu__option.is-drop-before::before,
+.status-menu__option.is-drop-after::after,
+.status-menu__title.is-drop-after::after,
+.sort-panel__line.is-drop-before::before,
+.sort-panel__line.is-drop-after::after,
+.img-prop__item.is-drop-before::before,
+.img-prop__item.is-drop-after::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  content: "";
+  pointer-events: none;
+}
+
+.status-menu__option.is-drop-before::before,
+.sort-panel__line.is-drop-before::before,
+.img-prop__item.is-drop-before::before {
+  top: -1px;
+}
+
+.status-menu__option.is-drop-after::after,
+.sort-panel__line.is-drop-after::after,
+.img-prop__item.is-drop-after::after {
+  bottom: -1px;
+}
+
+.status-menu__title.is-drop-after::after {
+  right: auto;
+  bottom: -6px;
+  left: -5px;
+  width: 232px;
+}
+
+.status-menu__new {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 4px 4px 20px;
+}
+
+.status-menu__new input,
+.option-menu__name {
+  height: 30px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink);
+  font-size: 13.5px;
+  outline: 0;
+}
+
+.status-menu__new input:focus,
+.option-menu__name:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.status-menu__new input[aria-invalid="true"],
+.option-menu__name[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--danger), 0 0 0 3px var(--danger-tint);
+}
+
+.status-menu__hint,
+.option-menu__hint {
+  padding: 4px 2px 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* A select's or multi-select's options: the status menu's flat sibling —
+   the same pills and settings, no groups and no grips, each row whole. */
+.options-menu__option {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  text-align: left;
+}
+
+.options-menu__option:hover {
+  background: var(--fill-hover);
+}
+
+.options-menu__option .status-menu__chevron {
+  margin-left: auto;
+}
+
+.options-menu__none {
+  padding: 8px 9px;
+  color: var(--ink-4);
+  font-size: 13px;
+}
+
+.options-menu .status-menu__new {
+  padding-left: 4px;
+}
+
+/* A view's sorts — Notion's sort panel: a line per key, first key first,
+   its column (on a grey face, with its mark) and its direction as the
+   platform's own pickers under a quiet face, × to take it away; Add sort
+   and Delete sort below. */
+.sort-panel {
+  display: flex;
+  width: min(392px, calc(100vw - 16px));
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.sort-panel__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+.sort-panel__line {
+  position: relative;
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.sort-panel__line.is-dragging {
+  opacity: 0.4;
+}
+
+.sort-panel__grip {
+  display: grid;
+  width: 18px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-4);
+  cursor: grab;
+}
+
+.sort-panel__field { min-width: 0; flex: 0 1 auto; }
+
+.sort-panel__field--column { flex: 1 1 0; }
+
+/* Every line's direction is as wide as the widest, so the lines line up. */
+.sort-panel__field:not(.sort-panel__field--column) {
+  width: 152px;
+  flex: none;
+}
+
+.sort-panel__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.sort-panel__remove {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.sort-panel .menu {
+  padding-top: 4px;
+}
+
+/* A view's filters — Notion's filter panel: a line per condition, the
+   lead word Where or And before its property, its operator and its value,
+   × to take it away. One group sits among them with a border and its own
+   And/Or; everything reads as one AND. */
+.filter-panel {
+  display: flex;
+  width: min(560px, calc(100vw - 16px));
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.filter-panel__title {
+  padding: 2px 9px 5px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.filter-panel__lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 5px;
+}
+
+.cond {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+
+.cond__lead {
+  width: 40px;
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: center;
+}
+
+.filter-panel__field { min-width: 0; flex: 0 1 auto; }
+
+.filter-panel__field--property { flex: 1 1 0; }
+
+.filter-panel__field--op { width: 118px; flex: none; }
+
+.filter-panel__mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.filter-panel__input {
+  width: 120px;
+  height: 28px;
+  flex: none;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.filter-panel__input:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cond__remove {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cond__remove:hover {
+  color: var(--danger);
+}
+
+/* The group is the filter's one box: its logic at its head, its conditions
+   inside, indented where it stands among the plain ones. */
+.group-box {
+  padding: 4px 6px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  margin: 2px 0 2px 40px;
+}
+
+.group-box__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px 2px;
+}
+
+.filter-panel__field--logic { flex: none; }
+
+.filter-panel__add-in {
+  display: inline-flex;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  margin: 2px 0 0 42px;
+  color: var(--ink-3);
+  font-size: 12px;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.filter-panel__add-in:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.filter-panel .menu {
+  padding-top: 4px;
+}
+
+/* The columns a view draws: a line per property, its mark and name and the
+   eye that takes it out; the name stays — a table's spine — tagged Title. */
+.cols-panel {
+  display: flex;
+  width: 270px;
+  flex-direction: column;
+  padding-top: 5px;
+}
+
+.cols-panel__search {
+  height: 28px;
+  flex: none;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  margin: 2px 7px 5px;
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  outline: 0;
+}
+
+.cols-panel__search:focus {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.cols-panel__rows {
+  display: flex;
+  max-height: 300px;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0 5px;
+  overflow-y: auto;
+}
+
+.cols-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cols-panel__row {
+  position: relative;
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+}
+
+.cols-panel__row:hover {
+  background: var(--fill-hover);
+}
+
+.cols-panel__grip {
+  display: grid;
+  width: 16px;
+  height: 24px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-4);
+  cursor: grab;
+}
+
+/* The name column has no grip; keep its name in line with the rows'. */
+.cols-panel__row.is-locked .cols-panel__mark {
+  margin-left: 24px;
+}
+
+.cols-panel__row.is-dragging {
+  opacity: 0.4;
+}
+
+/* Where a dragged column would land: the same blue line a sort's uses. */
+.cols-panel__row.is-drop-before::before,
+.cols-panel__row.is-drop-after::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  content: "";
+  pointer-events: none;
+}
+
+.cols-panel__row.is-drop-before::before { top: -1px; }
+
+.cols-panel__row.is-drop-after::after { bottom: -1px; }
+
+.cols-panel__step {
+  flex: none;
+  color: var(--ink-4);
+}
+
+.cols-panel__mark {
+  display: grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-2);
+}
+
+.cols-panel__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cols-panel__eye {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.cols-panel__row.is-hidden .cols-panel__name { color: var(--ink-3); }
+
+.cols-panel__row.is-hidden .cols-panel__eye { color: var(--ink-4); }
+
+.cols-panel__tag {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  color: var(--ink-4);
+  font-size: 10.5px;
+}
+
+.cols-panel__section {
+  padding: 7px 6px 3px;
+  color: var(--ink-4);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.cols-panel__none {
+  padding: 8px 6px;
+  color: var(--ink-4);
+  font-size: 12.5px;
+}
+
+.cols-panel .menu {
+  padding-top: 4px;
+}
+
+/* A group is a header over its rows: the chevron turns as it folds, the
+   value's pill or name, how many rows are in it, and its New — quiet until
+   the pointer is near. Folded rows are gone from the grid entirely. */
+.grp-row td {
+  height: 34px;
+  vertical-align: middle;
+}
+
+.grp-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.grp-h__toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+}
+
+.grp-h__chev {
+  flex: none;
+  color: var(--ink-3);
+  transform: rotate(90deg);
+  transition: transform var(--t-fast) var(--e-out);
+}
+
+.grp-h__chev.is-closed {
+  transform: rotate(0deg);
+}
+
+.grp-h__label {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grp-h__none { color: var(--ink-3); }
+
+.grp-h__count {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.grp-h__add {
+  display: inline-flex;
+  height: 24px;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out),
+    opacity var(--t-fast) var(--e-out);
+}
+
+.grp-h__add:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.grp-h:hover .grp-h__add,
+.grp-h__add:focus-visible { opacity: 1; }
+
+/* A column counting under a group's rows puts its subtotal in the header
+   row, as quiet as the group's count. */
+.grp-sum {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__table tr.is-folded { display: none; }
+
+.db-list__group {
+  padding: 0 8px;
+}
+
+/* The footer's cells stick to the table's bottom as the rows scroll past:
+   each column's calculation, its answer in a steady face. */
+.db__table tfoot td {
+  position: sticky;
+  height: 32px;
+  bottom: 0;
+  border-bottom: 0;
+  background: var(--paper);
+  box-shadow: 0 -1px 0 var(--hairline-strong);
+  color: var(--ink-2);
+  font-size: 12px;
+  z-index: 1;
+}
+
+.db__calc {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.db__calc-fn {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.db__calc-val {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.db__calc-val.is-empty,
+.db__calc--none { color: var(--ink-4); }
+
+/* One option's settings, in the panel's place: the way back, its name,
+   default, delete and colour — one scroller, the panel's own. */
+.option-menu__back {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 9px 0 4px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.option-menu__back:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.option-menu__name {
+  margin: 4px 4px 1px;
+}
+
+.option-menu__hint {
+  padding: 4px 6px 0;
+}
+
+.option-menu .menu {
+  max-height: none;
+  padding: 2px 0 0;
+  overflow: visible;
+}
+
+.panel__head h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db__row-icon {
+  display: grid;
+  width: 18px;
+  flex: none;
+  place-items: center;
+  color: var(--ink-3);
+}
+
+/* An unset date reads "Empty", like every other unset property, and only
+   where empty values are shown at all: always in a page's properties, on
+   approach in a table. The picker's own "mm/dd/yyyy" is never shown. */
+.db__date {
+  position: relative;
+  display: block;
+}
+
+.db__date.is-empty .db__cell--date:not(:focus)::-webkit-datetime-edit {
+  color: transparent;
+}
+
+.db__date.is-empty::after {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  color: var(--ink-4);
+  content: "Empty";
+  font-size: 14px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.db__table tr:hover .db__date.is-empty::after,
+.page-props__row .db__date.is-empty::after {
+  opacity: 1;
+}
+
+.db__date.is-empty:focus-within::after {
+  opacity: 0;
+}
+
+/* The picker's calendar mark appears when the field is approached. */
+.db__cell--date::-webkit-calendar-picker-indicator {
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.db__date:hover .db__cell--date::-webkit-calendar-picker-indicator,
+.db__cell--date:focus::-webkit-calendar-picker-indicator {
+  opacity: 0.6;
+}
+
+/* Set values, small: the list, gallery and board cards cannot give every
+   property a column, so each shows what was actually set. */
+.db-chips {
+  display: inline-flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.db-chip {
+  display: inline-flex;
+  height: 20px;
+  max-width: 160px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A multi-select's pills go bare on a card — each is already its own tag;
+   a box around them would say nothing more. A checkbox chip holds the
+   column's name beside its box. */
+.db-chip--multi {
+  height: auto;
+  padding: 0;
+  background: none;
+}
+
+.db-chip--check .checkbox {
+  width: 13px;
+  height: 13px;
+}
+
+/* ── Relations ────────────────────────────────────────────────────────── */
+
+/* A linked page, in a cell or on a card: its glyph and title, clickable to
+   the page. A page that is gone or out of reach keeps its place as a dashed
+   ghost — it may come back, and the link may still be meant. */
+.db-rel {
+  display: inline-flex;
+  height: 20px;
+  max-width: 160px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  overflow: hidden;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.db-rel svg {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.db-rel:hover {
+  background: var(--fill-hover);
+}
+
+.db-rel__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.db-rel--ghost {
+  border: 1px dashed var(--hairline-strong);
+  background: none;
+  color: var(--ink-4);
+  cursor: default;
+}
+
+.db-rel--ghost:hover {
+  background: none;
+}
+
+.db-rel__list {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.db-rel-cell {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+}
+
+/* The × a chip carries when it can be dropped — the cell's, styled as the
+   multi-select pill's remove is. */
+.db-rel__remove {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 2px;
+  color: var(--ink-4);
+}
+
+.db-rel__remove:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The picker's New page row, at the foot of its list. */
+.db-multi-menu__new {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 13px;
+  text-align: left;
+}
+
+.db-multi-menu__new:hover,
+.db-multi-menu__new.is-active {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+/* The relation column's panel: the fixed target, its limit, its mirror's
+   switch and the mirror's name. */
+.rel-panel {
+  display: flex;
+  min-width: 240px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+
+.rel-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rel-panel__label {
+  color: var(--ink-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rel-panel__value {
+  color: var(--ink-2);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rel-panel__toggle {
+  cursor: pointer;
+}
+
+.rel-panel__input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  color: inherit;
+  font-size: 13px;
+  outline: 0;
+}
+
+/* A menu row that states rather than offers — a mirror's origin. */
+.menu__item.is-static {
+  color: var(--ink-4);
+  cursor: default;
+}
+
+/* ── Pictures in properties ───────────────────────────────────────────── */
+
+/* An Image property shows its pictures small, each at its own shape (a
+   panorama is cut to a sensible width), the way Notion's Files & media cells
+   do. Before its bytes arrive a picture is its box, in the warm grey wash. */
+.img-thumbs {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.img-thumb.is-failed {
+  display: inline-grid;
+  place-items: center;
+  color: var(--ink-4);
+}
+
+.img-thumb {
+  display: inline-block;
+  height: 22px;
+  min-width: 16px;
+  max-width: 56px;
+  flex: none;
+  overflow: hidden;
+  aspect-ratio: 1;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.img-thumb img,
+.img-prop__thumb img,
+.db-card__image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.img-thumbs__more {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+/* A cell's line of pictures takes the cell's width and shows as many as fit
+   whole; one cut by the edge is hidden and counted in "+N" after the line. */
+.img-thumbs--fit {
+  display: flex;
+  flex: 0 1 auto;
+}
+
+.img-thumbs--fit + .img-thumbs__more {
+  margin-left: 4px;
+}
+
+.img-thumb[data-cut] {
+  visibility: hidden;
+}
+
+/* A table cell holding pictures: the whole cell is the button that opens
+   their list, and each picture in it opens full size, as an image block's
+   does — so it wears the same magnifier. They shrink with the row, so a
+   minimal table stays compact. */
+.db__images {
+  display: flex;
+  width: 100%;
+  height: var(--db-row, 33px);
+  align-items: center;
+  padding: 0 8px;
+  text-align: left;
+}
+
+.db__images .img-thumb {
+  height: calc(var(--db-row, 33px) - 11px);
+}
+
+.db__images [data-picture] {
+  cursor: zoom-in;
+}
+
+.db__images.is-empty::after {
+  color: transparent;
+  content: "Empty";
+  font-size: 14px;
+  transition: color var(--t-fast) var(--e-out);
+}
+
+.db__table tr:hover .db__images.is-empty::after,
+.db__images.is-empty:focus-visible::after,
+.page-props__row .db__images.is-empty::after {
+  color: var(--ink-4);
+}
+
+/* Pictures dragged over a cell, or over its list: the drop line's blue. */
+.db__images.is-drop,
+.img-prop.is-drop {
+  box-shadow: inset 0 0 0 2px var(--blue);
+}
+
+/* In a row's page the pictures are a little larger: there is room. */
+.page-props__row .db__images {
+  height: auto;
+  min-height: 34px;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+}
+
+.page-props__row .db__images:hover {
+  background: var(--fill-hover);
+}
+
+.page-props__row .img-thumb {
+  height: 28px;
+  max-width: 72px;
+}
+
+/* In a row's page there is room for every picture: the line wraps. */
+.page-props__row .img-thumbs--fit {
+  flex-wrap: wrap;
+}
+
+.db-chips .img-thumb {
+  height: 20px;
+}
+
+/* The list behind a cell: each picture by name and size, opened full size
+   from its row, taken out from its ×. */
+.img-prop {
+  display: flex;
+  width: 288px;
+  max-height: min(60vh, 380px);
+  flex-direction: column;
+  padding: 6px;
+  border-radius: inherit;
+}
+
+.img-prop__list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding: 0;
+  margin: 0;
+  gap: 2px;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.img-prop__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  border-radius: var(--r-sm);
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.img-prop__item:hover {
+  background: var(--fill-hover);
+}
+
+.img-prop__item.is-dragging {
+  opacity: 0.4;
+}
+
+/* The grip a picture is dragged into another place by, there on approach. */
+.img-prop__grip {
+  display: grid;
+  width: 16px;
+  height: 24px;
+  flex: none;
+  margin-right: -6px;
+  color: var(--ink-4);
+  cursor: grab;
+  opacity: 0;
+  place-items: center;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.img-prop__item:hover .img-prop__grip {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .img-prop__grip {
+    opacity: 1;
+  }
+}
+
+.img-prop__open {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  padding: 4px;
+  text-align: left;
+}
+
+.img-prop__thumb {
+  display: block;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+.img-prop__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.img-prop__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.img-prop__size,
+.img-prop__empty {
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.img-prop__empty {
+  padding: 8px 8px 4px;
+  margin: 0;
+}
+
+.img-prop__add {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.img-prop__add:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+/* Adding: Add images under the list, or — an empty cell — Notion's upload
+   panel: the flat blue button, and under it what pastes. */
+.img-prop__upload {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+}
+
+.img-prop__list + .img-prop__upload {
+  border-top: 1px solid var(--hairline);
+  margin-top: 4px;
+}
+
+.img-prop__upload.is-first {
+  gap: 2px;
+  padding: 6px 4px 2px;
+}
+
+.img-prop__upload-button {
+  width: 100%;
+  min-height: 32px;
+}
+
+/* ── List ─────────────────────────────────────────────────────────────── */
+
+.db-list {
+  display: flex;
+  flex-direction: column;
+  padding-top: 4px;
+}
+
+.db-list__row {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: calc(var(--read) * 0.95);
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.db-list__row:hover {
+  background: var(--fill-hover);
+}
+
+.db-list__row.is-peeked {
+  background: var(--fill-active);
+}
+
+/* The name — the page's mark and its words, a link to the page — and the
+   space beside it, where the name is typed. */
+.db-list__name {
+  display: flex;
+  min-width: 0;
+  min-height: 26px;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-list__icon {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  color: var(--ink-3);
+  place-items: center;
+}
+
+/* The name being typed — the same field the table's cell is. */
+.db-list__title.title-field {
+  width: 0;
+  min-width: 0;
+  height: 26px;
+  flex: 1;
+  padding: 3px 0;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: pre;
+}
+
+.db-list__row .db__row-actions {
+  margin-left: 0;
+}
+
+.db-list__row:hover .db__open,
+.db-list__row:focus-within .db__open {
+  opacity: 1;
+}
+
+/* In a row the chips never wrap: a second line would make one row twice the
+   height of its neighbours for a tag. */
+.db-list .db-chips {
+  max-width: 55%;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.db-list .db__add-row {
+  border-bottom: 0;
+  border-radius: var(--r-sm);
+}
+
+/* ── Gallery ──────────────────────────────────────────────────────────── */
+
+.db-gallery {
+  display: grid;
+  padding-top: 12px;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+}
+
+.db-card {
+  --card-well: color-mix(in srgb, var(--ink) 3%, var(--paper));
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  transition: box-shadow var(--t-fast) var(--e-out);
+}
+
+.db-card:hover,
+.db-card.is-peeked {
+  box-shadow: var(--shadow-card-hover);
+}
+
+/* The card's picture is the page: its first lines, set small, fading out
+   before they are cut off — which reads as "there is more" rather than as a
+   paragraph that stops in the middle of a word. */
+.db-card__preview {
+  position: relative;
+  display: flex;
+  height: 88px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  overflow: hidden;
+  background: var(--card-well);
+  box-shadow: inset 0 -0.5px 0 var(--hairline);
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.db-card__preview::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 36px;
+  background: linear-gradient(transparent, var(--card-well));
+  content: "";
+}
+
+.db-card__preview > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A page with nothing in it yet shows what it IS instead of an empty well. */
+.db-card__preview.is-blank {
+  align-items: center;
+  justify-content: center;
+}
+
+.db-card__preview.is-blank::after {
+  display: none;
+}
+
+/* A card's picture: an Image property's first image, filling the top of the
+   card as the first lines would, cut to fit. */
+.db-card__image {
+  display: block;
+  height: 88px;
+  flex: none;
+  overflow: hidden;
+  background: var(--card-well);
+  box-shadow: inset 0 -0.5px 0 var(--hairline);
+}
+
+/* The page's cover, as the top of its card. */
+.db-card__cover-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.db-card__preview--cover::after {
+  display: none;
+}
+
+.db-card__glyph {
+  display: grid;
+  color: var(--ink-4);
+  font-size: 26px;
+  line-height: 1;
+  place-items: center;
+}
+
+.db-card__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px 11px;
+}
+
+.db-card__title {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.db-card__title > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Card names: open on a click, rename from the pencil ──────────────── */
+
+/* The name is the card's open button, stretched over the whole card, so a
+   click anywhere on it opens the page while the pencil — drawn above the
+   stretch — stays its own control. The card, not the button, is the positioned
+   box the stretch fills. */
+.card-open::after {
+  position: absolute;
+  z-index: 1;
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+}
+
+.card-open:focus-visible {
+  outline: 0;
+}
+
+.card-open:focus-visible::after {
+  outline: 2px solid color-mix(in srgb, var(--blue) 57%, transparent);
+  outline-offset: 1px;
+}
+
+/* Renaming, the name is a field on the card: its own type, a hairline box so
+   it is plain you are typing, and the rest of the card left as it was. */
+.card-title-input {
+  width: calc(100% + 8px);
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--r-xs);
+  margin: -2px -4px;
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), 0 0 0 3px var(--blue-tint);
+  outline: 0;
+}
+
+/* A card's name holds its words and a mark side by side at rest (flex); typed,
+   it is one line of words, and a flex line of `contenteditable` loses its
+   caret. */
+.card-title-input.title-field {
+  display: block;
+}
+
+/* The pencil: a small white button in the card's corner, there only while the
+   card is pointed at or reached by keyboard. */
+.card-rename {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r-sm);
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--ink-2);
+  opacity: 0;
+  place-items: center;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.card-rename:hover {
+  background: color-mix(in srgb, var(--ink) 6%, var(--elevated));
+  color: var(--ink);
+}
+
+.board__card:hover .card-rename,
+.db-card:hover .card-rename,
+.card-rename:focus-visible,
+.board__card:focus-within .card-rename,
+.db-card:focus-within .card-rename {
+  opacity: 1;
+}
+
+.db-card.is-renaming {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.db-card--new {
+  min-height: 142px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+/* Cards with nothing on top are their names and properties alone. */
+.db-gallery--bare .db-card--new {
+  min-height: 44px;
+}
+
+.db-card--new:hover {
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink-2);
+}
+
+/* ── Calendar ─────────────────────────────────────────────────────────── */
+
+.db-cal {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding-top: 8px;
+}
+
+.db-cal__bar {
+  display: flex;
+  min-width: 0;
+  height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 6px;
+}
+
+.db-cal__month {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.db-cal__nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.db-cal__today {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 12.5px;
+}
+
+.db-cal__grid {
+  display: grid;
+  border-top: 1px solid var(--hairline);
+  border-left: 1px solid var(--hairline);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.db-cal__weekday {
+  overflow: hidden;
+  padding: 5px 6px;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-cal__day {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 78px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  border-right: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.db-cal__day.is-outside {
+  background: var(--fill);
+}
+
+.db-cal__date {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  align-self: flex-end;
+  padding: 0 5px;
+  border-radius: 11px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  place-items: center;
+}
+
+.db-cal__day.is-outside .db-cal__date {
+  color: var(--ink-4);
+}
+
+/* Today is Notion's red dot, the one coloured object in the grid. */
+.db-cal__day.is-today .db-cal__date {
+  background: var(--today);
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.db-cal__add {
+  position: absolute;
+  top: 5px;
+  left: 4px;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  opacity: 0;
+  place-items: center;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.db-cal__day:hover .db-cal__add,
+.db-cal__add:focus-visible {
+  opacity: 1;
+}
+
+.db-cal__add:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.db-cal__item {
+  display: block;
+  width: 100%;
+  padding: 2px 6px;
+  overflow: hidden;
+  border-radius: var(--r-xs);
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  color: var(--ink);
+  font-size: 11.5px;
+  line-height: 1.45;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-cal__item:hover {
+  background: color-mix(in srgb, var(--ink) 4%, var(--paper));
+}
+
+.db-cal__more {
+  padding: 0 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+/* A calendar in a narrow column keeps all seven days and gives up height and
+   type instead — a week that scrolls sideways is not a week. */
+@container dbv (max-width: 460px) {
+  .db-cal__day {
+    min-height: 62px;
+    padding: 3px;
+  }
+
+  .db-cal__weekday {
+    padding: 4px;
+    font-size: 10.5px;
+  }
+
+  .db-cal__item {
+    padding: 1px 4px;
+    font-size: 10.5px;
+  }
+}
+
+/* Tags. One shape in the option's colour (`data-tone`, the colour the
+   person gave it); the same chip appears in cells, the peek, the cards and
+   the board's column heads, so a status always looks like itself. A long
+   name is cut short inside its pill rather than pushing past its cell. */
+.tag {
+  --tag-bg: var(--tag-default-bg);
+  --tag-ink: var(--tag-default-ink);
+  --tag-dot: var(--tag-default-dot);
+
+  display: inline-flex;
+  height: 20px;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--tag-bg);
+  color: var(--tag-ink);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.tag__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Notion's status pills: a dot in the pill's own colour, so the state reads
+   before the word does. */
+.tag--status {
+  padding-left: 7px;
+}
+
+.tag--status::before {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tag-dot);
+  content: "";
+}
+
+/* An option's colour swatch, in its menu. */
+.option-swatch {
+  --tag-bg: var(--tag-default-bg);
+
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--r-xs);
+  background: var(--tag-bg);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+
+[data-tone="gray"] { --tag-bg: var(--tag-gray-bg); --tag-ink: var(--tag-gray-ink); --tag-dot: var(--text-gray); }
+[data-tone="brown"] { --tag-bg: var(--tag-brown-bg); --tag-ink: var(--tag-brown-ink); --tag-dot: var(--text-brown); }
+[data-tone="orange"] { --tag-bg: var(--tag-orange-bg); --tag-ink: var(--tag-orange-ink); --tag-dot: var(--text-orange); }
+[data-tone="yellow"] { --tag-bg: var(--tag-yellow-bg); --tag-ink: var(--tag-yellow-ink); --tag-dot: var(--text-yellow); }
+[data-tone="green"] { --tag-bg: var(--tag-green-bg); --tag-ink: var(--tag-green-ink); --tag-dot: var(--text-green); }
+[data-tone="blue"] { --tag-bg: var(--tag-blue-bg); --tag-ink: var(--tag-blue-ink); --tag-dot: var(--text-blue); }
+[data-tone="purple"] { --tag-bg: var(--tag-purple-bg); --tag-ink: var(--tag-purple-ink); --tag-dot: var(--text-purple); }
+[data-tone="pink"] { --tag-bg: var(--tag-pink-bg); --tag-ink: var(--tag-pink-ink); --tag-dot: var(--text-pink); }
+[data-tone="red"] { --tag-bg: var(--tag-red-bg); --tag-ink: var(--tag-red-ink); --tag-dot: var(--text-red); }
+
+/* ── Board ────────────────────────────────────────────────────────────── */
+
+.board {
+  display: flex;
+  align-items: flex-start;
+  padding: 12px 0 0;
+  gap: 12px;
+  overflow-x: auto;
+}
+
+/* A column is as wide as a card needs to be readable and no wider; inside a
+   narrow database it gives up 40px so a little of the next column shows —
+   the cue that the board goes on sideways. */
+.board__column {
+  display: flex;
+  width: clamp(208px, 56cqi, 260px);
+  flex: none;
+  flex-direction: column;
+  padding: 0 4px 8px;
+  border-radius: var(--r-md);
+  gap: 6px;
+  transition: background var(--t-fast) var(--e-out);
+}
+
+.board__column.is-drop-target {
+  background: var(--fill);
+}
+
+.board__column-head {
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.board__count {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.board__column-head .icon-btn {
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  opacity: 0;
+}
+
+.board__column:hover .board__column-head .icon-btn {
+  opacity: 1;
+}
+
+.board__card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  padding: 9px 10px;
+  border-radius: var(--r-sm);
+  gap: 6px;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out), transform var(--t-fast) var(--e-out),
+    opacity var(--t-fast) var(--e-out);
+}
+
+.board__card:hover {
+  background: var(--fill);
+}
+
+.board__card.is-dragging {
+  opacity: 0.35;
+}
+
+.board__card-title {
+  display: flex;
+  min-width: 0;
+  gap: 5px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+}
+
+/* A board card's name wraps, as Notion's does; a gallery card's is one line. */
+.board__card-title .card-open__name {
+  overflow-wrap: anywhere;
+}
+
+.board__card.is-renaming {
+  box-shadow: var(--shadow-card-hover);
+}
+
+.board__card p {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.board__add {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 14px;
+  opacity: 0;
+  transition: background var(--t-tap) var(--e-out), opacity var(--t-fast) var(--e-out);
+}
+
+.board__column:hover .board__add,
+.board__column:not(:has(.board__card)) .board__add,
+.board__add:focus-visible {
+  opacity: 1;
+}
+
+.board__add:hover {
+  background: var(--fill-hover);
+}
+
+/* A database this member can only view: nothing that would change it. */
+.dbv--readonly .db__add-row,
+.dbv--readonly .db__add-property,
+.dbv--readonly .view-tab--add {
+  display: none;
+}
+
+@media (max-width: 559.98px) {
+  .db__name {
+    max-width: min(52cqi, 180px);
+  }
+
+  .db__tool {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .cond {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .cond__lead {
+    width: auto;
+    min-width: 36px;
+    text-align: left;
+  }
+
+  .filter-panel__field--op {
+    width: auto;
+    flex: 1 1 110px;
+  }
+
+  .filter-panel__input {
+    flex: 1 1 120px;
+    width: auto;
+    min-height: 36px;
+  }
+
+  .group-box {
+    margin-left: 12px;
+  }
+
+  .filter-panel__add-in {
+    margin-left: 12px;
+  }
+
+  .sort-panel__order {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
+}
+
+@media (hover: none) {
+  .db__open,
+  .board__add,
+  .card-rename {
+    opacity: 1;
+  }
+}

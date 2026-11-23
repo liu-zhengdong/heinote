@@ -2,7 +2,7 @@
 
 .mobile-dock-wrap {
   position: fixed;
-  z-index: 32;
+  z-index: var(--z-dock);
   left: 14px;
   right: 14px;
   bottom: max(12px, env(safe-area-inset-bottom, 0px));
@@ -136,7 +136,7 @@
 /* Mobile keyboard-top formatting toolbar (ActiveEditSurface). */
 .mobile-edit-bar {
   position: fixed;
-  z-index: 65;
+  z-index: var(--z-editbar);
   left: 0;
   right: 0;
   bottom: var(--vv-keyboard, 0px);

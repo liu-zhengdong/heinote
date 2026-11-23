@@ -1,4 +1,6 @@
 import { AppWindow, ArrowUpRight, ImageIcon, Link2, RefreshCw, Smile, X } from "lucide-react";
+import "./editor.css";
+import "./picker.css";
 import {
   lazy,
   Suspense,

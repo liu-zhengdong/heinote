@@ -1,3 +1,4 @@
+import "./history.css";
 import { LocateFixed, RotateCcw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { BottomSheet } from "../../components/BottomSheet";

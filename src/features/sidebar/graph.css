@@ -1,0 +1,482 @@
+/* ── The graph ────────────────────────────────────────────────────────── */
+
+/* Obsidian's graph in the side panel: it fills what the list would, the
+   drawing — and any dot — moves under the pointer, and it never scrolls.
+   Where each dot is, the frame loop says (GraphView). */
+.graph {
+  --graph-bg: var(--sidebar);
+
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* The graph opened as a page: it fills the page pane, on the page's paper,
+   its tools in the top right corner as Obsidian's are. */
+.page-surface--graph {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.graph--page {
+  --graph-bg: var(--paper);
+}
+
+.graph--page .sidebar__empty {
+  align-items: center;
+  padding-top: 18%;
+  text-align: center;
+}
+
+.graph__tools {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+}
+
+.graph__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.graph__canvas.is-panning,
+.graph__canvas.is-panning .graph__node,
+.graph__canvas.is-holding,
+.graph__canvas.is-holding .graph__node {
+  cursor: grabbing;
+}
+
+/* Every line is drawn alike, as Obsidian draws them: what holds what and
+   what links to what are both just two pages joined. */
+.graph__edge {
+  stroke: var(--ink-4);
+  stroke-width: var(--graph-line, 1);
+  transition: opacity var(--t-fast) var(--e-out), stroke var(--t-fast) var(--e-out);
+}
+
+.graph__edge.is-on {
+  opacity: 1;
+  stroke: var(--blue);
+}
+
+.graph__edge.is-faded {
+  opacity: 0.15;
+}
+
+.graph__node {
+  cursor: pointer;
+  transition: opacity var(--t-fast) var(--e-out);
+  /* A dot new to the drawing comes in, rather than appearing. */
+  animation: graph-in 240ms var(--e-out);
+}
+
+@keyframes graph-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A dot shows focus by its own ring (below), never the browser's box — which
+   a dot pressed to drag it would otherwise wear. */
+.graph__node:focus {
+  outline: 0;
+}
+
+/* Wider than the dot, so a small dot is easy to hit. */
+.graph__hit {
+  fill: transparent;
+}
+
+.graph__dot {
+  fill: var(--ink-3);
+  stroke: var(--graph-bg);
+  stroke-width: 1.5;
+  transition: fill var(--t-fast) var(--e-out);
+}
+
+/* A dot a colour group found wears the group's colour (`data-tone`, the
+   person's choice of Notion's nine) — until it is the page being read,
+   pointed at or held, which are blue as every dot is. */
+.graph__node[data-tone] .graph__dot {
+  fill: var(--tag-dot);
+}
+
+.graph__arrow {
+  fill: var(--ink-4);
+}
+
+.graph__node.is-current .graph__dot,
+.graph__node.is-hovered .graph__dot,
+.graph__node.is-held .graph__dot,
+.graph__node:focus-visible .graph__dot {
+  fill: var(--blue);
+}
+
+.graph__node:focus-visible .graph__dot {
+  stroke: color-mix(in srgb, var(--blue) 57%, transparent);
+  stroke-width: 3;
+}
+
+.graph__node.is-faded {
+  opacity: 0.25;
+}
+
+.graph__label {
+  fill: var(--ink-2);
+  font-size: 10.5px;
+  paint-order: stroke;
+  pointer-events: none;
+  stroke: var(--graph-bg);
+  stroke-linejoin: round;
+  stroke-width: 2.5px;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.graph__label.is-current,
+.graph__label.is-lit {
+  fill: var(--ink);
+}
+
+.graph__label.is-current {
+  font-weight: 500;
+}
+
+/* The graph's settings — Obsidian's panel, a card over the graph that
+   stays while the graph is played with: Filters, Groups, Display, Forces,
+   each opened from its title. Small (Winston: "it feels so large", then
+   "put each slider on the same line as its label; make each row
+   smaller"): a narrow card in 12.5px type where every control is ONE
+   20px line, so the graph stays in view beside it — in the side panel it
+   keeps to its right, as it hangs below the tools on a page. */
+.graph-settings {
+  position: absolute;
+  z-index: 5;
+  top: 6px;
+  right: 6px;
+  width: min(232px, calc(100% - 12px));
+  max-height: calc(100% - 12px);
+  padding: 2px 0;
+  border-radius: var(--r-md);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink);
+  font-size: 12.5px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  container: graph-settings / inline-size;
+}
+
+.graph--page .graph-settings {
+  top: 44px;
+  right: 8px;
+  width: min(232px, calc(100% - 16px));
+  max-height: calc(100% - 52px);
+}
+
+.graph-settings__part + .graph-settings__part {
+  border-top: 1px solid var(--hairline);
+}
+
+.graph-settings__head {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 4px 0 3px;
+}
+
+.graph-settings__title {
+  display: flex;
+  min-width: 0;
+  height: 22px;
+  flex: 1;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--t-tap) var(--e-out);
+}
+
+.graph-settings__title:hover {
+  background: var(--fill-hover);
+}
+
+.graph-settings__chevron {
+  color: var(--ink-3);
+  transition: transform var(--t-fast) var(--e-out);
+}
+
+.graph-settings__part.is-open .graph-settings__chevron {
+  transform: rotate(90deg);
+}
+
+.graph-settings__actions {
+  display: flex;
+  flex: none;
+  gap: 0;
+}
+
+.graph-settings__actions .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+
+.graph-settings__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 10px 7px;
+}
+
+.graph-settings__search {
+  display: flex;
+  min-width: 0;
+  height: 24px;
+  margin-bottom: 2px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  color: var(--ink-3);
+}
+
+.graph-settings__search:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.graph-settings__search input,
+.graph-group__query {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 12.5px;
+  outline: 0;
+}
+
+.graph-settings__clear {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ink-4);
+  color: var(--paper);
+}
+
+.graph-settings__row {
+  display: flex;
+  min-height: 20px;
+  font-size: 12px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink-2);
+}
+
+/* Notion's switch: a small pill, blue when on (a checkbox's blue). */
+.switch {
+  position: relative;
+  width: 24px;
+  height: 14px;
+  flex: none;
+  border-radius: 7px;
+  background: var(--fill-strong);
+  transition: background var(--t-fast) var(--e-out);
+}
+
+.switch.is-on {
+  background: var(--blue);
+}
+
+.switch__knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+  transition: transform var(--t-fast) var(--e-out);
+}
+
+.switch.is-on .switch__knob {
+  transform: translateX(10px);
+}
+
+.switch:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 57%, transparent);
+  outline-offset: 2px;
+}
+
+/* A number on one line: its name, the slider, and what it is now — every
+   slider the same width, so they line up down the card. */
+.graph-settings__slider {
+  display: grid;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) 84px 30px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+.graph-settings__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* In a narrow side panel the sliders give way, never the names. */
+@container graph-settings (max-width: 223px) {
+  .graph-settings__slider {
+    gap: 5px;
+    grid-template-columns: minmax(0, 1fr) 60px 28px;
+  }
+}
+
+.graph-settings__value {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A slider: a hairline track filled in ink up to a white knob. */
+.graph-settings__slider input {
+  width: 100%;
+  height: 12px;
+  margin: 0;
+  appearance: none;
+  background: none;
+  cursor: pointer;
+}
+
+.graph-settings__slider input::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 1.5px;
+  background: linear-gradient(to right, var(--ink-3) var(--slider-fill), var(--fill-strong) var(--slider-fill));
+}
+
+.graph-settings__slider input::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  appearance: none;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+}
+
+.graph-settings__slider input::-moz-range-track {
+  height: 3px;
+  border-radius: 1.5px;
+  background: linear-gradient(to right, var(--ink-3) var(--slider-fill), var(--fill-strong) var(--slider-fill));
+}
+
+.graph-settings__slider input::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--paper);
+  box-shadow: var(--shadow-card);
+}
+
+.graph-settings__slider input:focus-visible::-webkit-slider-thumb {
+  box-shadow: var(--shadow-card), 0 0 0 3px var(--blue-tint);
+}
+
+.graph-settings__button {
+  min-height: 22px;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 0 8px;
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+  font-size: 12px;
+}
+
+.graph-settings__animate {
+  align-self: flex-end;
+}
+
+/* A colour group: its colour, its query, and a way to delete it. */
+.graph-group {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 2px 0 7px;
+  border-radius: var(--r-sm);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.graph-group:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 62%, transparent), 0 0 0 3px var(--blue-tint);
+}
+
+.graph-group .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+
+.graph-group__color,
+.graph-group__swatch {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--tag-dot, var(--ink-3));
+}
+
+.graph-group__colors {
+  display: grid;
+  grid-template-columns: repeat(9, 20px);
+  padding: 7px;
+  gap: 4px;
+}
+
+.graph-group__swatch {
+  width: 20px;
+  height: 20px;
+}
+
+.graph-group__swatch.is-selected {
+  box-shadow: 0 0 0 2px var(--elevated), 0 0 0 4px var(--ink-3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .graph__edge,
+  .graph__node,
+  .graph__dot,
+  .graph__label {
+    transition: none;
+  }
+
+  .graph__node {
+    animation: none;
+  }
+}
