@@ -1,6 +1,7 @@
 import type { ClipboardEvent } from "react";
 import { pointRect } from "../../hooks/useAnchoredPosition";
 import { createId } from "../../core/ids";
+import { decodeHtmlEntities } from "../../core/html-entities";
 import {
   inlineFromText,
   inlinePlainText,
@@ -310,20 +311,23 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     const pasted = pastedBlocks(event.clipboardData);
     if (!pasted) {
       const plain = event.clipboardData.getData("text/plain");
-      const across = replaceSelection(linkifyContent(inlineFromText(plain)));
+      const across = replaceSelection(linkifyContent(inlineFromText(decodeHtmlEntities(plain))));
       if (across) {
         event.preventDefault();
         runReplace(across);
         return;
       }
       // One line holding a web address — pasted from the address bar, say —
-      // goes in with the address linked, as Notion pastes one. Any other line
-      // is left to the browser, which pastes it among the words like typing.
+      // goes in with the address linked, as Notion pastes one; an entity —
+      // `&emsp;` in a copied paragraph — lands as the character a renderer
+      // shows. Any other line is left to the browser, which pastes it among
+      // the words like typing.
       const range = words ?? { start: caretOffset(event.currentTarget), end: caretOffset(event.currentTarget) };
-      const line = plain.replace(/\r?\n$/, "");
+      const raw = plain.replace(/\r?\n$/, "");
+      const line = decodeHtmlEntities(raw);
       const inserted = replaceRange(block.content, range.start, range.end, line);
       const withLinks = linkifyContent(inserted, range.start, range.start + line.length);
-      if (withLinks !== inserted && !/\n/.test(line)) {
+      if ((withLinks !== inserted || line !== raw) && !/\n/.test(line)) {
         event.preventDefault();
         execute(updateBlockContent(tree, block.id, withLinks), { id: block.id, start: range.start + line.length, force: true });
         // A link that makes a card, pasted onto an empty line: its card is

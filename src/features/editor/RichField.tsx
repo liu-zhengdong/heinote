@@ -12,6 +12,7 @@ import {
 } from "react";
 import { Popover } from "../../components/Popover";
 import { linkifyContent } from "../../core/autolink";
+import { decodeHtmlEntities } from "../../core/html-entities";
 import {
   applyMarkToRange,
   inlinePlainText,
@@ -567,10 +568,10 @@ export function RichField({
       return;
     }
     // Anything else is words — one line in a name — an address among them
-    // linked.
-    const line = grammar.lines
+    // linked, and an entity such as `&emsp;` read as the space it means.
+    const line = decodeHtmlEntities(grammar.lines
       ? text.replace(/\r\n?/g, "\n").replace(/\n$/, "")
-      : text.replace(/\r?\n$/, "").replace(/\s*[\r\n]+\s*/g, " ");
+      : text.replace(/\r?\n$/, "").replace(/\s*[\r\n]+\s*/g, " "));
     const inserted = grammar.lines ? replaceRange(words, start, end, line) : replaceInTitle(words, start, end, line);
     draw(grammar.normalize(linkifyContent(inserted, start, start + line.length)), start + line.length);
   };

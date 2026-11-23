@@ -1,4 +1,5 @@
 import { linkifyContent } from "./autolink";
+import { decodeHtmlEntities } from "./html-entities";
 import {
   inlinePlainText,
   isKeptLink,
@@ -54,13 +55,19 @@ const READERS: readonly Reader[] = [
   })),
   {
     pattern: /\[([^\]\n]+)\]\(([^\s)]+)\)/g,
-    read: (match, marks) => isKeptLink(match[2]) ? markdownRuns(match[1], { ...marks, link: match[2] }) : [{ text: match[0], marks }],
+    read: (match, marks) => {
+      const href = decodeHtmlEntities(match[2]);
+      return isKeptLink(href) ? markdownRuns(match[1], { ...marks, link: href }) : [{ text: decodeHtmlEntities(match[0]), marks }];
+    },
   },
   { pattern: /<br\s*\/?>/gi, read: (_match, marks) => [{ text: "\n", marks }] },
 ];
 
 /** `text` as runs, read left to right: at each step, the reader whose
- *  pattern starts first — the earlier in the list on a tie. */
+ *  pattern starts first — the earlier in the list on a tie. Plain words are
+ *  decoded as a renderer shows them (`&emsp;` is a space); code's own rule
+ *  returns its text without this walk, so `&amp;` inside backticks stays
+ *  literal, as Markdown keeps it. */
 function markdownRuns(text: string, marks: InlineMarks): InlineContent {
   const runs: InlineContent = [];
   for (let at = 0; ;) {
@@ -71,10 +78,10 @@ function markdownRuns(text: string, marks: InlineMarks): InlineContent {
       if (match && (!next || match.index < next.match.index)) next = { match, reader };
     }
     if (!next) {
-      runs.push({ text: text.slice(at), marks });
+      runs.push({ text: decodeHtmlEntities(text.slice(at)), marks });
       return runs;
     }
-    runs.push({ text: text.slice(at, next.match.index), marks }, ...next.reader.read(next.match, marks));
+    runs.push({ text: decodeHtmlEntities(text.slice(at, next.match.index)), marks }, ...next.reader.read(next.match, marks));
     at = next.match.index + next.match[0].length;
   }
 }
