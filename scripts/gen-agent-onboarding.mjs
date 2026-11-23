@@ -61,6 +61,7 @@ const llmsTxt = [
   "",
   "## Agent 接入",
   "",
+  "- [站点根路径](/): `GET /` 且 `Accept` 不含 `text/html` 时返回本导览——把裸站点 URL 交给 Agent 即可自举",
   "- [接入技能](api/v1/skill.md): 使用说明 + 内嵌 heinote 命令行助手脚本，一次抓取即完成接入",
   "- [API 契约](api/v1/agent-api.md): 完整接口文档（认证、页面、数据库、附件、提案、版本）",
   "- [版本探测](api/version): 部署名称与版本号",

@@ -71,6 +71,34 @@ test("UC-52: 文档带 ETag 与 describedby Link，条件请求回 304", async (
   assert.equal(again.status, 304);
 });
 
+test("UC-52: / 对非 HTML 客户端回导览，对浏览器继续交给前端管线", async (t) => {
+  const server = await fixture(t);
+
+  // curl / fetch / agent clients ask for */* or an explicit type: they get
+  // the same guide body as /llms.txt, not the SPA shell.
+  for (const accept of ["*/*", "application/json", "text/markdown"]) {
+    const res = await get(server, "/", { Accept: accept });
+    assert.equal(res.status, 200, `Accept: ${accept}`);
+    assert.match(res.headers.get("content-type") ?? "", /text\/markdown/);
+    assert.match(await res.text(), /^# 小黑笔记/);
+    assert.match(res.headers.get("vary") ?? "", /Accept/i);
+  }
+
+  // Conditional requests work at / just like at /llms.txt.
+  const etag = (await get(server, "/")).headers.get("etag");
+  assert.ok(etag);
+  const again = await get(server, "/", { "If-None-Match": etag! });
+  assert.equal(again.status, 304);
+
+  // A browser offers text/html and is handed on to the frontend pipeline —
+  // in this api-only fixture nothing serves it, so the fallthrough shows as 404
+  // (and definitely not as markdown).
+  const browser = await get(server, "/", { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" });
+  assert.notEqual(browser.status, 200);
+  assert.doesNotMatch(browser.headers.get("content-type") ?? "", /text\/markdown/);
+  assert.match(browser.headers.get("vary") ?? "", /Accept/i);
+});
+
 test("UC-52: /api/v1 响应带 describedby Link 指回导览", async (t) => {
   const server = await fixture(t);
   // Any /api/v1 answer — even an anonymous 401 — advertises the guide.

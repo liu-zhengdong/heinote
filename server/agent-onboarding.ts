@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { Express, Request, Response } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import { agentApiMd, llmsTxt, skillMd } from "./agent-onboarding-content.ts";
 
 /**
@@ -24,20 +24,36 @@ const docs: { path: string; body: string }[] = [
 
 const etag = (body: string) => `W/"${createHash("sha256").update(body).digest("hex").slice(0, 32)}"`;
 
+const sendMarkdown = (req: Request, res: Response, body: string, tag: string) => {
+  res.set({
+    "Content-Type": "text/markdown; charset=utf-8",
+    ETag: tag,
+    // Revalidate each time: the doc is cheap, and a redeployed build must
+    // not keep serving the previous process's snapshot.
+    "Cache-Control": "no-cache",
+    Link: '</llms.txt>; rel="describedby"',
+  });
+  if (req.headers["if-none-match"] === tag) return res.status(304).end();
+  res.send(body);
+};
+
+// Anything that asks for the root without wanting a web page is a program —
+// curl, fetch and other agent clients all send `Accept: */*` or an explicit
+// non-HTML type — so it gets the onboarding guide instead of a useless SPA
+// shell. Browsers always offer text/html and pass through to the frontend
+// (static files in production, Vite in dev, 404 in api-only mode).
+const wantsHtml = (accept: string | undefined): boolean => /text\/html|application\/xhtml\+xml/i.test(accept ?? "");
+
 export function attachAgentOnboarding(app: Express): void {
   for (const { path, body } of docs) {
     const tag = etag(body);
-    app.get(path, (req: Request, res: Response) => {
-      res.set({
-        "Content-Type": "text/markdown; charset=utf-8",
-        ETag: tag,
-        // Revalidate each time: the doc is cheap, and a redeployed build must
-        // not keep serving the previous process's snapshot.
-        "Cache-Control": "no-cache",
-        Link: '</llms.txt>; rel="describedby"',
-      });
-      if (req.headers["if-none-match"] === tag) return res.status(304).end();
-      res.send(body);
-    });
+    app.get(path, (req: Request, res: Response) => sendMarkdown(req, res, body, tag));
   }
+  const tag = etag(llmsTxt);
+  app.get("/", (req: Request, res: Response, next: NextFunction) => {
+    // The two representations of "/" must never be coalesced by a shared cache.
+    res.vary("Accept");
+    if (wantsHtml(req.headers.accept)) return next();
+    sendMarkdown(req, res, llmsTxt, tag);
+  });
 }
