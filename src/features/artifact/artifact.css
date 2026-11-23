@@ -15,6 +15,7 @@
 }
 
 .app-surface__frame {
+  display: block;
   width: 100%;
   min-height: 240px;
   height: 420px;
@@ -137,14 +138,27 @@
 .app-surface--grow .app-surface__frame { flex: 1; min-height: 0; height: auto; }
 .app-surface--grow .app-surface__empty { flex: 1; justify-content: center; }
 
-/* Public share: the app is the page's body, so it fills the column the
- *  reader leaves under the title — the content flexes to at least the
- *  viewport height minus the share header (≈50px) and the document's own
- *  padding. min-height keeps a short viewport from collapsing it below
- *  the embedded 420px. */
-.app-surface--fill { min-height: 420px; }
-.app-surface--fill .app-surface__frame { flex: 1; min-height: 0; height: 100%; }
-.app-surface--fill .app-surface__empty { min-height: 44px; }
+/* Public share: the app fills the viewport stage under the share header —
+ *  edge-to-edge with no card radius, so only the iframe scrolls and its
+ *  scrollbar sits flush against the window edge. */
+.app-surface--fill {
+  flex: 1;
+  min-height: 0;
+  border-radius: 0;
+}
+.app-surface--fill .app-surface__frame {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+}
+.app-surface--fill .app-surface__bar {
+  border-radius: 0;
+}
+.app-surface--fill .app-surface__empty {
+  flex: 1;
+  justify-content: center;
+}
 
 /* The summary strip: quiet metadata, one action. */
 .app-strip {

@@ -154,6 +154,32 @@ test("UC-15: agent builds an app; member enables it; it runs sandboxed and reach
   await guestFrame.locator("#load").click();
   await expect(guestFrame.locator("#rows")).toContainText("rows:1");
 
+  // Single-app public share: the title lives in the thin header and the
+  //  iframe fills the entire remaining viewport with no outer scrollbar.
+  await expect(page.locator(".public-reader--app .public-reader__head-title")).toContainText("计数器");
+  await expect(page.locator(".public-reader__content")).toHaveCount(0);
+  const geometry = await page.evaluate(() => {
+    const reader = document.querySelector(".public-reader")!;
+    const head = document.querySelector(".public-reader__head")!.getBoundingClientRect();
+    const frame = document.querySelector("iframe.app-surface__frame")!.getBoundingClientRect();
+    return {
+      readerScrollHeight: reader.scrollHeight,
+      readerClientHeight: reader.clientHeight,
+      readerScrollWidth: reader.scrollWidth,
+      readerClientWidth: reader.clientWidth,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      headBottom: head.bottom,
+      frame,
+    };
+  });
+  expect(geometry.readerScrollHeight).toBeLessThanOrEqual(geometry.readerClientHeight);
+  expect(geometry.readerScrollWidth).toBeLessThanOrEqual(geometry.readerClientWidth);
+  expect(Math.abs(geometry.frame.left)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.frame.width - geometry.viewportWidth)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.frame.top - geometry.headBottom)).toBeLessThanOrEqual(1);
+  expect(Math.abs(geometry.frame.bottom - geometry.viewportHeight)).toBeLessThanOrEqual(1);
+
   // The public reader follows the desk theme — chrome matches the app's
   //  resolved iframe theme under prefers-color-scheme: dark.
   await page.emulateMedia({ colorScheme: "dark" });
@@ -217,4 +243,123 @@ test("UC-15: apps embedded in a page are their surfaces; plain and scripted both
   await expect(page.frameLocator('iframe[title="脚本应用"]').locator("#title")).toHaveText("计数器");
 
   await page.screenshot({ path: join(evidence, "app-embedded.png"), fullPage: false });
+});
+
+test("UC-15: tall public app and multi-page app share stay single-scroll on desktop and mobile", async ({ page, browser }) => {
+  const tokenRes = await page.request.post(`${server.url}/api/tokens`, {
+    data: { name: "布局验收 Agent", access: "write" },
+  });
+  // Register a fresh owner if no session exists in this test context.
+  if (tokenRes.status() === 401) {
+    await register(page, "layoutmaker");
+  }
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const token = await createToken(page, "布局 Agent", "write");
+  await page.getByRole("button", { name: "关闭设置", exact: true }).click();
+
+  const TALL_APP = `<!doctype html><html><head><style>
+    body { margin: 0; padding: 24px; font-family: system-ui, sans-serif; }
+    .card { height: 2200px; border-radius: 12px; padding: 20px; border: 1px solid rgba(128,128,128,0.25); }
+  </style></head><body><div class="card"><h2 id="tall-title">长页面应用</h2><p>用于验证单滚动条布局。</p></div></body></html>`;
+
+  const parentDoc = await agent(token, "POST", "/api/v1/pages", { title: "文档合集", markdown: "说明文档。" });
+  expect(parentDoc.status).toBe(201);
+  const tallApp = await agent(token, "POST", "/api/v1/pages", { kind: "app", title: "HTML 能力展示", parentId: parentDoc.body.id });
+  expect(tallApp.status).toBe(201);
+  const drafted = await agent(token, "PATCH", `/api/v1/pages/${tallApp.body.id}`, {
+    baseRevision: tallApp.body.revision,
+    app: { draft: TALL_APP },
+  });
+  expect(drafted.status).toBe(200);
+  const enabled = await agent(token, "POST", `/api/v1/pages/${tallApp.body.id}/enable`, {
+    requestId: "b-tall-enable",
+    baseRevision: drafted.body.revision,
+  });
+  expect(enabled.status).toBe(200);
+
+  // 1. Standalone single-app share (desktop dark + mobile).
+  const singleShare = await page.request.post(`${server.url}/api/shares`, { data: { pageId: tallApp.body.id } });
+  expect(singleShare.status()).toBe(201);
+  const singleUrl = new URL((await singleShare.json()).url as string, server.url).toString();
+
+  const guest = await browser.newContext({ viewport: { width: 1280, height: 800 }, colorScheme: "dark" });
+  const reader = await guest.newPage();
+  await reader.goto(singleUrl);
+  await expect(reader.frameLocator("iframe.app-surface__frame").locator("#tall-title")).toHaveText("长页面应用");
+
+  const desktopSingle = await reader.evaluate(() => {
+    const outer = document.querySelector(".public-reader")!;
+    const head = document.querySelector(".public-reader__head")!.getBoundingClientRect();
+    const frame = document.querySelector("iframe.app-surface__frame")!.getBoundingClientRect();
+    return {
+      outerOverflowY: outer.scrollHeight - outer.clientHeight,
+      outerOverflowX: outer.scrollWidth - outer.clientWidth,
+      frameLeft: frame.left,
+      frameRightGap: window.innerWidth - frame.right,
+      frameTopGap: frame.top - head.bottom,
+      frameBottomGap: window.innerHeight - frame.bottom,
+    };
+  });
+  expect(desktopSingle.outerOverflowY).toBeLessThanOrEqual(0);
+  expect(desktopSingle.outerOverflowX).toBeLessThanOrEqual(0);
+  expect(Math.abs(desktopSingle.frameLeft)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desktopSingle.frameRightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desktopSingle.frameTopGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desktopSingle.frameBottomGap)).toBeLessThanOrEqual(1);
+
+  // Inner iframe itself IS scrollable (the single scrollbar at the right edge).
+  const innerScrollable = await reader.frameLocator("iframe.app-surface__frame").locator("body").evaluate(
+    () => document.documentElement.scrollHeight > window.innerHeight,
+  );
+  expect(innerScrollable).toBe(true);
+  await reader.screenshot({ path: join(evidence, "app-shared-tall-dark.png"), fullPage: false });
+
+  // 2. Multi-page share navigated to the child app (desktop with nav + mobile with pill).
+  const treeShare = await page.request.post(`${server.url}/api/shares`, { data: { pageId: parentDoc.body.id } });
+  expect(treeShare.status()).toBe(201);
+  const treeUrl = new URL((await treeShare.json()).url as string, server.url).toString();
+  await reader.goto(treeUrl);
+  await reader.locator(".public-reader__nav a", { hasText: "HTML 能力展示" }).click();
+  await expect(reader.frameLocator("iframe.app-surface__frame").locator("#tall-title")).toHaveText("长页面应用");
+
+  const desktopWithNav = await reader.evaluate(() => {
+    const outer = document.querySelector(".public-reader")!;
+    const nav = document.querySelector(".public-reader__nav")!.getBoundingClientRect();
+    const frame = document.querySelector("iframe.app-surface__frame")!.getBoundingClientRect();
+    return {
+      outerOverflowY: outer.scrollHeight - outer.clientHeight,
+      navRight: nav.right,
+      frameLeft: frame.left,
+      frameRightGap: window.innerWidth - frame.right,
+      frameBottomGap: window.innerHeight - frame.bottom,
+    };
+  });
+  expect(desktopWithNav.outerOverflowY).toBeLessThanOrEqual(0);
+  expect(Math.abs(desktopWithNav.frameLeft - desktopWithNav.navRight)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desktopWithNav.frameRightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(desktopWithNav.frameBottomGap)).toBeLessThanOrEqual(1);
+  await reader.screenshot({ path: join(evidence, "app-shared-with-nav.png"), fullPage: false });
+
+  // Mobile viewport with floating TOC pill.
+  await reader.setViewportSize({ width: 390, height: 844 });
+  await expect(reader.locator(".public-mobile-pill")).toBeVisible();
+  const mobileWithPill = await reader.evaluate(() => {
+    const outer = document.querySelector(".public-reader")!;
+    const frame = document.querySelector("iframe.app-surface__frame")!.getBoundingClientRect();
+    const pill = document.querySelector(".public-mobile-pill")!.getBoundingClientRect();
+    return {
+      outerOverflowY: outer.scrollHeight - outer.clientHeight,
+      outerOverflowX: outer.scrollWidth - outer.clientWidth,
+      frameWidth: frame.width,
+      frameBottom: frame.bottom,
+      pillTop: pill.top,
+    };
+  });
+  expect(mobileWithPill.outerOverflowY).toBeLessThanOrEqual(0);
+  expect(mobileWithPill.outerOverflowX).toBeLessThanOrEqual(0);
+  expect(Math.abs(mobileWithPill.frameWidth - 390)).toBeLessThanOrEqual(1);
+  expect(mobileWithPill.frameBottom).toBeLessThanOrEqual(mobileWithPill.pillTop + 1);
+  await reader.screenshot({ path: join(evidence, "app-shared-mobile.png"), fullPage: false });
+
+  await guest.close();
 });

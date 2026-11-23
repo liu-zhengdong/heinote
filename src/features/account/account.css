@@ -219,8 +219,12 @@
 
 .public-reader { width: 100%; height: 100dvh; overflow: auto; background: var(--paper); user-select: text; }
 .public-reader__head { display: flex; min-height: 52px; align-items: center; gap: 18px; padding: 12px 24px; border-bottom: 1px solid var(--hairline); }
-.public-reader__brand { color: var(--ink); font-size: 16px; font-weight: 650; text-decoration: none; }
-.public-reader__head > span { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+.public-reader__brand { flex: none; color: var(--ink); font-size: 16px; font-weight: 650; text-decoration: none; }
+.public-reader__head > span { display: flex; flex: none; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+.public-reader__head-title { display: flex; min-width: 0; align-items: center; gap: 7px; margin: 0; padding-left: 12px; border-left: 1px solid var(--hairline-strong); color: var(--ink); font-size: 14px; font-weight: 550; line-height: 1.4; }
+.public-reader__head-title > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.public-reader__head-title svg,
+.public-reader__head-title img { flex: none; }
 .public-reader__status { max-width: 600px; margin: 64px auto; padding: 0 24px; }
 .public-reader__status h1 { font-size: 25px; }
 .public-reader__layout { max-width: 1120px; margin: 0 auto; }
@@ -234,9 +238,19 @@
 .public-reader__nav-branch { padding-left: 12px; }
 .public-reader__document { min-width: 0; padding-bottom: 64px; animation: account-appear var(--t-base) var(--e-out); }
 .public-reader__cover { display: block; width: 100%; height: clamp(120px, 22vw, 240px); object-fit: cover; }
-.public-reader__content { max-width: 780px; margin: 0 auto; padding: 38px clamp(20px, 4vw, 48px); font-size: 16px; line-height: 1.75; overflow-wrap: anywhere; min-height: calc(100dvh - 75px); display: flex; flex-direction: column; }
-.public-reader__content .app-surface--fill { flex: 1; min-height: 0; }
+.public-reader__content { max-width: 780px; margin: 0 auto; padding: 38px clamp(20px, 4vw, 48px); font-size: 16px; line-height: 1.75; overflow-wrap: anywhere; }
 .public-reader__document--wide .public-reader__content { max-width: none; }
+
+/* Public app share: lock the outer shell to the viewport so the app fills
+ *  the stage edge-to-edge under the header with only one scrollbar. */
+.public-reader--app { display: flex; flex-direction: column; overflow: clip; }
+.public-reader--app .public-reader__head { flex: none; gap: 12px; }
+.public-reader--app .public-reader__badge { margin-inline-start: auto; }
+.public-reader--app .public-reader__layout { flex: 1; min-height: 0; width: 100%; max-width: none; margin: 0; display: flex; }
+.public-reader--app .public-reader__layout--with-nav { display: grid; grid-template-columns: 200px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.public-reader--app .public-reader__nav { position: static; align-self: stretch; max-height: none; height: 100%; border-right: 1px solid var(--hairline); overscroll-behavior: contain; }
+.public-reader__document--app { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; animation: none; }
+.public-reader__app-empty { margin: auto; padding: 32px 24px; text-align: center; }
 .public-reader__content--serif { font-family: var(--heinote-font-serif, Georgia, "Noto Serif SC", serif); }
 .public-reader__content--mono { font-family: var(--heinote-font-code, monospace); }
 .public-reader__icon { font-size: 42px; line-height: 1.4; margin-bottom: 12px; }
@@ -307,8 +321,10 @@
   .share:has(.public-links) { max-height: calc(100dvh - 64px); margin-top: 0; }
   .public-reader__head { padding-inline: 18px; padding-top: max(12px, env(safe-area-inset-top, 0px)); }
   .public-reader__layout--with-nav { display: block; }
+  .public-reader--app .public-reader__layout--with-nav { display: flex; }
   .public-reader__content { padding-top: 24px; }
   .public-reader__document--with-mobile-pill { padding-bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+  .public-reader__document--app.public-reader__document--with-mobile-pill { padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px)); }
   .public-reader__nav--sheet { position: static; align-self: stretch; width: 100%; max-height: none; padding: 8px 12px 16px; }
   .public-reader__nav--sheet a { min-height: 44px; width: 100%; font-size: 14.5px; }
 }

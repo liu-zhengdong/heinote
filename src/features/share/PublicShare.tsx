@@ -121,8 +121,19 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     return () => { window.document.title = previous; };
   }, [active, document]);
 
-  return <main className="public-reader">
-    <header className="public-reader__head"><a href="/" className="public-reader__brand">HeiNote</a><span><Globe size={14} aria-hidden="true" />公开阅读</span></header>
+  const isApp = Boolean(active && active.kind === "app");
+
+  return <main className={`public-reader${isApp ? " public-reader--app" : ""}`}>
+    <header className="public-reader__head">
+      <a href="/" className="public-reader__brand">HeiNote</a>
+      {isApp && active ? (
+        <h1 className="public-reader__head-title">
+          {pageIcon(active) ? <ReaderPageIcon page={active} context={context} size={18} /> : null}
+          <span>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</span>
+        </h1>
+      ) : null}
+      <span className="public-reader__badge"><Globe size={14} aria-hidden="true" />公开阅读</span>
+    </header>
     {loading ? <p className="public-reader__status account-muted" role="status">正在加载笔记…</p>
       : error ? <section className="public-reader__status"><h1>{unavailable ? "无法打开此页" : "加载失败"}</h1><p className="account-error" role="alert">{error}</p>
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>
@@ -131,24 +142,28 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
         {tree && listedCount > 1 && !mobile ? <nav className="public-reader__nav" aria-label="公开页面">
           <NavBranch pages={tree.roots} tree={tree} active={active.id} context={context} />
         </nav> : null}
-        <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
-          {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
-          <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
-            {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
-            <h1>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</h1>
-            {active.kind === "app" ? (
-              active.app?.enabled
-                ? <AppSurface page={active} shareToken={token} fill />
-                : <p className="account-muted">小应用尚未启用。</p>
-            ) : active.kind === "database" ? (
-              <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />
-            ) : (
-              active.block_tree ? <ReaderBlocks tree={active.block_tree} context={context} /> : null
-            )}
-            {document && active.kind !== "database" ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
-              <a key={page.id} href={pageHref(page.id)}><ReaderPageIcon page={page} context={context} size={16} />{titleOf(page)}</a>)}</nav> : null}
-          </div>
-        </article>
+        {isApp ? (
+          <article key={active.id} className={`public-reader__document public-reader__document--app${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
+            {active.app?.enabled
+              ? <AppSurface page={active} shareToken={token} fill />
+              : <p className="public-reader__app-empty account-muted">小应用尚未启用。</p>}
+          </article>
+        ) : (
+          <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
+            {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
+            <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
+              {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
+              <h1>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</h1>
+              {active.kind === "database" ? (
+                <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />
+              ) : (
+                active.block_tree ? <ReaderBlocks tree={active.block_tree} context={context} /> : null
+              )}
+              {document && active.kind !== "database" ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
+                <a key={page.id} href={pageHref(page.id)}><ReaderPageIcon page={page} context={context} size={16} />{titleOf(page)}</a>)}</nav> : null}
+            </div>
+          </article>
+        )}
         {mobile && tree && listedCount > 1 ? (
           <>
             <div className="public-mobile-pill-wrap">
