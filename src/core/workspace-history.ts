@@ -390,7 +390,12 @@ export class WorkspaceHistory {
 
   private replay(state: WorkspaceState, step: HistoryStep, direction: "undo" | "redo"): HistoryReplay | null {
     const undoing = direction === "undo";
-    if (step.atomic && step.changes.some((change) => !sameValue(comparable(change.path, valueAt(state, change.path)), comparable(change.path, undoing ? change.after : change.before)))) throw new HistoryConflict(step.changes);
+    if (step.atomic) for (const change of step.changes) {
+      const current = comparable(change.path, valueAt(state, change.path)); const expected = comparable(change.path, undoing ? change.after : change.before);
+      if (!sameValue(current, expected)) {
+        throw new HistoryConflict(step.changes);
+      }
+    }
     const mutations: WorkspaceMutation[] = [];
     for (const change of undoing ? [...step.changes].reverse() : step.changes) {
       const from = undoing ? change.after : change.before;

@@ -20,7 +20,7 @@ interface Drawn {
  * place in another page's editor) draws nothing. It is drawn again as the
  * blocks change under it, as they are laid out again and as presence moves.
  */
-export function RemoteCarets({ root }: { root: RefObject<HTMLDivElement | null> }) {
+export function RemoteCarets({ root }: { root: RefObject<HTMLElement | null> }) {
   const { platform, rosters } = useWorkspace();
   const { presence } = useActivity();
   const [drawn, setDrawn] = useState<Drawn[]>([]);

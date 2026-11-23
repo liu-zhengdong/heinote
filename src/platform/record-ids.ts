@@ -17,6 +17,9 @@ function parsePageScopedId(id: string): { pageId: string; rest: string } | null 
 
 export const blockRecordId = (pageId: string, blockId: string) => pageScopedId(pageId, blockId);
 
+/** The owning page id of any page-scoped record id (block, version, or event). */
+export const pageOfRecordId = (id: string): string | null => parsePageScopedId(id)?.pageId ?? null;
+
 export function parseBlockRecordId(id: string): { pageId: string; blockId: string } | null {
   const parsed = parsePageScopedId(id);
   return parsed && { pageId: parsed.pageId, blockId: parsed.rest };
@@ -32,4 +35,15 @@ export function parseHistoryId(id: string): { pageId: string; versionId: string;
   const parted = /^(.*)\.part\.(\d+)$/.exec(parsed.rest);
   const versionId = parted ? parted[1] : parsed.rest;
   return versionId ? { pageId: parsed.pageId, versionId, part: parted ? Number(parted[2]) : 0 } : null;
+}
+
+/* An edit event's id: `event.<event id>` under its page, so the page's
+   records — blocks, checkpoints, events — all leave with it. */
+export const eventId = (pageId: string, id: string) => pageScopedId(pageId, `event.${id}`);
+
+/** The page and event an event record's id names. */
+export function parseEventId(id: string): { pageId: string; eventId: string } | null {
+  const parsed = parsePageScopedId(id);
+  if (!parsed || !parsed.rest.startsWith("event.")) return null;
+  return { pageId: parsed.pageId, eventId: parsed.rest.slice(6) };
 }

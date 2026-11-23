@@ -73,11 +73,15 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
         if (!match) continue;
         excerpt = match.slice(0, 90);
       }
+      const spaceId = scope.startsWith("user:") ? "personal" : (store.knowledgeBases.get(scope) ? scope : "personal");
       scored.push({
         hit: {
           id: page.id,
           title: pageName(page),
           scope,
+          spaceId,
+          icon: typeof page.icon === "string" ? page.icon : "",
+          kind: page.kind,
           space: scope.startsWith("user:") ? "个人空间" : (spaceNames.get(scope) ?? scope),
           crumb: crumb(page),
           ...(excerpt !== undefined ? { excerpt } : {}),

@@ -1,26 +1,16 @@
-import { FileText, Globe, Paperclip } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { orderedBlocks, pageFirstLine } from "../../core/block-tree";
-import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../../core/types";
+import { Globe, Menu } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BottomSheet } from "../../components/BottomSheet";
+import { useFold } from "../../hooks/useFold";
+import type { NotePage } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
-import { codeHtml, codeLanguage, highlighterReady, whenHighlighterReady } from "../editor/code-highlight";
-import { MermaidDiagram } from "../editor/MermaidDiagram";
 import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
 import { AppSurface } from "../artifact/AppSurface";
+import { PublicDatabase } from "./PublicDatabase";
+import { ReaderBlocks, ReaderInline, ReaderPageIcon, titleOf, type ReaderContext } from "./reader";
 
 interface PublicDocument { title: string; pages: NotePage[] }
-interface ReaderContext { token: string; pages: Map<string, NotePage> }
-const COLORS = new Set(["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"]);
-
-function contentStyle(color?: string): CSSProperties | undefined {
-  if (!color) return undefined;
-  const background = color.endsWith("_background");
-  const name = background ? color.slice(0, -11) : color;
-  if (!COLORS.has(name)) return undefined;
-  return background ? { backgroundColor: `var(--bg-${name})` } : { color: `var(--text-${name})` };
-}
-function titleOf(page: NotePage): string { return page.title || pageFirstLine(page) || "无标题"; }
 function pageHref(id: string): string { return `#page=${encodeURIComponent(id)}`; }
 function selectedPage(): string { return new URLSearchParams(window.location.hash.slice(1)).get("page") ?? ""; }
 function tokenFromPath(): string {
@@ -28,158 +18,24 @@ function tokenFromPath(): string {
   if (!match) return "";
   try { return decodeURIComponent(match[1]); } catch { return ""; }
 }
-function fileHref(file: StoredFile, token: string): string {
+/** A stored file's bytes on the public route, keyed by its path. */
+function fileHref(file: { path: string }, token: string): string {
   return `/api/public/${encodeURIComponent(token)}/files?path=${encodeURIComponent(file.path)}`;
-}
-function filePathHref(path: string, token: string): string {
-  return `/api/public/${encodeURIComponent(token)}/files?path=${encodeURIComponent(path)}`;
-}
-
-/** A page's mark in the shared document: the picture or emoji it was given,
- *  else the page glyph — as it reads in the page list back in HeiNote. */
-function PublicPageIcon({ page, token, size = 16 }: { page: NotePage; token: string; size?: number }) {
-  const icon = pageIcon(page);
-  if (icon?.kind === "image") {
-    return <img className="public-reader__page-icon" src={filePathHref(icon.file.preview ?? icon.file.path, token)} alt="" width={size} height={size} />;
-  }
-  if (icon?.kind === "emoji") return <span aria-hidden="true">{icon.emoji}</span>;
-  return <FileText size={size} aria-hidden="true" />;
-}
-
-/** Only public pages can resolve internal links. External links use safe schemes. */
-function safeHref(value: string | undefined, context: ReaderContext): string | undefined {
-  if (!value) return undefined;
-  if (value.startsWith("#")) {
-    let id: string;
-    try { id = decodeURIComponent(value.slice(1)); } catch { return undefined; }
-    return context.pages.has(id) ? pageHref(id) : undefined;
-  }
-  try {
-    const url = new URL(value);
-    return ["https:", "http:", "mailto:", "tel:"].includes(url.protocol) ? url.href : undefined;
-  } catch { return undefined; }
-}
-
-function Inline({ content, context }: { content: InlineContent; context: ReaderContext }) {
-  return <>{content.map((run, index) => {
-    const mention = run.mention;
-    if (mention?.kind === "image") return <img key={index} className="public-reader__image" src={fileHref(mention.file, context.token)} alt={mention.file.name}
-      loading="lazy" width={mention.width ?? mention.file.width} height={mention.width ? undefined : mention.file.height} style={{ maxWidth: "100%", height: "auto" }} />;
-    if (mention?.kind === "page") {
-      const target = context.pages.get(mention.page_id);
-      return target ? <a key={index} href={pageHref(target.id)}>{titleOf(target)}</a> : <span key={index} className="account-muted">未公开页面</span>;
-    }
-    if (mention?.kind === "date") return <time key={index} dateTime={mention.date}>{mention.date}</time>;
-    const marks = run.marks;
-    let child: ReactNode = run.text;
-    if (marks?.code) child = <code>{child}</code>;
-    if (marks?.bold) child = <strong>{child}</strong>;
-    if (marks?.italic) child = <em>{child}</em>;
-    if (marks?.underline) child = <u>{child}</u>;
-    if (marks?.strike) child = <s>{child}</s>;
-    if (marks?.color) child = <span style={contentStyle(marks.color)}>{child}</span>;
-    const href = safeHref(marks?.link, context);
-    if (href) child = <a href={href} {...(href.startsWith("#") ? {} : { target: "_blank", rel: "noopener noreferrer" })}>{child}</a>;
-    return <Fragment key={index}>{child}</Fragment>;
-  })}</>;
-}
-
-/** A code block on the public reader, coloured like the editor's. The
- *  grammar chunk loads with the first code block on the page; until it
- *  arrives — or if it fails — the code shows as plain text. */
-function PublicCode({ source, language }: { source: string; language?: string }) {
-  const [coloured, setColoured] = useState(highlighterReady);
-  useEffect(() => {
-    if (coloured) return;
-    return whenHighlighterReady(() => setColoured(true));
-  }, [coloured]);
-  return <pre><code dangerouslySetInnerHTML={{ __html: codeHtml(source, language) }} /></pre>;
-}
-
-function BlockBody({ block, context }: { block: Block; context: ReaderContext }) {
-  const text = <Inline content={block.content} context={context} />;
-  switch (block.kind) {
-    case "heading1": return <h2>{text}</h2>;
-    case "heading2": return <h3>{text}</h3>;
-    case "heading3": return <h4>{text}</h4>;
-    case "divider": return <hr />;
-    case "quote": return <blockquote>{text}</blockquote>;
-    case "callout": return <aside className="public-reader__callout"><span aria-hidden="true">{block.icon || "💡"}</span><div>{text}</div></aside>;
-    case "todo": return <div className={`public-reader__todo${block.checked ? " is-checked" : ""}`}><span role="img" aria-label={block.checked ? "已完成" : "未完成"}>{block.checked ? "☑" : "☐"}</span><span>{text}</span></div>;
-    case "code": {
-      const source = block.content.map((run) => run.text).join("");
-      /* A Mermaid block reads as its diagram here, the source under it —
-         same shape the editor's read-only view has. */
-      return <>
-        {codeLanguage(block.language).id === "mermaid" ? <MermaidDiagram text={source} /> : null}
-        <PublicCode source={source} language={block.language} />
-      </>;
-    }
-    case "file": return <div>{block.file ? <a className="public-reader__file" href={fileHref(block.file, context.token)} target="_blank" rel="noopener noreferrer"><Paperclip size={16} aria-hidden="true" />{block.file.name}</a> : "文件不可用"}{block.content.length ? <p>{text}</p> : null}</div>;
-    case "table": {
-      const table = block.table;
-      if (!table) return null;
-      const rows = Object.entries(table.rows).sort(([leftId, left], [rightId, right]) => left.order - right.order || leftId.localeCompare(rightId));
-      return <div className="public-reader__table" tabIndex={0} role="region" aria-label="表格"><table><tbody>{rows.map(([id, row], rowIndex) => <tr key={id}>
-        {table.columns.map((column, columnIndex) => {
-          const Cell = (rowIndex === 0 && table.header_row) || (columnIndex === 0 && table.header_column) ? "th" : "td";
-          return <Cell key={column.id} scope={Cell === "th" ? rowIndex === 0 && table.header_row ? "col" : "row" : undefined}><Inline content={row.cells[column.id] ?? []} context={context} /></Cell>;
-        })}
-      </tr>)}</tbody></table></div>;
-    }
-    case "embed": {
-      const embed = block.embed;
-      const href = safeHref(embed?.url, context);
-      return <div className="public-reader__embed">{href ? <a href={href} target="_blank" rel="noopener noreferrer">{embed?.provider === "youtube" ? embed.title || "打开视频" : embed?.provider === "x" ? embed.name || `@${embed.handle}` : "打开链接"}</a> : null}
-        {embed?.provider === "x" && embed.text ? <p>{embed.text}</p> : null}{block.content.length ? <p>{text}</p> : null}</div>;
-    }
-    case "page": return <div>{block.name ? <strong>{block.name}</strong> : null}{text}</div>;
-    default: return <div className="public-reader__paragraph">{text}<br className="public-reader__empty-line" /></div>;
-  }
-}
-
-function BlockChildren({ tree, parentId = null, context, ancestors = new Set<string>() }: {
-  tree: BlockTree; parentId?: string | null; context: ReaderContext; ancestors?: Set<string>;
-}) {
-  const blocks = orderedBlocks(tree, parentId).filter((block) => !ancestors.has(block.id));
-  const children: ReactNode[] = [];
-  for (let index = 0; index < blocks.length; index++) {
-    const block = blocks[index];
-    if (block.kind === "bullet" || block.kind === "numbered") {
-      const kind = block.kind;
-      const list: ReactNode[] = [];
-      do {
-        const item = blocks[index];
-        list.push(<li key={item.id} style={contentStyle(item.color)}><Inline content={item.content} context={context} />
-          <BlockChildren tree={tree} parentId={item.id} context={context} ancestors={new Set([...ancestors, item.id])} /></li>);
-        index++;
-      } while (index < blocks.length && blocks[index].kind === kind);
-      index--;
-      children.push(kind === "bullet" ? <ul key={block.id}>{list}</ul> : <ol key={block.id}>{list}</ol>);
-    } else {
-      children.push(<div key={block.id} className={`public-reader__block public-reader__block--${block.kind}`}
-        style={{ ...contentStyle(block.color), textAlign: block.align }}>
-        <BlockBody block={block} context={context} />
-        <div className="public-reader__nested"><BlockChildren tree={tree} parentId={block.id} context={context} ancestors={new Set([...ancestors, block.id])} /></div>
-      </div>);
-    }
-  }
-  return <>{children}</>;
 }
 
 /** One level of the public page list: each row, then the rows it holds,
  *  nested so their indent says where they live. On a narrow screen the
  *  branch box goes away and the rows read flat, in the same order. */
-function NavBranch({ pages, tree, active, token }: { pages: NotePage[]; tree: PageTree; active: string; token: string }) {
+function NavBranch({ pages, tree, active, context }: { pages: NotePage[]; tree: PageTree; active: string; context: ReaderContext }) {
   return <>
     {pages.map((page) => (
       <div key={page.id} className="public-reader__nav-item">
         <a href={pageHref(page.id)} aria-current={page.id === active ? "page" : undefined}>
-          <PublicPageIcon page={page} token={token} size={15} /><span>{titleOf(page)}</span>
+          <ReaderPageIcon page={page} context={context} size={15} /><span>{titleOf(page)}</span>
         </a>
         {(tree.children.get(page.id)?.length ?? 0) > 0 ? (
           <div className="public-reader__nav-branch">
-            <NavBranch pages={tree.children.get(page.id)!} tree={tree} active={active} token={token} />
+            <NavBranch pages={tree.children.get(page.id)!} tree={tree} active={active} context={context} />
           </div>
         ) : null}
       </div>
@@ -208,8 +64,13 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const [unavailable, setUnavailable] = useState(false);
   const [revision, setRevision] = useState(0);
   const [pageId, setPageId] = useState(selectedPage);
+  const [navOpen, setNavOpen] = useState(false);
+  const mobile = useFold();
   useEffect(() => {
-    const changed = () => setPageId(selectedPage());
+    const changed = () => {
+      setPageId(selectedPage());
+      setNavOpen(false);
+    };
     window.addEventListener("hashchange", changed);
     return () => window.removeEventListener("hashchange", changed);
   }, []);
@@ -230,7 +91,20 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [token, revision]);
-  const context = useMemo<ReaderContext>(() => ({ token, pages: new Map(document?.pages.map((page) => [page.id, page]) ?? []) }), [document, token]);
+
+  /* This reader resolves links by the share's own addresses: a page to its
+   *  #page= hash, a file to /api/public/{token}/files?path=. The export
+   *  reader answers the same questions with paths inside its zip. */
+  const context = useMemo<ReaderContext>(() => {
+    const pages = new Map((document?.pages ?? []).map((page) => [page.id, page]));
+    return {
+      pages,
+      fileHref: (file) => fileHref(file, token),
+      pageHref: (id) => (pages.has(id) ? pageHref(id) : undefined),
+      unresolvedPageLabel: "未公开页面",
+    };
+  }, [document, token]);
+
   /* The nav mirrors the page list back in HeiNote: each page nested under
    *  the page that holds it, sorted by name. A page whose parent is not
    *  public lists at the top. */
@@ -239,7 +113,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     : undefined), [document]);
   const listedCount = tree ? tree.roots.length + [...tree.children.values()].reduce((count, pages) => count + pages.length, 0) : 0;
   const root = document?.pages.find((page) => !page.parent_id || !context.pages.has(page.parent_id)) ?? document?.pages[0];
-  const active = context.pages.get(pageId) ?? root;
+  const active = pageId ? context.pages.get(pageId) ?? root : root;
   useEffect(() => {
     if (!document) return;
     const previous = window.document.title;
@@ -254,25 +128,48 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>
       : !active ? <p className="public-reader__status account-muted">暂无公开内容</p>
       : <div className={`public-reader__layout${listedCount > 1 ? " public-reader__layout--with-nav" : ""}`}>
-        {tree && listedCount > 1 ? <nav className="public-reader__nav" aria-label="公开页面">
-          <NavBranch pages={tree.roots} tree={tree} active={active.id} token={token} />
+        {tree && listedCount > 1 && !mobile ? <nav className="public-reader__nav" aria-label="公开页面">
+          <NavBranch pages={tree.roots} tree={tree} active={active.id} context={context} />
         </nav> : null}
-        <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(active)}>
-          {active.cover_image ? <img className="public-reader__cover" src={fileHref(active.cover_image, token)} alt="" /> : null}
+        <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
+          {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
           <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
-            {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><PublicPageIcon page={active} token={token} size={72} /></div> : null}
-            <h1>{active.title_content?.length ? <Inline content={active.title_content} context={context} /> : titleOf(active)}</h1>
+            {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
+            <h1>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</h1>
             {active.kind === "app" ? (
               active.app?.enabled
                 ? <AppSurface page={active} shareToken={token} />
                 : <p className="account-muted">小应用尚未启用。</p>
+            ) : active.kind === "database" ? (
+              <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />
             ) : (
-              <BlockChildren tree={active.block_tree!} context={context} />
+              active.block_tree ? <ReaderBlocks tree={active.block_tree} context={context} /> : null
             )}
-            {document ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
-              <a key={page.id} href={pageHref(page.id)}><PublicPageIcon page={page} token={token} size={16} />{titleOf(page)}</a>)}</nav> : null}
+            {document && active.kind !== "database" ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
+              <a key={page.id} href={pageHref(page.id)}><ReaderPageIcon page={page} context={context} size={16} />{titleOf(page)}</a>)}</nav> : null}
           </div>
         </article>
+        {mobile && tree && listedCount > 1 ? (
+          <>
+            <div className="public-mobile-pill-wrap">
+              <button
+                type="button"
+                className="public-mobile-pill"
+                aria-label="打开公开页面目录"
+                aria-expanded={navOpen}
+                onClick={() => setNavOpen(true)}
+              >
+                <Menu size={16} aria-hidden="true" />
+                <span>目录 · {document?.title || titleOf(active)}</span>
+              </button>
+            </div>
+            <BottomSheet open={navOpen} label="公开页面" title={document?.title || "公开页面"} size="tall" onClose={() => setNavOpen(false)}>
+              <nav className="public-reader__nav public-reader__nav--sheet" aria-label="公开页面" onClick={() => setNavOpen(false)}>
+                <NavBranch pages={tree.roots} tree={tree} active={active.id} context={context} />
+              </nav>
+            </BottomSheet>
+          </>
+        ) : null}
       </div>}
   </main>;
 }

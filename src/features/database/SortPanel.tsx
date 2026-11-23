@@ -1,4 +1,4 @@
-import { GripVertical, Plus, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, Plus, Trash2, X } from "lucide-react";
 import { useState, type DragEvent, type ReactNode } from "react";
 import { MenuItem, MenuList } from "../../components/Menu";
 import { Select } from "../../components/Select";
@@ -38,6 +38,13 @@ export function SortPanel({
   const unused = columns.filter((column) => !used.has(column.id));
 
   const replace = (index: number, sort: ViewSort) => onChange(sorts.map((item, at) => (at === index ? sort : item)));
+  const move = (from: number, to: number) => {
+    if (from < 0 || to < 0 || to >= sorts.length || from === to) return;
+    const next = [...sorts];
+    const [moving] = next.splice(from, 1);
+    next.splice(to, 0, moving);
+    onChange(next);
+  };
   const over = (event: DragEvent<HTMLElement>, index: number) => {
     if (dragIndex === null) return;
     event.preventDefault();
@@ -91,6 +98,28 @@ export function SortPanel({
                 aria-label={`Sort ${index + 1}: direction`} value={sort.direction}
                 onValueChange={(direction) => replace(index, { ...sort, direction })}
                 options={DIRECTIONS.map((item) => ({ value: item.direction, label: item.label }))} />
+              {sorts.length > 1 ? (
+                <div className="sort-panel__order">
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    aria-label={`Move ${column?.label ?? "sort"} up`}
+                    disabled={index === 0}
+                    onClick={() => move(index, index - 1)}
+                  >
+                    <ArrowUp size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn icon-btn--sm"
+                    aria-label={`Move ${column?.label ?? "sort"} down`}
+                    disabled={index === sorts.length - 1}
+                    onClick={() => move(index, index + 1)}
+                  >
+                    <ArrowDown size={13} />
+                  </button>
+                </div>
+              ) : null}
               <button
                 type="button"
                 className="icon-btn icon-btn--sm sort-panel__remove"

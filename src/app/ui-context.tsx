@@ -8,7 +8,12 @@ import {
   type ReactNode,
 } from "react";
 import { createId } from "../core/ids";
-import { ToastStack, type ToastMessage, type ToastTone } from "../components/Toast";
+import { CornerStack, ToastStack, type ToastMessage, type ToastTone } from "../components/Toast";
+import type { GithubResult } from "../core/github-auth";
+import { SaveRecovery } from "../features/account/SaveRecovery";
+import { SyncIndicator } from "../features/account/SyncIndicator";
+import { useFold } from "../hooks/useFold";
+import { useIsMobileEditing } from "./edit-surface";
 import { useWorkspace } from "./workspace-context";
 
 interface UiContextValue {
@@ -32,19 +37,22 @@ interface UiContextValue {
   /** The admin console page. Full-window, opened from account settings. */
   adminOpen: boolean;
   setAdminOpen(open: boolean): void;
+  /** Whether the page history sheet/panel is open. */
+  historyOpen: boolean;
+  setHistoryOpen(open: boolean): void;
+  /** Account settings dialog state lives at app level so viewport changes across
+   *  the 560px breakpoint do not unmount open settings inside Sidebar. */
+  accountSettingsOpen: boolean;
+  accountSettingsNotice: GithubResult | null;
+  openAccountSettings(notice?: GithubResult | null): void;
+  closeAccountSettings(): void;
 }
 
 const UiContext = createContext<UiContextValue | null>(null);
 
 /** Applies the member's theme choice to the document element, always as a
  *  concrete value: "system" is resolved here against the media query and
- *  re-resolved when the desk changes underneath it.
- *
- *  Resolving in JavaScript rather than leaving the attribute off is what lets
- *  the stylesheet hold exactly ONE dark block. With the attribute absent, dark
- *  has to be written twice — once behind `prefers-color-scheme` for "system"
- *  and once behind `[data-theme="dark"]` for the explicit choice — and two
- *  copies of eighty values is two copies to keep in step. */
+ *  re-resolved when the desk changes underneath it. */
 function useThemeAttribute(theme: string): void {
   useEffect(() => {
     const root = document.documentElement;
@@ -67,10 +75,34 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sharePageId, setSharePageId] = useState<string | null>(null);
   const [peekPageId, setPeekPageId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [accountSettingsNotice, setAccountSettingsNotice] = useState<GithubResult | null>(null);
   // `/admin` is a real URL: deep links and reloads land back on the console.
   const [adminOpen, setAdminOpen] = useState(() => window.location.pathname === "/admin");
+  const mobile = useFold();
+  const mobileEditing = useIsMobileEditing();
 
   useThemeAttribute(preferences.theme);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!mobile) {
+      root.style.removeProperty("--mobile-bottom-offset");
+      return;
+    }
+    if (mobileEditing) {
+      root.style.setProperty("--mobile-bottom-offset", "calc(var(--vv-keyboard, 0px) + 56px)");
+      return;
+    }
+    const overlayActive = drawerOpen || quickFindOpen || Boolean(peekPageId) || historyOpen || Boolean(sharePageId) || adminOpen || accountSettingsOpen;
+    root.style.setProperty(
+      "--mobile-bottom-offset",
+      overlayActive
+        ? "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 16px)"
+        : "calc(max(12px, env(safe-area-inset-bottom, 0px)) + 68px)",
+    );
+  }, [accountSettingsOpen, adminOpen, drawerOpen, historyOpen, mobile, mobileEditing, peekPageId, quickFindOpen, sharePageId]);
 
   const toast = useCallback((message: string, tone: ToastTone = "info") => {
     setToasts((current) => [...current.slice(-2), { id: createId("toast"), message, tone }]);
@@ -84,6 +116,14 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const closeShare = useCallback(() => setSharePageId(null), []);
   const openPeek = useCallback((pageId: string) => setPeekPageId(pageId), []);
   const closePeek = useCallback(() => setPeekPageId(null), []);
+  const openAccountSettings = useCallback((notice: GithubResult | null = null) => {
+    setAccountSettingsNotice(notice);
+    setAccountSettingsOpen(true);
+  }, []);
+  const closeAccountSettings = useCallback(() => {
+    setAccountSettingsOpen(false);
+    setAccountSettingsNotice(null);
+  }, []);
 
   const value = useMemo<UiContextValue>(
     () => ({
@@ -100,14 +140,22 @@ export function UiProvider({ children }: { children: ReactNode }) {
       closePeek,
       adminOpen,
       setAdminOpen,
+      historyOpen,
+      setHistoryOpen,
+      accountSettingsOpen,
+      accountSettingsNotice,
+      openAccountSettings,
+      closeAccountSettings,
     }),
-    [adminOpen, closePeek, closeShare, drawerOpen, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
+    [accountSettingsNotice, accountSettingsOpen, adminOpen, closeAccountSettings, closePeek, closeShare, drawerOpen, historyOpen, openAccountSettings, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
   );
 
   return (
     <UiContext.Provider value={value}>
       {children}
-      <ToastStack toasts={toasts} onDismiss={dismiss} />
+      <CornerStack activity={<><SyncIndicator /><SaveRecovery /></>}>
+        <ToastStack toasts={toasts} onDismiss={dismiss} />
+      </CornerStack>
     </UiContext.Provider>
   );
 }

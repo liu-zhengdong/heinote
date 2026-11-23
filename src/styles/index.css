@@ -4,8 +4,7 @@
    Page controls appear on hover or focus. The concrete data-theme owns dark
    colours; motion tokens govern feedback and panel transitions. */
 
-/* Font stacks come from standalone.css. macOS uses the same system sans
-   and PingFang as Notion; other systems retain the bundled Noto Sans SC. */
+/* Font stacks come from standalone.css, using each OS's built-in sans, serif and CJK faces. */
 :root {
   color-scheme: light dark;
 
@@ -118,6 +117,9 @@
   --shadow-panel: rgba(15, 15, 15, 0.08) -2px 0 12px;
   --shadow-card: rgba(15, 15, 15, 0.1) 0 1px 2px, rgba(15, 15, 15, 0.06) 0 0 0 1px;
   --shadow-card-hover: rgba(15, 15, 15, 0.1) 0 2px 6px, rgba(15, 15, 15, 0.08) 0 0 0 1px;
+  /* Small floating pills (sync indicator, toasts, the draft pill) share the
+     one elevation — this name had gone undefined, leaving them shadowless. */
+  --shadow-menu: var(--shadow-pop);
 
   /* Radii — Notion's: small on anything that sits in the page, a little
      larger on what floats over it. */
@@ -724,35 +726,37 @@ kbd {
 
 /* ── Toasts ───────────────────────────────────────────────────────────── */
 
-.toast-stack {
+/* The corner's one stack: persistent activity pills (syncing, drafts
+   awaiting a decision) keep the bottom position and transient toasts push
+   on top — one container, not three elements fixed to the same point. */
+.corner-stack {
   position: fixed;
-  z-index: 100;
+  z-index: 200;
+  right: 20px;
   bottom: 20px;
-  left: 50%;
   display: flex;
   flex-direction: column-reverse;
+  align-items: flex-end;
   gap: 8px;
-  transform: translateX(-50%);
 }
 
-/* Notion's toast: a short dark line, as wide as its words, centred at the
-   foot of the window — its mark, the words, and a quiet ×. It used to be the
-   icon and the words sharing the width half and half (a rule meant for the
-   words reached the icon's span too), which stranded the icon at one end and
-   broke short words over two lines. */
+/* A toast is a quiet pill, a sibling of the sync indicator that answers
+   from the same corner: paper surface, small ink-3 words, only the mark
+   carrying the tone. */
 .toast {
   display: flex;
   width: max-content;
   max-width: min(420px, calc(100vw - 32px));
+  min-height: 30px;
   align-items: center;
   gap: 8px;
-  padding: 7px 6px 7px 12px;
-  border-radius: var(--r-md);
-  margin-inline: auto;
-  background: #2f2f2f;
-  color: #ffffff;
-  font-size: 13.5px;
-  box-shadow: var(--shadow-pop);
+  padding: 0 6px 0 12px;
+  border-radius: 15px;
+  background: var(--paper);
+  color: var(--ink-3);
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: var(--shadow-menu);
   opacity: 0;
   transform: translateY(8px) scale(0.98);
   transition: opacity var(--t-base) var(--e-out), transform var(--t-base) var(--e-pop);
@@ -774,26 +778,25 @@ kbd {
   display: grid;
   flex: none;
   place-items: center;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--ink-3);
 }
 
 .toast--success .toast__icon {
-  color: #6dd3a8;
+  color: var(--green);
 }
 
 .toast--error .toast__icon {
-  color: #ff8b82;
+  color: var(--danger);
 }
 
 .toast .icon-btn {
-  width: 22px;
-  height: 22px;
-  color: rgba(255, 255, 255, 0.55);
+  width: 18px;
+  height: 18px;
+  color: var(--ink-4);
 }
 
 .toast .icon-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  color: var(--ink);
 }
 
 /* ── Avatars ──────────────────────────────────────────────────────────── */
@@ -881,6 +884,26 @@ kbd {
 .app-shell--railed {
   --pane-left: var(--sidebar-rail);
   grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
+}
+
+.app-shell--mobile {
+  --pane-left: 0px;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100dvh;
+}
+
+.app-shell--mobile .app-main {
+  grid-area: 1 / 1;
+}
+
+.app-shell--mobile .page-surface {
+  padding-top: calc(46px + env(safe-area-inset-top, 0px));
+  scroll-padding-top: calc(54px + env(safe-area-inset-top, 0px));
+  scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+}
+
+.app-shell--mobile :is(.doc, .db) {
+  padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
 }
 
 /* The seam follows the pointer, not an easing curve. */
@@ -1385,6 +1408,11 @@ kbd {
 .tree-branch {
   display: flex;
   flex-direction: column;
+}
+
+.tree-spacer {
+  flex-shrink: 0;
+  pointer-events: none;
 }
 
 .tree-row {
@@ -2194,6 +2222,72 @@ kbd {
   background: var(--paper);
 }
 
+.topbar--mobile {
+  height: auto;
+  min-height: calc(44px + env(safe-area-inset-top, 0px));
+  justify-content: space-between;
+  padding: max(4px, env(safe-area-inset-top, 0px)) 10px 4px 12px;
+}
+
+.topbar--mobile .icon-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.topbar__space-badge {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-2);
+}
+
+.topbar__space-dot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.topbar__space-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__back {
+  display: inline-flex;
+  min-width: 0;
+  min-height: 44px;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 0 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.topbar__back > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar__done {
+  min-height: 36px;
+  padding: 0 10px;
+  color: var(--blue);
+  font-weight: 600;
+}
+
 .topbar__actions .icon-btn > svg,
 .topbar__actions .proposal-entry > svg {
   width: 20px;
@@ -2344,6 +2438,9 @@ kbd {
 .db {
   --read: 16px;
   --lead: 1.5;
+  /* The others' carets on this database's own surface are drawn here
+     (RemoteCarets). */
+  position: relative;
 }
 
 .doc {
@@ -5996,7 +6093,10 @@ pre.block__editable {
    more of it: the far edge fades while columns are past it, and the name
    column draws its edge once columns have gone under it — the table's own
    borders scroll away with them. Both follow the scroll; a table that fits
-   has no scroll timeline, and neither. */
+   has no scroll timeline, and neither. Where the browser has no scroll
+   timelines, the wrap's tableEdges ref (table-edges.ts) writes the same two
+   properties instead; the fade tracks the scroll pixel for pixel, so only
+   the name edge keeps a short transition. */
 @property --table-fade {
   syntax: "<length>";
   inherits: false;
@@ -6012,18 +6112,29 @@ pre.block__editable {
 .db__table-wrap {
   overflow-x: auto;
   mask-image: linear-gradient(to left, transparent, #000 var(--table-fade));
-  animation: table-fade linear both, name-edge linear both;
-  animation-timeline: scroll(self inline);
-  animation-range: calc(100% - 48px) 100%, 0 16px;
+  transition: --name-edge 150ms var(--e-out);
 }
 
-@keyframes table-fade {
-  from { --table-fade: 48px; }
-  to { --table-fade: 0px; }
-}
+@supports (animation-timeline: scroll()) {
+  .db__table-wrap {
+    /* The duration says "auto" out loud, and in its own longhand: written
+       inside the shorthand the minifier expands it to 0s, and a
+       scroll-driven animation with a time duration counts as finished at
+       once — progress pinned at 1, the name edge drawn at scroll zero. */
+    animation: table-fade linear both, name-edge linear both;
+    animation-duration: auto, auto;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - 48px) 100%, 0 16px;
+  }
 
-@keyframes name-edge {
-  to { --name-edge: var(--hairline-strong); }
+  @keyframes table-fade {
+    from { --table-fade: 48px; }
+    to { --table-fade: 0px; }
+  }
+
+  @keyframes name-edge {
+    to { --name-edge: var(--hairline-strong); }
+  }
 }
 
 /* Every column is as wide as its view says — `table-layout: fixed`, the
@@ -6357,6 +6468,85 @@ button.db__th:hover,
   align-items: center;
   gap: 4px;
   margin-left: auto;
+}
+
+/* A row's grip — the ⋮⋮ it is dragged by, quiet until the row (or the card)
+   is pointed at or the grip itself is focused. On a gallery card it is the
+   pencil's left-hand neighbour, floating over the card's corner. */
+.row-grip {
+  display: grid;
+  width: 18px;
+  height: 22px;
+  flex: none;
+  margin-left: -4px;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-4);
+  cursor: grab;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out), background var(--t-tap) var(--e-out);
+}
+
+.row-grip:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.row-grip:active {
+  cursor: grabbing;
+}
+
+.db__table tr:hover .row-grip,
+.db-list__row:hover .row-grip,
+.db-card .row-grip:focus-visible,
+.row-grip:focus-visible,
+.db-list__row:focus-within .row-grip,
+.db__table tr:focus-within .row-grip {
+  opacity: 1;
+}
+
+.db-card > .row-grip {
+  position: absolute;
+  z-index: 2;
+  top: 6px;
+  left: 6px;
+  width: 24px;
+  height: 24px;
+  margin-left: 0;
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+  color: var(--ink-2);
+}
+
+.db-card:hover > .row-grip,
+.db-card:focus-within > .row-grip {
+  opacity: 1;
+}
+
+/* Where a dragged row would land: the same blue line a sort or a status
+   option wears — a row's top or bottom edge, a card's left or right. */
+.db__table tr.is-rdrop-before > td,
+.db-list__row.is-rdrop-before {
+  box-shadow: inset 0 2px 0 var(--blue);
+}
+
+.db__table tr.is-rdrop-after > td,
+.db-list__row.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.db-list__group.is-rdrop-after {
+  box-shadow: inset 0 -2px 0 var(--blue);
+}
+
+.board__card.is-rdrop-before,
+.db-card.is-rdrop-before {
+  box-shadow: inset 2px 0 0 var(--blue), var(--shadow-card);
+}
+
+.board__card.is-rdrop-after,
+.db-card.is-rdrop-after {
+  box-shadow: inset -2px 0 0 var(--blue), var(--shadow-card);
 }
 
 .db__open {
@@ -6796,6 +6986,8 @@ button.db__th:hover,
   display: flex;
   min-width: 0;
   flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
   container: dbv / inline-size;
 }
 
@@ -6912,6 +7104,8 @@ button.db__th:hover,
   min-width: 0;
   flex: 1;
   flex-direction: column;
+  /* The others' carets drawn over this surface count from here. */
+  position: relative;
 }
 
 /* A table wider than the words' column scrolls on into the page's right
@@ -9185,6 +9379,25 @@ button.db__th:hover,
   white-space: nowrap;
 }
 
+/* An event's label sits like a summary but names where it lands. */
+.history-item__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The flash over where a picked edit landed — the person's colour is the
+   accent, as a remote caret's is. */
+.history-flash {
+  animation: history-flash 1.6s var(--e-out);
+}
+
+@keyframes history-flash {
+  0% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  70% { background: var(--blue-tint); box-shadow: inset 3px 0 0 var(--accent, #4f7cff); }
+  100% { background: transparent; box-shadow: inset 0 0 0 transparent; }
+}
+
 /* An older version, or a page you can only read, says so above the title and
    in the flow. It used to float over the head's air on a -44px margin, but the
    head gave that air back (28px, not 78px), and the notice sat on the title.
@@ -9834,6 +10047,112 @@ button.db__th:hover,
   .sidebar__collapse {
     display: none;
   }
+
+  .trash-banner {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-block: 8px;
+  }
+
+  .trash-banner .btn {
+    min-height: 44px;
+  }
+
+  .db__name {
+    max-width: min(52cqi, 180px);
+  }
+
+  .db__tool {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .cond {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .cond__lead {
+    width: auto;
+    min-width: 36px;
+    text-align: left;
+  }
+
+  .filter-panel__field--op {
+    width: auto;
+    flex: 1 1 110px;
+  }
+
+  .filter-panel__input {
+    flex: 1 1 120px;
+    width: auto;
+    min-height: 36px;
+  }
+
+  .group-box {
+    margin-left: 12px;
+  }
+
+  .filter-panel__add-in {
+    margin-left: 12px;
+  }
+
+  .sort-panel__order {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .stbl__scroll {
+    margin-inline: 0;
+    padding-inline: 4px;
+    max-inline-size: 100%;
+  }
+
+  .mermaid {
+    overflow-x: auto;
+    max-inline-size: 100%;
+  }
+
+  .block__code {
+    min-width: 0;
+    max-inline-size: 100%;
+  }
+
+  .side-peek--sheet .side-peek__scroll {
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .side-peek--sheet :is(.doc, .db) {
+    padding-inline: 18px;
+    padding-top: 12px;
+    padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .side-peek__head--mobile {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 46px;
+    padding: 0 10px 6px 12px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .side-peek__head--mobile .icon-btn {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  .side-peek__head-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 2px;
+  }
 }
 
 /* A window this short is four fixed bands and a sliver of page, so it is the
@@ -10091,4 +10410,74 @@ button.db__th:hover,
 .dbv--readonly .db__add-property,
 .dbv--readonly .view-tab--add {
   display: none;
+}
+
+/* A non-document checkpoint's preview: the page's definition, drawn in the
+   page's own column like `.doc`, so restoring a library or an app reads as
+   what it restores — structure, not a body that was never in the snapshot. */
+.snapshot-doc {
+  padding-top: 32px;
+}
+.snapshot-icon {
+  margin: 0 0 4px -2px;
+  color: var(--ink-2);
+}
+.snapshot-title {
+  margin-bottom: 24px;
+}
+.snapshot-section {
+  margin: 0 0 20px;
+}
+.snapshot-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.snapshot-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 14px;
+}
+.snapshot-item__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.snapshot-item__meta {
+  color: var(--ink-4);
+  font-size: 12px;
+}
+.snapshot-item--empty {
+  color: var(--ink-4);
+  font-style: normal;
+}
+.snapshot-note {
+  margin: 24px 0 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--accent);
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
 }

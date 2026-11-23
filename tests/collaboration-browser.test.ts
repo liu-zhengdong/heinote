@@ -1,5 +1,5 @@
 import { test as base, expect, type Browser, type BrowserContext, type Locator, type Page, type Route, type WebSocketRoute } from "@playwright/test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -259,6 +259,18 @@ async function downloadDraft(page: Page, contains: string): Promise<void> {
   const path = await download.path(); expect(path).not.toBeNull();
   const raw = await readFile(path!, "utf8"); expect(() => JSON.parse(raw)).not.toThrow(); expect(raw).toContain(contains);
 }
+async function createDatabaseIn(pair: Pair, title: string): Promise<Json> {
+  const created = await api(pair.ownerContext, pair.url, "/api/v1/databases", {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), spaceId: pair.scope, title, database: { title_name: "名称", properties: [], views: [{ id: "table", name: "全部", kind: "table" }] } },
+  });
+  const read = await api(pair.ownerContext, pair.url, `/api/v1/databases/${created.id}`, { token: pair.token });
+  return { id: created.id, revision: read.revision };
+}
+async function openPage(pair: Pair, page: Page, pageId: string): Promise<void> {
+  await page.goto(`${pair.url}/?page=${pageId}`);
+  await expect(page.locator(`article[data-page-id="${pageId}"]`)).toBeVisible();
+}
 function countTextRequests(page: Page, pair: Pair): Json[] {
   const requests: Json[] = [];
   page.on("request", (request) => {
@@ -466,6 +478,23 @@ test("a real restore during native composition keeps the old DOM out of the new 
   await expect(body(pair)).toHaveText("恢复目标"); await expect(body(pair, pair.peer)).toHaveText("恢复目标");
   expect((await current(pair)).generation).not.toBe(baseline.generation);
   await cdp.detach(); await openEditor(pair, pair.owner, "恢复目标");
+});
+
+test("the first edit after a peer's restore lands and keeps the restored words", async ({ app }) => {
+  const pair = await app.pair("协作测试页");
+  const version = await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/checkpoint`, { method: "POST", token: pair.token, data: { summary: "回归版本" } });
+  await focusEdge(title(pair), "end"); await pair.owner.keyboard.insertText("甲");
+  await expect.poll(async () => (await dto(pair)).title).toBe("协作测试页甲");
+  const baseline = await current(pair); const frame = pair.ownerWire.received.length;
+  await api(pair.peerContext, pair.url, `/api/v1/pages/${pair.pageId}/restore`, { method: "POST", token: pair.peerToken, data: { versionId: version.id } });
+  await pair.ownerWire.sawReset(pair.pageId, baseline.generation, frame);
+  /* Whichever side of the resync this keystroke lands on, the intent must
+     survive: a stale binding may not eat the input, and a stale-DOM commit
+     may not replay the pre-restore words over the restored ones. */
+  await focusEdge(title(pair), "end"); await pair.owner.keyboard.insertText("乙");
+  await expect.poll(async () => (await dto(pair)).title).toBe("协作测试页乙");
+  await expect(title(pair)).toHaveText("协作测试页乙"); await expect(title(pair, pair.peer)).toHaveText("协作测试页乙");
+  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
 });
 
 test("native Enter and Backspace retain structural undo and redo for split and merge", async ({ app }) => {
@@ -679,4 +708,130 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   expect(after.generation).toBe(before.generation); expect(after.revision).toBe(before.revision); expect(after.state).toBe(before.state);
   await persisted(pair, "abc\nPEERDEF");
   await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]); await expect(paragraphs(pair, pair.peer)).toHaveText(["abc", "PEERDEF"]);
+});
+
+/* A collaborator's caret is drawn over a database the way it is over a
+   document's blocks: on the database's own name as it's typed, and on a
+   row's name — the field while it is being renamed, the name as it's drawn
+   at rest — wherever the peer is working. */
+test("a peer typing in a shared database's name and a row's name draws a caret for the owner", async ({ app }) => {
+  const pair = await app.pair();
+  const evidence = resolve(".evidence/collaboration-database");
+  await mkdir(evidence, { recursive: true });
+  const database = await createDatabaseIn(pair, "协作清单");
+  const row = await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const rowId = row.page.id;
+  await Promise.all([openPage(pair, pair.owner, database.id), openPage(pair, pair.peer, database.id)]);
+  const caret = (page: Page) => page.locator(`article[data-page-id="${database.id}"] .remote-caret`);
+
+  /* The peer types the database's own name; the owner sees their caret on
+     the same name (the `.title-field` carrying the database's id). */
+  const name = (page: Page) => page.locator(`article[data-page-id="${database.id}"] .doc__title.title-field[data-block-id="${database.id}"]`);
+  await name(pair.peer).click();
+  await pair.peer.keyboard.insertText("乙改");
+  const ownerName = name(pair.owner);
+  await expect(ownerName).toHaveText("协作清单乙改");
+  const fieldBox = await ownerName.boundingBox();
+  await expect(caret(pair.owner)).toBeVisible({ timeout: 15000 });
+  const caretBox = await caret(pair.owner).boundingBox();
+  expect(caretBox!.x, "The caret sits inside the name's field").toBeGreaterThanOrEqual(fieldBox!.x);
+  expect(caretBox!.x).toBeLessThanOrEqual(fieldBox!.x + fieldBox!.width);
+  expect(caretBox!.y).toBeGreaterThanOrEqual(fieldBox!.y - 4);
+  expect(caretBox!.y).toBeLessThanOrEqual(fieldBox!.y + fieldBox!.height + 4);
+  await name(pair.peer).blur();
+
+  /* The peer renames a row; whether or not the name is open in the owner's
+     window, the caret lands on the name as it's drawn. */
+  const rowName = (page: Page) => page.locator(`article[data-page-id="${database.id}"] tr[data-page-id="${rowId}"] .db__row-title`);
+  await rowName(pair.peer).click();
+  await expect(rowName(pair.peer)).toHaveClass(/title-field/);
+  await pair.peer.keyboard.insertText("中");
+  await expect(rowName(pair.owner)).toHaveText("待办事项中");
+  /* Presence is polled: the previous caret (on the database's name) is
+     still drawn until the next look says the peer moved onto the row. */
+  await expect.poll(async () => {
+    const c = await caret(pair.owner).boundingBox();
+    const n = await rowName(pair.owner).boundingBox();
+    return Boolean(c && n && c.x >= n.x && c.x <= n.x + n.width && c.y >= n.y - 4 && c.y <= n.y + n.height + 4);
+  }, { timeout: 15000, message: "The peer's caret lands on the row's name" }).toBe(true);
+  await pair.owner.screenshot({ path: join(evidence, "remote-caret-database.png") });
+});
+
+test("a peer's edit lands on the page timeline and locating it flashes where it landed", async ({ app }) => {
+  const pair = await app.pair("定位基线");
+  await typeAt(pair, pair.peer, "协作者写的字");
+  await persisted(pair, "定位基线协作者写的字");
+  // The event must commit before the owner opens the panel.
+  await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/events`)).length).toBeGreaterThan(0);
+
+  await pair.owner.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await expect(panel).toBeVisible();
+  const event = panel.getByRole("button", { name: /peer/ });
+  await expect(event).toBeVisible();
+  await expect(event).toContainText("编辑了正文");
+  // Locating it flashes the block it touched, on the live page.
+  await event.click();
+  await expect(pair.owner.locator(`[data-block-id="${pair.blockId}"].history-flash`)).toBeVisible();
+});
+
+test("a database page's checkpoint previews its definition, not an empty document", async ({ app }) => {
+  const pair = await app.pair();
+  const database = await createDatabaseIn(pair, "协作清单");
+  await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const version = await api(pair.ownerContext, pair.url, `/api/v1/pages/${database.id}/checkpoint`, { method: "POST", token: pair.token, data: { summary: "结构调整前" } });
+  expect(version.summary).toBe("结构调整前");
+  await openPage(pair, pair.owner, database.id);
+  // A checkpoint matching the current content is the current version, not a
+  // row of its own — rename once so the checkpoint stands in the past.
+  await pair.owner.locator(`article[data-page-id="${database.id}"] .doc__title.title-field`).click();
+  await pair.owner.keyboard.insertText("改名");
+  await expect.poll(async () => (await api(pair.ownerContext, pair.url, `/api/v1/pages/${database.id}`, { token: pair.token })).title).toContain("改名");
+  await pair.owner.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await panel.getByRole("option", { name: /结构调整前/ }).click();
+  // The snapshot surface names the stored definition — its views at least —
+  // and says rows are out of the restore's reach. It must not render the
+  // blank DocumentEditor an old preview produced.
+  const preview = pair.owner.getByLabel("Version preview");
+  await expect(preview).toBeVisible();
+  await expect(preview).toContainText("协作清单");
+  await expect(preview).toContainText("全部");
+  await expect(pair.owner.locator(".snapshot-note")).toContainText("行数据");
+});
+
+test("a row's side peek offers Page history, which opens the row as a page with its own timeline", async ({ app }) => {
+  const pair = await app.pair();
+  const database = await createDatabaseIn(pair, "协作清单");
+  const row = await api(pair.ownerContext, pair.url, `/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: pair.token, status: 201,
+    data: { requestId: randomUUID(), baseRevision: database.revision, title: "待办事项" },
+  });
+  const rowId = row.page.id as string;
+  const rowPage = await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}`, { token: pair.token });
+  await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}/operations`, {
+    method: "POST", token: pair.token,
+    data: { requestId: randomUUID(), generation: rowPage.collaboration.generation, baseRevision: rowPage.collaboration.revision, operations: [{ type: "insert_blocks", markdown: "行里的正文" }] },
+  });
+  await openPage(pair, pair.owner, database.id);
+  const rowTr = pair.owner.locator(`tr[data-page-id="${rowId}"]`);
+  await rowTr.hover();
+  await rowTr.locator(".db__open").click();
+  const peek = pair.owner.locator("aside.side-peek");
+  await peek.getByRole("button", { name: "More page actions" }).click();
+  await pair.owner.getByRole("menuitem", { name: "Page history" }).click();
+  // History belongs to the row as a page: it selects, the peek leaves, and
+  // the panel shows what happened to the row itself.
+  const panel = pair.owner.getByRole("complementary", { name: "Page history" });
+  await expect(panel).toBeVisible();
+  await expect(pair.owner.locator(`article[data-page-id="${rowId}"]`)).toBeVisible();
+  await expect(panel.locator(".history-item", { hasText: "新增了段落" })).toBeVisible();
 });

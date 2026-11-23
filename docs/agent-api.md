@@ -2,6 +2,8 @@
 
 Agent 使用 Bearer 令牌访问同源 HTTP 服务。令牌由用户在账号面板创建。Agent 路径以 `/api/v1` 开头。浏览器审核路径在提案一节另列。
 
+本文档、接入技能与站点导览在部署站点上公开托管：`GET /llms.txt`、`GET /api/v1/skill.md`、`GET /api/v1/agent-api.md`，均免鉴权。Agent 拿到站点 URL 即可自取接入材料，再经下方「授权请求」拿令牌。
+
 令牌携带一个 Agent 身份：显示名与头像。写操作以此身份署名版本、提案与变更记录。用户在设置中按令牌查看最近写操作；撤销令牌清除操作记录但保留已产生的署名。
 
 ## 认证
@@ -21,6 +23,8 @@ Authorization: Bearer notes_...
 | GET | `/pages` | 列出账号可见的未归档页面 |
 | POST | `/pages` | 创建文档或应用页面 |
 | GET | `/pages/:id` | 读取正文、块树及修订值 |
+| GET | `/pages/:id/markdown` | 读取正文的 Markdown 投影 |
+| POST | `/pages/:id/copy` | 把页面及其子树拷贝到个人空间或指定空间 |
 | PATCH | `/pages/:id` | 修改标题或替换纯文本正文；应用页面改 `app` 字段 |
 | POST | `/pages/:id/enable` | 启用应用页面的草稿源码 |
 | POST | `/pages/:id/operations` | 幂等结构化修改或创建提案 |
@@ -91,6 +95,8 @@ Authorization: Bearer notes_...
 
 示例省略了页面的其他字段。`page.block_tree` 返回实际编辑器数据。`text` 是按顺序提取的纯文本，不能表达所有块类型。
 
+`GET /pages/:id/markdown` 返回 `{"id","title","revision","scope","markdown"}`，其中 `markdown` 是正文按复制与导出相同规则序列化的结果：标题、列表、todo、引用、代码块、表格、分割线展开为 Markdown 结构，行内标记保留。页面提及写为页面标题，附件写为可下载链接（`/api/v1/files/<scope>?path=…`，需要同一令牌访问）。这是可读投影，不保留块 ID、提及身份或不可序列化的结构（如 linked view 的视图固定）；写回请使用 `PATCH` 的 `markdown` 或 `insert_blocks`。仅文档页面可用，应用与数据库页面返回 400。
+
 更新输入：
 
 ```json
@@ -104,6 +110,17 @@ Authorization: Bearer notes_...
 `title`、`text` 和 `markdown` 均可省略。提供 `text` 会替换整页块树，保存为一个纯文本块。该操作不会保留原正文的富文本、表格或嵌入结构。提供 `markdown` 同样整体替换，但按 Markdown 规则重建块树；两者互斥。只改标题时，应省略 `text` 和 `markdown`。
 
 服务器在修改前保存检查点。旧修订值返回 409。Agent 应重新读取页面，再决定如何处理冲突。
+
+### 跨空间拷贝
+
+```json
+POST /api/v1/pages/:id/copy
+{ "requestId": "uuid", "spaceId": "目标空间", "parentId": "目标内的父页面" }
+```
+
+`POST /pages/:id/copy` 把页面连同整个子树复制到目标空间：`spaceId` 省略时拷贝到个人空间；提供空间 id 时，文档空间落在顶层（成为该空间的共享根页），知识库落在其首页下。`parentId` 把拷贝放到目标空间内某个文档页面下；父页面不属于目标空间返回 400。页面与子树获得新 id，正文里指向被拷贝页面的链接改指拷贝，指向子树外的链接保持原样。附件字节重新存储到目标空间的文件索引，拷贝不依赖源空间。应用页面的数据库绑定不随拷贝迁移。返回 `201` 和新页面对象；同一 `requestId` 重试返回已保存的结果。
+
+拷贝是页面进出团队知识库的唯一途径——页面不能直接移动或创建到知识库边界之外。
 
 ### 应用页面
 

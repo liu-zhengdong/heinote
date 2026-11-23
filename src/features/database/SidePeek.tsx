@@ -1,22 +1,28 @@
-import { ChevronsRight, Maximize2 } from "lucide-react";
+import { ChevronsDown, ChevronsRight, ChevronsUp, Maximize2, Redo2, Undo2, X } from "lucide-react";
 import {
+  Suspense,
+  lazy,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useActiveEditSurface } from "../../app/edit-surface";
+import { BottomSheet } from "../../components/BottomSheet";
+import { useLayer } from "../../components/layer-stack";
 import { Tooltip } from "../../components/Tooltip";
+import { useFold } from "../../hooks/useFold";
 import { useMountTransition } from "../../hooks/useMountTransition";
 import { pageName } from "../../core/block-tree";
 import type { NotePage } from "../../core/types";
-import { imeComposing } from "../../core/keyboard";
 import { useWorkspace, type PagePatch } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { DocumentEditor } from "../editor/DocumentEditor";
-import { AppPage } from "../artifact/AppPage";
 import { PageActions } from "../topbar/PageActions";
-import { DatabaseSheet } from "./DatabasePage";
+
+const AppPage = lazy(() => import("../artifact/AppPage").then((module) => ({ default: module.AppPage })));
+const DatabaseSheet = lazy(() => import("./DatabasePage").then((module) => ({ default: module.DatabaseSheet })));
 import { PropertyEditor, PropertyIcon } from "./properties";
 import { propertyName, rowValues } from "./database-model";
 import { relationPeerMutations } from "./relation";
@@ -146,19 +152,25 @@ export function SidePeek({
   width,
   pane,
   onResize,
+  onHistory,
 }: {
   docked: boolean;
   width: number;
   pane: number;
   onResize(width: number): void;
+  /** The peeked page's history: the caller decides where it opens — it
+   *  belongs to a row of the page the peek sits on, not that page. */
+  onHistory?(): void;
 }) {
   const { canEdit, selectPage, loadPages } = useWorkspace();
   const { peekPageId, closePeek } = useUi();
+  const mobile = useFold();
+  const activeSurface = useActiveEditSurface();
   const page = usePage(peekPageId);
   // The peeked page's body is pulled in as it opens (UC-48).
   useEffect(() => { if (peekPageId) loadPages([peekPageId]); }, [loadPages, peekPageId]);
   const open = Boolean(page && !page.archived);
-  const { mounted, shown } = useMountTransition(open, PEEK_EXIT_MS);
+  const { mounted, shown } = useMountTransition(open && !mobile, PEEK_EXIT_MS);
   const panelRef = useRef<HTMLElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -175,14 +187,14 @@ export function SidePeek({
      whatever had it — the row that was pressed. Another row pressed while it
      is open keeps the first place to go back to. */
   useEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     return () => {
       returnFocus.current?.focus({ preventScroll: true });
     };
-  }, [open]);
+  }, [mobile, open]);
   useLayoutEffect(() => {
-    if (!open) return;
+    if (!open || mobile) return;
     // Each page opens at its top.
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     const panel = panelRef.current;
@@ -192,23 +204,9 @@ export function SidePeek({
       if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [open, peekPageId]);
+  }, [mobile, open, peekPageId]);
 
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      // The Escape that cancels a composition is the input method's.
-      if (event.key !== "Escape" || event.defaultPrevented || imeComposing(event)) return;
-      // Escape is spent one layer at a time, as in Notion: a menu open inside
-      // the page closes first, and Escape while typing selects the block (the
-      // editor claims that one). The next Escape closes the peek — the block
-      // selection goes with it.
-      if (document.querySelector(".pop.is-shown")) return;
-      closePeek();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closePeek, open]);
+  useLayer(open && !mobile, closePeek, { phase: "bubble" });
 
   /* The seam follows the pointer, written straight to the shell's variable,
      and commits the width on release — as the list's seam does. */
@@ -234,8 +232,114 @@ export function SidePeek({
   };
 
   const drawn = open && page ? page : lastPage;
+  const title = drawn ? pageName(drawn) : "";
+
+  const peekBody = drawn ? (
+    drawn.kind === "database" ? (
+      <Suspense fallback={null}><DatabaseSheet database={drawn} surfaceContainer={mobile ? "peek" : "main"} /></Suspense>
+    ) : drawn.kind === "app" ? (
+      <Suspense fallback={null}><AppPage page={drawn} /></Suspense>
+    ) : drawn.block_tree === undefined ? (
+      <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>
+    ) : (
+      <DocumentEditor
+        key="page"
+        page={drawn}
+        readOnly={!canEdit(drawn.id)}
+        properties={<PageProperties page={drawn} />}
+        surfaceContainer={mobile ? "peek" : "main"}
+      />
+    )
+  ) : null;
+
+  if (mobile) {
+    if (!drawn) return null;
+    const editingPeek = activeSurface?.container === "peek";
+    return (
+      <BottomSheet
+        open={open}
+        label={title || "详情"}
+        size="staged"
+        escapePhase="bubble"
+        className="side-peek--sheet"
+        onClose={closePeek}
+        header={({ expanded, toggleExpanded }) => (
+          <header className="side-peek__head side-peek__head--mobile">
+            {editingPeek ? (
+              <>
+                <button
+                  type="button"
+                  className="btn topbar__done"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => activeSurface.done()}
+                >
+                  完成
+                </button>
+                <div className="side-peek__head-actions">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="Undo"
+                    disabled={!activeSurface.canUndo}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => activeSurface.undo?.()}
+                  >
+                    <Undo2 size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    aria-label="Redo"
+                    disabled={!activeSurface.canRedo}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => activeSurface.redo?.()}
+                  >
+                    <Redo2 size={16} />
+                  </button>
+                  <PageActions page={drawn} compact link onHistory={onHistory} />
+                </div>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label={expanded ? "恢复半屏" : "展开全屏"}
+                  onClick={toggleExpanded}
+                >
+                  {expanded ? <ChevronsDown size={17} /> : <ChevronsUp size={17} />}
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Open as full page"
+                  onClick={() => {
+                    selectPage(drawn.id);
+                    closePeek();
+                  }}
+                >
+                  <Maximize2 size={15} />
+                </button>
+                <span className="side-peek__spacer" />
+                <div className="side-peek__head-actions">
+                  <PageActions page={drawn} compact link onHistory={onHistory} />
+                  <button type="button" className="icon-btn" aria-label="Close side peek" onClick={closePeek}>
+                    <X size={17} />
+                  </button>
+                </div>
+              </>
+            )}
+          </header>
+        )}
+      >
+        <div ref={scrollRef} className="side-peek__scroll scroller">
+          {peekBody}
+        </div>
+      </BottomSheet>
+    );
+  }
+
   if (!mounted || !drawn) return null;
-  const title = pageName(drawn);
 
   return (
     <>
@@ -279,19 +383,11 @@ export function SidePeek({
             </button>
           </Tooltip>
           <span className="side-peek__spacer" />
-          <PageActions page={drawn} compact={width < COMPACT_BELOW} link />
+          <PageActions page={drawn} compact={width < COMPACT_BELOW} link onHistory={onHistory} />
         </header>
         <div ref={scrollRef} className="side-peek__scroll scroller">
           {/* A database is its views, an app its surface — never a page's words. */}
-          {drawn.kind === "database" ? (
-            <DatabaseSheet database={drawn} />
-          ) : drawn.kind === "app" ? (
-            <AppPage page={drawn} />
-          ) : drawn.block_tree === undefined ? (
-            <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>
-          ) : (
-            <DocumentEditor key="page" page={drawn} readOnly={!canEdit(drawn.id)} properties={<PageProperties page={drawn} />} />
-          )}
+          {peekBody}
         </div>
       </aside>
     </>

@@ -70,7 +70,10 @@ export function hasMetadataChange(collection: string, before: JsonRecord | undef
   if (collection !== "pages" && collection !== "blocks") return false;
   if (!before || !after) return true;
   const strip = (record: JsonRecord): JsonRecord => {
-    const copy = { ...record }; delete copy.content; delete copy.title_content; delete copy.title; delete copy.updated_at; delete copy.updated_by;
+    /* Edit stamps move with every keystroke; treating them as metadata
+     *  would mark every plain write "mixed" and leave a record step behind
+     *  the text step — undoing either half then replays the other's words. */
+    const copy = { ...record }; delete copy.content; delete copy.title_content; delete copy.title; delete copy.updated_at; delete copy.updated_by; delete copy.edited_at; delete copy.edited_by;
     if (isObject(copy.table) && isObject(copy.table.rows)) copy.table = { ...copy.table, rows: Object.fromEntries(Object.entries(copy.table.rows).map(([id, row]) => { if (!isObject(row)) return [id, row]; const { cells: _cells, ...metadata } = row; return [id, metadata]; })) };
     return copy;
   };
@@ -89,7 +92,14 @@ export function pageRevision(page: JsonRecord | undefined, blocks: Array<{ id: s
     return Object.fromEntries(Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => [key, normalize(value[key])]));
   };
   const { updated_at: _at, updated_by: _by, ...content } = page ?? {};
-  const bytes = new TextEncoder().encode(JSON.stringify(normalize([content, [...blocks].sort((a, b) => a.id.localeCompare(b.id))])));
+  // edited_at/edited_by are provenance stamps the server adds on top of a
+  // committed edit, not page content: the revision must match the content
+  // the collaborating client hashes.
+  const unsigned = (block: { id: string; value: JsonRecord }) => {
+    const { edited_at: _bAt, edited_by: _bBy, ...value } = block.value;
+    return { id: block.id, value };
+  };
+  const bytes = new TextEncoder().encode(JSON.stringify(normalize([content, blocks.map(unsigned).sort((a, b) => a.id.localeCompare(b.id))])));
   return Array.from(digest(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 export function bytesToBase64(bytes: Uint8Array): string {

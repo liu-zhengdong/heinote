@@ -3,6 +3,7 @@ import {
   Copy,
   CornerDownRight,
   CornerUpLeft,
+  FileDown,
   FolderInput,
   Link,
   MoreHorizontal,
@@ -13,11 +14,12 @@ import {
   Undo2,
   UserPlus,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { useFold } from "../../hooks/useFold";
 import { imeComposing } from "../../core/keyboard";
 import type { NotePage } from "../../core/types";
 import { lineLink, pageName } from "../../core/block-tree";
@@ -28,6 +30,8 @@ import { MoveToMenu } from "../editor/MoveToMenu";
 import { PAGE_FONTS, pageFont } from "../editor/page-decoration";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { sameItems, usePage, useWorkspaceState } from "../../app/workspace-store";
+
+const ExportDialog = lazy(() => import("../export/ExportDialog").then((module) => ({ default: module.ExportDialog })));
 
 /* What a page's bar offers for the page it names: Share, the star, and the
    ··· menu — the same wherever the page is shown, full-page or in the side
@@ -61,6 +65,7 @@ export function PageActions({
     selectPage,
     archivePage,
     duplicatePage,
+    copyPageTo,
     movePage,
     updatePage,
     undo,
@@ -74,13 +79,29 @@ export function PageActions({
     canTrashPage,
     spaces,
     spaceOf,
+    ensureAllSpaces,
   } = useWorkspace();
   const { toast, sharePageId, requestShare, closeShare, closePeek } = useUi();
+  const mobile = useFold();
   const [moreAnchor, setMoreAnchor] = useState<AnchorRect | null>(null);
   const [moveAnchor, setMoveAnchor] = useState<AnchorRect | null>(null);
+  const [copyAnchor, setCopyAnchor] = useState<AnchorRect | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  useEffect(() => {
+    if (copyAnchor) void ensureAllSpaces();
+  }, [copyAnchor, ensureAllSpaces]);
   // Where the page may go, read only while the picker is open.
   const moveTargets = useWorkspaceState(
     (state) => (moveAnchor ? Object.values(state.pages).filter((candidate) => canMovePage(page.id, candidate.id)) : null),
+    (left, right) => (left && right ? sameItems(left, right) : left === right),
+  );
+  // Where a copy may land: a document page the member can write to, in this
+  // space or another (knowledge bases take it under their home).
+  const copyTargets = useWorkspaceState(
+    (state) => (copyAnchor
+      ? Object.values(state.pages).filter((candidate) =>
+          candidate.id !== page.id && candidate.kind === "document" && !candidate.archived && canEdit(candidate.id))
+      : null),
     (left, right) => (left && right ? sameItems(left, right) : left === right),
   );
   const moreRef = useRef<HTMLButtonElement | null>(null);
@@ -148,7 +169,7 @@ export function PageActions({
 
   return (
     <>
-      {compact ? (
+      {mobile ? null : compact ? (
         <Tooltip label={shareLabel}>
           <button
             type="button"
@@ -170,7 +191,7 @@ export function PageActions({
           {shareLabel}
         </button>
       )}
-      {link ? (
+      {link && !mobile ? (
         <Tooltip label="Copy link">
           <button type="button" className="icon-btn" aria-label="Copy link" onClick={copyLink}>
             <Link size={16} />
@@ -205,9 +226,16 @@ export function PageActions({
         anchor={moreAnchor}
         placement="bottom-end"
         label="Page actions"
+        mobileSheet={{ title: pageName(page) || "页面操作" }}
         onDismiss={() => setMoreAnchor(null)}
       >
         <MenuList label="Page actions" className="menu--page" autoFocus>
+          {mobile ? (
+            <>
+              <MenuItem icon={<UserPlus size={16} />} label={shareLabel} onSelect={() => { setMoreAnchor(null); toggleShare(); }} />
+              <MenuDivider />
+            </>
+          ) : null}
           {/* Notion opens this menu on the page's font. A pick leaves the
               menu open, so the page can be seen changing behind it. */}
           {editable && page.kind === "document" ? (
@@ -240,21 +268,14 @@ export function PageActions({
           {editable ? (
             <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={isLibraryHome} onSelect={() => { if (!isLibraryHome) { setMoreAnchor(null); duplicatePage(page.id); } }} />
           ) : null}
-          {/* The only way a knowledge-base page can leave the space: a
-              private copy in the member's own space, free to share. Also
-              shown on pages inside someone else's shared tree. */}
-          {!library && spaceId ? (
-            <MenuItem
-              icon={<FolderInput size={16} />}
-              label="拷贝到个人空间"
-              onSelect={() => {
-                setMoreAnchor(null);
-                const copyId = duplicatePage(page.id, { toPersonal: true });
-                if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
-                else toast("无法拷贝此页面", "error");
-              }}
-            />
-          ) : null}
+          {/* The only way a page leaves a shared space or a knowledge base:
+              a copy the server makes there (fresh ids, attachments re-stored
+              under the destination). */}
+          <MenuItem
+            icon={<FolderInput size={16} />}
+            label="拷贝到…"
+            onSelect={() => { setCopyAnchor(moreAnchor); setMoreAnchor(null); }}
+          />
           {movable ? (
             <MenuItem
               icon={<CornerDownRight size={16} />}
@@ -274,6 +295,9 @@ export function PageActions({
           ) : null}
           {onHistory ? (
             <MenuItem icon={<Clock3 size={16} />} label="Page history" onSelect={() => { setMoreAnchor(null); onHistory(); }} />
+          ) : null}
+          {page.kind !== "app" ? (
+            <MenuItem icon={<FileDown size={16} />} label="导出…" onSelect={() => { setMoreAnchor(null); setExportOpen(true); }} />
           ) : null}
           <MenuDivider />
           {/* Where Notion keeps Undo too: in the page's own menu, with the
@@ -309,6 +333,35 @@ export function PageActions({
           onClose={() => setMoveAnchor(null)}
         />
       ) : null}
+
+      {/* "Copy to…": the same picker, but choosing lands a copy of this page
+          and its subtree under the chosen page — or at Files' top. */}
+      {copyAnchor ? (
+        <MoveToMenu
+          anchor={copyAnchor}
+          pages={copyTargets ?? []}
+          count={1}
+          label="拷贝到…"
+          placeholder="拷贝到…"
+          onMove={(targetId) => {
+            setCopyAnchor(null);
+            void copyPageTo(page.id, targetId).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onMoveToTop={() => {
+            setCopyAnchor(null);
+            void copyPageTo(page.id, null).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onClose={() => setCopyAnchor(null)}
+        />
+      ) : null}
+
+      {exportOpen ? <Suspense fallback={null}><ExportDialog page={page} onClose={() => setExportOpen(false)} /></Suspense> : null}
     </>
   );
 }

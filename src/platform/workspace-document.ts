@@ -4,6 +4,7 @@ import { storedRuns } from "../core/stored-runs";
 import type { SpaceSummary, WorkspaceMutation, WorkspaceState } from "../core/types";
 import type { PlatformClient } from "./client";
 import { Plane } from "./plane";
+import { deleteScopeMirror, setMirrorUser } from "./mirror";
 import { blockRecordId } from "./record-ids";
 import { restoreSavedWrites, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
@@ -106,6 +107,9 @@ export class WorkspaceDocument {
   private refusals = 0;
   /** Monotonic dependency barrier; handling drafts must not reset it. */
   private refusalVersion = 0;
+  /** Knowledge base space ids known from membership metadata (opened lazily on switch). */
+  private readonly knowledgeBaseIds = new Set<string>();
+  private activeSpaceId = PERSONAL;
   /** Viewer spaces and archived knowledge bases receive no content writes. */
   private readonly readOnly = new Set<string>();
   private loading = true;
@@ -131,11 +135,29 @@ export class WorkspaceDocument {
     }
   }
 
-  static async open(platform: PlatformClient, known?: readonly SpaceSummary[]): Promise<WorkspaceDocument> {
+  static async open(
+    platform: PlatformClient,
+    known?: readonly SpaceSummary[],
+    options: { activeSpaceId?: string; seedPageId?: string } = {},
+  ): Promise<WorkspaceDocument> {
+    setMirrorUser(platform.bootstrap.user.id);
     const document = new WorkspaceDocument(platform);
     const spaceIds = await document.discoverSpaces(known);
-    await document.watch(PERSONAL);
-    await Promise.all(spaceIds.map((spaceId) => document.watchSpace(spaceId)));
+    const initialSpace = options.activeSpaceId && document.knowledgeBaseIds.has(options.activeSpaceId)
+      ? options.activeSpaceId
+      : PERSONAL;
+    document.activeSpaceId = initialSpace;
+    if (initialSpace === PERSONAL) {
+      await document.watch(PERSONAL, undefined, { seedPageId: options.seedPageId });
+      // Ordinary non-KB shared spaces load alongside without holding back first-page open.
+      const ordinary = spaceIds.filter((id) => !document.knowledgeBaseIds.has(id));
+      if (ordinary.length) void Promise.all(ordinary.map((spaceId) => document.watchSpace(spaceId)));
+    } else {
+      await Promise.all([
+        document.watch(PERSONAL, undefined, { collections: ["workspace_settings"] }),
+        document.watchSpace(initialSpace, { seedPageId: options.seedPageId }),
+      ]);
+    }
     await restoreSavedWrites();
     document.loading = false;
     document.reproject(false);
@@ -153,19 +175,25 @@ export class WorkspaceDocument {
     return [...this.desired];
   }
 
-  /** Keep membership and content write permission without changing member roles. */
+  /** Keep membership, KB classification, and write permission without changing member roles. */
   private updateSpaces(list: readonly SpaceSummary[]): void {
     this.desired.clear();
     this.readOnly.clear();
+    this.knowledgeBaseIds.clear();
     for (const space of list) {
       if (!space.spaceId) continue;
       this.desired.add(space.spaceId);
+      if (space.knowledgeBase) this.knowledgeBaseIds.add(space.spaceId);
       if (space.role === "viewer" || space.knowledgeBase?.archived) this.readOnly.add(space.spaceId);
     }
   }
 
-  private async watch(key: string, token?: symbol): Promise<void> {
-    const plane = await Plane.open(key === PERSONAL ? undefined : key);
+  private async watch(
+    key: string,
+    token?: symbol,
+    options: { paused?: boolean; collections?: readonly ("pages" | "blocks" | "versions" | "page_events" | "workspace_settings")[]; seedPageId?: string } = {},
+  ): Promise<void> {
+    const plane = await Plane.open(key === PERSONAL ? undefined : key, options);
     if (this.closed || (key !== PERSONAL && (!this.desired.has(key) || this.opening.get(key)?.token !== token))) {
       await plane.close();
       return;
@@ -177,12 +205,12 @@ export class WorkspaceDocument {
   }
 
   /** Share writes wait for the space's plane to open. Concurrent readers share that opening. */
-  private watchSpace(spaceId: string): Promise<void> {
+  private watchSpace(spaceId: string, options: { paused?: boolean; seedPageId?: string } = {}): Promise<void> {
     if (this.closed || !this.desired.has(spaceId) || this.planes.has(spaceId)) return Promise.resolve();
     const current = this.opening.get(spaceId);
     if (current) return current.promise;
     const token = Symbol(spaceId);
-    const promise = this.watch(spaceId, token)
+    const promise = this.watch(spaceId, token, options)
       // A space that cannot be read now is retried by the next membership refresh.
       .catch(() => undefined)
       .finally(() => {
@@ -222,11 +250,15 @@ export class WorkspaceDocument {
     return loaded;
   }
 
-  /** Pull a set of pages' bodies into their planes (UC-48). Pages route to
-   *  the plane their record lives in; a page nobody knows is tried in every
-   *  open plane — a pull that finds nothing marks nothing. Idempotent and
-   *  safe to fire-and-forget from rendering code. */
-  async loadPages(pageIds: readonly string[]): Promise<void> {
+  /** True while the active space's directory is streaming in the background. */
+  get directoryLoading(): boolean {
+    return Boolean(this.planes.get(this.activeSpaceId)?.directoryLoading);
+  }
+
+  private async pullPages(
+    pageIds: readonly string[],
+    pull: (plane: Plane, ids: readonly string[]) => Promise<void>,
+  ): Promise<void> {
     if (this.closed || !pageIds.length) return;
     const byPlane = new Map<string, string[]>();
     const unknown: string[] = [];
@@ -236,7 +268,80 @@ export class WorkspaceDocument {
       else unknown.push(pageId);
     }
     for (const plane of this.planes.keys()) if (unknown.length) byPlane.set(plane, [...(byPlane.get(plane) ?? []), ...unknown]);
-    await Promise.all([...byPlane].map(([plane, ids]) => this.planes.get(plane)?.loadPages(ids)));
+    await Promise.all([...byPlane].map(([plane, ids]) => {
+      const target = this.planes.get(plane);
+      return target ? pull(target, ids) : Promise.resolve();
+    }));
+  }
+
+  /** Pull a set of pages' bodies into their planes (UC-48). Pages route to
+   *  the plane their record lives in; a page nobody knows is tried in every
+   *  open plane — a pull that finds nothing marks nothing. Idempotent and
+   *  safe to fire-and-forget from rendering code. */
+  async loadPages(pageIds: readonly string[]): Promise<void> {
+    await this.pullPages(pageIds, (plane, ids) => plane.loadPages(ids));
+  }
+
+  /** Pull these pages' version history and edit events on demand (UC-56). */
+  async loadHistory(pageIds: readonly string[]): Promise<void> {
+    await this.pullPages(pageIds, (plane, ids) => plane.loadHistory(ids));
+  }
+
+  /** True when every named page has completed its on-demand history pull. */
+  hasHistoryLoaded(pageIds: readonly string[]): boolean {
+    if (!pageIds.length) return true;
+    for (const pageId of pageIds) {
+      const key = this.projector.pagePlanes.get(pageId);
+      const plane = key ? this.planes.get(key) : undefined;
+      if (plane && !plane.hasHistoryLoaded([pageId])) return false;
+    }
+    return true;
+  }
+
+  /** Activate a navigation space ("personal" or a KB spaceId) on demand,
+   *  pausing inactive background planes so polling stays O(1). */
+  async activateSpace(spaceId: string, options: { seedPageId?: string } = {}): Promise<void> {
+    if (this.closed) return;
+    const previous = this.activeSpaceId;
+    if (previous !== spaceId) {
+      if (previous === PERSONAL) {
+        for (const [key, plane] of this.planes) {
+          if (key === PERSONAL || !this.knowledgeBaseIds.has(key)) plane.setActive(false);
+        }
+      } else {
+        this.planes.get(previous)?.setActive(false);
+      }
+      this.activeSpaceId = spaceId;
+    }
+    if (spaceId === PERSONAL) {
+      const personal = this.planes.get(PERSONAL);
+      if (personal) await personal.ensureFull({ seedPageId: options.seedPageId });
+      else await this.watch(PERSONAL, undefined, { seedPageId: options.seedPageId });
+      if (this.activeSpaceId === PERSONAL) {
+        this.planes.get(PERSONAL)?.setActive(true);
+        const ordinary = [...this.desired].filter((id) => !this.knowledgeBaseIds.has(id));
+        if (ordinary.length) void Promise.all(ordinary.map((id) => this.watchSpace(id)));
+      }
+      return;
+    }
+    if (!this.desired.has(spaceId)) return;
+    await this.watchSpace(spaceId, { seedPageId: options.seedPageId });
+    if (this.activeSpaceId === spaceId && this.desired.has(spaceId)) this.planes.get(spaceId)?.setActive(true);
+    else this.planes.get(spaceId)?.setActive(false);
+  }
+
+  /** Load personal pages and every authorized knowledge base for cross-space pickers. */
+  async ensureAllSpaces(): Promise<void> {
+    if (this.closed) return;
+    const personal = this.planes.get(PERSONAL);
+    const openPersonal = personal ? personal.ensureFull() : this.watch(PERSONAL);
+    await Promise.all([openPersonal, ...[...this.desired].map((id) => this.watchSpace(id))]);
+    for (const [key, plane] of this.planes) {
+      const keepActive = this.activeSpaceId === PERSONAL
+        ? (key === PERSONAL || !this.knowledgeBaseIds.has(key))
+        : key === this.activeSpaceId;
+      plane.setActive(keepActive);
+    }
   }
 
   /** Starts reading a space: one this member just shared a page into, or one
@@ -252,20 +357,24 @@ export class WorkspaceDocument {
    *  their own writes to it too: those were stored in the space, and a
    *  window opened now would not have them either. */
   removeSpace(spaceId: string): void {
+    const wasActive = this.activeSpaceId === spaceId;
     this.desired.delete(spaceId);
     this.opening.delete(spaceId);
     this.readOnly.delete(spaceId);
+    void deleteScopeMirror(spaceId);
     const plane = this.planes.get(spaceId);
-    if (!plane) return;
-    this.planes.delete(spaceId);
-    this.stops.get(spaceId)?.();
-    this.stops.delete(spaceId);
-    this.held.delete(spaceId);
-    void plane.close();
-    // The page leaves the space too: being in it says the member is looking
-    // at it, and the space puts out a page whose member it no longer has.
-    void this.platform.presence.release(spaceId);
-    this.reproject();
+    if (plane) {
+      this.planes.delete(spaceId);
+      this.stops.get(spaceId)?.();
+      this.stops.delete(spaceId);
+      this.held.delete(spaceId);
+      void plane.close();
+      // The page leaves the space too: being in it says the member is looking
+      // at it, and the space puts out a page whose member it no longer has.
+      void this.platform.presence.release(spaceId);
+      this.reproject();
+    }
+    if (wasActive) void this.activateSpace(PERSONAL);
   }
 
   /** Brings the spaces being read in line with the ones the member belongs
@@ -285,7 +394,11 @@ export class WorkspaceDocument {
     this.updateSpaces(list);
     const followed = new Set([...this.planes.keys(), ...this.opening.keys()]);
     for (const spaceId of followed) if (spaceId !== PERSONAL && !this.desired.has(spaceId)) this.removeSpace(spaceId);
-    await Promise.all([...this.desired].map((spaceId) => this.watchSpace(spaceId)));
+    const personalActive = Boolean(this.planes.get(PERSONAL)?.hasPages);
+    const eager = [...this.desired].filter((spaceId) =>
+      spaceId === this.activeSpaceId || (personalActive && !this.knowledgeBaseIds.has(spaceId)),
+    );
+    await Promise.all(eager.map((spaceId) => this.watchSpace(spaceId)));
     return true;
   }
 
@@ -412,6 +525,11 @@ export class WorkspaceDocument {
     return this.writing.size > 0;
   }
 
+  /** Where the writes stand now — the same status `onSyncStatus` reports. */
+  get status(): SyncStatus {
+    return this.syncStatus;
+  }
+
   onSyncStatus(listener: (status: SyncStatus) => void): () => void {
     this.syncListeners.add(listener);
     listener(this.syncStatus);
@@ -461,9 +579,10 @@ export class WorkspaceDocument {
        opening — wait for it so sharing does not die on that race. */
     const plane = planeOfPage(this.state, pageId);
     if (plane) await awaitCollaborativeBasis(plane, pageId);
-    /* Sharing writes the tree whole into the space: bodies not pulled in
-       yet (UC-48) are pulled first, or the copy would land empty. */
-    await this.loadPages(this.descendantPages(pageId));
+    /* Sharing writes the tree whole into the space: bodies and history not
+       pulled in yet are pulled first, or they would be left behind. */
+    const subtree = this.descendantPages(pageId);
+    await Promise.all([this.loadPages(subtree), this.loadHistory(subtree)]);
     await this.addSpace(spaceId);
     if (page.share_space_id !== spaceId) this.transact([{ type: "set", path: ["pages", pageId, "share_space_id"], value: spaceId }]);
     await this.flush();
@@ -473,8 +592,9 @@ export class WorkspaceDocument {
    *  and leaves the space, whose members lose it. */
   async stopSharing(pageId: string): Promise<void> {
     if (!this.state.pages[pageId]?.share_space_id) return;
-    // Same contract as sharing: every body of the tree is here first.
-    await this.loadPages(this.descendantPages(pageId));
+    // Same contract as sharing: every body and history of the tree is here first.
+    const subtree = this.descendantPages(pageId);
+    await Promise.all([this.loadPages(subtree), this.loadHistory(subtree)]);
     this.transact([{ type: "delete", path: ["pages", pageId, "share_space_id"] }]);
     await this.flush();
   }

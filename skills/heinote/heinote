@@ -202,6 +202,23 @@ def cmd_page(client, a):
     emit(status, payload)
 
 
+def cmd_markdown(client, a):
+    status, payload = client.request("GET", f"/api/v1/pages/{a.id}/markdown")
+    if status != 200 or not isinstance(payload, dict):
+        emit(status, payload)
+    text = payload.get("markdown") or ""
+    if a.out:
+        target = os.path.expanduser(a.out)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(text)
+        emit(200, {"saved": target, "title": payload.get("title"),
+                   "revision": payload.get("revision")})
+    else:
+        sys.stdout.write(text)
+        if text and not text.endswith("\n"):
+            sys.stdout.write("\n")
+
+
 def cmd_create_page(client, a):
     if a.text is not None and a.markdown is not None:
         die("--text 与 --markdown 只能提供一个。")
@@ -219,6 +236,15 @@ def cmd_create_page(client, a):
         body.pop("markdown", None)
     status, payload = client.request("POST", "/api/v1/pages", body)
     emit(status, payload)
+
+
+def cmd_copy(client, a):
+    body = {}
+    if a.space_id:
+        body["spaceId"] = a.space_id
+    if a.parent_id:
+        body["parentId"] = a.parent_id
+    mutate(client, "POST", f"/api/v1/pages/{a.id}/copy", body, body, a.request_id, a.force)
 
 
 def cmd_set_title(client, a):
@@ -598,6 +624,11 @@ def build_parser():
     sp.add_argument("id")
     sp.set_defaults(fn=cmd_page)
 
+    sp = sub.add_parser("markdown", help="读取页面正文 Markdown（块树的可读投影）")
+    sp.add_argument("id")
+    sp.add_argument("--out", help="写入文件；省略时输出到 stdout")
+    sp.set_defaults(fn=cmd_markdown)
+
     sp = sub.add_parser("create-page", help="创建文档页或应用页")
     sp.add_argument("--title")
     sp.add_argument("--text", help="正文文字；`-` 从标准输入读取")
@@ -607,6 +638,13 @@ def build_parser():
     sp.add_argument("--space-id")
     sp.add_argument("--scope")
     sp.set_defaults(fn=cmd_create_page)
+
+    sp = sub.add_parser("copy", help="把页面（含子树）拷贝到个人空间或某个空间")
+    sp.add_argument("id")
+    sp.add_argument("--space-id", help="目标空间：\"personal\"（默认）或空间 id；知识库落在其首页下")
+    sp.add_argument("--parent-id", help="目标空间内的父页面")
+    rid(sp)
+    sp.set_defaults(fn=cmd_copy)
 
     sp = sub.add_parser("set-title", help="只修改标题，不动正文")
     sp.add_argument("id")

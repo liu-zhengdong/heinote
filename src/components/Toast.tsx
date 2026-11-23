@@ -1,5 +1,5 @@
 import { CircleAlert, Check, Info, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useMountTransition } from "../hooks/useMountTransition";
 
@@ -50,11 +50,20 @@ export function ToastStack({
   onDismiss(id: string): void;
 }) {
   if (!toasts.length) return null;
+  return <>{toasts.map((toast) => (
+    <ToastRow key={toast.id} toast={toast} onClose={() => onDismiss(toast.id)} />
+  ))}</>;
+}
+
+/* The corner's single container: persistent activity pills answer from the
+   bottom (the sync indicator, the draft pill) and transient toasts push on
+   top of them — one stack, not three elements racing the same fixed point.
+   Portal'd once so the order never depends on where siblings mount. */
+export function CornerStack({ activity, children }: { activity?: ReactNode; children?: ReactNode }) {
   return createPortal(
-    <div className="toast-stack">
-      {toasts.map((toast) => (
-        <ToastRow key={toast.id} toast={toast} onClose={() => onDismiss(toast.id)} />
-      ))}
+    <div className="corner-stack">
+      {activity}
+      {children}
     </div>,
     document.body,
   );

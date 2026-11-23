@@ -46,7 +46,10 @@ export function attachCollaborationSocket(server: Server, store: Store, authoriz
         const scope = store.scope(who, subscription.scope);
         const event = events.find((event) => event.scope === scope && event.pageId === subscription.pageId);
         if (!event || event.type === "removed") continue;
-        documents.push({ type: event.type, scope: event.scope, pageId: event.pageId, seq: event.seq, generation: event.generation, revision: event.revision, update: event.update ? bytesToBase64(event.update) : undefined });
+        /* Address the document as the subscriber knows it: sessions are keyed by
+         *  the scope name this client subscribed with (an alias like
+         *  "personal"), not the canonical name stored on the event. */
+        documents.push({ type: event.type, scope: subscription.scope, pageId: event.pageId, seq: event.seq, generation: event.generation, revision: event.revision, update: event.update ? bytesToBase64(event.update) : undefined });
       }
       if (documents.length) send(client, { type: "commit", requestId: events.find((event) => event.requestId)?.requestId, documents });
     }

@@ -170,7 +170,7 @@ export function AccountSettings({ onClose, notice }: { onClose(): void; notice: 
   };
 
   if (!user) return null;
-  return <Modal open label="账号设置" className="account-settings" onClose={close}>
+  return <Modal open label="账号设置" className="account-settings" mobilePresentation="fullscreen" onClose={close}>
     <div className="settings-scope" ref={scope} onKeyDown={trapFocus}>
       <div className="settings-layout" data-detail={mobileDetail} inert={confirmation ? true : undefined}>
         <aside className="settings-nav">

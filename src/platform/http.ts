@@ -15,9 +15,32 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
   return response.status === 204 ? undefined as T : response.json() as Promise<T>;
 }
 
-export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, interval = 1500): () => void {
+let prefetchedSpaces: { userId: string; promise: Promise<unknown> } | null = null;
+
+/** Start loading /api/spaces while the lazy WorkspaceShell chunk initializes. */
+export function prefetchSpaces(userId: string): void {
+  if (prefetchedSpaces?.userId === userId) return;
+  const promise = request<unknown>("/api/spaces");
+  promise.catch(() => undefined);
+  prefetchedSpaces = { userId, promise };
+}
+
+/** Take ownership of a user-scoped /api/spaces prefetch once on boot. */
+export function consumePrefetchedSpaces<T>(userId: string): Promise<T> | null {
+  if (!prefetchedSpaces || prefetchedSpaces.userId !== userId) return null;
+  const { promise } = prefetchedSpaces;
+  prefetchedSpaces = null;
+  return promise as Promise<T>;
+}
+
+/** Discard any prefetched space catalog across logout or account change. */
+export function clearPrefetchedSpaces(): void {
+  prefetchedSpaces = null;
+}
+
+export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, interval = 1500, options: { initial?: T } = {}): () => void {
   let closed = false;
-  let last = "";
+  let last = options.initial !== undefined ? JSON.stringify(options.initial) : "";
   let timer: ReturnType<typeof setTimeout>;
   const tick = async () => {
     try {
@@ -27,6 +50,7 @@ export function poll<T>(read: () => Promise<T>, listener: (value: T) => void, in
     } catch { /* Keep the last successful snapshot during a connection gap. */ }
     if (!closed) timer = setTimeout(tick, interval);
   };
-  void tick();
+  if (options.initial !== undefined) timer = setTimeout(tick, interval);
+  else void tick();
   return () => { closed = true; clearTimeout(timer); };
 }

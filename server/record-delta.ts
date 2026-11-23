@@ -27,16 +27,23 @@ const CHANGELOG = (alias: string, deleted: number) => `
     INSERT INTO record_changes SELECT ${alias}.scope,${alias}.collection,${alias}.id,(SELECT seq FROM record_seq WHERE scope=${alias}.scope AND collection=${alias}.collection),${deleted}
       WHERE NOT EXISTS(SELECT 1 FROM record_changes WHERE scope=${alias}.scope AND collection=${alias}.collection AND id=${alias}.id);`;
 
+/* Triggers are dropped before creation: IF NOT EXISTS alone leaves a stale
+ *  body from an earlier build in place forever (a dev database kept an old
+ *  OR REPLACE body and every records UPSERT then failed with a UNIQUE
+ *  constraint error — ISS-12 fix never reached it). */
 export const DELTA_TRIGGERS = `
-  CREATE TRIGGER IF NOT EXISTS record_seq_insert AFTER INSERT ON records BEGIN
+  DROP TRIGGER IF EXISTS record_seq_insert;
+  DROP TRIGGER IF EXISTS record_seq_update;
+  DROP TRIGGER IF EXISTS record_seq_delete;
+  CREATE TRIGGER record_seq_insert AFTER INSERT ON records BEGIN
     ${BUMP("NEW")}
     ${CHANGELOG("NEW", 0)}
   END;
-  CREATE TRIGGER IF NOT EXISTS record_seq_update AFTER UPDATE ON records BEGIN
+  CREATE TRIGGER record_seq_update AFTER UPDATE ON records BEGIN
     ${BUMP("NEW")}
     ${CHANGELOG("NEW", 0)}
   END;
-  CREATE TRIGGER IF NOT EXISTS record_seq_delete AFTER DELETE ON records BEGIN
+  CREATE TRIGGER record_seq_delete AFTER DELETE ON records BEGIN
     ${BUMP("OLD")}
     ${CHANGELOG("OLD", 1)}
   END;`;

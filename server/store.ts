@@ -4,11 +4,11 @@ import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import schema, { HISTORY_BUDGET_BYTES } from "../schema.ts";
+import schema, { HISTORY_AGE_MS, HISTORY_BUDGET_BYTES } from "../schema.ts";
 import { isCurrent } from "../src/core/versions.ts";
 import { emptyPlane, Projector, type PlaneRecords, type RecordValue } from "../src/platform/records.ts";
 import { historyParts } from "../src/platform/history-record.ts";
-import { blockRecordId, parseBlockRecordId, parseHistoryId } from "../src/platform/record-ids.ts";
+import { blockRecordId, eventId, parseBlockRecordId, parseHistoryId } from "../src/platform/record-ids.ts";
 import type { LoadedNotePage, LoadedWorkspaceState, NotePage, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
 import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
@@ -59,6 +59,7 @@ export class Store {
   readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
   readonly quotas!: Quotas;
+  readonly dbEpoch!: string;
   readonly dataDir: string;
   private transactionDepth = 0;
   /** The one-time collaboration rebuild at startup is not a user commit. */
@@ -103,6 +104,14 @@ export class Store {
     this.avatars = new AvatarStore(this.db, this.files);
     this.knowledgeBases = new KnowledgeBases(this);
     this.quotas = new Quotas(this, dataDir);
+    const existingEpoch = this.one("SELECT value FROM site_settings WHERE key='db_instance_id'");
+    if (existingEpoch) {
+      this.dbEpoch = String(existingEpoch.value);
+    } else {
+      const generated = id();
+      this.db.prepare("INSERT OR IGNORE INTO site_settings(key,value) VALUES('db_instance_id',?)").run(generated);
+      this.dbEpoch = String(this.one("SELECT value FROM site_settings WHERE key='db_instance_id'")?.value ?? generated);
+    }
     this.collaboration = new CollaborationStore(this);
     this.quotaSuspended = true;
     try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
@@ -200,9 +209,9 @@ export class Store {
    *  changed row under its record id, and each removed row's id under
    *  `deleted`. `after` 0 yields the whole collection (rows written before
    *  the changelog never entered it, so they're read from `records`). */
-  recordsSince(scope: string, collection: string, after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+  recordsSince(scope: string, collection: string, after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
     const latest = this.watermark(scope, collection);
-    if (after <= 0) return { latest, rows: this.records(scope, collection), deleted: [] };
+    if (after <= 0) return { latest, epoch: this.dbEpoch, rows: this.records(scope, collection), deleted: [] };
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
     const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
@@ -210,13 +219,28 @@ export class Store {
       if (Number(row.deleted) || row.value == null) deleted.push(String(row.id));
       else rows.push({ id: String(row.id), value: JSON.parse(String(row.value)) });
     }
-    return { latest, rows, deleted };
+    return { latest, epoch: this.dbEpoch, rows, deleted };
+  }
+  /** The page record plus its parent chain up to root for O(depth) cold open. */
+  pageAncestors(scope: string, pageId: string): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const latest = this.watermark(scope, "pages");
+    const rows: Array<{ id: string; value: Row }> = [];
+    const seen = new Set<string>();
+    let current: string | undefined = pageId;
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const value = this.record(scope, "pages", current);
+      if (!value) break;
+      rows.push({ id: current, value });
+      current = typeof value.parent_id === "string" && value.parent_id ? value.parent_id : undefined;
+    }
+    return { latest, epoch: this.dbEpoch, rows, deleted: [] };
   }
   /** The same delta, limited to records that belong to one of `pageIds`:
    *  rows match through their `page` field (via the records_page index on a
    *  cold read) and tombstones through the page-scoped record id
    *  (`<len>_<pageId>_<rest>`). UC-48 lazy loading polls per loaded page. */
-  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
     const latest = this.watermark(scope, collection);
     const wanted = new Set(pageIds);
     const inPage = (id: string, value: Row | null): boolean => {
@@ -238,6 +262,7 @@ export class Store {
       // `page` field miss the index; the page-scoped id prefix finds them
       // without a full scan.
       const prefixes = pageIds.map((pageId) => `${pageId.length}_${pageId}_`);
+      const foundIds = new Set(found.map((item) => item.id));
       // GLOB, not LIKE: LIKE can't decompose 'p%' into a range scan unless
       // case_sensitive_like is on, so SQLite scanned the whole partition
       // (and visited every row for id) on every cold pull — 132k reads per
@@ -245,9 +270,9 @@ export class Store {
       // index directly. `_` is not a GLOB metachar, prefixes need no escape.
       const extra = this.all(`SELECT id,value FROM records WHERE scope=? AND collection=? AND (${prefixes.map(() => "id GLOB ?").join(" OR ")})`,
         scope, collection, ...prefixes.map((prefix) => `${prefix}*`))
-        .filter((row) => !new Set(found.map((found) => found.id)).has(String(row.id)))
+        .filter((row) => !foundIds.has(String(row.id)))
         .map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
-      return { latest, rows: [...found, ...extra], deleted: [] };
+      return { latest, epoch: this.dbEpoch, rows: [...found, ...extra], deleted: [] };
     }
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
@@ -258,7 +283,7 @@ export class Store {
       const value = JSON.parse(String(row.value)) as Row;
       if (inPage(id, value)) rows.push({ id, value });
     }
-    return { latest, rows, deleted };
+    return { latest, epoch: this.dbEpoch, rows, deleted };
   }
   /** Exact reads by record id — rebase needs just the rows a failed batch
    *  touched, not the whole collection (UC-48). */
@@ -335,6 +360,19 @@ export class Store {
     }
     return undefined;
   }
+  /** Locate which scope and navigation space hold a page visible to `actor`
+   *  via O(M) primary-key lookups, so a deep link can activate just that space. */
+  locatePage(actor: Actor, pageId: string): { scope: string; spaceId: string } | null {
+    if (this.record(`user:${actor.user.id}`, "pages", pageId)) {
+      return { scope: "personal", spaceId: "personal" };
+    }
+    for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) {
+      const spaceId = String(member.space_id);
+      if (!this.record(spaceId, "pages", pageId)) continue;
+      return { scope: spaceId, spaceId: this.knowledgeBases.get(spaceId) ? spaceId : "personal" };
+    }
+    return null;
+  }
   /** One page and its ancestor chain as planes for the Projector — the
    *  chain is what `withoutUnhomed` needs to keep the page, and its
    *  `share_space_id` root is what names the page's scope. `state()` would
@@ -367,7 +405,7 @@ export class Store {
     const planes = new Map<string, PlaneRecords>();
     const planeOf = (scope: string): PlaneRecords => {
       let plane = planes.get(scope);
-      if (!plane) planes.set(scope, plane = { pages: new Map(), blocks: new Map(), versions: new Map(), workspace_settings: new Map() });
+      if (!plane) planes.set(scope, plane = { pages: new Map(), blocks: new Map(), versions: new Map(), page_events: new Map(), workspace_settings: new Map() });
       return plane;
     };
     // Match state()'s plane order so duplicate IDs keep the same precedence.
@@ -436,6 +474,24 @@ export class Store {
       this.collaboration.checkBarriers(actor, requested, expectedPages);
       const approved = this.collaboration.applyUpdates(actor, textUpdates);
       const result: Array<Row | null> = [];
+      // What the batch touched on each page, for its timeline event: text
+      // updates name their fields, record writes name their records.
+      const touched = new Map<string, { scope: string; pageId: string; targets: Set<string>; labels: Set<string>; deleted?: boolean }>();
+      const touch = (scope: string, pageId: string, target: string, label: string) => {
+        const key = `${scope}${pageId}`;
+        const entry = touched.get(key) ?? touched.set(key, { scope, pageId, targets: new Set(), labels: new Set() }).get(key)!;
+        entry.targets.add(target); entry.labels.add(label);
+      };
+      for (const raw of approved) {
+        const [fieldScope, collection, recordId, path] = JSON.parse(raw) as [string, string, string, string[]];
+        if (collection === "pages") {
+          const { eventPage, row } = this.eventPageOf(fieldScope, recordId);
+          touch(fieldScope, eventPage, recordId, row ? "修改了行名" : path[0] === "title_content" ? "修改了标题" : "修改了页面属性");
+        } else if (collection === "blocks") {
+          const parsed = parseBlockRecordId(recordId);
+          if (parsed) touch(fieldScope, parsed.pageId, parsed.blockId, path[0] === "content" ? "编辑了正文" : path[0] === "table" ? "编辑了表格" : "编辑了段落");
+        }
+      }
       const scopes = new Set<string>(textUpdates.map((update) => this.scope(actor, update.scope)));
       // Bulk path: permission checks, conflict lookups and dirty tracking
       // repeat per write otherwise — a whole-vault import is ~10^5 writes,
@@ -478,17 +534,28 @@ export class Store {
           if (write.id === library.homePageId) fail(403, "知识库首页不能删除。", "knowledge_base_home");
           if (!["owner", "admin"].includes(this.role(actor, scope))) fail(403, "永久删除需要知识库管理权限。", "forbidden");
         }
+        // The server's own stamps on blocks never make a client write
+        // stale: they compare without them and survive a rewrite.
+        const comparable = (row: Row | undefined | null): Row | undefined | null => {
+          if (!row || write.collection !== "blocks") return row;
+          const { edited_at: _at, edited_by: _by, ...rest } = row;
+          return rest;
+        };
         let next: Row | undefined;
         if (write.action === "put") {
           if (!write.value) fail(400, "缺少记录内容。");
-          if (current && !isDeepStrictEqual(current, write.base) && !isDeepStrictEqual(current, write.value)) fail(409, "记录已修改。", "conflict");
-          next = write.value;
+          if (current && !isDeepStrictEqual(comparable(current), comparable(write.base)) && !isDeepStrictEqual(comparable(current), comparable(write.value))) fail(409, "记录已修改。", "conflict");
+          next = { ...write.value };
+          if (write.collection === "blocks" && current && next.edited_by === undefined) {
+            if (current.edited_at !== undefined) next.edited_at = current.edited_at;
+            if (current.edited_by !== undefined) next.edited_by = current.edited_by;
+          }
         } else if (write.action === "patch") {
           if (!current) fail(409, "记录已删除。", "conflict");
           if (!write.patch || !write.base) fail(400, "修改必须携带原记录。");
           next = patched(current, write.patch, write.base);
         } else {
-          if (current && !isDeepStrictEqual(current, write.base)) fail(409, "记录已修改，无法删除。", "conflict");
+          if (current && !isDeepStrictEqual(comparable(current), comparable(write.base))) fail(409, "记录已修改，无法删除。", "conflict");
         }
         if (next) {
           const spec = schema.definition.collections[write.collection as keyof typeof schema.definition.collections];
@@ -513,6 +580,7 @@ export class Store {
             // page or the whole batch is refused.
             this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
             this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
+            this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
           }
           if (write.collection === "pages" && current?.share_space_id === scope) {
             if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。", "owner_required");
@@ -522,6 +590,37 @@ export class Store {
           }
         }
         result.push(next ?? null); scopes.add(scope);
+        if (write.collection === "pages" || write.collection === "blocks") {
+          const { eventPage, row } = write.collection === "pages"
+            ? this.eventPageOf(scope, write.id, { deleted: !next, prior: current })
+            : { eventPage: parseBlockRecordId(write.id)?.pageId ?? write.id, row: false };
+          if (next) {
+            if (write.collection === "pages") {
+              touch(scope, eventPage, write.id,
+                !current ? (row ? "新增了一行" : "创建了页面")
+                : row ? (write.patch && "title_content" in write.patch ? "修改了行名" : "修改了行属性")
+                : (write.patch && "title_content" in write.patch ? "修改了标题" : "修改了页面属性"));
+            } else {
+              const parsed = parseBlockRecordId(write.id)!;
+              const isCell = "table" in (write.patch ?? write.value ?? {});
+              touch(scope, eventPage, parsed.blockId,
+                !current ? "新增了段落" : isCell ? "编辑了表格" : "编辑了段落");
+            }
+          } else if (write.collection === "blocks" && current) {
+            const parsed = parseBlockRecordId(write.id)!;
+            touch(scope, eventPage, parsed.blockId, "删除了段落");
+          } else if (write.collection === "pages" && current) {
+            // A deleted page's timeline dies with it — suppress its own
+            // entry. A row's lives on its database's, which outlives it.
+            if (row) {
+              touch(scope, eventPage, write.id, "删除了一行");
+            } else {
+              touched.get(`${scope}${write.id}`) ?? touched.set(`${scope}${write.id}`, { scope, pageId: write.id, targets: new Set(), labels: new Set(), deleted: true });
+              touched.get(`${scope}${write.id}`)!.deleted = true;
+              touch(scope, write.id, write.id, "删除了页面");
+            }
+          }
+        }
       }
       } finally {
         if (this.bulk) this.collaboration.resumeDirtyTracking();
@@ -542,9 +641,59 @@ export class Store {
         for (const scope of scopes) this.validatePlane(actor, scope);
         for (const scope of scopes) this.pruneHistory(scope);
       }
+      for (const entry of touched.values()) {
+        if (entry.deleted) continue;
+        this.recordPageEvent(actor, entry.scope, entry.pageId, [...entry.labels], [...entry.targets]);
+        this.pruneEvents(entry.scope, entry.pageId);
+      }
       if (requestId) this.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(actor.user.id, requestId, digest, JSON.stringify(result));
       return result;
     });
+  }
+
+  /** The page whose timeline an edit to `recordId` belongs to: a database
+   *  row's edits name the database, so a row rename shows where the row
+   *  lives. `deleted` reads the record before it went. */
+  /** The timeline a pages-record write belongs to: a row's own record is a
+   *  column of its database, so its writes land on the database's timeline;
+   *  an ordinary page's land on its own. A deleted page's parent has to come
+   *  from the record as it was — the live read returns nothing once it's gone. */
+  private eventPageOf(scope: string, recordId: string, opts: { deleted?: boolean; prior?: Row } = {}): { eventPage: string; row: boolean } {
+    const page = opts.deleted ? opts.prior : this.record(scope, "pages", recordId);
+    const parentId = page?.parent_id;
+    if (typeof parentId === "string") {
+      const parent = this.record(scope, "pages", parentId);
+      if (parent?.kind === "database") return { eventPage: parentId, row: true };
+    }
+    return { eventPage: recordId, row: false };
+  }
+
+  /** One entry on a page's timeline — or into the latest, when the same
+   *  author edits again inside the window history coalesces on. */
+  private recordPageEvent(actor: Actor, scope: string, pageId: string, labels: string[], targets: string[]): void {
+    const latest = this.all("SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND id LIKE ? ORDER BY value->>'created_at' DESC LIMIT 1", scope, `${pageId.length}_${pageId}_event.%`)[0];
+    const author = asAuthor(actor);
+    if (latest) {
+      const value = JSON.parse(String(latest.value)) as { created_at: string; author_id: string; author_name: string; label: string; targets: string[]; merged: number };
+      if (value.author_id === actor.user.id && value.author_name === author && Date.now() - Date.parse(value.created_at) < 5 * 60 * 1000) {
+        const merged = new Set([...value.label.split("、"), ...labels]);
+        const label = merged.size <= 3 ? [...merged].join("、") : "多处编辑";
+        this.put(scope, "page_events", String(latest.id), { ...value, label, targets: [...new Set([...value.targets, ...targets])].slice(0, 50), merged: value.merged + 1 });
+        return;
+      }
+    }
+    const event = { page: pageId, event: id(), created_at: now(), author_id: actor.user.id, author_name: author, ...(actor.avatar ? { author_avatar_url: actor.avatar } : {}), label: labels.slice(0, 3).join("、") || "编辑了页面", targets: targets.slice(0, 50), merged: 1 };
+    this.put(scope, "page_events", eventId(pageId, event.event), event as Row);
+  }
+
+  /** A page's timeline keeps its newest 300 entries within the window —
+   *  small records, so count and age bound them. */
+  private pruneEvents(scope: string, pageId: string): void {
+    const rows = this.all("SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND id LIKE ?", scope, `${pageId.length}_${pageId}_event.%`);
+    const ordered = rows.map((row) => ({ id: String(row.id), time: String(JSON.parse(String(row.value)).created_at) })).sort((a, b) => b.time.localeCompare(a.time));
+    for (const [index, entry] of ordered.entries()) {
+      if (index >= 300 || Date.parse(entry.time) < Date.now() - HISTORY_AGE_MS) this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND id=?").run(scope, entry.id);
+    }
   }
   private validatePlane(actor: Actor | undefined, scope: string): void {
     const pages = new Map(this.records(scope, "pages").map((row) => [row.id, row.value]));
@@ -644,7 +793,7 @@ export class Store {
     const collaboration = this.collaboration.snapshot(actor, scope.startsWith("user:") ? "personal" : scope, pageId);
     return { id: page.id, title: page.title, text, revision, scope, page, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
   }
-  savePage(scope: string, page: LoadedNotePage): void {
+  savePage(scope: string, page: LoadedNotePage, who?: Actor, label = "修改了页面"): void {
     this.transaction(() => {
       this.assertPageLocation(scope, page.id);
       const library = this.knowledgeBases.get(scope);
@@ -655,6 +804,13 @@ export class Store {
       for (const block of Object.values(block_tree.by_id)) {
         const { parent_id: parent, ...rest } = block;
         this.put(scope, "blocks", blockRecordId(page.id, block.id), { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) });
+      }
+      // Direct writes bypass apply's touch collection; the caller says what
+      // the act was and it lands on the page's own timeline.
+      if (who) {
+        const { eventPage } = this.eventPageOf(scope, page.id);
+        this.recordPageEvent(who, scope, eventPage, [label], [page.id]);
+        this.pruneEvents(scope, eventPage);
       }
       if (library) this.validatePlane(undefined, scope);
     });

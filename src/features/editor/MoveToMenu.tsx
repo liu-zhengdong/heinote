@@ -18,6 +18,7 @@ export function MoveToMenu({
   anchor,
   pages,
   count,
+  label,
   placeholder,
   onMove,
   onMoveToTop,
@@ -26,6 +27,8 @@ export function MoveToMenu({
   anchor: AnchorRect;
   pages: NotePage[];
   count: number;
+  /** The popover's accessible name; "Move to" by default. */
+  label?: string;
   /** What the search asks for; by default, where the blocks should go. */
   placeholder?: string;
   onMove(pageId: string): void;
@@ -68,7 +71,7 @@ export function MoveToMenu({
   }, [active]);
 
   return (
-    <Popover open anchor={anchor} placement="bottom-start" role="dialog" label="Move to" onDismiss={onClose}>
+    <Popover open anchor={anchor} placement="bottom-start" role="dialog" label={label ?? "Move to"} mobileSheet={{ title: label ?? "移动到…" }} onDismiss={onClose}>
       <div className="move-to">
         <input
           autoFocus

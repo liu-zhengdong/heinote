@@ -35,6 +35,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+import { BottomSheet } from "../../components/BottomSheet";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
@@ -51,12 +52,13 @@ import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
 import { pageAncestry, spaceOfPage } from "../../core/page-tree";
 import { buildTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
-import { useWorkspaceState } from "../../app/workspace-store";
+import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
 import { capitalized } from "../../core/title";
 import { pageGlyph } from "../editor/block-registry";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
+import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
 import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
 import "./sidebar.css";
@@ -263,6 +265,39 @@ const TreeRow = memo(function TreeRow({
   );
 });
 
+const ROW_HEIGHT_DESKTOP = 31;
+const ROW_HEIGHT_MOBILE = 44;
+const TREE_OVERSCAN = 20;
+const TREE_STEP = 10;
+
+interface TreeMetrics {
+  counts: Map<string, number>;
+  rowIndex: Map<string, number>;
+  totalRows: number;
+}
+
+function measureTree(tree: PageTree, expanded: ReadonlySet<string>): TreeMetrics {
+  const counts = new Map<string, number>();
+  const rowIndex = new Map<string, number>();
+  let cursor = 0;
+  const walk = (page: NotePage): number => {
+    const start = cursor;
+    cursor += 1;
+    rowIndex.set(page.id, start);
+    let size = 1;
+    if (expanded.has(page.id)) {
+      const children = tree.children.get(page.id);
+      if (children) {
+        for (const child of children) size += walk(child);
+      }
+    }
+    counts.set(page.id, size);
+    return size;
+  };
+  for (const root of tree.roots) walk(root);
+  return { counts, rowIndex, totalRows: cursor };
+}
+
 export function Sidebar() {
   const {
     platform,
@@ -277,6 +312,7 @@ export function Sidebar() {
     archivePage,
     createPage,
     duplicatePage,
+    copyPageTo,
     ensureShareSpace,
     movePage,
     selectPage,
@@ -290,6 +326,8 @@ export function Sidebar() {
     isFavorite,
     toggleFavorite,
     openGraph,
+    ensureAllSpaces,
+    directoryLoading,
   } = useWorkspace();
   const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast } = useUi();
   const folded = useFold();
@@ -297,8 +335,13 @@ export function Sidebar() {
   const asideRef = useRef<HTMLElement | null>(null);
   const newTriggerRef = useRef<HTMLButtonElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledRef = useRef("");
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
+  const [copyPicker, setCopyPicker] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
+  useEffect(() => {
+    if (copyPicker) void ensureAllSpaces();
+  }, [copyPicker, ensureAllSpaces]);
   const [newMenu, setNewMenu] = useState<AnchorRect | null>(null);
   const [sortMenu, setSortMenu] = useState<AnchorRect | null>(null);
   const [emptyTrashConfirm, setEmptyTrashConfirm] = useState(false);
@@ -364,8 +407,27 @@ export function Sidebar() {
   const linked = linkedFromOutside(pages);
   const linkedPage = useCallback((page: NotePage) => linked.has(page.id), [linked]);
 
-  const railed = folded || preferences.sidebar_collapsed;
-  const drawered = railed && drawerOpen;
+  const mobile = folded;
+  const railed = !mobile && preferences.sidebar_collapsed;
+  const drawered = !mobile && railed && drawerOpen;
+  const rowHeight = mobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
+  const [scrollBucket, setScrollBucket] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+  const treeMetrics = useMemo(() => measureTree(tree, expanded), [tree, expanded]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.clientHeight > 0) setViewportHeight(el.clientHeight);
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (el.clientHeight > 0) setViewportHeight(el.clientHeight);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [railed, drawered, view]);
+
+  const prevScopeViewRef = useRef(`${activeSpaceId}:${view}`);
 
   useEffect(() => {
     if (!folded && drawerOpen) setDrawerOpen(false);
@@ -430,9 +492,35 @@ export function Sidebar() {
   }, [pages, selectedPageId, updateExpanded]);
 
   useLayoutEffect(() => {
+    const scopeKey = `${activeSpaceId}:${view}`;
+    if (prevScopeViewRef.current !== scopeKey) {
+      prevScopeViewRef.current = scopeKey;
+      setScrollBucket(0);
+      if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    }
     if (!selectedPageId) return;
+    const key = `${activeSpaceId}:${view}:${selectedPageId}`;
+    if (lastScrolledRef.current === key) return;
+    if (view === "files") {
+      const idx = treeMetrics.rowIndex.get(selectedPageId);
+      if (idx === undefined) return;
+      lastScrolledRef.current = key;
+      const el = scrollRef.current;
+      if (!el) return;
+      const h = el.clientHeight || viewportHeight;
+      const rowTop = idx * rowHeight;
+      const rowBottom = rowTop + rowHeight;
+      if (rowTop < el.scrollTop || rowBottom > el.scrollTop + h) {
+        const target = Math.max(0, Math.round(rowTop - h / 2 + rowHeight / 2));
+        el.scrollTop = target;
+        const nextBucket = Math.floor(target / (rowHeight * TREE_STEP)) * TREE_STEP;
+        setScrollBucket((current) => (current === nextBucket ? current : nextBucket));
+      }
+      return;
+    }
+    lastScrolledRef.current = key;
     scrollRef.current?.querySelector(`[data-page-id="${CSS.escape(selectedPageId)}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [selectedPageId, view]);
+  }, [activeSpaceId, rowHeight, selectedPageId, treeMetrics, view, viewportHeight]);
 
   /* Dragging the seam writes straight to the DOM variable and only commits the
      preference on release, so a resize never round-trips through the operation
@@ -578,8 +666,37 @@ export function Sidebar() {
     drop: (target, event) => handlers.current?.drop(target, event),
   }), []);
 
+  const winStart = Math.max(0, scrollBucket - TREE_OVERSCAN);
+  const winEnd = Math.min(treeMetrics.totalRows, scrollBucket + Math.ceil(viewportHeight / rowHeight) + TREE_STEP + TREE_OVERSCAN);
+
+  const renderList = (items: readonly NotePage[], depth: number, startRow: number): ReactNode => {
+    let cursor = startRow;
+    let topSkip = 0;
+    let bottomSkip = 0;
+    const visible: ReactNode[] = [];
+    for (const page of items) {
+      const size = treeMetrics.counts.get(page.id) ?? 1;
+      const end = cursor + size;
+      if (end <= winStart) {
+        topSkip += size;
+      } else if (cursor >= winEnd) {
+        bottomSkip += size;
+      } else {
+        visible.push(branch(page, depth, tree, cursor));
+      }
+      cursor = end;
+    }
+    return (
+      <>
+        {topSkip > 0 ? <div className="tree-spacer" style={{ height: topSkip * rowHeight }} aria-hidden="true" /> : null}
+        {visible}
+        {bottomSkip > 0 ? <div className="tree-spacer" style={{ height: bottomSkip * rowHeight }} aria-hidden="true" /> : null}
+      </>
+    );
+  };
+
   /** A block's row, in the tree or in Favorites. */
-  const branch = (page: NotePage, depth: number, source: PageTree): ReactNode => {
+  const branch = (page: NotePage, depth: number, source: PageTree, startRow?: number): ReactNode => {
     // A page holds pages — its blocks among them, a block being a page —
     // listed under it; a database, its rows.
     const children = source.children.get(page.id) ?? [];
@@ -603,7 +720,7 @@ export function Sidebar() {
         />
         {open && children.length > 0 ? (
           <div className="tree-children" style={{ "--tree-depth": depth } as CSSProperties}>
-            {children.map((child) => branch(child, depth + 1, source))}
+            {startRow !== undefined ? renderList(children, depth + 1, startRow + 1) : children.map((child) => branch(child, depth + 1, source))}
           </div>
         ) : null}
       </div>
@@ -786,6 +903,11 @@ export function Sidebar() {
           className={`sidebar__scroll scroller ${rootDrop ? "is-drop-target" : ""}`}
           role={view === "trash" ? undefined : "tree"}
           aria-label={capitalized(view)}
+          onScroll={(event) => {
+            if (view !== "files") return;
+            const next = Math.floor(event.currentTarget.scrollTop / (rowHeight * TREE_STEP)) * TREE_STEP;
+            setScrollBucket((current) => (current === next ? current : next));
+          }}
           onDragOver={(event) => {
             if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
             event.preventDefault();
@@ -800,11 +922,14 @@ export function Sidebar() {
           }}
         >
           {view === "files" ? (
-            tree.roots.length ? tree.roots.map((page) => branch(page, 0, tree)) : (
-              writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
-                <Plus size={15} />New page
-              </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
-            )
+            <>
+              {tree.roots.length ? renderList(tree.roots, 0, 0) : !directoryLoading ? (
+                writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
+                  <Plus size={15} />New page
+                </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
+              ) : null}
+              {directoryLoading ? <div className="sidebar__empty" aria-busy="true"><p>正在加载目录…</p></div> : null}
+            </>
           ) : null}
 
           {view === "favorites" ? (
@@ -866,9 +991,15 @@ export function Sidebar() {
   const menuIsHome = Boolean(menuPage && activeSpace?.knowledgeBase?.homePageId === menuPage.id);
   const menuSpaceId = menuPage ? spaceOfPage(pages, menuPage.id) : undefined;
   const menuInLibrary = Boolean(menuSpaceId && spaces[menuSpaceId]?.knowledgeBase);
-  /* Any page inside a shared space — a knowledge base, or someone else's
-     shared tree — offers the private copy out. */
-  const menuInSharedSpace = Boolean(menuSpaceId);
+  // Where a copy may land: a document page the member can write to.
+  const copyPage = copyPicker ? pages[copyPicker.pageId] : undefined;
+  const copyTargets = useWorkspaceState(
+    (state) => (copyPage
+      ? Object.values(state.pages).filter((candidate) =>
+          candidate.id !== copyPage.id && candidate.kind === "document" && !candidate.archived && canEdit(candidate.id))
+      : null),
+    (left, right) => (left && right ? sameItems(left, right) : left === right),
+  );
 
   return (
     <>
@@ -936,31 +1067,45 @@ export function Sidebar() {
         </nav>
       ) : null}
 
-      <aside
-        ref={asideRef}
-        className={[
-          "sidebar",
-          railed ? "sidebar--drawer" : "",
-          drawered ? "is-open" : "",
-          resizing ? "is-resizing" : "",
-        ].filter(Boolean).join(" ")}
-        aria-label="Pages"
-        role={drawered ? "dialog" : undefined}
-        aria-modal={drawered ? true : undefined}
-        aria-hidden={railed && !drawered ? true : undefined}
-        inert={railed && !drawered ? true : undefined}
-      >
-        {list}
-        {!railed ? (
-          <div
-            className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
-            role="separator"
-            aria-label="Resize the page list"
-            aria-orientation="vertical"
-            onPointerDown={onResizeStart}
-          />
-        ) : null}
-      </aside>
+      {mobile ? (
+        <BottomSheet
+          open={drawerOpen}
+          label="Pages"
+          size="tall"
+          className="sidebar sidebar--sheet"
+          scrimLabel="Close the page list"
+          restoreFocusTo={() => document.querySelector<HTMLElement>('.mobile-dock [aria-label="All pages"]')}
+          onClose={() => setDrawerOpen(false)}
+        >
+          {list}
+        </BottomSheet>
+      ) : (
+        <aside
+          ref={asideRef}
+          className={[
+            "sidebar",
+            railed ? "sidebar--drawer" : "",
+            drawered ? "is-open" : "",
+            resizing ? "is-resizing" : "",
+          ].filter(Boolean).join(" ")}
+          aria-label="Pages"
+          role={drawered ? "dialog" : undefined}
+          aria-modal={drawered ? true : undefined}
+          aria-hidden={railed && !drawered ? true : undefined}
+          inert={railed && !drawered ? true : undefined}
+        >
+          {list}
+          {!railed ? (
+            <div
+              className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
+              role="separator"
+              aria-label="Resize the page list"
+              aria-orientation="vertical"
+              onPointerDown={onResizeStart}
+            />
+          ) : null}
+        </aside>
+      )}
 
       {drawered ? (
         <button type="button" tabIndex={-1} className="sidebar__scrim is-shown" aria-label="Close the page list" onClick={() => setDrawerOpen(false)} />
@@ -972,6 +1117,7 @@ export function Sidebar() {
         placement="bottom-start"
         role="presentation"
         group="sidebar-new"
+        mobileSheet={{ title: "新建" }}
         onDismiss={(reason) => {
           setNewMenu(null);
           if (reason === "escape") newTriggerRef.current?.focus({ preventScroll: true });
@@ -984,7 +1130,7 @@ export function Sidebar() {
         </MenuList>
       </Popover>
 
-      <Popover open={Boolean(sortMenu)} anchor={sortMenu} placement="bottom-start" label="Sort" onDismiss={() => setSortMenu(null)}>
+      <Popover open={Boolean(sortMenu)} anchor={sortMenu} placement="bottom-start" label="Sort" mobileSheet={{ title: "排序" }} onDismiss={() => setSortMenu(null)}>
         <MenuList label="Sort" autoFocus>
           {SORTS.map((sort, index) => (
             <div key={sort}>
@@ -1008,6 +1154,7 @@ export function Sidebar() {
         anchor={rowMenu?.anchor ?? null}
         placement="bottom-start"
         label="Page actions"
+        mobileSheet={{ title: menuPage ? pageName(menuPage) || "页面操作" : "页面操作" }}
         onDismiss={() => setRowMenu(null)}
       >
         {menuPage ? (
@@ -1023,20 +1170,14 @@ export function Sidebar() {
               onSelect={() => { selectPage(menuPage.id); requestShare(menuPage.id); setRowMenu(null); }}
             />
             <MenuItem icon={<Link size={16} />} label="Copy link" onSelect={() => { copyPageLink(menuPage.id); setRowMenu(null); }} />
-            {/* The only way content leaves a shared space: a private copy in
-                the member's own space. There it can be shared freely. */}
-            {menuInSharedSpace ? (
-              <MenuItem
-                icon={<FolderInput size={16} />}
-                label="拷贝到个人空间"
-                onSelect={() => {
-                  const copyId = duplicatePage(menuPage.id, { toPersonal: true });
-                  if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
-                  else toast("无法拷贝此页面", "error");
-                  setRowMenu(null);
-                }}
-              />
-            ) : null}
+            {/* The only way content leaves a shared space or a knowledge
+                base: a copy the server makes at the destination (fresh ids,
+                attachments re-stored). */}
+            <MenuItem
+              icon={<FolderInput size={16} />}
+              label="拷贝到…"
+              onSelect={() => { setCopyPicker(rowMenu); setRowMenu(null); }}
+            />
             {menuEditable ? (
               <>
                 <MenuItem icon={<Copy size={16} />} label="Duplicate" disabled={menuIsHome} onSelect={() => { if (!menuIsHome) { duplicatePage(menuPage.id); setRowMenu(null); } }} />
@@ -1057,6 +1198,33 @@ export function Sidebar() {
           </MenuList>
         ) : null}
       </Popover>
+
+      {/* "拷贝到…": choosing a page lands a copy of the row's page and its
+          subtree under it — or at Files' top. */}
+      {copyPicker && copyPage ? (
+        <MoveToMenu
+          anchor={copyPicker.anchor}
+          pages={copyTargets ?? []}
+          count={1}
+          label="拷贝到…"
+          placeholder="拷贝到…"
+          onMove={(targetId) => {
+            setCopyPicker(null);
+            void copyPageTo(copyPage.id, targetId).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onMoveToTop={() => {
+            setCopyPicker(null);
+            void copyPageTo(copyPage.id, null).then((copyId) => {
+              if (copyId) { selectPage(copyId); toast("已拷贝到个人空间", "success"); }
+              else toast("无法拷贝此页面", "error");
+            }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
+          }}
+          onClose={() => setCopyPicker(null)}
+        />
+      ) : null}
 
       <EmptyTrashConfirm
         open={emptyTrashConfirm}

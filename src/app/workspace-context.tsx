@@ -43,6 +43,7 @@ import {
   revealBlocks,
 } from "../features/editor/history-cursor";
 import { databaseRows, rowKey, rowOrderAfter } from "../features/database/database-model";
+import { markFresh } from "../features/database/fresh";
 import { bodyPath, linkIntoParent, trashWrites } from "./page-rows";
 import { reidentify } from "../features/editor/editor-commands";
 import { selectionPoints } from "../features/editor/selection";
@@ -56,11 +57,11 @@ import { hasMetadataChange, isStructureChange } from "../collaboration/protocol"
 import { publishRecovery } from "../collaboration/recovery";
 import { pageOfRef, recordValue, recordsOfPath, refKey } from "../platform/records";
 import { withStrictRecordReplay } from "../platform/live";
-import { ApiError, request } from "../platform/http";
+import { ApiError, consumePrefetchedSpaces, request } from "../platform/http";
 import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
-import { collaborationAccount, openCollaborativePage } from "../collaboration/client";
+import { collaborationAccount, openWhenDocument } from "../collaboration/client";
 
 /** What changes rarely — the actions, the selection, the member's spaces
  *  and preferences — so a view reading it is not redrawn by every keystroke.
@@ -72,12 +73,16 @@ export interface WorkspaceContextValue {
   platform: PlatformClient | null;
   selectedPageId: string;
   loading: boolean;
+  directoryLoading: boolean;
   error: string | null;
   preferences: WorkspacePreferences;
   activeSpaceId: string;
   activeSpace: SpaceSummary | null;
   sidebarSort: WorkspacePreferences["sidebar_sort"];
   switchSpace(spaceId: string): void;
+  activateSpace(spaceId: string, options?: { seedPageId?: string }): Promise<void>;
+  ensureAllSpaces(): Promise<void>;
+  openLocatedPage(wanted: string): Promise<boolean>;
   setSidebarSort(sort: WorkspacePreferences["sidebar_sort"]): Promise<void>;
   refreshSpaces(): Promise<void>;
   knowledgeBases: KnowledgeBaseClient;
@@ -85,6 +90,11 @@ export interface WorkspaceContextValue {
   /** Pulls pages' bodies into the window (UC-48). Idempotent; safe to call
    *  from rendering code whenever a page is about to be shown or read. */
   loadPages(pageIds: readonly string[]): void;
+  /** Pulls pages' version history and edit events on demand (UC-56). */
+  loadHistory(pageIds: readonly string[]): Promise<void>;
+  /** ⌘/Ctrl+S: waits on every write so far, then answers where they stand —
+   *  "saved" only once the server really has them. */
+  saveNow(): Promise<SyncStatus>;
   /** Whether the page pane shows the graph instead of the selected page —
    *  opened there as a note opens there. Choosing a page, even the one that
    *  was open, or making one, puts the page back. */
@@ -103,6 +113,13 @@ export interface WorkspaceContextValue {
    *  level of the member's own space — the sanctioned way content leaves a
    *  shared space or a knowledge base. */
   duplicatePage(pageId: string, options?: { block?: boolean; sameTitle?: boolean; toPersonal?: boolean }): string | null;
+  /** Copies a page and its subtree into another document page — or, with
+   *  `parentId` null, to the top level of the member's own space. The
+   *  server makes the copy (fresh ids, links re-pointed, attachments
+   *  re-stored under the destination); the window pulls the copy in once
+   *  it answers. Resolves to the copy's id, null while the workspace is
+   *  not loaded. */
+  copyPageTo(pageId: string, parentId: string | null): Promise<string | null>;
   /** Moves a page to another folder: every link to it stays where it is. */
   movePage(pageId: string, parentId: string | null): void;
   /** `record: false` keeps a change out of undo — for bookkeeping the
@@ -239,6 +256,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     : platformClient, [platformClient, sessionUser]);
   const [selectedPageId, setSelectedPageId] = useState("");
   const [loading, setLoading] = useState(true);
+  const [directoryLoading, setDirectoryLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SyncStatus>("saved");
   const [presence, setPresence] = useState<CollaboratorPresence[]>([]);
@@ -251,6 +269,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const presenceSpaceId = spaceOfPage(state.pages, selectedPageId);
   const [spaces, setSpaces] = useState<Record<string, SpaceSummary>>({});
   const spacesRef = useRef(spaces);
+  const initialSpacesRef = useRef<SpaceSummary[] | undefined>(undefined);
+  const rosterBookRef = useRef<SpaceRosters | null>(null);
+  const initialUrlPage = useRef(typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("page") : null).current;
   const setSpaceCatalog = useCallback((list: readonly SpaceSummary[]) => {
     const next = Object.fromEntries(list.map((space) => [space.spaceId, space]));
     spacesRef.current = next;
@@ -269,8 +290,22 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     let unsubscribe = () => {};
     void createPlatformClient(sessionUser)
       .then(async (client) => {
-        const initialSpaces = await client.spaces.installations().catch(async (reason: unknown) => { await client.close(); throw reason; });
-        const next = await WorkspaceDocument.open(client, initialSpaces).catch(async (reason: unknown) => { await client.close(); throw reason; });
+        const remembered = readSpaceNavigation(client.bootstrap.user.id);
+        const spacesPromise = consumePrefetchedSpaces<SpaceSummary[]>(client.bootstrap.user.id) ?? client.spaces.installations();
+        const locatePromise = initialUrlPage && remembered.pages[remembered.spaceId] !== initialUrlPage
+          ? request<{ scope: string; spaceId: string }>(`/api/records/locate?page=${encodeURIComponent(initialUrlPage)}`).catch(() => null)
+          : Promise.resolve(null);
+        const [initialSpaces, located] = await Promise.all([spacesPromise, locatePromise])
+          .catch(async (reason: unknown) => { await client.close(); throw reason; });
+        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
+        let initialSpaceId = catalog[remembered.spaceId]?.knowledgeBase ? remembered.spaceId : "personal";
+        if (located && (located.spaceId === "personal" || catalog[located.spaceId]?.knowledgeBase)) {
+          initialSpaceId = located.spaceId;
+        }
+        const seedPageId = initialUrlPage ?? remembered.pages[initialSpaceId] ?? catalog[initialSpaceId]?.knowledgeBase?.homePageId;
+        initialSpacesRef.current = initialSpaces;
+        const next = await WorkspaceDocument.open(client, initialSpaces, { activeSpaceId: initialSpaceId, seedPageId })
+          .catch(async (reason: unknown) => { await client.close(); throw reason; });
         if (!active) {
           await next.close();
           await client.close();
@@ -280,6 +315,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         setPlatform(client);
         setDocument(next);
         setState(next.state);
+        setDirectoryLoading(next.directoryLoading);
         const stopSync = next.onSyncStatus(setSaveStatus);
         // Hidden or closing, the window saves at once rather than after the
         // usual pause; a tab closed with writes still unsaved asks first.
@@ -300,11 +336,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         // The member's first page — or, for someone whose pages are all
         // shared with them, the first of those.
         setSpaceCatalog(initialSpaces);
-        const remembered = readSpaceNavigation(client.bootstrap.user.id);
-        const catalog = Object.fromEntries(initialSpaces.map((space) => [space.spaceId, space]));
-        const initialSpaceId = catalog[remembered.spaceId]?.knowledgeBase ? remembered.spaceId : "personal";
         setEmptySpaceId(initialSpaceId);
-        setSelectedPageId(firstPageInSpace(next.state, catalog, initialSpaceId, remembered.pages[initialSpaceId]));
+        setSelectedPageId(firstPageInSpace(next.state, catalog, initialSpaceId, initialUrlPage ?? remembered.pages[initialSpaceId]));
         // The views read it now — after the first page is chosen, so a link
         // to a page in the address, read as the pages arrive, is chosen last.
         store.set(next.state);
@@ -315,6 +348,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           // replaced.
           store.set(nextState);
           setState(nextState);
+          setDirectoryLoading(next.directoryLoading);
         });
         unsubscribe = () => {
           stopChanges();
@@ -403,10 +437,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       /* Open the page's collaborative document now that it is on screen;
          startup no longer opens one for every page. */
       const scope = spaceOfPage(pages, pageId) ?? "personal";
-      void openCollaborativePage(scope, pageId).catch(() => undefined);
+      /* The document initializes on the page's first committed write; a
+         single GET before it lands 404s and no retry ever fires — the
+         session never opens. openWhenDocument keeps asking while the page
+         exists locally. */
+      void openWhenDocument(scope, pageId).catch(() => undefined);
     }
     // The page's body joins the mirror as it opens (UC-48).
-    void document?.loadPages([pageId]).catch(() => undefined);
+    if (pageId) void document?.loadPages([pageId]).catch(() => undefined);
     setSelectedPageId(pageId);
     setGraphFor(null);
   }, [store, document]);
@@ -416,6 +454,39 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const loadPages = useCallback((pageIds: readonly string[]) => {
     void document?.loadPages(pageIds).catch(() => undefined);
   }, [document]);
+
+  /** UC-56 history pulls: fetch versions & edit events on panel/migration demand. */
+  const loadHistory = useCallback(async (pageIds: readonly string[]) => {
+    if (!document) return;
+    await document.loadHistory(pageIds).catch(() => undefined);
+  }, [document]);
+
+  const activateSpace = useCallback(async (spaceId: string, options: { seedPageId?: string } = {}) => {
+    if (!document) return;
+    await document.activateSpace(spaceId, options);
+  }, [document]);
+
+  const ensureAllSpaces = useCallback(async () => {
+    if (!document) return;
+    await document.ensureAllSpaces();
+  }, [document]);
+
+  const openLocatedPage = useCallback(async (wanted: string): Promise<boolean> => {
+    if (!document || !platform) return false;
+    const candidate = wanted.startsWith("#") ? wanted.slice(1) : wanted;
+    if (!candidate) return false;
+    if (document.state.pages[candidate]) { selectPage(candidate); return true; }
+    const located = await request<{ scope: string; spaceId: string }>(
+      `/api/records/locate?page=${encodeURIComponent(candidate)}`,
+    ).catch(() => null);
+    if (!located) return false;
+    if (located.spaceId !== "personal" && !spacesRef.current[located.spaceId]?.knowledgeBase) return false;
+    setEmptySpaceId(located.spaceId);
+    await document.activateSpace(located.spaceId, { seedPageId: candidate });
+    if (!document.state.pages[candidate]) return false;
+    selectPage(candidate);
+    return true;
+  }, [document, platform, selectPage]);
 
   const openGraph = useCallback(() => setGraphFor(selectedRef.current), []);
   const closeGraph = useCallback(() => setGraphFor(null), []);
@@ -505,7 +576,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
     }
     commit(mutations);
-    if (options.select !== false) setSelectedPageId(id);
+    if (options.select !== false) {
+      markFresh(id);
+      setSelectedPageId(id);
+    }
     return id;
   }, [commit, document, platform, activeSpaceId]);
 
@@ -630,6 +704,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return duplicateNow(pageId, options);
   }, [document, platform, duplicateNow]);
 
+  const copyPageTo = useCallback(async (pageId: string, parentId: string | null): Promise<string | null> => {
+    if (!document || !platform) return null;
+    const body: Record<string, string> = { requestId: `copy-${uuid()}` };
+    if (parentId) body.parentId = parentId;
+    else body.spaceId = "personal";
+    const answer = await request<{ id: string }>(`/api/v1/pages/${encodeURIComponent(pageId)}/copy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    void document.loadPages([answer.id]).catch(() => undefined);
+    return answer.id;
+  }, [document, platform]);
+
   /** Re-parents a page. Refuses to drop a page inside its own subtree, which is
    *  the only move that could orphan a branch. */
   const movePage = useCallback((pageId: string, parentId: string | null) => {
@@ -643,9 +731,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
        same contract sharePageTree holds. */
     const crossing = parentId && spaceOfPage(document.state.pages, pageId) !== spaceOfPage(document.state.pages, parentId);
     if (crossing) {
-      const missing = [pageId, ...descendantPageIds(document.state.pages, pageId)].filter((id) => !isLoadedPage(document.state.pages[id]));
-      if (missing.length) {
-        void document.loadPages(missing).then(() => movePage(pageId, parentId)).catch(() => undefined);
+      const subtree = [pageId, ...descendantPageIds(document.state.pages, pageId)];
+      const missing = subtree.filter((id) => !isLoadedPage(document.state.pages[id]));
+      const needHistory = !document.hasHistoryLoaded(subtree);
+      if (missing.length || needHistory) {
+        void Promise.all([
+          missing.length ? document.loadPages(missing) : Promise.resolve(),
+          needHistory ? document.loadHistory(subtree) : Promise.resolve(),
+        ]).then(() => movePage(pageId, parentId)).catch(() => undefined);
         return;
       }
     }
@@ -781,6 +874,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
      own, read again only when that space says someone joined, left, was
      moved or was invited. The SDK catches up after a gap in the stream, so
      nothing is read again for a window coming back into focus. */
+  const followedRosterIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const space of Object.values(spaces)) {
+      if ((activeSpaceId === "personal" && !space.knowledgeBase)
+          || space.spaceId === activeSpaceId
+          || space.spaceId === presenceSpaceId) {
+        ids.add(space.spaceId);
+      }
+    }
+    return [...ids].sort();
+  }, [spaces, activeSpaceId, presenceSpaceId]);
+
   useEffect(() => {
     if (!platform || !document) return;
     let active = true;
@@ -788,14 +893,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const book = new SpaceRosters(platform.spaces.watchRoster, (next) => {
       if (active) setRosters(next);
     });
+    rosterBookRef.current = book;
     const apply = (list: SpaceSummary[]) => {
       if (!active) return;
       setSpaceCatalog(list);
-      book.follow(list.map((space) => space.spaceId));
       // The spaces read, and — moved to Can view — the ones written to no more.
       void document.refreshSpaces(list);
     };
-    void platform.spaces.watchInstallations(apply)
+    void platform.spaces.watchInstallations(
+      apply,
+      initialSpacesRef.current ? { initial: initialSpacesRef.current } : undefined,
+    )
       .then((unsubscribe) => {
         if (active) stop = unsubscribe;
         else unsubscribe();
@@ -803,10 +911,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       .catch(() => undefined);
     return () => {
       active = false;
+      rosterBookRef.current = null;
       stop?.();
       book.close();
     };
   }, [document, platform, setSpaceCatalog]);
+
+  useEffect(() => {
+    rosterBookRef.current?.follow(followedRosterIds);
+  }, [followedRosterIds, platform, document]);
 
   const ensureShareSpace = useCallback(async (pageId: string) => {
     if (!document || !platform) throw new Error("HeiNote is still opening");
@@ -879,8 +992,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (spaceId !== "personal" && !catalog[spaceId]?.knowledgeBase) return;
     const remembered = readSpaceNavigation(platform.bootstrap.user.id);
     setEmptySpaceId(spaceId);
-    selectPage(firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]));
-    if (spaceId !== "personal") void document.addSpace(spaceId);
+    const pageId = firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]);
+    selectPage(pageId);
+    const seedPageId = pageId || remembered.pages[spaceId] || catalog[spaceId]?.knowledgeBase?.homePageId;
+    void document.activateSpace(spaceId, { seedPageId }).then(() => {
+      if (selectedRef.current) return;
+      const landed = firstPageInSpace(document.state, spacesRef.current, spaceId, remembered.pages[spaceId]);
+      if (landed) selectPage(landed);
+    }).catch(() => undefined);
     setPreference("sidebar_view", "files");
   }, [document, platform, selectPage, setPreference]);
 
@@ -1074,28 +1193,42 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [history]);
   const annotateHistory = useCallback((input: HistoryInput) => history.annotate(input), [history]);
 
+  const saveNow = useCallback(async (): Promise<SyncStatus> => {
+    if (!document) return "saved";
+    try { await document.flush(); }
+    catch { /* The status itself says what remains: in flight or refused. */ }
+    return document.status;
+  }, [document]);
+
   const value = useMemo<WorkspaceContextValue>(() => ({
     document,
     platform,
     selectedPageId,
     loading,
+    directoryLoading,
     error,
     preferences: state.preferences,
     activeSpaceId,
     activeSpace,
     sidebarSort,
     switchSpace,
+    activateSpace,
+    ensureAllSpaces,
+    openLocatedPage,
     setSidebarSort,
     refreshSpaces,
     knowledgeBases,
     selectPage,
     loadPages,
+    loadHistory,
+    saveNow,
     graphOpen,
     openGraph,
     closeGraph,
     createPage,
     updatePage,
     duplicatePage,
+    copyPageTo,
     movePage,
     applyBlockMutations,
     commitWrites: commit,
@@ -1128,23 +1261,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     platform,
     selectedPageId,
     loading,
+    directoryLoading,
     error,
     state.preferences,
     activeSpaceId,
     activeSpace,
     sidebarSort,
     switchSpace,
+    activateSpace,
+    ensureAllSpaces,
+    openLocatedPage,
     setSidebarSort,
     refreshSpaces,
     knowledgeBases,
     selectPage,
     loadPages,
+    loadHistory,
+    saveNow,
     graphOpen,
     openGraph,
     closeGraph,
     createPage,
     updatePage,
     duplicatePage,
+    copyPageTo,
     movePage,
     applyBlockMutations,
     commit,

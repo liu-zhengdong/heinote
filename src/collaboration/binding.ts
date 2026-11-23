@@ -41,11 +41,26 @@ export function preserveTextDraft(bound: BoundText | null, content: RichText, me
   if (bound.field.userId) publishRecovery(bound.field.userId, draft);
   else window.dispatchEvent(new CustomEvent("notes:save-refused", { detail: draft }));
 }
+/** Called inside the owning session's local-origin Yjs transaction when the
+ *  observed basis and the live text diverged: `next` is already merged with
+ *  remote additions, so diffing against the stale DOM basis would re-insert
+ *  them. Diff against the live state, and rebind the element's basis so the
+ *  next commit anchors to what it now shows. */
+export function editLiveField(field: RegisteredField, next: RichText): void {
+  const observed = active?.current;
+  const matching = observed?.field.text === field.text && observed.field.generation === field.generation;
+  const nextBasis = editText(field.text, captureText(field.text), next);
+  if (active && matching) active.current = { field, basis: nextBasis };
+}
 /** Called inside the owning session's local-origin Yjs transaction. */
 export function editObservedField(field: RegisteredField, next: RichText): void {
   const observed = active?.current;
-  const matching = observed?.field.text === field.text && observed.field.generation === field.generation;
-  if (observed && !matching) {
+  /* The draft guard belongs to the observed element's own field: a
+   *  structural write can patch a sibling field while the caret sits in
+   *  this one, and refusing that batch would roll the structure back. */
+  const sameField = observed?.field.pageId === field.pageId && observed.field.key === field.key;
+  const matching = sameField && observed.field.text === field.text && observed.field.generation === field.generation;
+  if (sameField && !matching) {
     preserveTextDraft(observed, next, "页面结构或版本已变化。输入中的文字已保留为草稿。");
     throw new Error("The rendered text belongs to an earlier document generation");
   }

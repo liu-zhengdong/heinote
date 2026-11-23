@@ -559,4 +559,133 @@ describe("lazy collection pulls (UC-48)", () => {
     // Rows already mirrored count a page as loaded without a mark.
     expect(asked.every((path) => path.includes("?after=0&pages="))).toBe(true);
   });
+
+  it("tracks version and event ids as lazy pages, coalesces concurrent loads, and pauses/resumes polling", async () => {
+    const asked: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      asked.push(path);
+      if (asked.length === 1) await gate;
+      const pages = new URLSearchParams(path.split("?")[1]).get("pages") ?? "";
+      if (!pages) return json({ latest: 3, rows: [], deleted: [] });
+      const rows = pages.split(",").flatMap((spec) => {
+        const id = spec.split(":")[0];
+        return [{ id: `${id.length}_${id}_v1`, value: { id: "v1", page_id: id } }];
+      });
+      return json({ latest: 3, rows, deleted: [] });
+    }));
+    const versions = await live.LiveCollection.open<Record<string, unknown>>("versions", "personal", { lazy: true, paused: true });
+    opened.push(versions);
+    await flush();
+    expect(asked).toHaveLength(0);
+    const first = versions.loadPages(["alpha"]);
+    const second = versions.loadPages(["alpha"]);
+    expect(asked).toHaveLength(1);
+    const queued = versions.loadPages(["beta"]);
+    release();
+    await Promise.all([first, second, queued]);
+    expect(versions.hasSettledPages(["alpha", "beta"])).toBe(true);
+    expect(versions.loadedPageIds.has("alpha")).toBe(true);
+    expect(versions.loadedPageIds.has("beta")).toBe(true);
+    const callsBeforeResume = asked.length;
+    versions.resume();
+    await flush();
+    expect(asked.length).toBe(callsBeforeResume + 1);
+    versions.pause();
+  });
+
+  it("resets on epoch mismatch and streams cold directory after fast ?ancestors= boot (UC-56)", async () => {
+    let phase: "ep1" | "ep2" = "ep1";
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((done) => { releaseFull = done; });
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      asked.push(path);
+      const query = new URLSearchParams(path.split("?")[1] ?? "");
+      if (query.has("ancestors")) {
+        return json({ latest: 10, epoch: "epoch-1", rows: [{ id: "seed", value: { id: "seed", title: "Seed" } }], deleted: [] });
+      }
+      if (path.includes("after=0") && phase === "ep1") {
+        await fullGate;
+        return json({
+          latest: 10, epoch: "epoch-1",
+          rows: [{ id: "seed", value: { id: "seed", title: "Seed" } }, { id: "other", value: { id: "other", title: "Other" } }],
+          deleted: [],
+        });
+      }
+      if (phase === "ep2" && path.includes("after=10")) {
+        return json({ latest: 50, epoch: "epoch-2", rows: [], deleted: [] });
+      }
+      return json({
+        latest: 2, epoch: "epoch-2",
+        rows: [{ id: "rebuilt", value: { id: "rebuilt", title: "Rebuilt" } }],
+        deleted: [],
+      });
+    }));
+
+    const pages = await live.LiveCollection.open<Record<string, unknown>>("pages", "personal", { seedPageId: "seed" });
+    opened.push(pages);
+    expect(pages.directoryLoading).toBe(true);
+    expect(pages.get("seed")).toBeTruthy();
+    expect(pages.get("other")).toBeUndefined();
+    releaseFull();
+    await flush();
+    expect(pages.directoryLoading).toBe(false);
+    expect(pages.get("other")).toBeTruthy();
+
+    phase = "ep2";
+    pages.refreshNow();
+    await flush();
+    const mismatchIdx = asked.findIndex((x) => x.includes("after=10"));
+    expect(mismatchIdx).toBeGreaterThanOrEqual(0);
+    expect(asked.slice(mismatchIdx + 1).some((p) => p.includes("after=0"))).toBe(true);
+    expect(pages.get("seed")).toBeUndefined();
+    expect(pages.get("rebuilt")).toBeTruthy();
+  });
+
+  it("immediately re-pulls when applySnapshot bumps epoch during an in-flight delta refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const secondStarted = deferred<void>();
+      const secondGate = deferred<void>();
+      let pullCount = 0;
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        pullCount += 1;
+        if (pullCount === 1) {
+          return json({ latest: 1, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 1 } }], deleted: [] });
+        }
+        if (pullCount === 2) {
+          secondStarted.resolve();
+          await secondGate.promise;
+          return json({ latest: 2, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 2 } }], deleted: [] });
+        }
+        return json({ latest: 2, epoch: "e1", rows: [{ id: "row1", value: { id: "row1", row_order: 2 } }], deleted: [] });
+      }));
+
+      const pages = await live.LiveCollection.open<{ id: string; row_order: number }>("pages", "personal");
+      opened.push(pages);
+      expect(pages.get("row1")?.row_order).toBe(1);
+
+      pages.refreshNow();
+      await secondStarted.promise;
+      // Snapshot on another page bumps collection epoch while delta pull #2 is in flight.
+      pages.applySnapshot({
+        scope: "personal",
+        pageId: "db1",
+        generation: "g1",
+        state: "",
+        revision: "r1",
+        canEdit: true,
+        seq: 1,
+        records: { page: { id: "db1", kind: "database" }, blocks: [] },
+      });
+      secondGate.resolve();
+      await flush();
+      expect(pullCount).toBe(3);
+      expect(pages.get("row1")?.row_order).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -3,6 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useId, useMemo, useR
 import type { Person } from "../../core/types";
 import { githubMessages, type GithubResult } from "../../core/github-auth";
 import { api, errorMessage } from "./api";
+import { clearPrefetchedSpaces, prefetchSpaces } from "../../platform/http";
 import { AgentAuthRequest } from "./AgentAuthRequest";
 import { GithubMark, GithubSignupChoice } from "./Github";
 
@@ -16,6 +17,20 @@ interface SessionContextValue {
   logout(): Promise<void>;
 }
 const SessionContext = createContext<SessionContextValue | null>(null);
+
+/* Fire /api/session as soon as the auth bundle evaluates (before React mounts)
+   so network latency overlaps with boot; consumed once by the first refresh. */
+let pendingInitialSession: Promise<SessionResponse> | null = (() => {
+  if (typeof window === "undefined" || typeof fetch !== "function" || window.location.pathname.startsWith("/s/")) return null;
+  const promise = api<SessionResponse>("/api/session");
+  promise.then((data) => {
+    if (data.user) {
+      prefetchSpaces(data.user.id);
+      void import("../../app/WorkspaceShell");
+    }
+  }).catch(() => undefined);
+  return promise;
+})();
 
 export function useSession(): SessionContextValue {
   const session = useContext(SessionContext);
@@ -40,6 +55,13 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const [signupTicket, setSignupTicket] = useState<string | null>(null);
   const [authRequest, setAuthRequest] = useState<string | null>(null);
   const parsedQuery = useRef(false);
+  const prefetchedShell = useRef(false);
+
+  const warmWorkspace = useCallback(() => {
+    if (prefetchedShell.current) return;
+    prefetchedShell.current = true;
+    void import("../../app/WorkspaceShell");
+  }, []);
 
   // AuthGate is the only consumer of the OAuth callback query. The ticket is
   // kept in component state while the address bar is cleaned immediately.
@@ -63,7 +85,9 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     const id = ++requestId.current;
-    const next = await api<SessionResponse>("/api/session");
+    const initial = pendingInitialSession;
+    pendingInitialSession = null;
+    const next = await (initial ?? api<SessionResponse>("/api/session"));
     if (id !== requestId.current) return;
     if (identity.current && next.user?.id !== identity.current) {
       window.location.reload();
@@ -83,6 +107,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
+    if (loading || !session || session.user) return;
+    const win = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (typeof win.requestIdleCallback === "function") {
+      const id = win.requestIdleCallback(() => warmWorkspace(), { timeout: 600 });
+      return () => win.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(warmWorkspace, 150);
+    return () => window.clearTimeout(timer);
+  }, [loading, session, warmWorkspace]);
+  useEffect(() => {
     let checking = false;
     const expired = () => {
       if (checking || !identity.current) return;
@@ -94,7 +131,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
+    const userId = identity.current || undefined;
+    clearPrefetchedSpaces();
     await api("/api/auth/logout", { method: "POST" });
+    await import("../../platform/mirror").then((mirror) => mirror.clearUserMirror(userId)).catch(() => undefined);
     ++requestId.current;
     // A new page clears the previous account's module-level write queues.
     window.location.reload();
@@ -111,14 +151,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
     setBusy(true);
     setError("");
     try {
-      await api(`/api/auth/${registering ? "register" : "login"}`, {
+      const reply = await api<{ user?: SessionUser }>(`/api/auth/${registering ? "register" : "login"}`, {
         method: "POST",
         body: JSON.stringify({ handle: handle.trim().replace(/^@/, ""), password, ...(registering ? { displayName: displayName.trim() } : {}) }),
       });
-      const next = await api<SessionResponse>("/api/session");
+      const next: SessionResponse = reply?.user
+        ? { user: reply.user, registrationOpen: session?.registrationOpen ?? false, githubEnabled: session?.githubEnabled }
+        : await api<SessionResponse>("/api/session");
       if (!next.user) throw new Error("登录未完成，请重试");
       ++requestId.current;
       identity.current = next.user.id;
+      prefetchSpaces(next.user.id);
       setSession(next);
       setPassword("");
       setPasswordVisible(false);
@@ -139,13 +182,24 @@ export function AuthGate({ children }: { children: ReactNode }) {
     </SessionContext.Provider>
   );
 
-  // The signup ticket confirms a new account, then refreshes the session.
-  // onCreate resolves with an empty result so the choice keeps its busy state
-  // until this gate unmounts.
+  // The signup ticket confirms a new account, then updates the session directly
+  // when the response carries the user. onCreate resolves with an empty result
+  // so the choice keeps its busy state until this gate unmounts.
   const createWithTicket = async (ticket: string) => {
     try {
-      await api("/api/auth/github/signup", { method: "POST", body: JSON.stringify({ ticket }) });
-      await refresh();
+      const reply = await api<{ user?: SessionUser }>("/api/auth/github/signup", { method: "POST", body: JSON.stringify({ ticket }) });
+      if (reply?.user) {
+        ++requestId.current;
+        identity.current = reply.user.id;
+        prefetchSpaces(reply.user.id);
+        setSession((previous) => ({
+          user: reply.user!,
+          registrationOpen: previous?.registrationOpen ?? false,
+          githubEnabled: previous?.githubEnabled,
+        }));
+      } else {
+        await refresh();
+      }
       return {};
     } catch (reason) {
       const status = (reason as { status?: number }).status;
@@ -158,7 +212,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <SessionContext.Provider value={value}>
       <main className="account-gate">
         <section className="account-gate__card" aria-label={signupMode ? "GitHub 登录选择" : registering ? "创建小黑笔记账号" : "登录小黑笔记"} aria-busy={loading || busy}>
-          <div className="account-gate__brand"><span className="account-gate__mark"><img src="/brand/heinote-icon.png" width="34" height="34" alt="" /></span>小黑笔记</div>
+          <div className="account-gate__brand"><span className="account-gate__mark"><img src="/brand/heinote-icon-64.png" width="34" height="34" alt="" /></span>小黑笔记</div>
           <h1>{loading ? "正在连接" : signupMode ? "GitHub 登录" : registering ? "创建账号" : "登录"}</h1>
           {loading ? <p className="account-muted" role="status">正在读取登录状态…</p> : !session ? (
             <>
@@ -174,6 +228,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
             <form className="account-form" onSubmit={(event) => void submit(event)}>
               <label className="account-field">账号
                 <input name="handle" autoComplete="username" autoCapitalize="none" spellCheck={false} value={handle}
+                  onFocus={warmWorkspace}
                   onChange={(event) => setHandle(event.target.value.toLowerCase())} required minLength={2} maxLength={40}
                   pattern={"[a-z0-9][a-z0-9_.\\-]{1,39}"} aria-describedby={registering ? `${fieldId}-handle` : undefined} disabled={busy} autoFocus />
                 {registering ? <small id={`${fieldId}-handle`} className="account-hint">2–40 位小写字母、数字或 _ . -，首位须为字母或数字</small> : null}
@@ -185,7 +240,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 <label htmlFor={`${fieldId}-password-input`}>密码</label>
                 <div className="account-password">
                   <input id={`${fieldId}-password-input`} name="password" type={passwordVisible ? "text" : "password"} autoComplete={registering ? "new-password" : "current-password"}
-                    value={password} onChange={(event) => setPassword(event.target.value)} required minLength={registering ? 10 : undefined} maxLength={256}
+                    value={password} onFocus={warmWorkspace} onChange={(event) => setPassword(event.target.value)} required minLength={registering ? 10 : undefined} maxLength={256}
                     aria-describedby={registering ? `${fieldId}-password` : undefined} disabled={busy} />
                   <button type="button" className="account-password__toggle" aria-label={passwordVisible ? "隐藏密码" : "显示密码"} aria-pressed={passwordVisible} disabled={busy} onClick={() => setPasswordVisible(!passwordVisible)}>
                     {passwordVisible ? <EyeOff size={17} aria-hidden="true" /> : <Eye size={17} aria-hidden="true" />}

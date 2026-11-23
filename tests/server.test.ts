@@ -174,6 +174,17 @@ async function agentPage(browser: Browser, bearer: string, title = "First title"
   return created;
 }
 
+test("the public version probe answers the deployed package identity without a session (UC-51)", async (t) => {
+  const f = await fixture(t);
+  const anonymous = f.browser();
+  const reply = await anonymous.request("/api/version");
+  assert.equal(reply.status, 200);
+  assert.equal(reply.headers.get("cache-control"), "no-store");
+  assert.equal(reply.body.name, "heinote");
+  assert.equal(reply.body.version, (await import("../package.json", { with: { type: "json" } })).default.version);
+  assert.ok(typeof reply.body.startedAt === "string" && !Number.isNaN(Date.parse(reply.body.startedAt)));
+});
+
 test("registration, session cookies, login, and logout invalidate the old session", async (t) => {
   const f = await fixture(t);
   const alice = f.browser();
@@ -837,4 +848,41 @@ test("database restart preserves accounts, sessions, tokens, pages, and history"
   const login = f.browser();
   status(await login.request("/api/auth/login", { method: "POST", body: { handle: "alice", password } }), 200);
   assert.equal(status(await login.request("/api/session"), 200).user.id, user.id);
+});
+
+test("lazy history pulls (?pages=) and /api/records/locate respect space isolation and membership (UC-56)", async (t) => {
+  const f = await fixture(t);
+  const alice = f.browser(); const bob = f.browser();
+  await register(alice, "alice_uc56");
+  await register(bob, "bob_uc56");
+  const bearer = await token(alice, "write");
+  const p1 = await agentPage(alice, bearer.token, "First history page", "Body 1");
+  const p2 = await agentPage(alice, bearer.token, "Second history page", "Body 2");
+  status(await alice.request(`/api/v1/pages/${p1.id}/checkpoint`, { method: "POST", token: bearer.token }), 200);
+  status(await alice.request(`/api/v1/pages/${p2.id}/checkpoint`, { method: "POST", token: bearer.token }), 200);
+  const vDelta = status(await alice.request(`/api/records/personal/versions?after=0&pages=${encodeURIComponent(p1.id)}:0`), 200);
+  assert.equal(vDelta.rows.length, 1);
+  assert.equal(vDelta.rows[0].value.page, p1.id);
+  const eDelta = status(await alice.request(`/api/records/personal/page_events?after=0&pages=${encodeURIComponent(p1.id)}:0`), 200);
+  assert.ok(eDelta.rows.every((row: Json) => row.value.page === p1.id));
+
+  const kb = status(await alice.request("/api/knowledge-bases", { method: "POST", body: { requestId: "11111111-1111-4111-8111-111111111111", name: "Locate KB" } }), 201);
+  const kbHome = kb.knowledgeBase.homePageId;
+  const locatedPersonal = status(await alice.request(`/api/records/locate?page=${encodeURIComponent(p1.id)}`), 200);
+  assert.deepEqual(locatedPersonal, { scope: "personal", spaceId: "personal" });
+  const locatedKb = status(await alice.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 200);
+  assert.deepEqual(locatedKb, { scope: kb.spaceId, spaceId: kb.spaceId });
+  status(await bob.request(`/api/records/locate?page=${encodeURIComponent(kbHome)}`), 404);
+
+  const root = await agentPage(alice, bearer.token, "Ancestor root", "Root");
+  const mid = status(await alice.request("/api/v1/pages", { method: "POST", token: bearer.token, body: { title: "Ancestor mid", text: "Mid", parentId: root.id } }), 201);
+  const leaf = status(await alice.request("/api/v1/pages", { method: "POST", token: bearer.token, body: { title: "Ancestor leaf", text: "Leaf", parentId: mid.id } }), 201);
+  const anc = status(await alice.request(`/api/records/personal/pages?ancestors=${encodeURIComponent(leaf.id)}`), 200);
+  assert.ok(typeof anc.epoch === "string" && anc.epoch.length > 0);
+  assert.deepEqual(anc.rows.map((row: Json) => row.id), [leaf.id, mid.id, root.id]);
+  const deltaBeforeRestart = status(await alice.request("/api/records/personal/pages?after=0"), 200);
+  assert.equal(deltaBeforeRestart.epoch, anc.epoch);
+  await f.restart();
+  const deltaAfterRestart = status(await alice.request("/api/records/personal/pages?after=0"), 200);
+  assert.equal(deltaAfterRestart.epoch, anc.epoch);
 });

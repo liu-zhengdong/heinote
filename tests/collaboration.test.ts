@@ -713,3 +713,101 @@ test("viewers cannot approve proposals and explicit rejection changes no documen
   assert.equal(after.state, base.state); assert.equal(after.generation, base.generation); assert.equal(after.revision, base.revision);
   ok(await s.alice.request(`/api/proposals/${proposal.id}/apply`, { method: "POST", body: { baseRevision: base.revision } }), 409);
 });
+
+test("committed edits write timeline events with their author and targets, merging within the window", { timeout: 10000 }, async (t) => {
+  const s = await shared(t);
+  const events = async (browser: Browser) => ok(await browser.request(`/api/v1/pages/${s.pageId}/events`));
+  // Page creation itself is a batch without requestId — the event exists.
+  const initial = await events(s.alice);
+  assert.ok(initial.some((e: Json) => e.label === "创建了页面" && e.author_name === "Independent collaboration Agent"), `creation event missing: ${JSON.stringify(initial)}`);
+
+  const base = await snapshot(s.alice, s.scope, s.pageId);
+  const b = fork(base);
+  ok(await submit(s.bob, base, update(b, () => field(b, s.titleKey).insert(0, "乙改"))));
+
+  let list = await events(s.alice);
+  const bobTitle = list.filter((e: Json) => e.author_name === "bob");
+  assert.equal(bobTitle.length, 1, JSON.stringify(list));
+  assert.equal(bobTitle[0].label, "修改了标题");
+  assert.deepEqual(bobTitle[0].targets, [s.pageId]);
+  assert.equal(bobTitle[0].author_id, s.bobUser.id);
+  assert.equal(bobTitle[0].merged, 1);
+
+  // Alice edits twice inside the window: title then body — one event grows.
+  const a1 = fork(await snapshot(s.alice, s.scope, s.pageId));
+  ok(await submit(s.alice, base, update(a1, () => field(a1, s.titleKey).insert(0, "甲改"))));
+  const a2doc = fork(await snapshot(s.alice, s.scope, s.pageId));
+  ok(await submit(s.alice, base, update(a2doc, () => field(a2doc, s.bodyKey).insert(0, "甲写"))));
+
+  list = await events(s.bob);
+  const aliceEvents = list.filter((e: Json) => e.author_name === "alice" && e.label !== "创建了页面");
+  assert.equal(aliceEvents.length, 1, `same-author edits within the window must merge: ${JSON.stringify(list)}`);
+  assert.equal(aliceEvents[0].merged, 2);
+  assert.ok(aliceEvents[0].label.includes("修改了标题") && aliceEvents[0].label.includes("编辑了正文"), aliceEvents[0].label);
+  assert.ok(aliceEvents[0].targets.includes(s.pageId) && aliceEvents[0].targets.includes(String(s.block.value.id ?? s.block.value.page)), `targets ${JSON.stringify(aliceEvents[0].targets)}`);
+
+  // A checkpoint is not an edit: versions grow, events do not.
+  ok(await s.alice.request(`/api/v1/pages/${s.pageId}/checkpoint`, { method: "POST", body: { summary: "手动" } }));
+  const afterCheckpoint = await events(s.alice);
+  assert.equal(afterCheckpoint.length, list.length, "checkpoint writes must not produce events");
+  b.destroy(); a1.destroy(); a2doc.destroy();
+});
+
+test("page deletion removes its events; member sees all authors' entries", { timeout: 10000 }, async (t) => {
+  const s = await shared(t);
+  const base = await snapshot(s.bob, s.scope, s.pageId);
+  const b = fork(base);
+  ok(await submit(s.bob, base, update(b, () => field(b, s.bodyKey).insert(0, "乙写"))));
+  const rows = ok(await s.bob.request(`/api/records/${s.scope}/page_events`));
+  assert.ok(rows.some((row: Json) => JSON.parse(JSON.stringify(row.value)).author_name === "bob"), `bob reads page_events via records: ${JSON.stringify(rows)}`);
+  // Deleting the page cascades its timeline with its blocks and checkpoints.
+  const snap = await snapshot(s.alice, s.scope, s.pageId);
+  const pageRow = ok(await s.alice.request(`/api/records/${s.scope}/pages`)).find((row: Json) => row.id === s.pageId);
+  ok(await s.alice.request("/api/records/batch", { method: "POST", body: { writes: [{ scope: s.scope, collection: "pages", id: s.pageId, action: "delete", base: pageRow.value }], expectedPages: [{ scope: s.scope, pageId: s.pageId, generation: snap.generation, revision: snap.revision }] } }));
+  // The owner's share-root delete revokes other members — the owner checks.
+  assert.equal(ok(await s.alice.request(`/api/records/${s.scope}/page_events`)).length, 0);
+  b.destroy();
+});
+
+test("events are server-made only: clients cannot write the page_events collection", { timeout: 10000 }, async (t) => {
+  const s = await shared(t);
+  const reply = await s.alice.request(`/api/records/${s.scope}/page_events/fake`, { method: "POST", body: { action: "put", base: null, value: { page: s.pageId, event: "x", created_at: new Date().toISOString(), author_id: s.aliceUser.id, author_name: "伪造", label: "x", targets: [], merged: 1 } } });
+  assert.equal(reply.status, 400, `writeSchema must refuse page_events: ${reply.status} ${JSON.stringify(reply.body)}`);
+});
+
+test("row writes land on the database's timeline — creates, renames and deletes — while a row's own edits stay on its timeline", { timeout: 15000 }, async (t) => {
+  const s = await shared(t);
+  const database = ok(await s.alice.request("/api/v1/databases", {
+    method: "POST", token: s.token.token,
+    body: { requestId: randomUUID(), spaceId: s.scope, title: "清单", database: { title_name: "名称", properties: [], views: [{ id: "table", name: "全部", kind: "table" }] } },
+  }), 201);
+  const read = ok(await s.alice.request(`/api/v1/databases/${database.id}`, { token: s.token.token }));
+  const row = ok(await s.alice.request(`/api/v1/databases/${database.id}/rows`, {
+    method: "POST", token: s.token.token,
+    body: { requestId: randomUUID(), baseRevision: read.revision, title: "任务一" },
+  }), 201);
+  const rowId = String(row.page.id);
+  const dbEvents = () => s.alice.request(`/api/v1/pages/${database.id}/events`).then((r) => r.body as Json[]);
+  assert.ok((await dbEvents()).some((e) => e.label.includes("新增了一行")), `row creation must land on the database timeline: ${JSON.stringify(await dbEvents())}`);
+
+  // A block written under the row belongs to the row's own timeline — the
+  // same shape a document's edits take on theirs.
+  const rowBase = await snapshot(s.alice, s.scope, rowId);
+  const blockId = `${rowId.length}_${rowId}_body1`;
+  ok(await s.alice.request("/api/records/batch", {
+    method: "POST", body: { requestId: randomUUID(), expectedPages: [expected(rowBase)],
+      writes: [{ scope: s.scope, collection: "blocks", id: blockId, action: "put", base: null, value: { id: "body1", page: rowId, kind: "text", content: [{ text: "行内正文" }], order: 1 } }] },
+  }));
+  const rowEvents = ok(await s.alice.request(`/api/v1/pages/${rowId}/events`));
+  assert.ok(rowEvents.some((e) => e.label.includes("新增了段落") && e.targets.includes("body1")), `row timeline must carry its own block writes: ${JSON.stringify(rowEvents)}`);
+  assert.ok(!(await dbEvents()).some((e) => e.targets.includes("body1")), "a row's block write must not surface on the database timeline");
+
+  // Deleting the row names the act on the database timeline — the row's own
+  // timeline dies with it, and the label must say 行, not 页面.
+  const rowRecord = ok(await s.alice.request(`/api/records/${s.scope}/pages`)).find((r: Json) => r.id === rowId);
+  const rowCurrent = await snapshot(s.alice, s.scope, rowId);
+  ok(await s.alice.request("/api/records/batch", { method: "POST", body: { requestId: randomUUID(), expectedPages: [expected(rowCurrent)], writes: [{ scope: s.scope, collection: "pages", id: rowId, action: "delete", base: rowRecord.value }] } }));
+  const events = await dbEvents();
+  assert.ok(events.some((e) => e.label.includes("删除了一行")), `row deletion must land on the database timeline: ${JSON.stringify(events)}`);
+  assert.ok(!events.some((e) => e.label.includes("删除了页面")), "a row delete labelled as a page delete misleads the timeline");
+});

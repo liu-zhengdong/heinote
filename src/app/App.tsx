@@ -1,8 +1,6 @@
 import { CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { routes } from "../platform/schema";
-import { DatabasePage } from "../features/database/DatabasePage";
-import { AppPage } from "../features/artifact/AppPage";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
 import { DocumentEditor } from "../features/editor/DocumentEditor";
 import { linkedPageId } from "../features/editor/mentions";
@@ -10,7 +8,12 @@ import { QuickFind } from "../features/quickfind/QuickFind";
 import { Sidebar } from "../features/sidebar/Sidebar";
 import { DeletePageConfirm } from "../features/sidebar/TrashView";
 import { TopBar } from "../features/topbar/TopBar";
+import { MobileDock } from "../features/mobile/MobileDock";
+import { MobileEditBar } from "../features/editor/MobileEditBar";
+import { getActiveEditSurface } from "./edit-surface";
+import { useSession } from "../features/account/AuthGate";
 import { useFold } from "../hooks/useFold";
+import { useVisualViewport } from "../hooks/useVisualViewport";
 import type { NotePage } from "../core/types";
 import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
 import { imeComposing } from "../core/keyboard";
@@ -20,9 +23,14 @@ import { pageAncestry } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
 
-/* Sharing, page history and the graph are loaded the first time they are opened. */
+/* Sharing, page history, the graph, databases, apps, settings and the admin
+   console are loaded the first time they are opened. */
+const DatabasePage = lazy(() => import("../features/database/DatabasePage").then((module) => ({ default: module.DatabasePage })));
+const AppPage = lazy(() => import("../features/artifact/AppPage").then((module) => ({ default: module.AppPage })));
+const AccountSettings = lazy(() => import("../features/account/AccountSettings").then((module) => ({ default: module.AccountSettings })));
 const ShareDialog = lazy(() => import("../features/share/ShareDialog").then((module) => ({ default: module.ShareDialog })));
 const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
+const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 
@@ -44,28 +52,66 @@ function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: Note
 function AppPageShell({ pageId }: { pageId: string }) {
   const page = usePage(pageId);
   if (!page) return null;
-  return <AppPage page={page} />;
+  return (
+    <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+      <AppPage page={page} />
+    </Suspense>
+  );
 }
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace,
+    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
-  const { setQuickFindOpen, drawerOpen, setDrawerOpen, sharePageId, closeShare, peekPageId, openPeek, closePeek, toast, adminOpen, setAdminOpen } = useUi();
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const { user, githubOutcome, clearGithubOutcome } = useSession();
+  const {
+    setQuickFindOpen,
+    drawerOpen,
+    setDrawerOpen,
+    sharePageId,
+    closeShare,
+    peekPageId,
+    openPeek,
+    closePeek,
+    toast,
+    adminOpen,
+    setAdminOpen,
+    historyOpen,
+    setHistoryOpen,
+    accountSettingsOpen,
+    accountSettingsNotice,
+    openAccountSettings,
+    closeAccountSettings,
+  } = useUi();
+
+  useEffect(() => {
+    if (!user || !githubOutcome) return;
+    openAccountSettings(githubOutcome);
+    clearGithubOutcome();
+  }, [clearGithubOutcome, githubOutcome, openAccountSettings, user]);
   /* Opened once, the panel stays mounted, so it can slide out as it closes. */
   const [historyUsed, setHistoryUsed] = useState(false);
   const [historyPreview, setHistoryPreview] = useState<NotePage | null>(null);
-  const folded = useFold();
+  const [surfaceEl, setSurfaceEl] = useState<HTMLElement | null>(null);
+  const mobile = useFold();
+  const { keyboardOpen } = useVisualViewport(mobile);
+  const previousKeyboardOpen = useRef(false);
+  useEffect(() => {
+    const wasOpen = previousKeyboardOpen.current;
+    previousKeyboardOpen.current = keyboardOpen;
+    if (!mobile || !wasOpen || keyboardOpen) return;
+    const current = getActiveEditSurface();
+    if (current && !current.subOverlayOpen) current.done();
+  }, [keyboardOpen, mobile]);
   /* Same sum the Sidebar does. The shell only needs it for the width of the
-     first track; what goes IN that track is the Sidebar's business. */
-  const railed = folded || preferences.sidebar_collapsed;
+     first track; on mobile there is no rail track at all. */
+  const railed = !mobile && preferences.sidebar_collapsed;
 
   /* The side peek is laid out by the shell: docked beside the page when the
      page pane holds both, over it when it does not. */
   const [shell, setShell] = useState<HTMLDivElement | null>(null);
-  const peek = usePeekLayout(shell, railed ? SIDEBAR_RAIL_WIDTH : preferences.sidebar_width);
+  const peek = usePeekLayout(shell, mobile ? 0 : railed ? SIDEBAR_RAIL_WIDTH : preferences.sidebar_width);
   /* What the shell draws of the workspace — the open page's kind, whether
      the row in the peek is still there, whether sharing still follows the
      page — each read on its own, so typing redraws none of it. */
@@ -98,7 +144,7 @@ export function App() {
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     setHistoryPreview(null);
-  }, []);
+  }, [setHistoryOpen]);
 
   /* Workspace-level shortcuts. ⌘K opens Quick Find, ⌘\ folds the list and
      ⌘⇧N starts a page — the three Notion reaches for without a menu. On a
@@ -107,8 +153,22 @@ export function App() {
      change nothing they could see. */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || imeComposing(event)) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
       const key = event.key.toLowerCase();
+      /* ⌘/Ctrl+S means "make sure it's saved", not the browser's page
+         download: wait on what is still in flight and say where it landed.
+         It is taken before the IME check — even mid-composition the system
+         save dialog must never open. */
+      if (key === "s") {
+        event.preventDefault();
+        void saveNow().then((status) => {
+          if (status === "saved") toast("已保存", "success");
+          else if (status === "refused") toast("部分更改未能保存，已保留为草稿", "error");
+          else toast("尚未全部保存，联网后会自动完成", "info");
+        });
+        return;
+      }
+      if (imeComposing(event)) return;
       if (key === "k" && !event.shiftKey) {
         // Words selected in a page took it for a link.
         if (event.defaultPrevented) return;
@@ -118,7 +178,7 @@ export function App() {
       }
       if (key === "\\") {
         event.preventDefault();
-        if (folded) setDrawerOpen(!drawerOpen);
+        if (mobile) setDrawerOpen(!drawerOpen);
         else setPreference("sidebar_collapsed", !preferences.sidebar_collapsed);
         return;
       }
@@ -129,7 +189,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [createPage, drawerOpen, folded, preferences.sidebar_collapsed, setDrawerOpen, setPreference, setQuickFindOpen]);
+  }, [createPage, drawerOpen, mobile, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, toast]);
 
   /* A page id in the fragment opens that page — the target of every "Copy
      link" in the app, a block's too: a block is a page. So does a place
@@ -140,13 +200,23 @@ export function App() {
      back after they navigate away. */
   const openedFromHash = useRef("");
   const wantedPage = useRef<string | null>(new URLSearchParams(window.location.search).get("page"));
+  const locating = useRef(new Set<string>());
   useEffect(() => {
     const openWanted = () => {
       const wanted = wantedPage.current;
-      const id = wanted ? linkedPageId(wanted, store.getState().pages) : null;
-      if (!id) return;
-      wantedPage.current = null;
-      selectPage(id);
+      if (!wanted) return;
+      const id = linkedPageId(wanted, store.getState().pages);
+      if (id) {
+        wantedPage.current = null;
+        selectPage(id);
+        return;
+      }
+      if (!loading && !locating.current.has(wanted)) {
+        locating.current.add(wanted);
+        void openLocatedPage(wanted).then((opened) => {
+          if (opened && wantedPage.current === wanted) wantedPage.current = null;
+        });
+      }
     };
     const openFromHash = () => {
       const link = window.location.hash;
@@ -175,23 +245,36 @@ export function App() {
       stopRoutes();
       window.removeEventListener("hashchange", openFromHash);
     };
-  }, [selectPage, store]);
+  }, [loading, openLocatedPage, selectPage, store]);
 
   /* The address says which page is open — `?page=<id>`, the place a link or
      an agent's `open` brings the window back to — so the desktop can tell an
      agent where the window is (`whats_open`). Replaced, never pushed: it is
      no step of the browser's history. */
   useEffect(() => {
+    if (loading) return;
     const here = new URL(window.location.href);
     if (selectedPageId) here.searchParams.set("page", selectedPageId);
     else here.searchParams.delete("page");
     if (here.href !== window.location.href) window.history.replaceState(window.history.state, "", here);
-  }, [selectedPageId]);
+  }, [loading, selectedPageId]);
+
+  /* A peeked row's history belongs to the row as a page: opening it selects
+     the row, and the page-change cleanup below then opens it — doing it in
+     the handler would race the same cleanup it must survive. */
+  const historyForRef = useRef<string | null>(null);
 
   /* Going to another page closes what belonged to this one: its history, the
-     drawer that led there, and the row open beside it. */
+     drawer that led there, and the row open beside it — unless the move was
+     the history itself reaching a peeked row. */
   useEffect(() => {
-    closeHistory();
+    if (historyForRef.current === selectedPageId) {
+      historyForRef.current = null;
+      setHistoryOpen(true);
+      setHistoryUsed(true);
+    } else {
+      closeHistory();
+    }
     setDrawerOpen(false);
     closePeek();
   }, [closeHistory, closePeek, selectedPageId, setDrawerOpen]);
@@ -235,7 +318,7 @@ export function App() {
   return (
     <div
       ref={setShell}
-      className={`app-shell ${railed ? "app-shell--railed" : ""} ${peekOpen && peek.docked ? "app-shell--peek" : ""}`}
+      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && peekOpen && peek.docked ? "app-shell--peek" : ""}`}
       style={{ ["--sidebar-w" as string]: `${preferences.sidebar_width}px`, ["--peek-w" as string]: `${peek.width}px` }}
     >
       <Sidebar />
@@ -256,7 +339,7 @@ export function App() {
           {/* The graph, opened as a page of its own: its dots open beside
               it, in the side peek — or in its place with ⌘/Ctrl. */}
           {graphOpen ? (
-            <main className="page-surface page-surface--graph">
+            <main ref={setSurfaceEl} className="page-surface page-surface--graph">
               <Suspense fallback={<div className="graph graph--page" aria-busy="true" />}>
                 <GraphView
                   variant="page"
@@ -266,7 +349,7 @@ export function App() {
               </Suspense>
             </main>
           ) : (
-          <main className="page-surface scroller">
+          <main ref={setSurfaceEl} className="page-surface scroller">
             {historyPreview ? (
               <div className="history-banner" role="status">
                 <Clock3 size={14} />
@@ -292,8 +375,14 @@ export function App() {
               </div>
             ) : null}
 
-            {selectedKind === "database" && !historyPreview ? (
-              <DatabasePage readOnly={Boolean(trashedAt)} />
+            {historyPreview && historyPreview.kind !== "document" ? (
+              /* A non-document checkpoint holds the page's definition, not
+                 a body: show what restoring it restores. */
+              <Suspense fallback={null}><SnapshotPreview page={historyPreview} /></Suspense>
+            ) : selectedKind === "database" && !historyPreview ? (
+              <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+                <DatabasePage readOnly={Boolean(trashedAt)} />
+              </Suspense>
             ) : selectedKind === "app" && !historyPreview ? (
               <AppPageShell pageId={selectedPageId} />
             ) : selectedKind ? (
@@ -316,7 +405,23 @@ export function App() {
         </div>
       </div>
 
-      <SidePeek docked={peek.docked} width={peek.width} pane={peek.pane} onResize={peek.resize} />
+      <SidePeek
+        docked={peek.docked}
+        width={peek.width}
+        pane={peek.pane}
+        onResize={peek.resize}
+        onHistory={() => {
+          if (!peekPageId) return;
+          if (peekPageId !== selectedPageId) {
+            historyForRef.current = peekPageId;
+            selectPage(peekPageId);
+          } else {
+            closePeek();
+            setHistoryOpen(true);
+            setHistoryUsed(true);
+          }
+        }}
+      />
       {historyUsed ? (
         <Suspense fallback={null}>
           <HistoryPanel
@@ -339,6 +444,23 @@ export function App() {
         onConfirm={() => void removeTrashedPage()}
       />
       <QuickFind />
+      {mobile ? <MobileDock surface={surfaceEl} historyOpen={historyOpen} /> : null}
+      {mobile ? <MobileEditBar /> : null}
+      {user && accountSettingsOpen ? (
+        <Suspense fallback={null}>
+          <AccountSettings
+            key={`${user.id}:${accountSettingsNotice || "default"}`}
+            notice={accountSettingsNotice}
+            onClose={() => {
+              closeAccountSettings();
+              requestAnimationFrame(() => {
+                const trigger = document.querySelector<HTMLElement>('.sidebar [aria-label="设置"], .rail [aria-label="设置"]');
+                if (trigger?.getClientRects().length && !trigger.closest("[inert]")) trigger.focus({ preventScroll: true });
+              });
+            }}
+          />
+        </Suspense>
+      ) : null}
       {adminOpen ? (
         <Suspense fallback={null}>
           <AdminConsole onClose={() => {

@@ -71,6 +71,14 @@ const HISTORY_RETENTION = {
   maxAgeSeconds: HISTORY_AGE_MS / 1000, maxEntries: HISTORY_LIMIT, maxBytes: HISTORY_BUDGET_BYTES,
 };
 
+/** How many edits a page's timeline keeps; each entry is small, so the cap
+ *  is by count and age, not bytes. */
+export const EVENTS_LIMIT = 300;
+const EVENTS_RETENTION = {
+  groupBy: "page", entryBy: "event", timestamp: "created_at",
+  maxAgeSeconds: HISTORY_AGE_MS / 1000, maxEntries: EVENTS_LIMIT,
+};
+
 /* ── What the commands take ───────────────────────────────────────────────
    `t` fields, each saying what it is to the agent choosing it, and left out
    unless it is required. Field names are the agents': snake_case, as
@@ -341,7 +349,11 @@ export default schema({
     },
     blocks: {
       scopes: ["personal", "space"],
-      fields: { page: t.string().describe("The page it is a paragraph of."), ...paragraphFields, content: t.richText() },
+      fields: {
+        page: t.string().describe("The page it is a paragraph of."), ...paragraphFields, content: t.richText(),
+        /** Who last typed in it and when: the timeline's per-paragraph hint. */
+        edited_at: t.string().optional(), edited_by: t.string().optional(),
+      },
       agents: "read",
     },
     // A part of a page's checkpoint (src/platform/history-record.ts).
@@ -352,6 +364,23 @@ export default schema({
         part: t.int(), parts: t.int(), payload: t.string(),
       },
       retention: HISTORY_RETENTION,
+    },
+    // One committed edit on a page: who, when, and the fields it touched —
+    // the history panel's timeline. Writes of `versions` and
+    // `workspace_settings` make none; the same author's edits inside one
+    // coalescing window merge into the latest entry.
+    page_events: {
+      scopes: ["personal", "space"],
+      fields: {
+        page: t.string(), event: t.string(), created_at: t.string(),
+        author_id: t.string(), author_name: t.string(), author_avatar_url: t.string().optional(),
+        label: t.string(),
+        /** The blocks (or the page itself) the edit touched, for locating. */
+        targets: t.list(t.string()),
+        /** How many committed batches this entry holds: always ≥ 1. */
+        merged: t.int(),
+      },
+      retention: EVENTS_RETENTION,
     },
     // The member's own settings, which nobody else sees: `preferences` and
     // `roots` (the top level's order).

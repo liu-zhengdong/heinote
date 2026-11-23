@@ -198,7 +198,14 @@ export function editText(text: Y.Text, basis: TextBasis, next: RichText): TextBa
 }
 /** Replay a value-level edit after a generation changed its character IDs.
  * Both edits observe the old committed text. Local deletion/formatting can
- * therefore affect only baseline characters, never the remote additions. */
+ * therefore affect only baseline characters, never the remote additions.
+ *
+ * The remote apply is value-based: a remote atom equal to a baseline atom
+ * aliases the baseline's own item ("keep" means "leave it"). A local edit
+ * that deletes that baseline atom then also deletes the remote's text —
+ * an aliasing the real merge never has, since the remote atom there is the
+ * remote writer's own item. Repair re-inserts exactly the remote atoms the
+ * local edit took down, anchored where they stood. */
 export function rebaseText(base: RichText, local: RichText, remote: RichText): RichText {
   if (equal(base, local) || equal(local, remote)) return remote;
   if (equal(base, remote)) return local;
@@ -209,8 +216,70 @@ export function rebaseText(base: RichText, local: RichText, remote: RichText): R
     const basis = captureText(text);
     editText(text, basis, remote);
     editText(text, basis, local);
+    const remoteAtoms = atomsOf(remote);
+    const current = atomsOf(readText(text));
+    /* Value alone cannot tell a remote atom from a shared baseline item.
+       What the merge would do is known though: the local edit can only
+       kill baseline items, so an atom the remote side merely kept dies
+       with its baseline position — while an atom the remote side added
+       can never be removed by the local intent. If it vanished anyway,
+       the local diff ate it by value-aliasing and it is re-inserted where
+       it stood, just before the next atom the merge kept. */
+    const remoteOwned = new Set<number>();
+    const sharedToBase = new Map<number, number>();
+    {
+      const baseAtoms = atomsOf(base);
+      let baseAt = 0; let remoteAt = 0;
+      for (const change of diffArrays(baseAtoms, remoteAtoms, { comparator: sameValue })) {
+        const count = change.count ?? change.value.length;
+        if (change.removed) baseAt += count;
+        else if (change.added) { for (let at = 0; at < count; at++) remoteOwned.add(remoteAt + at); remoteAt += count; }
+        else { for (let at = 0; at < count; at++) sharedToBase.set(remoteAt + at, baseAt + at); baseAt += count; remoteAt += count; }
+      }
+    }
+    const removedBase = new Set<number>();
+    {
+      let baseAt = 0;
+      for (const change of diffArrays(atomsOf(base), atomsOf(local), { comparator: sameValue })) {
+        const count = change.count ?? change.value.length;
+        if (change.removed) { for (let at = 0; at < count; at++) removedBase.add(baseAt + at); baseAt += count; }
+        else if (!change.added) baseAt += count;
+      }
+    }
+    let remoteAt = 0; let index = 0; let inserted = 0;
+    for (const change of diffArrays(remoteAtoms, current, { comparator: sameValue })) {
+      const count = change.count ?? change.value.length;
+      if (change.removed) {
+        /* Missing from the merge: revive remote-owned atoms, but not ones
+         *  sharing a baseline position the local intent deleted — those
+         *  died exactly as the real merge would kill them. */
+        for (const run of runsOf(change.value.filter((_, offset) => {
+          const at = remoteAt + offset;
+          return remoteOwned.has(at) || !removedBase.has(sharedToBase.get(at) ?? -1);
+        }))) {
+          if ("text" in run && run.text) { text.insert(index + inserted, run.text, run.marks as Record<string, unknown> | undefined); inserted += run.text.length; }
+          else if ("embed" in run && run.embed) { text.insertEmbed(index + inserted, structuredClone(run.embed), run.marks as Record<string, unknown> | undefined); inserted += 1; }
+        }
+        remoteAt += count;
+      } else if (!change.added) { index += count; remoteAt += count; }
+      else index += count;
+    }
     return readText(text);
   } finally { doc.destroy(); }
+}
+
+/** Three-way merge for a DOM commit whose observed basis and the shared
+ *  text have since diverged. When the DOM already drew every remote atom
+ *  (live is a subsequence of what the user submitted), the submitted text
+ *  is already the merge — applying it again would duplicate the remote
+ *  atoms. Otherwise the DOM is behind and remote atoms it never saw are
+ *  merged back in beside the user's intent. */
+export function mergeShownText(seen: RichText, desired: RichText, live: RichText): RichText {
+  const remote = atomsOf(live); const local = atomsOf(desired);
+  let at = 0;
+  for (const atom of local) if (at < remote.length && sameValue(atom, remote[at])) at += 1;
+  if (at === remote.length) return desired;
+  return rebaseText(seen, desired, live);
 }
 
 export function captureSelection(basis: TextBasis, start: number, end: number): TextSelection {

@@ -78,8 +78,11 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 heinote pages [--full]                        # 列出页面（默认 id/title/kind 摘要）
 heinote search <query> [--space S] [--limit N] [--offset N]
                                               # 搜标题与正文；返回 {hits,total,hasMore,nextOffset}
-heinote page <id>                             # 读页面与块树
+heinote page <id>                             # 读页面与块树（完整 JSON）
+heinote markdown <id> [--out F]               # 读正文 Markdown（块树的可读投影，默认 stdout）
 heinote create-page --title T [--text STR | --markdown STR] [--parent-id P] [--space-id S]
+heinote copy <id> [--space-id S] [--parent-id P]
+                                              # 把页面含子树拷到个人空间或某空间（知识库落到其首页下）
 heinote set-title <id> --title T              # 只改标题
 heinote append <id> --text STR [--format markdown] | --markdown STR [--suggest]
 heinote ops <id> --ops ops.json [--suggest]   # 结构化修改，JSON 数组
@@ -120,12 +123,14 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | --- | --- |
 | 列出可见页面 | `heinote pages` |
 | 跨空间搜索页面 | `heinote search "关键词"` |
-| 读页面与块树 | `heinote page <id>` |
+| 读页面与块树 | `heinote page <id>`（要块 ID、修订时） |
+| 读正文为 Markdown | `heinote markdown <id>`（人类可读；页面提及为标题、附件为下载链接） |
 | 追加文字 | `heinote append <id> --text "内容"` 或 `--text -` |
 | 追加富文本 | `heinote append <id> --markdown -`（标题、列表、表格、代码块整块树插入） |
 | 追加行内标记 | `heinote append <id> --text "`code` **粗**" --format markdown` |
 | 局部修改 | `heinote ops <id> --ops ops.json`（操作见下） |
 | 创建文档页 | `heinote create-page --title T --text "正文"`（或 `--markdown "# 标题"` 写富文本） |
+| 拷贝页面到其他空间 | `heinote copy <id> --space-id <S>`（默认个人空间；附件随拷贝迁移） |
 | 创建条目 | `heinote row-create <db> --data row.json` |
 | 改条目属性 | `heinote row-set <db> <row> --data '{"properties":{...}}'` |
 | 查询条目 | `heinote db-query <db> --query '{"filters":[...]}'` |

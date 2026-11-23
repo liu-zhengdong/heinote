@@ -2,8 +2,9 @@ import * as Y from "yjs";
 import { uuid } from "../core/ids";
 import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
-import { parseBlockRecordId } from "./record-ids";
-import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openCollaborativePage, pageBasis, projectRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { pageOfRecordId, parseBlockRecordId } from "./record-ids";
+import { MAX_CACHED_BLOCK_PAGES, MIRRORED_COLLECTIONS, readMirror, scheduleWriteMirror } from "./mirror";
+import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, protectSettledRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
@@ -311,9 +312,16 @@ function runBatch(owner: AccountQueue, batch: SavedBatch, items: Pending[]): Pro
        the server refuses without — and the session that names it only opens
        on demand now. Open it and attach the basis before the write goes. */
     const addressed = new Set(batch.expectedPages.map((basis) => documentKey(basis)));
+    /* A page this batch creates cannot have a collaborative document yet:
+     *  the document initializes with the page record's commit, which is this
+     *  very batch. Waiting for a session would deadlock the write, so a
+     *  `pages` write with no base marks the page as creation and skips the
+     *  basis entirely — the server asks for none on a page with no document. */
+    const creating = new Set(items.flatMap((item) => item.write?.collection === "pages" && item.write.action !== "delete" && !item.write.base ? [documentKey({ scope: item.write.scope, pageId: item.write.id })] : []));
     for (const item of items) {
       const pageId = item.write ? pageOf(item.write) : undefined;
       if (!item.structural || !item.write || !pageId || addressed.has(documentKey({ scope: item.write.scope, pageId }))) continue;
+      if (creating.has(documentKey({ scope: item.write.scope, pageId }))) { addressed.add(documentKey({ scope: item.write.scope, pageId })); continue; }
       await awaitCollaborativeBasis(item.write.scope, pageId);
       const basis = pageBasis(item.write.scope, pageId);
       if (basis) { batch.expectedPages.push(basis); addressed.add(documentKey(basis)); }
@@ -498,45 +506,222 @@ export class LiveCollection<R extends object> {
   /** The server's record changelog watermark this mirror reached (ISS-12).
    *  Polls send it as `after`; 0 means a cold pull of the whole collection. */
   private latest = 0;
-  /** Lazy collections (UC-48 blocks): each page's watermark, or 0 for a page
-   *  asked for but not pulled yet. Only these pages are mirrored; the poll
-   *  sends them as `pages=<id>:<seq>` specs instead of `after`. */
+  /** Lazy collections (UC-48 blocks, UC-56 history): each page's watermark,
+   *  or 0 for a page asked for but not pulled yet. Only these pages are
+   *  mirrored; the poll sends them as `pages=<id>:<seq>` specs instead of `after`. */
   private readonly pageWatermarks = new Map<string, number>();
+  private readonly settledPages = new Set<string>();
+  private readonly mirrorBlocks = new Map<string, { watermark: number; rows: Array<[string, R]> }>();
+  private blocksLru: string[] = [];
+  private serverEpoch = "";
+  private _directoryLoading = false;
+  private paused: boolean;
+  private inFlight: Promise<void> | null = null;
+  private queuedRefresh = false;
   private stop: () => void;
-  private constructor(readonly name: string, readonly scope: string, private readonly lazy = false) {
+  private constructor(readonly name: string, readonly scope: string, private readonly lazy = false, paused = false) {
+    this.paused = paused;
     this.stop = onScopeChange(scope, () => {
       // Collaboration snapshots replace only page and block records.
       if (name === "pages" || name === "blocks") this.epoch += 1;
       this.emit();
     });
   }
-  static async open<R extends object>(name: string, scope: string, options: { lazy?: boolean } = {}): Promise<LiveCollection<R>> {
-    const live = new LiveCollection<R>(name, scope, options.lazy ?? false);
+  /** True while cold boot showed the target page via `?ancestors=` and the
+   *  background `?after=0` directory pull is still streaming in. */
+  get directoryLoading(): boolean {
+    return this._directoryLoading;
+  }
+  private touchBlocksLru(pageId: string): void {
+    this.blocksLru = [...this.blocksLru.filter((id) => id !== pageId), pageId].slice(-MAX_CACHED_BLOCK_PAGES);
+  }
+  private persistMirror(): void {
+    if (this.closed || !MIRRORED_COLLECTIONS.has(this.name)) return;
+    if (this.name === "blocks") {
+      const grouped = new Map<string, Array<[string, unknown]>>();
+      for (const [pageId, entry] of this.mirrorBlocks) grouped.set(pageId, entry.rows);
+      for (const pageId of this.settledPages) grouped.set(pageId, []);
+      for (const [id, value] of this.remote) {
+        const pageId = pageOfRecordId(id) ?? (typeof (value as Value).page === "string" ? (value as Value).page as string : null);
+        if (!pageId) continue;
+        const list = grouped.get(pageId) ?? [];
+        list.push([id, value]);
+        grouped.set(pageId, list);
+        if (!this.blocksLru.includes(pageId)) this.touchBlocksLru(pageId);
+      }
+      const keep = new Set(this.blocksLru.slice(-MAX_CACHED_BLOCK_PAGES));
+      const pages: Record<string, Array<[string, unknown]>> = {};
+      const pageWatermarks: Array<[string, number]> = [];
+      for (const pageId of keep) {
+        const watermark = this.pageWatermarks.get(pageId) ?? this.mirrorBlocks.get(pageId)?.watermark;
+        if (watermark === undefined || watermark <= 0) continue;
+        pageWatermarks.push([pageId, watermark]);
+        pages[pageId] = grouped.get(pageId) ?? [];
+      }
+      if (!pageWatermarks.length) return;
+      scheduleWriteMirror(this.scope, "blocks", { kind: "blocks", epoch: this.serverEpoch, pageWatermarks, pages, lru: [...keep] });
+      return;
+    }
+    if (this.latest <= 0) return;
+    scheduleWriteMirror(this.scope, this.name, {
+      kind: "full",
+      epoch: this.serverEpoch,
+      latest: this.latest,
+      rows: [...this.remote.entries()],
+    });
+  }
+  static async open<R extends object>(name: string, scope: string, options: { lazy?: boolean; paused?: boolean; seedPageId?: string } = {}): Promise<LiveCollection<R>> {
+    const live = new LiveCollection<R>(name, scope, options.lazy ?? false, options.paused ?? false);
     const key = collectionKey(scope, name); const group = collections.get(key) ?? new Set(); group.add(live as LiveCollection<object>); collections.set(key, group);
-    try { await live.refresh(); live.schedule(); return live; }
+    try {
+      if (!live.paused) {
+        const cached = MIRRORED_COLLECTIONS.has(name) ? await readMirror(scope, name) : null;
+        if (live.closed) return live;
+        if (name === "blocks" && cached?.kind === "blocks") {
+          live.serverEpoch = cached.epoch;
+          live.blocksLru = [...cached.lru];
+          for (const [pageId, mark] of cached.pageWatermarks) {
+            live.mirrorBlocks.set(pageId, { watermark: mark, rows: (cached.pages[pageId] ?? []) as Array<[string, R]> });
+          }
+          live.schedule();
+          return live;
+        }
+        if (!live.lazy && cached?.kind === "full" && cached.latest > 0) {
+          live.remote = new Map(cached.rows as Array<[string, R]>);
+          live.latest = cached.latest;
+          live.serverEpoch = cached.epoch;
+          if (name === "pages" && cached.rows.length === 0) {
+            await live.refresh();
+            live.schedule();
+            return live;
+          }
+          void live.refresh().catch(() => undefined).finally(() => live.schedule());
+          return live;
+        }
+        if (!live.lazy && name === "pages" && options.seedPageId) {
+          const base = `/api/records/${encodeURIComponent(scope)}/${name}`;
+          const fullPromise = request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`${base}?after=0`);
+          fullPromise.catch(() => undefined);
+          const fastDelta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
+            `${base}?ancestors=${encodeURIComponent(options.seedPageId)}`,
+          ).catch(() => null);
+          if (live.closed) { await fullPromise.catch(() => undefined); throw new Error("closed"); }
+          if (fastDelta && fastDelta.rows.length > 0) {
+            live.remote = new Map(fastDelta.rows.map((row) => [row.id, row.value]));
+            live.serverEpoch = fastDelta.epoch ?? "";
+            live._directoryLoading = true;
+            void fullPromise.then((fullDelta) => {
+              if (live.closed) return;
+              const fresh = new Map(fullDelta.rows.map((row) => [row.id, row.value]));
+              for (const [id, value] of live.remote) {
+                const settledAt = live.settled.get(id);
+                if (settledAt && settledAt + 30_000 > Date.now()) fresh.set(id, value);
+              }
+              live.remote = fresh;
+              live.latest = fullDelta.latest;
+              live.serverEpoch = fullDelta.epoch ?? live.serverEpoch;
+              live._directoryLoading = false;
+              live.persistMirror();
+              live.emit();
+              live.schedule();
+            }).catch(() => {
+              if (live.closed) return;
+              live._directoryLoading = false;
+              live.emit();
+              live.schedule();
+            });
+            return live;
+          }
+          const fullDelta = await fullPromise;
+          if (live.closed) throw new Error("closed");
+          live.remote = new Map(fullDelta.rows.map((row) => [row.id, row.value]));
+          live.latest = fullDelta.latest;
+          live.serverEpoch = fullDelta.epoch ?? "";
+          live.persistMirror();
+          live.schedule();
+          return live;
+        }
+        await live.refresh();
+        live.schedule();
+      }
+      return live;
+    }
     catch (error) { await live.close(); throw error; }
   }
-  /** The pages this lazy mirror holds (or is pulling), for the projector's
-   *  loaded-vs-unloaded decision. Pages with remote rows count too: their
-   *  content is here even if it arrived before any explicit load. */
+  /** The pages this lazy mirror holds, for the projector's loaded-vs-unloaded
+   *  decision. Completed lazy pulls, mirrored remote rows, and unsent local
+   *  block writes keep pages rendered without waiting for server ACKs. */
   get loadedPageIds(): ReadonlySet<string> {
-    const ids = new Set(this.pageWatermarks.keys());
-    if (this.lazy) for (const [id, value] of this.remote) {
-      const parsed = parseBlockRecordId(id);
-      if (parsed) ids.add(parsed.pageId);
-      else if (typeof (value as Value).page === "string") ids.add((value as Value).page as string);
+    const ids = new Set(this.settledPages);
+    if (this.lazy) {
+      for (const [id, value] of this.remote) {
+        const pageId = pageOfRecordId(id);
+        if (pageId) ids.add(pageId);
+        else if (typeof (value as Value).page === "string") ids.add((value as Value).page as string);
+      }
+      for (const write of this.pending) {
+        const pageId = pageOf(write);
+        if (pageId) ids.add(pageId);
+      }
     }
     return ids;
   }
-  /** Subscribe a set of pages into a lazy mirror. New pages start at
-   *  watermark 0 so the next pull carries their whole content. */
+  /** True once every named page has completed at least one lazy pull. */
+  hasSettledPages(pageIds: readonly string[]): boolean {
+    return !this.lazy || pageIds.every((id) => this.settledPages.has(id));
+  }
+  /** Pause periodic delta polling while the owning space sits in the background. */
+  pause(): void {
+    this.paused = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+  /** Resume periodic delta polling and catch up immediately. */
+  resume(): void {
+    if (this.closed || !this.paused) return;
+    this.paused = false;
+    void this.refresh().catch(() => undefined).finally(() => this.schedule());
+  }
+  /** Subscribe a set of pages into a lazy mirror. Hydrates warm cached pages
+   *  immediately and refreshes in the background; cold pages await their pull. */
   async loadPages(pageIds: readonly string[]): Promise<void> {
     if (!this.lazy || this.closed) return;
-    let added = false;
-    for (const pageId of pageIds) if (!this.pageWatermarks.has(pageId)) { this.pageWatermarks.set(pageId, 0); added = true; }
-    if (added) await this.refresh().catch(() => undefined);
+    let addedCold = false;
+    let warmHydrated = false;
+    for (const pageId of pageIds) {
+      if (!pageId) continue;
+      if (this.name === "blocks") this.touchBlocksLru(pageId);
+      if (this.pageWatermarks.has(pageId)) continue;
+      const cached = this.mirrorBlocks.get(pageId);
+      if (cached) {
+        for (const [id, val] of cached.rows) this.remote.set(id, val);
+        this.pageWatermarks.set(pageId, cached.watermark);
+        this.settledPages.add(pageId);
+        this.mirrorBlocks.delete(pageId);
+        warmHydrated = true;
+      } else {
+        this.pageWatermarks.set(pageId, 0);
+        addedCold = true;
+      }
+    }
+    if (warmHydrated) this.emit();
+    if (addedCold) await this.refresh().catch(() => undefined);
+    else if (warmHydrated) void this.refresh().catch(() => undefined);
+    else if (this.inFlight) await this.inFlight.catch(() => undefined);
   }
-  private async refresh(): Promise<void> {
+  private refresh(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    if (this.inFlight) { this.queuedRefresh = true; return this.inFlight; }
+    const run = (async () => {
+      do {
+        this.queuedRefresh = false;
+        await this.pullOnce();
+      } while (this.queuedRefresh && !this.closed);
+    })().finally(() => { if (this.inFlight === run) this.inFlight = null; });
+    this.inFlight = run;
+    return run;
+  }
+  private async pullOnce(): Promise<void> {
     if (this.lazy) {
       // Nothing subscribed: no request at all — idle cost is zero.
       if (!this.pageWatermarks.size) return;
@@ -547,46 +732,98 @@ export class LiveCollection<R extends object> {
       for (let index = 0; index < specs.length; index += 100) chunks.push(specs.slice(index, index + 100));
       let changed = false;
       for (const chunk of chunks) {
-        const delta = await request<{ latest: number; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
+        const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
           `/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=0&pages=${chunk.map((spec) => encodeURIComponent(spec)).join(",")}`);
-        if (this.closed || epoch !== this.epoch) return;
+        if (this.closed) return;
+        if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
+        const epochMismatch = Boolean(delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch);
+        const rewound = chunk.some((spec) => {
+          const since = Number(spec.slice(spec.lastIndexOf(":") + 1));
+          return since > 0 && delta.latest < since;
+        });
+        if (epochMismatch || rewound) {
+          this.serverEpoch = delta.epoch ?? "";
+          this.remote.clear();
+          this.mirrorBlocks.clear();
+          this.settledPages.clear();
+          for (const pageId of this.pageWatermarks.keys()) this.pageWatermarks.set(pageId, 0);
+          this.queuedRefresh = true;
+          return;
+        }
+        const needPersistEpoch = Boolean(delta.epoch && !this.serverEpoch);
+        if (delta.epoch) this.serverEpoch = delta.epoch;
         for (const row of delta.rows) { this.remote.set(row.id, row.value); changed = true; }
         for (const id of delta.deleted) { if (this.remote.delete(id)) changed = true; }
         for (const spec of chunk) {
           const pageId = spec.slice(0, spec.lastIndexOf(":"));
+          const firstLoad = !this.settledPages.has(pageId);
+          this.settledPages.add(pageId);
           const before = this.pageWatermarks.get(pageId);
-          if (before === undefined || before === delta.latest) continue;
+          if (before === undefined) continue;
           // A first pull is a load even when the page holds nothing: emit
-          // so its body can project (and its editor leave the loading row).
-          if (before === 0) changed = true;
-          this.pageWatermarks.set(pageId, delta.latest);
+          // so its body or empty history resolves waiting views.
+          if (firstLoad || (before === 0 && delta.latest !== before)) changed = true;
+          if (delta.latest !== before) this.pageWatermarks.set(pageId, delta.latest);
         }
+        if (changed || needPersistEpoch) this.persistMirror();
       }
       if (changed) this.emit();
       return;
     }
     const epoch = this.epoch;
-    // Delta since our watermark; a server whose watermark moved backwards
-    // (restored backup, fresh database) is re-pulled cold with after=0.
+    // Delta since our watermark; an epoch mismatch or watermark rewind (restored
+    // backup, fresh database) clears the cache and re-pulls cold with after=0.
     const cold = this.latest === 0;
-    const delta = await request<{ latest: number; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
-    if (this.closed || epoch !== this.epoch) return;
-    if (delta.latest < this.latest) { this.latest = 0; void this.refresh().catch(() => undefined); return; }
+    const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
+    if (this.closed) return;
+    if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
+    if ((delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch) || delta.latest < this.latest) {
+      this.latest = 0;
+      this.serverEpoch = delta.epoch ?? "";
+      this.remote.clear();
+      this.queuedRefresh = true;
+      return;
+    }
+    const needPersistEpoch = Boolean(delta.epoch && !this.serverEpoch);
+    if (delta.epoch) this.serverEpoch = delta.epoch;
     this.latest = delta.latest;
-    if (cold) { this.remote = new Map(delta.rows.map((row) => [row.id, row.value])); this.emit(); return; }
-    if (!delta.rows.length && !delta.deleted.length) return;
+    if (cold) {
+      this.remote = new Map(delta.rows.map((row) => [row.id, row.value]));
+      this.persistMirror();
+      this.emit();
+      return;
+    }
+    if (!delta.rows.length && !delta.deleted.length) {
+      if (needPersistEpoch) this.persistMirror();
+      return;
+    }
     for (const row of delta.rows) this.remote.set(row.id, row.value);
     for (const id of delta.deleted) this.remote.delete(id);
+    this.persistMirror();
     this.emit();
   }
-  private schedule(): void { if (!this.closed) this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200); }
+  private schedule(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.closed && !this.paused) {
+      this.timer = setTimeout(() => void this.refresh().catch(() => undefined).finally(() => this.schedule()), 1200);
+    }
+  }
   private values(): Map<string, R> {
     const values = new Map(this.remote);
+    const editing = new Set<string>();
     for (const write of this.pending) {
+      editing.add(write.id);
       if (write.action === "delete") values.delete(write.id);
       else values.set(write.id, (write.action === "put" ? write.value : merge((values.get(write.id) ?? {}) as Value, write.patch as Value)) as R);
     }
-    for (const [id, record] of values) values.set(id, projectRecord(this.scope, this.name, id, record as Value) as R);
+    const ours = (id: string) => editing.has(id);
+    for (const [id, record] of values)
+      /* Rows with a pending local write already carry the newest text in
+       *  their merged patch. Overlaying a document field that lags that
+       *  write — the server only learns it through this batch — rolls the
+       *  shown text back mid-typing and tears the caret. */
+      if (!ours(id)) values.set(id, projectRecord(this.scope, this.name, id, record as Value) as R);
     return values;
   }
   get records(): Array<{ id: string; value: R }> { return [...this.values()].map(([id, value]) => ({ id, value })); }
@@ -596,23 +833,36 @@ export class LiveCollection<R extends object> {
   /** Pull the row delta now — a committed push pokes this so structural
    *  changes land without waiting for the 1.2s poll. */
   refreshNow(): void { void this.refresh().catch(() => undefined); }
+  /** Rows this client committed a moment ago — the snapshot was fetched
+   *  while its write was in flight, so it may not know them yet. Touching
+   *  them would roll the DOM back past data the server already holds. */
+  private readonly settled = new Map<string, number>();
   applySnapshot(snapshot: DocumentSnapshot): void {
     if (!snapshot.records || this.closed) return;
     this.epoch += 1;
-    if (this.name === "pages") this.remote.set(snapshot.pageId, snapshot.records.page as R);
+    const fresh = (id: string) => (this.settled.get(id) ?? 0) + 30_000 > Date.now();
+    if (this.name === "pages") { if (!fresh(snapshot.pageId)) this.remote.set(snapshot.pageId, snapshot.records.page as R); else protectSettledRecord(snapshot.scope, "pages", snapshot.pageId); }
     if (this.name === "blocks") {
-      for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId) this.remote.delete(id);
-      for (const row of snapshot.records.blocks) this.remote.set(row.id, row.value as R);
+      for (const [id, row] of this.remote) if ((row as Value).page === snapshot.pageId && !fresh(id)) this.remote.delete(id);
+      for (const row of snapshot.records.blocks) if (!fresh(row.id)) this.remote.set(row.id, row.value as R); else protectSettledRecord(snapshot.scope, "blocks", row.id);
       // A snapshot is authoritative page content: the page counts as loaded
       // even without an explicit subscription (UC-48).
-      if (this.lazy && !this.pageWatermarks.has(snapshot.pageId))
-        this.pageWatermarks.set(snapshot.pageId, Math.max(0, ...this.pageWatermarks.values()));
+      if (this.lazy) {
+        this.settledPages.add(snapshot.pageId);
+        if (!this.pageWatermarks.has(snapshot.pageId))
+          this.pageWatermarks.set(snapshot.pageId, Math.max(0, ...this.pageWatermarks.values()));
+      }
+      this.persistMirror();
     }
+    if (this.name === "pages") this.persistMirror();
   }
   restoreWrite(write: Write): void { this.pending.push(write); this.emit(); }
   acceptWrite(write: Write, value: Value | null): void {
     this.epoch += 1; this.pending = this.pending.filter((item) => item !== write);
-    if (value) this.remote.set(write.id, value as R); else this.remote.delete(write.id); this.emit();
+    if (value) { this.remote.set(write.id, value as R); this.settled.set(write.id, Date.now()); }
+    else this.remote.delete(write.id);
+    this.persistMirror();
+    this.emit();
   }
   refuseWrite(write: Write, _reason: unknown): void {
     this.pending = this.pending.filter((item) => item !== write); void this.refresh().catch(() => undefined); this.emit();
@@ -628,7 +878,8 @@ export class LiveCollection<R extends object> {
     /* A write on a page with no collaborative document yet opens it: pages
        not on screen were never opened at startup, and a just-made page can
        outrun its session. */
-    if (pageId && !basis) void openCollaborativePage(this.scope, pageId).catch(() => undefined);
+    if (pageId && !basis) void openWhenDocument(this.scope, pageId).catch(() => undefined);
+
     const observed = observedText();
     if (basis && observed && observed.field.pageId === pageId && observed.field.scope === this.scope && observed.field.revision) { basis.generation = observed.field.generation; basis.revision = observed.field.revision; }
     let change: LocalTextChange | undefined; let error: unknown;

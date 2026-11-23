@@ -121,7 +121,7 @@ export function PropertyMenu({
 
   return (
     <>
-      <Popover open anchor={anchor} placement="bottom-start" label="Edit property" group={GROUP} onDismiss={onClose}>
+      <Popover open anchor={anchor} placement="bottom-start" label="Edit property" group={GROUP} mobileSheet={{ title: "编辑属性" }} onDismiss={onClose}>
         <div className="prop-menu">
           <div className="prop-menu__head">
             <button
@@ -320,6 +320,7 @@ export function PropertyMenu({
           placement="right-start"
           label="Edit property"
           group={GROUP}
+          mobileSheet={{ title: "关联设置" }}
           onDismiss={() => setSide(null)}
         >
           <div className="rel-panel">
@@ -379,6 +380,7 @@ export function PropertyMenu({
           placement="right-start"
           label="Change type"
           group={GROUP}
+          mobileSheet={{ title: "属性类型" }}
           onDismiss={() => setSide(null)}
         >
           <MenuList label="Change type" autoFocus>

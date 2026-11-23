@@ -28,24 +28,37 @@ export function pointRect(x: number, y: number): AnchorRect {
   return { top: y, left: x, bottom: y, right: x, width: 0, height: 0 };
 }
 
+function viewportBounds(): { minTop: number; maxBottom: number; maxWidth: number } {
+  const vv = window.visualViewport;
+  const vvTop = vv ? vv.offsetTop : 0;
+  const vvBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const editBar = document.querySelector<HTMLElement>(".mobile-edit-bar");
+  const editBarTop = editBar ? editBar.getBoundingClientRect().top : Infinity;
+  const minTop = vvTop + VIEWPORT_MARGIN;
+  const maxBottom = Math.max(minTop + 80, Math.min(vvBottom, editBarTop) - VIEWPORT_MARGIN);
+  const maxWidth = vv ? vv.width : window.innerWidth;
+  return { minTop, maxBottom, maxWidth };
+}
+
 function resolve(
   anchor: AnchorRect,
   size: { width: number; height: number },
   placement: Placement,
   gap: number,
 ): { left: number; top: number; placement: Placement } {
+  const { minTop, maxBottom, maxWidth } = viewportBounds();
   const vertical = placement.startsWith("top") || placement.startsWith("bottom");
   let side = placement.split("-")[0];
   if (vertical) {
     const wantsTop = side === "top";
-    const roomBelow = window.innerHeight - anchor.bottom - gap - VIEWPORT_MARGIN;
-    const roomAbove = anchor.top - gap - VIEWPORT_MARGIN;
+    const roomBelow = maxBottom - anchor.bottom - gap;
+    const roomAbove = anchor.top - gap - minTop;
     // Flip only when the preferred side cannot hold the panel and the other can.
     if (wantsTop && roomAbove < size.height && roomBelow > roomAbove) side = "bottom";
     if (!wantsTop && roomBelow < size.height && roomAbove > roomBelow) side = "top";
   } else {
     const wantsLeft = side === "left";
-    const roomRight = window.innerWidth - anchor.right - gap - VIEWPORT_MARGIN;
+    const roomRight = maxWidth - anchor.right - gap - VIEWPORT_MARGIN;
     const roomLeft = anchor.left - gap - VIEWPORT_MARGIN;
     if (wantsLeft && roomLeft < size.width && roomRight > roomLeft) side = "right";
     if (!wantsLeft && roomRight < size.width && roomLeft > roomRight) side = "left";
@@ -59,15 +72,14 @@ function resolve(
     ? (side === "top" ? anchor.top - size.height - gap : anchor.bottom + gap)
     : anchor.top;
 
-  left = Math.min(Math.max(VIEWPORT_MARGIN, left), Math.max(VIEWPORT_MARGIN, window.innerWidth - size.width - VIEWPORT_MARGIN));
-  top = Math.min(Math.max(VIEWPORT_MARGIN, top), Math.max(VIEWPORT_MARGIN, window.innerHeight - size.height - VIEWPORT_MARGIN));
+  left = Math.min(Math.max(VIEWPORT_MARGIN, left), Math.max(VIEWPORT_MARGIN, maxWidth - size.width - VIEWPORT_MARGIN));
+  top = Math.min(Math.max(minTop, top), Math.max(minTop, maxBottom - size.height));
   return { left, top, placement: `${side}-${alignEnd ? "end" : "start"}` as Placement };
 }
 
 /** Pins a fixed-position floating element to an anchor rectangle, flipping to
  *  the opposite side when the preferred one would run off screen. Re-measures
- *  whenever the panel resizes, which is what keeps a filtering slash menu from
- *  drifting as its result list shrinks. */
+ *  whenever the panel resizes or the mobile visual viewport changes. */
 export function useAnchoredPosition(
   ref: RefObject<HTMLElement | null>,
   anchor: AnchorRect | null,
@@ -94,9 +106,14 @@ export function useAnchoredPosition(
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     window.addEventListener("resize", measure);
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", measure);
+    vv?.addEventListener("scroll", measure);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
+      vv?.removeEventListener("resize", measure);
+      vv?.removeEventListener("scroll", measure);
     };
   }, [anchor, gap, placement, ref]);
 

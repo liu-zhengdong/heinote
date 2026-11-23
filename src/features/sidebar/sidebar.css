@@ -23,3 +23,19 @@
 .confirm h2 { margin: 0 0 12px; color: var(--ink); font-size: 17px; line-height: 1.4; }
 .confirm p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.7; }
 .confirm__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; }
+
+@media (max-width: 559.98px) {
+  .sidebar--sheet .sidebar__topbar { gap: 6px; padding-bottom: 4px; }
+  .sidebar--sheet .sidebar__search,
+  .sidebar--sheet .sidebar__new { min-height: 40px; }
+  .sidebar--sheet .sidebar__new { min-width: 40px; }
+  .sidebar--sheet .sidebar__views { gap: 2px; }
+  .sidebar--sheet .sidebar__view { min-height: 44px; padding: 6px 10px; font-size: 14.5px; }
+  .sidebar--sheet .tree-row { min-height: 44px; font-size: 14.5px; }
+  .sidebar--sheet .tree-row__actions { opacity: 1; }
+  .sidebar--sheet .tree-row__action,
+  .sidebar--sheet .tree-row__toggle { min-width: 34px; min-height: 34px; }
+  .sidebar--sheet .sidebar__foot { padding: 8px 10px 4px; }
+  .sidebar--sheet .sidebar__foot .space-switcher { min-height: 44px; }
+  .sidebar--sheet .sidebar__foot .icon-btn { min-width: 44px; min-height: 44px; }
+}

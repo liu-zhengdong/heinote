@@ -29,10 +29,13 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
+import type { RichText } from "../../platform/schema";
+import { fieldIsOurs, fieldStale } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DismissReason } from "../../hooks/useDismiss";
+import { useFold } from "../../hooks/useFold";
 import { LinkForm, linkHref, selectedAddress } from "./FormatToolbar";
 import { inlineFromNodes, keptOffset } from "./rich-text";
 import { focusRange, selectionOffsets, selectionRect } from "./selection";
@@ -134,6 +137,10 @@ export interface RichFieldProps {
   placeholder: string;
   readOnly?: boolean;
   collaboration?: { pageId: string; key: string };
+  /** `data-block-id`: what this field's caret counts as — a page's title
+   *  carries the page's id, a row's name the row's — so its place is said in
+   *  presence and the others' caret can land on it (RemoteCarets). */
+  blockId?: string;
   /** `data-history-field`: undo brings the caret back here. */
   historyField?: string;
   /** Takes the caret when it appears: all of it selected, or after it. */
@@ -160,6 +167,7 @@ export function RichField({
   placeholder,
   readOnly = false,
   collaboration,
+  blockId,
   historyField,
   focusOnMount,
   elementRef,
@@ -170,6 +178,7 @@ export function RichField({
   onBlur,
   onOpenPage,
 }: RichFieldProps) {
+  const mobile = useFold();
   const ref = useRef<HTMLElement | null>(null);
   const composing = useRef(false);
   const bound = useRef<BoundText | null>(null);
@@ -206,11 +215,24 @@ export function RichField({
     if (previous) {
       const current = refreshTextBinding(previous);
       if (!current) {
-        if (ref.current) saveDraft({ bound: previous, content: shownWords(ref.current, grammar) });
-        sync.current();
-        return false;
+        const live = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
+        if (live) {
+          /* A replaced generation whose seeded words differ from what the
+             DOM shows. Adopt the new field, re-sync the DOM to it and let
+             the action land — the commit path re-bases stale intent onto
+             the new text, and refused commits still reach the drafts. */
+          bound.current = live;
+          sync.current();
+          previous = bound.current;
+        } else {
+          /* No live shared field: the words run on the plain record path,
+             so nothing may eat this input. */
+          bound.current = null;
+          previous = null;
+        }
+      } else {
+        previous = current; bound.current = current;
       }
-      previous = current; bound.current = current;
     }
     const updated = withTextBasis(previous, action);
     if (bound.current === previous) bound.current = updated;
@@ -229,7 +251,16 @@ export function RichField({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const wantedContent = nextBound ? grammar.normalize(contentOfRuns(readText(nextBound.field.text))) : content;
+      /* Same rule as InlineEditor: a bound field only rewrites when it is
+       *  outside our own write chain; otherwise the newest in-flight commit
+       *  beats the possibly stale `content` prop. */
+      const boundRuns = nextBound ? readText(nextBound.field.text) : null;
+      const chain: { next?: RichText } = {};
+      const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
+      const remote = boundRuns !== null && collaboration != null && !fieldStale(collaboration.pageId, collaboration.key) && !ours && chain.next === undefined;
+      const chainHead = chain.next ? grammar.normalize(contentOfRuns(chain.next)) : null;
+      const remoteContent = remote && boundRuns ? grammar.normalize(contentOfRuns(boundRuns)) : null;
+      const wantedContent = remoteContent ?? chainHead ?? content;
       const html = grammar.html(wantedContent);
       if (document.activeElement !== element) {
         if (element.innerHTML !== html) element.innerHTML = html;
@@ -583,6 +614,7 @@ export function RichField({
         aria-placeholder={placeholder}
         aria-readonly={readOnly || undefined}
         data-placeholder={placeholder}
+        data-block-id={blockId}
         data-history-field={historyField}
         data-collaboration-page={collaboration?.pageId}
         data-collaboration-field={collaboration?.key}
@@ -628,7 +660,7 @@ export function RichField({
           }, 0);
         }}
       />
-      {bar && !readOnly && !linkOpen ? (
+      {bar && !readOnly && !linkOpen && !(mobile && grammar.marks) ? (
         <Popover
           open
           anchor={bar.anchor}

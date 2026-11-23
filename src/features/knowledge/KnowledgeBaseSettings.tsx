@@ -6,7 +6,7 @@ import { Modal } from "../../components/Modal";
 import { personName } from "../../components/ProfileAvatar";
 import type { SpaceSummary } from "../../core/types";
 import { uuid } from "../../core/ids";
-import { ApiError } from "../../platform/http";
+import { ApiError, request } from "../../platform/http";
 import { useKnowledgeBaseModal } from "./KnowledgeBaseDialog";
 import { formatBytes } from "../admin/types";
 import "./knowledge-base.css";
@@ -34,6 +34,21 @@ export function KnowledgeBaseSettings({ space, onClose }: { space: SpaceSummary;
   const [recipientId, setRecipientId] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [kbStorage, setKbStorage] = useState<{ used: number; limit: number; over: number } | undefined>(() => metadata?.storage);
+  useEffect(() => {
+    if (metadata?.storage) setKbStorage(metadata.storage);
+  }, [metadata?.storage]);
+  useEffect(() => {
+    if (!editable) return;
+    let alive = true;
+    void request<{ managed?: Array<{ spaceId: string; used: number; limit: number; over: number }> }>("/api/account/quota")
+      .then((quota) => {
+        const match = quota.managed?.find((item) => item.spaceId === space.spaceId);
+        if (alive && match) setKbStorage({ used: match.used, limit: match.limit, over: match.over });
+      })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [editable, space.spaceId]);
   const busy = useRef(false);
   const scope = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -142,7 +157,7 @@ export function KnowledgeBaseSettings({ space, onClose }: { space: SpaceSummary;
             <input id={`${id}-name`} value={name} required maxLength={200} readOnly={!editable || Boolean(unknown)} disabled={pending}
               aria-describedby={error ? `${id}-error` : undefined} onChange={(event) => { setName(event.target.value); setStatus(""); }} />
           </label>
-          {editable && metadata?.storage ? <p className="knowledge-base-note">存储 {formatBytes(metadata.storage.used)} / {formatBytes(metadata.storage.limit)}{metadata.storage.over > 0 ? "（已超额，请联系站点管理员）" : ""}</p> : null}
+          {editable && kbStorage ? <p className="knowledge-base-note">存储 {formatBytes(kbStorage.used)} / {formatBytes(kbStorage.limit)}{kbStorage.over > 0 ? "（已超额，请联系站点管理员）" : ""}</p> : null}
           <label className="knowledge-base-field" htmlFor={`${id}-description`}>
             <span>简介</span>
             <textarea id={`${id}-description`} value={description} rows={3} maxLength={2000} readOnly={!editable || Boolean(unknown)} disabled={pending}

@@ -1,41 +1,49 @@
-import { useEffect, type ReactNode } from "react";
-import { imeComposing } from "../core/keyboard";
+import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useFold } from "../hooks/useFold";
 import { useMountTransition } from "../hooks/useMountTransition";
+import { BottomSheet } from "./BottomSheet";
+import { useLayer } from "./layer-stack";
 
 const EXIT_MS = 150;
 
-/** Centered dialog over a dimmed page. The scrim and the card animate together
- *  so the page never appears to dim before the card has arrived. */
+/** Centered dialog over a dimmed page on desktop, or a unified BottomSheet on
+ *  narrow viewports unless the dialog owns a full-screen mobile flow. */
 export function Modal({
   open,
   label,
   className = "",
+  mobilePresentation = "sheet",
   onClose,
   children,
 }: {
   open: boolean;
   label: string;
   className?: string;
+  mobilePresentation?: "sheet" | "fullscreen";
   onClose(): void;
   children: ReactNode;
 }) {
-  const { mounted, shown } = useMountTransition(open, EXIT_MS);
+  const mobile = useFold();
+  const useSheet = mobile && mobilePresentation === "sheet";
+  const { mounted, shown } = useMountTransition(open && !useSheet, EXIT_MS);
+  useLayer(open && !useSheet, onClose, { phase: "capture" });
 
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !imeComposing(event)) {
-        // An open floating surface — a menu, a suggestion list — takes the
-        // Escape and closes itself; the dialog stays until they are gone.
-        if (document.querySelector('[popover="auto"]:popover-open, .pop')) return;
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [onClose, open]);
+  if (useSheet) {
+    const size = className.includes("quickfind") ? "tall" : "auto";
+    return (
+      <BottomSheet
+        open={open}
+        label={label}
+        size={size}
+        className={`overlay__card ${className}`.trim()}
+        initialFocus="none"
+        onClose={onClose}
+      >
+        {children}
+      </BottomSheet>
+    );
+  }
 
   if (!mounted) return null;
   return createPortal(

@@ -2,6 +2,7 @@ import { Table2 } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { useWorkspace } from "../../app/workspace-context";
 import { PageIconMark } from "../editor/PageIcon";
+import { RemoteCarets } from "../editor/RemoteCarets";
 import { DatabaseViews } from "./DatabaseViews";
 import { consumeFresh } from "./fresh";
 import { usePage } from "../../app/workspace-store";
@@ -92,6 +93,7 @@ export function InlineDatabase({
             <input
               ref={nameRef}
               className="dbv-inline__title t-control-size-keep"
+              data-block-id={databaseId}
               data-history-field="title"
               value={database.title}
               placeholder="Untitled database"
@@ -102,6 +104,7 @@ export function InlineDatabase({
           </>
         )}
       />
+      {historical ? null : <RemoteCarets root={inlineRef} />}
     </div>
   );
 }

@@ -77,6 +77,7 @@ export interface BlockRowProps {
    *  links — its mark and count at the start of the line — the link's name
    *  after them. */
   linkLine?: LinkLine;
+  surfaceContainer?: "main" | "peek";
   actions: BlockActions;
 }
 
@@ -330,7 +331,13 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         ) : null}
 
         {block.kind === "table" ? (
-          <SimpleTable block={block} owningPageId={props.owningPageId} readOnly={readOnly} actions={actions} />
+          <SimpleTable
+            block={block}
+            owningPageId={props.owningPageId}
+            readOnly={readOnly}
+            surfaceContainer={props.surfaceContainer}
+            actions={actions}
+          />
         ) : block.kind === "embed" ? (
           <div className="block__media">
             <EmbedBlock block={block} readOnly={readOnly} actions={actions} />

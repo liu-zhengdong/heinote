@@ -41,17 +41,17 @@ export class KnowledgeBases {
   }
 }
 
-export function spaceSummary(store: Store, row: Row): SpaceSummary {
+export function spaceSummary(store: Store, row: Row, includeStorage = false): SpaceSummary {
   const spaceId = String(row.id);
   const role = row.role as SpaceRole;
   const manager = role === "owner" || role === "admin";
   const knowledgeBase = store.knowledgeBases.get(spaceId);
-  const kbQuota = knowledgeBase ? store.quotas?.quota(`kb:${spaceId}`) : undefined;
+  const kbQuota = includeStorage && knowledgeBase && manager ? store.quotas?.quota(`kb:${spaceId}`) : undefined;
   return {
     spaceId, name: String(row.name), role,
     canInvite: manager && !knowledgeBase?.archived,
     canManageRoles: manager, canRemoveMembers: manager, canLeave: role !== "owner",
-    // Managers see the capacity line; members see the KB without it.
+    // Managers see the capacity line; `/api/account/quota` supplies it on settings open without scanning every KB on `/api/spaces`.
     ...(knowledgeBase ? { knowledgeBase: { ...knowledgeBase, ...(manager && kbQuota ? { storage: { used: kbQuota.used, limit: kbQuota.limit, over: kbQuota.over } } : {}) } } : {}),
   };
 }
@@ -66,7 +66,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
     const role = store.role(who, spaceId);
     const space = store.one("SELECT * FROM spaces WHERE id=?", spaceId);
     if (!space) fail(404, "知识库不存在。", "not_found");
-    return spaceSummary(store, { ...space, role });
+    return spaceSummary(store, { ...space, role }, true);
   };
   const current = (who: Actor, spaceId: string, expected: number): { metadata: KnowledgeBase; role: SpaceRole } => {
     const role = store.role(who, spaceId);
@@ -112,7 +112,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       store.db.prepare("INSERT INTO knowledge_bases(space_id,home_page_id,description,archived,sort,revision,created_at) VALUES(?,?,?,?,?,?,?)").run(spaceId, homePageId, input.description, 0, "name", 1, createdAt);
       const home = newPage(homePageId, "document", null, { author: who.user.id, now: createdAt }, id());
       home.title = input.name; home.share_space_id = spaceId;
-      store.savePage(spaceId, home);
+      store.savePage(spaceId, home, who, "创建了知识库首页");
       return summary(who, spaceId);
     });
     res.status(201).json(result);

@@ -53,6 +53,7 @@ interface PageRow {
     kind: "document" | "database";
     title_content: Array<{ text: string }>;
     database?: unknown;
+    parent_id?: string;
   };
 }
 
@@ -66,6 +67,7 @@ async function savedPages(page: Page) {
     kind: value.kind,
     title: value.title_content.map((run) => run.text).join(""),
     hasDatabase: value.database !== undefined,
+    parentId: value.parent_id,
   })).sort((left, right) => left.id.localeCompare(right.id));
 }
 
@@ -131,13 +133,15 @@ async function expectNavigationLayout(page: Page) {
   expect(top).not.toBeNull();
   let previousBottom = top!.y + top!.height;
   let previousX: number | undefined;
+  const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   for (const view of views) {
     const tab = tabs.getByRole("tab", { name: view.name, exact: true });
     await expect(tab).toContainText(view.label);
     const box = await tab.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
-    expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
+    if (mobile) expect(box!.height).toBeGreaterThanOrEqual(42);
+    else expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
     if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
     previousX = box!.x;
     previousBottom = box!.y + box!.height;
@@ -285,16 +289,19 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   await expect(newMenu(page)).toBeHidden();
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".rail")).toHaveCount(0);
   const allPages = page.getByRole("button", { name: "All pages", exact: true });
   await expect(allPages).toHaveAttribute("aria-expanded", "false");
   await allPages.click();
-  await expect(allPages).toHaveAttribute("aria-expanded", "true");
   await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
   await expectToolbarLayout(filesToolbar(page));
   await createButton(page).click();
   const menu = newMenu(page);
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("menuitem")).toHaveText(["页面", "数据库", "小应用"]);
+  const sheet = page.locator(".bottom-sheet.pop--sheet.is-shown");
+  await expect(sheet).toBeVisible();
+  await sheet.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
   const bounds = await menu.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -304,8 +311,9 @@ test("toolbar fits a 168px sidebar and a 390px light mobile drawer", async ({ pa
   const drawerShot = testInfo.outputPath("sidebar-menu-light-mobile-drawer.png");
   await page.screenshot({ path: drawerShot, animations: "disabled" });
   await testInfo.attach("Light mobile drawer and creation menu (2x)", { path: drawerShot, contentType: "image/png" });
-  await page.getByRole("button", { name: "Close the page list", exact: true }).click({ position: { x: 330, y: 700 } });
+  await page.getByRole("button", { name: "关闭 新建 浮层", exact: true }).click({ position: { x: 195, y: 40 } });
   await expect(menu).toBeHidden();
+  await page.getByRole("button", { name: "Close the page list", exact: true }).click({ position: { x: 195, y: 40 } });
   await expect(allPages).toHaveAttribute("aria-expanded", "false");
   expect(await savedPages(page)).toEqual([]);
 });
@@ -471,7 +479,7 @@ test("touch drawer keeps tools visible and saves a new page", async ({ browser }
     await register(page, "sidebar_touch");
     const allPages = page.getByRole("button", { name: "All pages", exact: true });
     await allPages.tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
     await expectNavigationLayout(page);
     const toolbar = filesToolbar(page);
     await expect.poll(() => effectiveOpacity(toolbar.getByRole("button", { name: "Change sort order", exact: true }))).toBe(1);
@@ -479,14 +487,14 @@ test("touch drawer keeps tools visible and saves a new page", async ({ browser }
     await createButton(page).tap();
     await expect(newMenu(page)).toBeVisible();
     await newMenu(page).getByRole("menuitem", { name: "页面", exact: true }).tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeHidden();
     await page.getByLabel("Page title", { exact: true }).fill("Mobile document");
     await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Mobile document"]);
     await page.reload();
     await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Mobile document");
     await page.emulateMedia({ colorScheme: "dark" });
     await allPages.tap();
-    await expect(allPages).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("dialog", { name: "Pages", exact: true })).toBeVisible();
     await attachLayout(page, testInfo, "dark-touch-drawer");
   } finally {
     await context.close();
@@ -658,5 +666,43 @@ test("the shared view lists public links and shares pages at once", async ({ pag
   await expect(tree.getByRole("heading", { name: "我共享的" })).toBeVisible();
   await expect.poll(async () => JSON.stringify(await (await page.request.get(`${server.url}/api/records/personal/pages`)).json())).toContain("share_space_id");
   await expect(sharedTab).toHaveText(/已分享\s*2$/);
+  expect(errors).toEqual([]);
+});
+
+test("copy to… lands a copy under the chosen page and at the top level", async ({ page }) => {
+  const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
+  await register(page, "sidebar_copy_to");
+  await createDocument(page, "Source notes");
+  await createDocument(page, "Target folder");
+  const tree = page.getByRole("tree", { name: "Files", exact: true });
+
+  // A copy under another page, from the row menu's picker.
+  await tree.getByRole("button", { name: "Source notes", exact: true }).first().hover();
+  await tree.getByRole("button", { name: "Actions for Source notes", exact: true }).click();
+  const rowMenu = page.locator('.menu[role="menu"][aria-label="Page actions"]');
+  await expect(rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true })).toBeVisible();
+  await rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true }).click();
+  await expect(rowMenu).toBeHidden();
+  const picker = page.getByRole("dialog", { name: "拷贝到…", exact: true });
+  await expect(picker).toBeVisible();
+  await picker.locator("input").fill("Target");
+  await picker.getByRole("option", { name: "Target folder" }).click();
+  await expect.poll(async () => {
+    const rows = await savedPages(page);
+    const copies = rows.filter((row) => row.title === "Source notes");
+    const target = rows.find((row) => row.title === "Target folder");
+    return JSON.stringify({ copies: copies.length, nested: copies.filter((row) => row.parentId === target?.id).length });
+  }).toContain('"copies":2,"nested":1');
+  await expect(tree.getByRole("button", { name: "Expand Target folder", exact: true })).toBeVisible();
+
+  // A copy at the top level through the picker's "Top level".
+  await tree.getByRole("button", { name: "Target folder", exact: true }).first().hover();
+  await tree.getByRole("button", { name: "Actions for Target folder", exact: true }).first().click();
+  await rowMenu.getByRole("menuitem", { name: "拷贝到…", exact: true }).click();
+  await picker.getByRole("option", { name: "Top level" }).click();
+  await expect.poll(async () => {
+    const rows = await savedPages(page);
+    return rows.filter((row) => row.title === "Target folder" && !row.parentId).length;
+  }).toBe(2);
   expect(errors).toEqual([]);
 });

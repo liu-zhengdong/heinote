@@ -11,15 +11,18 @@ import { z } from "zod";
 import { Store, fail, hash, id, secret, HttpError, writeSchema, asAuthor, type Actor, type Row, type User } from "./store.ts";
 import { newPage } from "../src/core/block-tree.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
+import { blockTreeToMarkdown, readableDescriber } from "../src/core/export-markdown.ts";
 import { restoredPage } from "../src/core/versions.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
+import { attachAgentCopy } from "./agent-copy.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
 import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-requests.ts";
+import { attachAgentOnboarding } from "./agent-onboarding.ts";
 import { attachPublicApp } from "./public-app.ts";
 import { activePage, externalScope, mutation } from "./mutation.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
@@ -122,6 +125,14 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (importActive()) return fail(503, "导入进行中，请稍后再试。", "import_running");
     next();
   });
+  // UC-52: every /api/v1 response points back at the onboarding guide so an
+  // agent that lands on the API can still discover the skill and contract.
+  app.use("/api/v1", (_req, res, next) => {
+    res.set("Link", '</llms.txt>; rel="describedby"');
+    next();
+  });
+  // Public, anonymous agent self-onboarding docs (guide, skill, contract).
+  attachAgentOnboarding(app);
 
   const cookie = (req: Request) => /(?:^|;\s*)notes_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
   const sessionUser = (req: Request): User | undefined => {
@@ -178,6 +189,15 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     session: (req) => ({ user: sessionUser(req), key: cookie(req) ? hash(cookie(req)!) : undefined }),
   });
   app.get("/api/health", (_req, res) => { store.one("SELECT 1"); res.json({ status: "ok" }); });
+  /* UC-51: public identity probe. name/version come from the deployed
+     package.json (the same packageMeta the admin about page reads); startedAt
+     lets a caller tell this process — and therefore this build — restarted.
+     no-store: each answer must describe the process answering, not a cached
+     deployment that was since replaced. */
+  app.get("/api/version", (_req, res) => {
+    res.set("Cache-Control", "no-store");
+    res.json({ name: packageMeta.name, version: packageMeta.version, startedAt: startedAt.toISOString() });
+  });
   app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled }));
   app.patch("/api/account/profile", (req, res) => {
     const who = actor(req); const { displayName } = parse(z.object({ displayName: z.string().trim().min(1).max(100) }).strict(), req.body);
@@ -463,9 +483,16 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const active = [...presence].filter(([key, item]) => key.startsWith(`${spaceId}:`) && store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, item.userId));
     res.json([...new Map(active.map(([, item]) => [item.userId, { userId: item.userId, state: item.state, online: true }])).values()]);
   });
+  app.get("/api/records/locate", (req, res) => {
+    const who = actor(req);
+    const pageId = parse(z.string().min(1).max(256), req.query.page);
+    const located = store.locatePage(who, pageId);
+    if (!located) fail(404, "页面不存在。", "not_found");
+    res.json(located);
+  });
   app.get("/api/records/:scope/:collection", (req, res) => {
     const who = actor(req); const scope = store.scope(who, text(req.params.scope)); const collection = text(req.params.collection);
-    if (!["pages", "blocks", "versions", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
+    if (!["pages", "blocks", "versions", "page_events", "workspace_settings"].includes(collection)) fail(404, "记录集合不存在。");
     if (collection === "workspace_settings" && !scope.startsWith("user:")) fail(403, "设置仅属于个人。");
     // ?after=<seq> asks for the delta since that watermark (ISS-12). Without
     // it the response stays the plain array older clients expect. ?pages=
@@ -474,7 +501,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const after = req.query.after === undefined ? undefined : parse(z.number().int().min(0), Number(req.query.after));
     const ids = typeof req.query.ids === "string" && req.query.ids ? req.query.ids.split(",") : undefined;
     const pageSpecs = typeof req.query.pages === "string" && req.query.pages ? req.query.pages.split(",") : undefined;
-    if (ids) res.json(store.recordsByIds(scope, collection, ids));
+    const ancestors = typeof req.query.ancestors === "string" && req.query.ancestors ? text(req.query.ancestors) : undefined;
+    if (ancestors) {
+      if (collection !== "pages") fail(400, "只有页面支持祖先路径查询。");
+      res.json(store.pageAncestors(scope, ancestors));
+    }
+    else if (ids) res.json(store.recordsByIds(scope, collection, ids));
     else if (pageSpecs && after !== undefined) {
       const groups = pageSpecs.map((spec) => {
         const [pageId, since = "0"] = spec.split(":", 2);
@@ -493,7 +525,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const cold = groups.filter((group) => group.since <= 0).map((group) => group.pageId);
       if (cold.length) merge(store.recordsSincePages(scope, collection, cold, 0));
       for (const group of groups) if (group.since > 0) merge(store.recordsSincePages(scope, collection, [group.pageId], group.since));
-      res.json({ latest, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
+      res.json({ latest, epoch: store.dbEpoch, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
     }
     else if (after === undefined) res.json(store.records(scope, collection));
     else res.json(store.recordsSince(scope, collection, after));
@@ -716,7 +748,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         const block = Object.values(page.block_tree.by_id)[0]; block.content = [{ text: input.text ?? "" }];
       }
       if (!parent && !scope.startsWith("user:") && !knowledgeBase) page.share_space_id = scope;
-      store.savePage(scope, page);
+      store.savePage(scope, page, who, "创建了页面");
       // Mirrors the window's create_page: a child page also appears as an
       // expanded link at the end of its parent's words, when the parent has
       // a body to carry it (documents do; apps and databases don't).
@@ -737,6 +769,32 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.status(201).json(store.pageDto(who, pageId));
   });
   app.get("/api/v1/pages/:id", (req, res) => { const who = actor(req); res.json(store.pageDto(who, text(req.params.id))); });
+  /* The body re-serialized as the Markdown the copy/export path writes —
+     a readable projection for agents, not the lossless block tree. */
+  app.get("/api/v1/pages/:id/markdown", (req, res) => {
+    const who = actor(req);
+    const pageId = text(req.params.id);
+    const { page, scope } = store.page(who, pageId);
+    if (page.kind !== "document") fail(400, "只有文档页面导出正文 Markdown。", "bad_request");
+    // Page mentions read as their titles; look each referenced page up by
+    // record (the projection only holds this page's ancestors).
+    const titles = new Map<string, string>([[page.id, page.title]]);
+    for (const block of Object.values(page.block_tree.by_id)) {
+      for (const run of block.content) {
+        const pageRef = run.mention?.kind === "page" ? run.mention.page_id : undefined;
+        if (!pageRef || titles.has(pageRef)) continue;
+        const record = store.pageRecord(who, pageRef);
+        const content = record?.title_content as Array<{ text?: string }> | undefined;
+        titles.set(pageRef, Array.isArray(content) ? content.map((run) => run.text ?? "").join("") : "");
+      }
+    }
+    const titleOf = (id: string) => titles.get(id) ?? "";
+    const fileScope = scope.startsWith("user:") ? "personal" : scope;
+    const markdown = blockTreeToMarkdown(page.block_tree, titleOf,
+      (file: StoredFile) => `/api/v1/files/${fileScope}?path=${encodeURIComponent(file.path)}`,
+      readableDescriber(titleOf));
+    res.json({ id: page.id, title: page.title, revision: store.revision(scope, pageId), scope, markdown });
+  });
   app.patch("/api/v1/pages/:id", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId);
     const input = parse(z.object({
@@ -782,7 +840,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         };
         if (input.app.draft === "") delete next.app.draft;
       }
-      store.savePage(scope, next);
+      store.savePage(scope, next, who, input.title !== undefined ? "修改了标题" : "修改了页面属性");
       recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId, pageTitle: next.title });
     }); res.json(store.pageDto(who, pageId));
   });
@@ -799,12 +857,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         store.checkpoint(who, page.id, "启用应用源码前");
         const next: LoadedNotePage = { ...page, block_tree: page.block_tree, updated_at: currentTime(), updated_by: asAuthor(who), app: { ...(page.app ?? {}), enabled: draft } };
         delete next.app!.draft;
-        store.savePage(scope, next);
+        store.savePage(scope, next, who, "启用了应用源码");
         recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: page.id, pageTitle: next.title });
         return { status: 200, body: store.pageDto(who, page.id), scope, pageIds: [page.id] };
       });
   });
   app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).versions[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
+  app.get("/api/v1/pages/:id/events", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).pageEvents[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
   app.post("/api/v1/pages/:id/checkpoint", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id);
     const version = store.transaction(() => {
@@ -824,7 +883,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       store.checkpoint(who, pageId, "恢复前", true);
       // A version's snapshot was written from a whole page: it keeps its body.
       const restored: LoadedNotePage = restoredPage(version.snapshot, page) as LoadedNotePage; restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
-      store.savePage(scope, restored);
+      store.savePage(scope, restored, who, "恢复了历史版本");
       store.collaboration.reset(scope, pageId);
       recordTokenEvent(store.db, who.tokenId, { action: "restore", pageId, pageTitle: restored.title, versionId: version.id });
     }); res.json(store.pageDto(who, pageId));
@@ -836,6 +895,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     collaborationSocket?.notifyAuthRequests(userId, pendingAuthRequests(store, userId));
   }, options.authRequestTtlMs);
   attachAgentOperations(app, store, actor);
+  attachAgentCopy(app, { store, actor });
   attachAgentFiles(app, store, actor);
   attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
@@ -846,8 +906,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     vite = server; app.use(server.middlewares);
   } else if (options.serveStatic !== false) {
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "../dist");
-    app.use(express.static(root, { index: false }));
-    app.get("/{*path}", (_req, res) => res.sendFile(resolve(root, "index.html")));
+    app.use("/assets", express.static(resolve(root, "assets"), { index: false, maxAge: "1y", immutable: true }));
+    app.use(express.static(root, { index: false, maxAge: "1d" }));
+    app.get("/{*path}", (_req, res) => {
+      res.setHeader("Cache-Control", "no-cache");
+      res.sendFile(resolve(root, "index.html"));
+    });
   }
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof z.ZodError) {

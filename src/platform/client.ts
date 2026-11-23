@@ -28,7 +28,7 @@ export interface PlatformClient {
   spaces: {
     create(name: string): Promise<{ spaceId: string; name: string }>;
     installations(): Promise<SpaceSummary[]>;
-    watchInstallations(listener: (spaces: SpaceSummary[]) => void): Promise<() => void>;
+    watchInstallations(listener: (spaces: SpaceSummary[]) => void, options?: { initial?: SpaceSummary[] }): Promise<() => void>;
     members(spaceId: string): Promise<SpaceMember[]>;
     watchRoster(spaceId: string, listener: (roster: SpaceRoster) => void): Promise<() => void>;
     invite(spaceId: string, handle: string, role: "admin" | "editor" | "viewer"): Promise<{ created: boolean }>;
@@ -48,8 +48,8 @@ export async function createPlatformClient(knownUser?: Person | null): Promise<P
   if (!user) throw new Error("请先登录小黑笔记。");
   configureCollaboration(user.id);
   const stops = new Set<() => void>();
-  const watch = <T,>(read: () => Promise<T>, listener: (value: T) => void) => {
-    const stop = poll(read, listener); stops.add(stop);
+  const watch = <T,>(read: () => Promise<T>, listener: (value: T) => void, options: { initial?: T } = {}) => {
+    const stop = poll(read, listener, undefined, options); stops.add(stop);
     return () => { stop(); stops.delete(stop); };
   };
   const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -108,7 +108,7 @@ export async function createPlatformClient(knownUser?: Person | null): Promise<P
     spaces: {
       create: (name) => request("/api/spaces", json("POST", { name })),
       installations: () => request("/api/spaces"),
-      async watchInstallations(listener) { return watch(() => request<SpaceSummary[]>("/api/spaces"), listener); },
+      async watchInstallations(listener, options) { return watch(() => request<SpaceSummary[]>("/api/spaces"), listener, options); },
       async members(spaceId) { return (await request<SpaceRoster>(`/api/spaces/${spaceId}/roster`)).members; },
       async watchRoster(spaceId, listener) { return watch(() => request<SpaceRoster>(`/api/spaces/${spaceId}/roster`), listener); },
       invite: (id, handle, role) => request(`/api/spaces/${id}/invitations`, json("POST", { handle, role })),

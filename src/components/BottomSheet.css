@@ -1,0 +1,204 @@
+/* Unified mobile bottom sheet container. Uses the same z-index layer (80) as
+   .overlay so stacked dialogs, sheets, and fullscreen modals preserve natural
+   portal DOM order. */
+
+.bottom-sheet-wrap {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  pointer-events: none;
+}
+
+.bottom-sheet-wrap.is-shown {
+  pointer-events: auto;
+}
+
+.bottom-sheet__scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: var(--scrim);
+  opacity: 0;
+  transition: opacity var(--t-base) var(--e-out);
+}
+
+.bottom-sheet-wrap.is-shown .bottom-sheet__scrim {
+  opacity: 1;
+}
+
+/* History preview uses a light scrim so the page behind remains legible. */
+.bottom-sheet-wrap--peek .bottom-sheet__scrim {
+  background: rgba(15, 15, 15, 0.12);
+}
+
+.bottom-sheet {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  max-height: min(92dvh, calc(100dvh - 24px));
+  flex-direction: column;
+  padding-bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  border-radius: 16px 16px 0 0;
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink);
+  outline: 0;
+  transform: translateY(24px);
+  opacity: 0;
+  transition:
+    transform var(--t-base) var(--e-pop),
+    opacity var(--t-fast) var(--e-out),
+    height var(--t-base) var(--e-out);
+}
+
+.bottom-sheet.is-shown {
+  transform: none;
+  opacity: 1;
+}
+
+.bottom-sheet--auto {
+  max-height: 86dvh;
+}
+
+.bottom-sheet--tall {
+  height: 78dvh;
+}
+
+.bottom-sheet--mid {
+  height: 68dvh;
+}
+
+.bottom-sheet--expanded {
+  height: 94dvh;
+}
+
+.bottom-sheet--peek {
+  height: 45dvh;
+}
+
+.bottom-sheet__handle {
+  display: flex;
+  flex: none;
+  justify-content: center;
+  padding: 9px 0 5px;
+}
+
+.bottom-sheet__pill {
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--ink-4);
+}
+
+.bottom-sheet__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 12px 6px 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.bottom-sheet__title {
+  min-width: 0;
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-sheet__head-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.bottom-sheet__head-actions .icon-btn {
+  min-width: 40px;
+  min-height: 40px;
+}
+
+.bottom-sheet__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Dialogs and menus mapped into BottomSheet shed their desktop box framing. */
+.bottom-sheet.overlay__card,
+.bottom-sheet.pop--sheet {
+  width: 100%;
+  max-width: none;
+  margin-top: 0;
+  border-radius: 16px 16px 0 0;
+}
+
+.bottom-sheet.pop--sheet .menu {
+  max-height: none;
+  min-width: 0;
+  width: 100%;
+  padding: 6px 10px 4px;
+}
+
+.bottom-sheet.pop--sheet .menu__item {
+  min-height: 44px;
+  font-size: 14.5px;
+}
+
+.bottom-sheet.quickfind {
+  height: 86dvh;
+  max-height: 86dvh;
+}
+
+.bottom-sheet.quickfind .bottom-sheet__body {
+  overflow: hidden;
+}
+
+.bottom-sheet.quickfind .quickfind__input {
+  padding-top: 10px;
+}
+
+.bottom-sheet.quickfind .menu {
+  flex: 1;
+  max-height: none;
+}
+
+.bottom-sheet.share {
+  padding: 0;
+}
+
+.bottom-sheet.knowledge-base-modal > .bottom-sheet__body > div {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.bottom-sheet.sidebar--sheet {
+  height: 82dvh;
+  background: var(--sidebar);
+}
+
+.bottom-sheet.sidebar--sheet .bottom-sheet__body {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bottom-sheet__scrim,
+  .bottom-sheet {
+    transition: none;
+  }
+}

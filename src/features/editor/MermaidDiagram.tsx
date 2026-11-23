@@ -107,7 +107,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: str
   }, [text]);
 
   return (
-    <div className="mermaid" contentEditable={false}>
+    <div className="mermaid" role="region" tabIndex={0} aria-label="Mermaid diagram" contentEditable={false}>
       <div ref={host} className="mermaid__host" />
       {down ? <p className="mermaid__hint">Diagram engine unavailable — showing source only.</p> : null}
     </div>
