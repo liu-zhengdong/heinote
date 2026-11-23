@@ -496,14 +496,23 @@ Content-Type: application/json
 
 以下路径使用浏览器会话，不签发 Bearer 令牌。它们管理 Agent 身份本身，所以不向 Agent 开放。
 
-- `GET /api/tokens`：列出账号令牌。`id`、`name`、`displayName`、`avatar`、`access`、`createdAt`、`lastUsedAt`。`avatar` 取 `preset:<id>`、`upload:<文件>` 或 `initial`。
+- `GET /api/tokens`：列出账号令牌。`id`、`name`、`displayName`、`avatar`、`access`、`embed`、`createdAt`、`lastUsedAt`。`avatar` 取 `preset:<id>`、`upload:<文件>` 或 `initial`。
 - `GET /api/tokens/presets`：列出头像预设 `id` 与 `name`。客户端自带预设图；`preset:<id>` 头像不经过网络加载。
-- `POST /api/tokens`：创建令牌。`name`、`access`，可选 `displayName`、`avatar`。只在本响应返回一次 `token` 原文。
-- `PATCH /api/tokens/:id`：改 `displayName`、`avatar`。只影响此后的署名，不回写历史快照。
+- `POST /api/tokens`：创建令牌。`name`、`access`，可选 `displayName`、`avatar`、`embed`。只在本响应返回一次 `token` 原文。
+- `PATCH /api/tokens/:id`：改 `displayName`、`avatar`、`embed`。只影响此后的署名，不回写历史快照。关闭 `embed` 立即使该令牌的嵌入会话失效。
 - `PUT /api/tokens/:id/avatar`：上传头像图片，服务端裁为 webp。存储范围随令牌，撤销时删除。
 - `GET /api/tokens/:id/avatar/:path`：读上传头像。
 - `GET /api/tokens/:id/activity`：该令牌最近 100 条写操作。`action`、`pageId`、`pageTitle`、`versionId`、`createdAt`，按时间倒序。只读操作不记录。
-- `DELETE /api/tokens/:id`：撤销。令牌立即 401，事件与头像删除。
+- `DELETE /api/tokens/:id`：撤销。令牌立即 401，事件与头像删除，其嵌入会话一并删除。
+
+## 嵌入会话（工作台 iframe）
+
+勾选 `embed` 的令牌可以把整个网页端嵌进第三方工作台 iframe。令牌以自身身份换取一次性票据，票据在 iframe 导航中核销，得到一张跨站会话 Cookie（`notes_embed`，`HttpOnly; Secure; SameSite=None; Partitioned`）。会话里的浏览行为按令牌身份执行：内容读写受 `access` 约束，账号、认证、成员与令牌管理一律拒绝，令牌撤销或关闭 `embed` 时会话立即失效。
+
+- `POST /api/v1/embed/tickets`：签发票据。仅 `embed` 令牌的 Bearer 可调。父页源从 `Origin` 请求头或请求体 `origin` 取得（两者同时给出必须一致）；缺省或冲突返回 400。返回 `{ ticket, expiresAt }`，有效期 60 秒。跨站调用已被写闸豁免。
+- `GET /api/v1/embed/session?t=<ticket>`：核销票据。设计为 iframe `src` 的顶层导航调用：要求 `Sec-Fetch-Dest: iframe`，父页源按 `Referer`（缺省回退 `Origin`）核对与票据声明一致，不一致或缺席返回 403；票据无效、过期或重放返回 401。成功时 302 到 `/` 并写入会话 Cookie；仅持该会话的框架响应返回 `Content-Security-Policy: frame-ancestors 'self' <声明源>`，其余响应仍 `X-Frame-Options: DENY`。票据签发时的声明源是会话固定绑定的父页源，票据泄露不能把它换到别的源。
+
+注意：跨站会话依赖 `SameSite=None`，生产部署需要 HTTPS；不支持 CHIPS 的旧浏览器按未分区存储处理。父页 `referrerpolicy="no-referrer"` 会导致核销 403。
 
 会话接口的 `actor` 仍要求账号角色与空间权限。令牌的 `access: read` 只追加只读约束，不扩展权限。
 

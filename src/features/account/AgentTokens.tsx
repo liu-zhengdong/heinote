@@ -13,6 +13,7 @@ interface AgentToken {
   displayName: string;
   avatar: string;
   access: "read" | "write";
+  embed: boolean;
   createdAt: string;
   lastUsedAt: string | null;
 }
@@ -55,6 +56,7 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [access, setAccess] = useState<AgentToken["access"]>("write");
+  const [embed, setEmbed] = useState(false);
   const [preset, setPreset] = useState("");
   const [customFile, setCustomFile] = useState<File | null>(null);
   const [pending, setPending] = useState("");
@@ -101,6 +103,7 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
           name: name.trim(),
           displayName: displayName.trim() || undefined,
           access,
+          embed,
           ...(preset ? { avatar: `preset:${preset}` } : {}),
         }),
       });
@@ -115,6 +118,7 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
       setItems((current) => [metadata, ...current]);
       setName("");
       setDisplayName("");
+      setEmbed(false);
       setPreset("");
       setCustomFile(null);
       setCreating(false);
@@ -141,6 +145,23 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
       });
       setItems((current) => current.map((token) => token.id === item.id ? next : token));
       setNotice(`已更新「${item.name}」的身份`);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+    finally { setPending(""); onBusyChange(false); }
+  };
+
+  const saveEmbed = async (item: AgentToken, enabled: boolean) => {
+    if (pending) return;
+    setPending(item.id);
+    onBusyChange(true);
+    setError("");
+    try {
+      const next = await api<AgentToken>(`/api/tokens/${encodeURIComponent(item.id)}`, {
+        method: "PATCH", body: JSON.stringify({ embed: enabled }),
+      });
+      setItems((current) => current.map((token) => token.id === item.id ? next : token));
+      setNotice(enabled ? `「${item.name}」已允许嵌入工作台` : `「${item.name}」已关闭嵌入，已有嵌入会话随即失效`);
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -208,6 +229,10 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
             </span>
           </button>
           {isOpen ? <div className="token-detail">
+            <label className="token-embed">
+              <input type="checkbox" aria-label={`嵌入工作台「${item.name}」`} checked={item.embed} disabled={Boolean(pending)} onChange={(event) => void saveEmbed(item, event.target.checked)} />
+              <span>允许嵌入工作台<span className="account-muted">（iframe 中打开小黑笔记；关闭后已有嵌入会话随即失效）</span></span>
+            </label>
             <div className="token-detail__feed">
               <div className="group-title">最近写操作 <span className="account-muted">创建于 {formatDate(item.createdAt)}</span></div>
               {activityLoading === item.id ? <p className="feed__empty">读取中…</p>
@@ -321,6 +346,10 @@ export function AgentTokens({ onBusyChange, active, secret, onSecretChange: setS
             <button type="button" role="radio" aria-checked={access === "write"} className={access === "write" ? "is-on" : ""} disabled={Boolean(pending)} onClick={() => setAccess("write")}>读写</button>
           </div>
         </div>
+        <label className="account-field create-block__embed">
+          <input type="checkbox" name="tokenEmbed" checked={embed} disabled={Boolean(pending)} onChange={(event) => setEmbed(event.target.checked)} />
+          <span>允许嵌入工作台<span className="account-muted">（可用此令牌在 iframe 中打开小黑笔记）</span></span>
+        </label>
       </div>
       <div className="create-block__foot">
         <button type="button" className="btn" disabled={Boolean(pending)} onClick={() => setCreating(false)}>取消</button>

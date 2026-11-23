@@ -33,6 +33,7 @@ import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
 import { MAX_AVATAR_BYTES, prepareAvatar } from "./avatars.ts";
 import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvatarRef, tokenAvatarScope, tokenAvatarUrl, tokenDto } from "./token-identity.ts";
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
+import { clearEmbedCookie, createEmbed } from "./embed.ts";
 import { writeExport } from "./export.ts";
 import { cancelImport, importActive, importJob, initializeImports, shutdownImports, startImport } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
@@ -106,25 +107,55 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   const registrationAllowed = () => registrationOpen || !store.one("SELECT id FROM users LIMIT 1");
   const attempts = new Map<string, { count: number; until: number }>();
   const presence = new Map<string, { userId: string; clientId: string; state: unknown; time: number }>();
+  const embed = createEmbed(store);
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "same-origin");
-    res.setHeader("X-Frame-Options", "DENY");
+    /* UC-58: only a frameable response carrying a valid embed session drops
+       the frame blockade, and then only for the origin the ticket declared.
+       Everything else — api, assets, anonymous, plain sessions — stays DENY. */
+    /* UC-58: only a frameable response carrying a valid embed session drops
+       the frame blockade, and then only for the origin the ticket declared.
+       Everything else — api, assets, anonymous, plain sessions — stays DENY.
+       Express's default 404 page sets CSP default-src 'none'; reasserting our
+       header on writeHead keeps the contract on every response. */
+    const frameOrigin = embed.frameOrigin(req);
+    const frameable = !req.path.startsWith("/api/") && frameOrigin;
+    if (frameable) {
+      const writeHead = res.writeHead;
+      res.writeHead = function (...args: Parameters<typeof writeHead>) {
+        res.setHeader("Content-Security-Policy", `frame-ancestors 'self' ${frameOrigin}`);
+        return writeHead.apply(res, args);
+      } as typeof writeHead;
+    } else res.setHeader("X-Frame-Options", "DENY");
     if (req.path.startsWith("/api/")) res.setHeader("Cache-Control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
       const origin = req.get("origin");
       const expected = publicUrl ? new URL(publicUrl).origin : `${req.protocol}://${req.get("host")}`;
-      if ((origin && origin !== expected) || req.get("sec-fetch-site") === "cross-site") return next(new HttpError(403, "请求来源无效。"));
+      /* UC-58: the ticket endpoint intentionally serves the cross-site
+         workbench backend; it binds and verifies the origin itself. */
+      const crossSiteTicket = req.path === "/api/v1/embed/tickets";
+      if (!crossSiteTicket && ((origin && origin !== expected) || req.get("sec-fetch-site") === "cross-site")) return next(new HttpError(403, "请求来源无效。"));
     }
     next();
   });
   const jsonParser = express.json({ limit: "16mb" });
   app.use((req, res, next) => req.path.startsWith("/api/files/") || req.path.startsWith("/api/v1/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
+  /* UC-58: embed sessions act with token identity — account, auth, member
+     and token management are closed to them even on routes that never call
+     actor() (login, register). req.path is mount-relative here. */
+  app.use("/api", (req, _res, next) => {
+    if (embed.resolve(req) && embed.denied(req.path, req.method)) fail(403, "嵌入会话不可访问账号管理。", "forbidden");
+    next();
+  });
   // A running import holds the site's write path; let writes fail fast with
   // a readable 503 instead of hanging on SQLite's busy timeout.
   app.use("/api", (req, _res, next) => {
     if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
-    if (req.path.startsWith("/account/import") || req.path.startsWith("/admin/update-apply") || req.path.startsWith("/auth/")) return next();
+    /* Embed tickets only write an in-memory map + last_used_at; the plugin
+       must still be able to redeem a session while an import runs. */
+    if (req.path.startsWith("/account/import") || req.path.startsWith("/admin/update-apply") ||
+        req.path.startsWith("/auth/") || req.path.startsWith("/v1/embed/")) return next();
     if (importActive()) return fail(503, "导入进行中，请稍后再试。", "import_running");
     next();
   });
@@ -159,10 +190,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         displayName: row.display_name == null ? String(row.name) : String(row.display_name),
         avatar: tokenAvatarUrl(tokenId, avatar) ?? avatar };
     }
+    const embedded = embed.actorFor(req);
+    if (embedded) return embedded;
     const user = sessionUser(req);
     if (!user) fail(401, "请先登录。", "unauthorized");
     return { user };
   };
+  embed.attach(app, actor);
   attachKnowledgeBases(app, { store, actor });
   const admin = (req: Request) => {
     const who = actor(req);
@@ -177,7 +211,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const previous = cookie(req);
     if (previous) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(previous));
     const token = secret();
-    store.db.prepare("INSERT INTO sessions VALUES(?,?,?)").run(hash(token), userId, Date.now() + 30 * 86400000);
+    store.db.prepare("INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)").run(hash(token), userId, Date.now() + 30 * 86400000);
     res.cookie("notes_session", token, { httpOnly: true, sameSite: "lax", secure, maxAge: 30 * 86400000, path: "/" });
   };
   const throttle = (req: Request) => {
@@ -201,7 +235,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     res.set("Cache-Control", "no-store");
     res.json({ name: packageMeta.name, version: packageMeta.version, startedAt: startedAt.toISOString() });
   });
-  app.get("/api/session", (req, res) => res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled }));
+  app.get("/api/session", (req, res) => {
+    const embedded = embed.resolve(req);
+    if (embedded) return res.json({ user: embedded.user, embed: true, registrationOpen: registrationAllowed(), githubEnabled: false });
+    res.json({ user: sessionUser(req) ?? null, registrationOpen: registrationAllowed(), githubEnabled: github.enabled });
+  });
   app.patch("/api/account/profile", (req, res) => {
     const who = actor(req); const { displayName } = parse(z.object({ displayName: z.string().trim().min(1).max(100) }).strict(), req.body);
     store.db.prepare("UPDATE users SET display_name=? WHERE id=?").run(displayName, who.user.id);
@@ -229,8 +267,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     establish(req, res, String(row.id)); res.json({ user: store.user(row) });
   });
   app.post("/api/auth/logout", (req, res) => {
+    const embedded = embed.resolve(req);
+    if (embedded) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(embedded.key);
     const value = cookie(req); if (value) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(value));
-    res.clearCookie("notes_session", { path: "/", httpOnly: true, sameSite: "lax", secure }); res.json({ ok: true });
+    res.clearCookie("notes_session", { path: "/", httpOnly: true, sameSite: "lax", secure });
+    if (embedded) clearEmbedCookie(res);
+    res.json({ ok: true });
   });
   const quotaUser = (row: Row) => {
     const user = store.user(row);
@@ -634,10 +676,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       displayName: z.string().trim().min(1).max(100).optional(),
       avatar: z.string().max(100).optional(),
       avatarPreset: z.string().max(40).optional(),
+      embed: z.boolean().optional(),
     }).strict(), req.body);
     const avatar = tokenAvatarRef(input);
     const tokenId = id(); const token = `notes_${secret()}`; const createdAt = currentTime();
-    store.db.prepare("INSERT INTO tokens VALUES(?,?,?,?,?,?,?,?,NULL)").run(tokenId, hash(token), who.user.id, input.name, input.displayName ?? null, avatar, input.access, createdAt);
+    store.db.prepare("INSERT INTO tokens(id,hash,user_id,name,display_name,avatar,access,created_at,last_used_at,embed) VALUES(?,?,?,?,?,?,?,?,NULL,?)")
+      .run(tokenId, hash(token), who.user.id, input.name, input.displayName ?? null, avatar, input.access, createdAt, input.embed ? 1 : 0);
     res.status(201).json({ ...tokenDto(store.one("SELECT * FROM tokens WHERE id=?", tokenId)!), token });
   });
   const ownedToken = (who: Actor, tokenId: string): Row => {
@@ -654,11 +698,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const input = parse(z.object({
       displayName: z.string().trim().min(1).max(100).optional(),
       avatar: z.string().max(100).optional(),
+      embed: z.boolean().optional(),
     }).strict(), req.body);
     if (input.avatar !== undefined) parseTokenAvatar(input.avatar);
-    const fields: string[] = []; const params: string[] = [];
+    const fields: string[] = []; const params: (string | number)[] = [];
     if (input.displayName !== undefined) { fields.push("display_name=?"); params.push(input.displayName); }
     if (input.avatar !== undefined) { fields.push("avatar=?"); params.push(input.avatar); }
+    if (input.embed !== undefined) { fields.push("embed=?"); params.push(input.embed ? 1 : 0); }
     if (!fields.length) fail(400, "没有要修改的字段。", "bad_request");
     store.db.prepare(`UPDATE tokens SET ${fields.join(",")} WHERE id=?`).run(...params, tokenId);
     res.json(tokenDto(ownedToken(who, tokenId)));
@@ -689,6 +735,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       // UC-41 rows keep an FK pointer to the token they minted. Detach it so
       // the audit row survives the revoke while the token itself goes away.
       store.db.prepare("UPDATE agent_auth_requests SET token_id=NULL, granted_token=NULL WHERE token_id=?").run(tokenId);
+      // UC-58: revoking the token kills its embed sessions in the same stroke.
+      store.db.prepare("DELETE FROM sessions WHERE token_id=?").run(tokenId);
       store.db.prepare("DELETE FROM tokens WHERE id=?").run(tokenId);
     });
     res.json({ ok: true });
@@ -950,6 +998,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   const server = app.listen(options.port ?? Number(process.env.PORT ?? 3000), options.host ?? process.env.HOST ?? "0.0.0.0");
   collaborationSocket = attachCollaborationSocket(server, store, (req) => {
     if (req.headers.authorization) fail(403, "实时连接使用浏览器会话。");
+    const embedded = embed.actorFor(req as Request);
+    if (embedded) return embedded;
     const user = sessionUser(req as Request);
     if (!user) fail(401, "请重新登录。", "unauthorized");
     return { user };

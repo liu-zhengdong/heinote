@@ -411,6 +411,10 @@
 .create-block { padding: 14px 16px; margin: 14px 0 6px; border-radius: var(--r-md); background: var(--fill); display: grid; gap: 14px; }
 .create-block__row { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; }
 .create-block__name { flex: 1; min-width: 160px; }
+.create-block__embed, .token-embed { display: flex; align-items: center; gap: 7px; padding-bottom: 3px; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.create-block__embed input, .token-embed input { accent-color: var(--blue); margin: 0; }
+.token-embed { margin: 4px 4px 10px; }
+.token-embed .account-muted, .create-block__embed .account-muted { margin-left: 4px; font-weight: 400; }
 .create-block__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .account-field__label { color: var(--ink-2); font-size: 13px; }
 

@@ -64,6 +64,7 @@ export function tokenDto(row: Row) {
     access: String(row.access),
     createdAt: String(row.created_at),
     lastUsedAt: row.last_used_at == null ? null : String(row.last_used_at),
+    embed: Number(row.embed) === 1,
   };
 }
 
