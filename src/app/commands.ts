@@ -37,7 +37,7 @@ import { createId } from "../core/ids";
 import { bodyBlock, createBlock, isLoadedPage, lineLink, linesFor, loadedBodies, orderedBlocks, pageName, withLineLink } from "../core/block-tree";
 import { embedFromUrl, normalizeEmbed } from "../core/embeds";
 import { inlineFromText, isKeptLink, MENTION_CHAR, normalizeInlineContent, normalizeMention } from "../core/inline-content";
-import { descendantPageIds, inTrash } from "../core/page-tree";
+import { descendantPageIds, inTrash, isPurging } from "../core/page-tree";
 import { versionList } from "../core/versions";
 import type { Block, DatabaseConfig, DatabaseView, FilterCondition, InlineContent, NotePage, StoredFile, ViewFilter } from "../core/types";
 import {
@@ -142,7 +142,7 @@ function pageOf(host: CommandHost, id: string | undefined, options: { trash?: bo
   const pageId = id ?? host.selectedPageId;
   if (!pageId) refuse("not_found", "No page is open in the window: name one with page_id (find_pages finds it).");
   const page = pagesOf(host)[pageId];
-  if (!page) refuse("not_found", `There is no page ${pageId} in this person's HeiNote.`);
+  if (!page || isPurging(pagesOf(host), page.id)) refuse("not_found", `There is no page ${pageId} in this person's HeiNote.`);
   if (!options.trash && inTrash(pagesOf(host), page.id)) {
     refuse("in_trash", `${describe(page)} is in the trash: restore_page brings it back first.`);
   }
@@ -592,7 +592,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
     async deletePage(input) {
       const h = await opened();
       const page = writablePage(h, input.page_id, { trash: true });
-      if (!page.archived) refuse("bad_request", `${describe(page)} is not in the trash: only a page in the trash is deleted for good (archive_page first).`);
+      if (!page.archived || isPurging(pagesOf(h), page.id)) refuse("bad_request", `${describe(page)} is not in the trash: only a page in the trash is deleted for good (archive_page first).`);
       if (!h.workspace.canDeletePage(page.id)) refuse("read_only", "Only a knowledge base owner or administrator can permanently delete its pages.");
       const pages = pagesOf(h);
       const gone = [page.id, ...descendantPageIds(pages, page.id)];

@@ -19,7 +19,7 @@ import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
 import { imeComposing } from "../core/keyboard";
 import { useUi } from "./ui-context";
 import { pageName } from "../core/block-tree";
-import { pageAncestry } from "../core/page-tree";
+import { descendantCount, inTrash, isPurging, pageAncestry } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
 
@@ -115,11 +115,19 @@ export function App() {
   /* What the shell draws of the workspace — the open page's kind, whether
      the row in the peek is still there, whether sharing still follows the
      page — each read on its own, so typing redraws none of it. */
-  const selectedKind = useWorkspaceState((state) => state.pages[selectedPageId]?.kind ?? null);
+  const selectedKind = useWorkspaceState((state) => {
+    if (!selectedPageId || isPurging(state.pages, selectedPageId)) return null;
+    return state.pages[selectedPageId]?.kind ?? null;
+  });
   // Opened from the trash, the page is read where it is: the page in the
   // trash, itself or above it, is the one Restore brings back.
-  const trashedAt = useWorkspaceState((state) => pageAncestry(state.pages, selectedPageId).find((page) => page.archived)?.id ?? null);
+  const trashedAt = useWorkspaceState((state) => (
+    !selectedPageId || isPurging(state.pages, selectedPageId)
+      ? null
+      : pageAncestry(state.pages, selectedPageId).find((page) => page.archived)?.id ?? null
+  ));
   const trashedTitle = useWorkspaceState((state) => trashedAt && state.pages[trashedAt] ? pageName(state.pages[trashedAt]) || "Untitled" : "");
+  const trashedChildCount = useWorkspaceState((state) => (trashedAt ? descendantCount(state.pages, trashedAt) : 0));
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const removeTrashedPage = useCallback(async () => {
@@ -133,7 +141,7 @@ export function App() {
   // Gone, the peek closes.
   const peekOpen = useWorkspaceState((state) => {
     const peeked = peekPageId ? state.pages[peekPageId] : undefined;
-    return Boolean(peeked && !peeked.archived);
+    return Boolean(peeked && !inTrash(state.pages, peeked.id));
   });
   const sharePage = usePage(sharePageId);
   /* Sharing follows the page it was opened for — the page, the row open
@@ -440,6 +448,7 @@ export function App() {
       <DeletePageConfirm
         open={confirmDelete}
         title={trashedTitle}
+        childCount={trashedChildCount}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => void removeTrashedPage()}
       />

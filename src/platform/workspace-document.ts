@@ -287,6 +287,12 @@ export class WorkspaceDocument {
     await this.pullPages(pageIds, (plane, ids) => plane.loadHistory(ids));
   }
 
+  /** Pull the latest pages and settings metadata for `scope`. */
+  async refreshScope(scope: string): Promise<void> {
+    if (this.closed) return;
+    await this.planes.get(scope)?.refreshMetadata();
+  }
+
   /** True when every named page has completed its on-demand history pull. */
   hasHistoryLoaded(pageIds: readonly string[]): boolean {
     if (!pageIds.length) return true;

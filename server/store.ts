@@ -6,6 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import schema, { HISTORY_AGE_MS, HISTORY_BUDGET_BYTES } from "../schema.ts";
 import { isCurrent } from "../src/core/versions.ts";
+import { inTrash, isPurging } from "../src/core/page-tree.ts";
 import { emptyPlane, Projector, type PlaneRecords, type RecordValue } from "../src/platform/records.ts";
 import { historyParts } from "../src/platform/history-record.ts";
 import { blockRecordId, eventId, parseBlockRecordId, parseHistoryId } from "../src/platform/record-ids.ts";
@@ -15,6 +16,7 @@ import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
 import { Quotas } from "./quotas.ts";
+import { PURGE_QUEUE_DDL, PurgeManager } from "./purge.ts";
 import { LATEST_VERSION } from "./migrations/index.ts";
 import { DELTA_DDL, DELTA_TRIGGERS } from "./record-delta.ts";
 import { documentKey, pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
@@ -59,9 +61,11 @@ export class Store {
   readonly knowledgeBases: KnowledgeBases;
   readonly collaboration: CollaborationStore;
   readonly quotas!: Quotas;
+  readonly purge!: PurgeManager;
   readonly dbEpoch!: string;
   readonly dataDir: string;
   private transactionDepth = 0;
+  get inTransaction(): boolean { return this.transactionDepth > 0; }
   /** The one-time collaboration rebuild at startup is not a user commit. */
   quotaSuspended = false;
   constructor(dataDir: string) {
@@ -88,6 +92,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
       CREATE TABLE IF NOT EXISTS agent_auth_requests(id TEXT PRIMARY KEY, name TEXT NOT NULL, access TEXT NOT NULL, ip TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', user_id TEXT REFERENCES users(id), token_id TEXT REFERENCES tokens(id), granted_token TEXT, created_at TEXT NOT NULL, expires INTEGER NOT NULL, resolved_at TEXT);
       CREATE INDEX IF NOT EXISTS idx_agent_auth_requests_status ON agent_auth_requests(status);
+      ${PURGE_QUEUE_DDL}
       ${DELTA_DDL}
       ${DELTA_TRIGGERS}`);
     // UC-33: user_version is the migration cursor. A database whose version
@@ -113,6 +118,7 @@ export class Store {
       this.dbEpoch = String(this.one("SELECT value FROM site_settings WHERE key='db_instance_id'")?.value ?? generated);
     }
     this.collaboration = new CollaborationStore(this);
+    this.purge = new PurgeManager(this);
     this.quotaSuspended = true;
     try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
   }
@@ -360,15 +366,33 @@ export class Store {
     }
     return undefined;
   }
+  /** Walk a page's ancestor chain in `scope` by primary key without loading the whole vault. */
+  pageTrashState(scope: string, pageId: string): { archived: boolean; purging: boolean } {
+    let archived = false;
+    let purging = false;
+    let current: string | undefined = pageId;
+    const seen = new Set<string>();
+    while (current && !seen.has(current)) {
+      seen.add(current);
+      const value = this.record(scope, "pages", current);
+      if (!value) break;
+      if (value.archived) archived = true;
+      if (value.purging) purging = true;
+      if (archived && purging) break;
+      current = typeof value.parent_id === "string" && value.parent_id ? value.parent_id : undefined;
+    }
+    return { archived, purging };
+  }
   /** Locate which scope and navigation space hold a page visible to `actor`
    *  via O(M) primary-key lookups, so a deep link can activate just that space. */
   locatePage(actor: Actor, pageId: string): { scope: string; spaceId: string } | null {
-    if (this.record(`user:${actor.user.id}`, "pages", pageId)) {
+    const personal = `user:${actor.user.id}`;
+    if (this.record(personal, "pages", pageId) && !this.pageTrashState(personal, pageId).purging) {
       return { scope: "personal", spaceId: "personal" };
     }
     for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) {
       const spaceId = String(member.space_id);
-      if (!this.record(spaceId, "pages", pageId)) continue;
+      if (!this.record(spaceId, "pages", pageId) || this.pageTrashState(spaceId, pageId).purging) continue;
       return { scope: spaceId, spaceId: this.knowledgeBases.get(spaceId) ? spaceId : "personal" };
     }
     return null;
@@ -428,7 +452,7 @@ export class Store {
   private pageProjection(actor: Actor, pageId: string): { projected: LoadedWorkspaceState; page: LoadedNotePage; scope: string } {
     const projected = new Projector().project(this.pagePlanes(actor, pageId)) as LoadedWorkspaceState;
     const page = projected.pages[pageId];
-    if (!page) fail(404, "页面不存在。", "not_found");
+    if (!page || isPurging(projected.pages, pageId)) fail(404, "页面不存在。", "not_found");
     // The chain that decides scope: raw records are enough — the page and
     // its ancestors' location markers, not their projected trees.
     let current: Row = page;
@@ -468,6 +492,28 @@ export class Store {
         const scope = this.scope(actor, write.scope, true);
         const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? parseBlockRecordId(write.id)?.pageId : write.collection === "versions" ? parseHistoryId(write.id)?.pageId : undefined;
         if (pageId) this.assertPageLocation(scope, pageId);
+        if (write.collection === "pages") {
+          if (write.action === "patch" && write.patch && "purging" in write.patch) fail(403, "不能直接修改删除状态。", "forbidden");
+          if (write.action === "put" && write.value?.purging !== undefined) {
+            const existing = this.record(scope, "pages", write.id);
+            if (Boolean(write.value.purging) !== Boolean(existing?.purging)) fail(403, "不能直接修改删除状态。", "forbidden");
+          }
+          if (this.purge.hasPendingInScope(scope)) {
+            if (this.pageTrashState(scope, write.id).purging) fail(409, "页面正在删除中，无法修改。", "purging");
+            const nextParent = write.action === "put" ? write.value?.parent_id : write.action === "patch" ? write.patch?.parent_id : undefined;
+            if (typeof nextParent === "string" && nextParent && this.pageTrashState(scope, nextParent).purging) {
+              fail(409, "目标父页面正在删除中。", "purging");
+            }
+          }
+        } else if (pageId && this.purge.hasPendingInScope(scope) && (write.collection === "blocks" || write.collection === "versions")) {
+          if (this.pageTrashState(scope, pageId).purging) fail(409, "页面正在删除中，无法修改。", "purging");
+        }
+      }
+      for (const update of textUpdates) {
+        const scope = this.scope(actor, update.scope, true);
+        if (this.purge.hasPendingInScope(scope) && this.pageTrashState(scope, update.pageId).purging) {
+          fail(409, "页面正在删除中，无法修改。", "purging");
+        }
       }
       this.collaboration.markRequest(requestId);
       this.collaboration.checkExpected(actor, expectedPages);
@@ -561,6 +607,7 @@ export class Store {
           const spec = schema.definition.collections[write.collection as keyof typeof schema.definition.collections];
           next = z.object(spec.fields).strict().parse(next) as Row;
           if (write.collection === "pages") {
+            if (Boolean(next.purging) !== Boolean(current?.purging)) fail(403, "不能直接修改删除状态。", "forbidden");
             if (next.id !== write.id) fail(400, "页面 ID 不一致。");
             if (next.share_space_id) {
               if (typeof next.share_space_id !== "string") fail(400, "空间无效。");
@@ -579,8 +626,9 @@ export class Store {
             // holds this write, so paragraphs and history leave with the
             // page or the whole batch is refused.
             this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
-            this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
-            this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND id LIKE ?").run(scope, `${write.id.length}_${write.id}_%`);
+            this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND json_extract(value,'$.page')=?").run(scope, write.id);
+            this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=?").run(scope, write.id);
+            this.stmt("DELETE FROM collaboration_archives WHERE scope=? AND page_id=?").run(scope, write.id);
           }
           if (write.collection === "pages" && current?.share_space_id === scope) {
             if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。", "owner_required");
@@ -824,13 +872,15 @@ export class Store {
     if (!owner) fail(404, "分享链接已失效。");
     let actual;
     try { actual = this.page({ user: owner }, String(share.page_id)); } catch { fail(404, "分享链接已失效。"); }
-    if (actual.scope !== share.scope || actual.page.archived) fail(404, "分享链接已失效。");
+    const rootTrash = this.pageTrashState(actual.scope, actual.page.id);
+    if (actual.scope !== share.scope || rootTrash.archived || rootTrash.purging) fail(404, "分享链接已失效。");
     const all = this.state({ user: owner }).pages;
+    if (inTrash(all, actual.page.id)) fail(404, "分享链接已失效。");
     const pages: NotePage[] = [];
     const queue = [actual.page]; const seen = new Set<string>();
     while (queue.length) {
       const page = queue.shift()!;
-      if (seen.has(page.id) || page.archived) continue;
+      if (seen.has(page.id) || inTrash(all, page.id)) continue;
       seen.add(page.id);
       pages.push(page);
       for (const child of Object.values(all)) if (child.parent_id === page.id && this.page({ user: owner }, child.id).scope === actual.scope) queue.push(child);

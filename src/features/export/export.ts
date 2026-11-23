@@ -30,7 +30,7 @@ function cellText(row: NotePage, property: { id: string; type: string }, pages: 
   switch (property.type) {
     case "checkbox": return raw === "true" ? "TRUE" : "FALSE";
     case "multi_select": return multiValues(raw).join("; ");
-    case "relation": return relationIds(raw).map((id) => { const page = pages.get(id); return page && !page.archived ? pageName(page) : ""; }).filter(Boolean).join("; ");
+    case "relation": return relationIds(raw).map((id) => { const page = pages.get(id); return page && !page.archived && !page.purging ? pageName(page) : ""; }).filter(Boolean).join("; ");
     case "image":
     case "file": return (row.property_files?.[property.id] ?? []).map((file) => file.name).join("; ");
     default: return raw;
@@ -63,7 +63,7 @@ export function databaseCsv(database: NotePage, pages: Map<string, NotePage>, vi
  *  view lists first, so a database survives as data not only as a table.
  *  Page mentions keep `[[wikilinks]]`; file links point into attachments/. */
 export function pageMarkdown(page: NotePage, dir: string, pages: Map<string, NotePage>): string {
-  const titleOf = (id: string) => { const target = pages.get(id); return target && !target.archived ? pageName(target) : ""; };
+  const titleOf = (id: string) => { const target = pages.get(id); return target && !target.archived && !target.purging ? pageName(target) : ""; };
   const fileHref = (file: StoredFile) => {
     const zipPath = attachmentZipPath(file);
     return zipPath ? relative(dir, zipPath) : file.name || "file";

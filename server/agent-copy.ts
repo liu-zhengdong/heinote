@@ -1,7 +1,7 @@
 import type { Express, Request } from "express";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { descendantPageIds } from "../src/core/page-tree.ts";
+import { descendantPageIds, inTrash, isPurging } from "../src/core/page-tree.ts";
 import { relinkContent } from "../src/core/block-tree.ts";
 import { blockRecordId } from "../src/platform/record-ids.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
@@ -81,11 +81,16 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
     // original (broken) reference — the copy can't resurrect them.
     const source = store.page(who, pageId);
     const all = store.state(who).pages;
+    if (inTrash(all, pageId)) {
+      if (isPurging(all, pageId)) fail(404, "页面不存在。", "not_found");
+      fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
+    }
     const ids = [pageId, ...descendantPageIds(all, pageId)];
     const pages: LoadedNotePage[] = [];
     for (const idInTree of ids) {
+      if (inTrash(all, idInTree)) continue;
       const found = store.page(who, idInTree);
-      if (found.scope === source.scope && !found.page.archived) pages.push(found.page);
+      if (found.scope === source.scope) pages.push(found.page);
     }
     const bytes = new Map<string, Buffer>();
     for (const page of pages) {
@@ -101,12 +106,18 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
     mutation(store, actor, req, res, input,
       (who) => {
         const source = store.page(who, pageId);
-        if (source.page.archived) fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
+        const sourceTrash = store.pageTrashState(source.scope, pageId);
+        if (sourceTrash.purging) fail(404, "页面不存在。", "not_found");
+        if (sourceTrash.archived) fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
         const targetScope = store.scope(who, input.spaceId ?? "personal", true);
         const parent = input.parentId ? store.page(who, input.parentId) : undefined;
         if (parent && parent.scope !== targetScope) fail(400, "父页面不属于目标空间。", "bad_request");
         if (parent && parent.page.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");
-        if (parent && parent.page.archived) fail(409, "父页面已归档。", "conflict");
+        if (parent) {
+          const parentTrash = store.pageTrashState(parent.scope, parent.page.id);
+          if (parentTrash.purging) fail(404, "父页面不存在。", "not_found");
+          if (parentTrash.archived) fail(409, "父页面已归档。", "conflict");
+        }
         const library = store.knowledgeBases.get(targetScope);
         const destination = parent?.page ?? (library ? store.page(who, library.homePageId).page : undefined);
         if (destination && destination.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");

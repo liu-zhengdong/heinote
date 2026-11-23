@@ -184,7 +184,7 @@ import {
 import { blockKeys } from "./useBlockKeys";
 import { useSelectedBlockKeys } from "./useSelectedBlockKeys";
 import { blockTyping } from "./useBlockTyping";
-import { spaceOfPage } from "../../core/page-tree";
+import { inTrash, isPurging, spaceOfPage } from "../../core/page-tree";
 import { followHref } from "./RichField";
 import { RemoteCarets } from "./RemoteCarets";
 
@@ -1161,7 +1161,7 @@ export function DocumentEditor({
       const seen = new Set<string>();
       let cursor: NotePage | undefined = candidate;
       while (cursor && !seen.has(cursor.id)) {
-        if (cursor.archived || carried.has(cursor.id)) return false;
+        if (cursor.archived || cursor.purging || carried.has(cursor.id)) return false;
         seen.add(cursor.id);
         cursor = cursor.parent_id ? pages[cursor.parent_id] : undefined;
       }
@@ -1208,7 +1208,7 @@ export function DocumentEditor({
     for (const block of Object.values(fragment.by_id)) {
       const link = lineLink(block);
       const moved = link?.expanded ? pages[link.page_id] : undefined;
-      if (moved && !moved.archived && moved.parent_id !== holder) movePage(moved.id, holder);
+      if (moved && !inTrash(pages, moved.id) && moved.parent_id !== holder) movePage(moved.id, holder);
     }
   }, [movePage, ownerOf, page.id, store]);
 
@@ -2257,7 +2257,8 @@ export function DocumentEditor({
       removeHere: () => removeMount(block, at),
     });
     const target = pages[link.page_id];
-    return target && !target.archived ? renderPage(`${link.page_id}:${at}`, target, handle, link.view) : null;
+    const shown = Boolean(target && !target.archived && !isPurging(pages, target.id) && (inTrash(pages, page.id) || !inTrash(pages, target.id)));
+    return shown && target ? renderPage(`${link.page_id}:${at}`, target, handle, link.view) : null;
   };
 
   /* A paragraph that is nothing but a shown link IS the page or block, in its

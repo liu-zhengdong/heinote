@@ -44,8 +44,9 @@ const holderSets = new WeakMap<Record<string, NotePage>, ReadonlySet<string>>();
 export function pageHolders(pages: Record<string, NotePage>): ReadonlySet<string> {
   const known = holderSets.get(pages);
   if (known) return known;
+  const trashed = trashedPageIds(pages);
   const holders = new Set<string>();
-  for (const page of Object.values(pages)) if (page?.parent_id && !page.archived) holders.add(page.parent_id);
+  for (const page of Object.values(pages)) if (page?.parent_id && !trashed.has(page.id)) holders.add(page.parent_id);
   holderSets.set(pages, holders);
   return holders;
 }
@@ -131,7 +132,7 @@ export function canMovePage(
     return !spaceId || (spaces[spaceId]?.role !== "viewer" && !spaces[spaceId]?.knowledgeBase?.archived);
   };
   const page = pages[pageId];
-  if (!page || page.archived || page.share_space_id || !editable(pageId)) return false;
+  if (!page || inTrash(pages, pageId) || page.share_space_id || !editable(pageId)) return false;
   if (targetId === undefined) return true;
   if ((page.parent_id ?? null) === targetId) return false;
   if (targetId) {
@@ -159,7 +160,7 @@ export function canTrashPage(
   pageId: string,
 ): boolean {
   const page = pages[pageId];
-  if (!page || page.archived) return false;
+  if (!page || inTrash(pages, pageId)) return false;
   const spaceId = spaceOfPage(pages, pageId);
   const role = spaceId ? spaces[spaceId]?.role : "owner";
   const library = spaceId ? spaces[spaceId]?.knowledgeBase : undefined;
@@ -167,17 +168,136 @@ export function canTrashPage(
   return !page.share_space_id || role === "owner" || role === "admin";
 }
 
-/** Knowledge-base permanent removal belongs to its owner and administrators. */
+/** Knowledge-base permanent removal belongs to its owner and administrators;
+ *  ordinary shared roots belong to their owner. */
 export function canDeletePage(pages: Record<string, NotePage>, spaces: Record<string, PermissionSpace>, pageId: string): boolean {
-  if (!pages[pageId]) return false;
+  const page = pages[pageId];
+  if (!page || isPurging(pages, pageId)) return false;
   const scope = spaceOfPage(pages, pageId);
   if (!scope) return true;
   const space = spaces[scope];
   if (!space || space.role === "viewer" || space.knowledgeBase?.archived) return false;
-  return !space.knowledgeBase || (space.knowledgeBase.homePageId !== pageId && ["owner", "admin"].includes(space.role ?? ""));
+  if (!space.knowledgeBase) return !page.share_space_id || space.role === "owner";
+  return space.knowledgeBase.homePageId !== pageId && ["owner", "admin"].includes(space.role ?? "");
 }
 
-/** Whether a page is in the trash, itself or with a parent. */
+function ancestorMarkedSet(
+  pages: Record<string, NotePage>,
+  cache: WeakMap<Record<string, NotePage>, ReadonlySet<string>>,
+  predicate: (page: NotePage) => boolean,
+): ReadonlySet<string> {
+  const known = cache.get(pages);
+  if (known) return known;
+  const result = new Set<string>();
+  const resolved = new Set<string>();
+  for (const page of Object.values(pages)) {
+    if (!page?.id || resolved.has(page.id)) continue;
+    const chain: NotePage[] = [];
+    const visiting = new Set<string>();
+    let cursor: NotePage | undefined = page;
+    let hit = false;
+    while (cursor?.id && !visiting.has(cursor.id)) {
+      if (resolved.has(cursor.id)) {
+        hit = result.has(cursor.id);
+        break;
+      }
+      visiting.add(cursor.id);
+      chain.push(cursor);
+      if (predicate(cursor)) {
+        hit = true;
+        break;
+      }
+      cursor = cursor.parent_id ? pages[cursor.parent_id] : undefined;
+    }
+    for (const item of chain) {
+      resolved.add(item.id);
+      if (hit) result.add(item.id);
+    }
+  }
+  cache.set(pages, result);
+  return result;
+}
+
+const purgingSets = new WeakMap<Record<string, NotePage>, ReadonlySet<string>>();
+const trashedSets = new WeakMap<Record<string, NotePage>, ReadonlySet<string>>();
+const descendantCountMaps = new WeakMap<Record<string, NotePage>, ReadonlyMap<string, number>>();
+
+/** Pages queued for background permanent deletion, directly or under a purging ancestor. */
+export function purgingPageIds(pages: Record<string, NotePage>): ReadonlySet<string> {
+  return ancestorMarkedSet(pages, purgingSets, (page) => Boolean(page.purging));
+}
+
+/** Pages in the trash or being purged, directly or under a trashed/purging ancestor. */
+export function trashedPageIds(pages: Record<string, NotePage>): ReadonlySet<string> {
+  return ancestorMarkedSet(pages, trashedSets, (page) => Boolean(page.archived || page.purging));
+}
+
+/** Whether a page is queued for background permanent deletion, itself or with an ancestor. */
+export function isPurging(pages: Record<string, NotePage>, pageId: string): boolean {
+  return Boolean(pageId) && purgingPageIds(pages).has(pageId);
+}
+
+/** Whether a page is in the trash (or being purged), itself or with a parent. */
 export function inTrash(pages: Record<string, NotePage>, pageId: string): boolean {
-  return pageAncestry(pages, pageId).some((page) => page.archived);
+  return Boolean(pageId) && trashedPageIds(pages).has(pageId);
+}
+
+/** Non-purging descendant counts for every page, computed in one O(N) pass. */
+export function subtreeDescendantCounts(pages: Record<string, NotePage>): ReadonlyMap<string, number> {
+  const known = descendantCountMaps.get(pages);
+  if (known) return known;
+  const purging = purgingPageIds(pages);
+  const children = new Map<string, string[]>();
+  const allIds: string[] = [];
+  for (const page of Object.values(pages)) {
+    if (!page?.id || purging.has(page.id)) continue;
+    allIds.push(page.id);
+    if (page.parent_id && pages[page.parent_id] && !purging.has(page.parent_id)) {
+      const list = children.get(page.parent_id);
+      if (list) list.push(page.id);
+      else children.set(page.parent_id, [page.id]);
+    }
+  }
+  const counts = new Map<string, number>();
+  const rootIds = allIds.filter((id) => {
+    const parentId = pages[id]?.parent_id;
+    return !parentId || !pages[parentId] || purging.has(parentId);
+  });
+  const stack: Array<{ id: string; visited: boolean }> = rootIds.map((id) => ({ id, visited: false }));
+  while (stack.length) {
+    const frame = stack.pop()!;
+    if (frame.visited) {
+      let total = 0;
+      for (const childId of children.get(frame.id) ?? []) total += 1 + (counts.get(childId) ?? 0);
+      counts.set(frame.id, total);
+    } else if (!counts.has(frame.id)) {
+      stack.push({ id: frame.id, visited: true });
+      for (const childId of children.get(frame.id) ?? []) {
+        if (!counts.has(childId)) stack.push({ id: childId, visited: false });
+      }
+    }
+  }
+  for (const id of allIds) {
+    if (counts.has(id)) continue;
+    const seen = new Set<string>([id]);
+    const queue = [id];
+    let total = 0;
+    while (queue.length) {
+      const current = queue.shift()!;
+      for (const childId of children.get(current) ?? []) {
+        if (seen.has(childId)) continue;
+        seen.add(childId);
+        total += 1;
+        queue.push(childId);
+      }
+    }
+    counts.set(id, total);
+  }
+  descendantCountMaps.set(pages, counts);
+  return counts;
+}
+
+/** Number of non-purging descendant pages under `pageId`. */
+export function descendantCount(pages: Record<string, NotePage>, pageId: string): number {
+  return subtreeDescendantCounts(pages).get(pageId) ?? 0;
 }

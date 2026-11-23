@@ -81,6 +81,18 @@ export class CollaborationStore {
     const events = [...this.events.values()]; this.events.clear(); this.forced.clear();
     for (const listener of this.listeners) { try { listener(events); } catch (error) { console.error("Collaboration notification failed", error); } }
   }
+  notifyRemoved(scope: string, pageIds: readonly string[]): void {
+    const events: DocumentEvent[] = [];
+    for (const pageId of pageIds) {
+      this.sequences.delete(documentKey({ scope, pageId }));
+      events.push({ scope, pageId, type: "removed" });
+    }
+    if (!events.length) return;
+    for (const listener of this.listeners) {
+      try { listener(events); }
+      catch (error) { console.error("Collaboration notification failed", error); }
+    }
+  }
   reset(scope: string, pageId: string): void {
     this.forced.add(documentKey({ scope, pageId }));
     this.store.db.prepare("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)").run(scope, pageId);
@@ -89,7 +101,7 @@ export class CollaborationStore {
   private load(row: Row): Y.Doc { const doc = new Y.Doc(); Y.applyUpdate(doc, row.state as Uint8Array); return doc; }
   private pageData(scope: string, pageId: string) {
     const { page, blocks } = this.store.pageBundle(scope, pageId);
-    if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
+    if (!page || page.purging || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
     return { page, blocks, fields: fieldsInPage(pageId, page, blocks), structure: hash(JSON.stringify(structureOf(page, blocks))) };
   }
   private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean, update?: Uint8Array): void {
@@ -113,7 +125,9 @@ export class CollaborationStore {
       const previous = this.stored(scope, pageId); const data = this.pageData(scope, pageId);
       if (!data) {
         if (previous) {
-          this.archive(previous);
+          const movedElsewhere = this.store.one("SELECT 1 FROM records WHERE collection='pages' AND id=? AND scope!=? LIMIT 1", pageId, scope);
+          if (movedElsewhere) this.archive(previous);
+          else this.store.db.prepare("DELETE FROM collaboration_archives WHERE scope=? AND page_id=?").run(scope, pageId);
           this.store.db.prepare("DELETE FROM collaboration_documents WHERE scope=? AND page_id=?").run(scope, pageId);
           this.events.set(key, { scope, pageId, type: "removed" });
         }
@@ -171,11 +185,13 @@ export class CollaborationStore {
     if (!row) fail(409, "协作文档正在初始化。", "not_ready");
     const page = this.store.record(scope, "pages", pageId);
     if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
+    if (this.store.purge.hasPendingInScope(scope) && this.store.pageTrashState(scope, pageId).purging) return null;
     const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
     return { canEdit };
   }
   snapshot(actor: Actor, scopeName: string, pageId: string): DocumentSnapshot {
     const scope = this.store.scope(actor, scopeName);
+    if (this.store.pageTrashState(scope, pageId).purging) fail(404, "页面已移走或不存在。", "not_found");
     const data = this.pageData(scope, pageId);
     if (!data) fail(404, "页面已移走或不存在。", "not_found");
     const row = this.stored(scope, pageId);
@@ -283,7 +299,7 @@ export class CollaborationStore {
   }
   fields(actor: Actor, scopeName: string, pageId: string): { doc: Y.Doc; generation: string; scope: string; fields: Record<string, RichText> } {
     const scope = this.store.scope(actor, scopeName, true); const row = this.stored(scope, pageId);
-    if (!row || !this.pageData(scope, pageId)) fail(404, "协作页面不存在。");
+    if (this.store.pageTrashState(scope, pageId).purging || !row || !this.pageData(scope, pageId)) fail(404, "协作页面不存在。", "not_found");
     const doc = this.load(row);
     return { doc, scope, generation: String(row.generation), fields: readFields(doc) };
   }

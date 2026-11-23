@@ -1,5 +1,5 @@
 import { pageName } from "../../core/block-tree";
-import { isBareRow } from "../../core/page-tree";
+import { inTrash, isBareRow } from "../../core/page-tree";
 import type { NotePage, SidebarSort } from "../../core/types";
 import { outsideLinks, referenceIndex } from "../editor/mentions";
 
@@ -55,14 +55,14 @@ export function buildTree(pages: Record<string, NotePage>, sort: SidebarSort): P
   const children = new Map<string, NotePage[]>();
   const left = unlisted(pages);
   for (const page of Object.values(pages)) {
-    if (!page?.id || page.archived || left.has(page.id)) continue;
+    if (!page?.id || inTrash(pages, page.id) || left.has(page.id)) continue;
     const parent = page.parent_id ? pages[page.parent_id] : undefined;
     if (!parent) {
       roots.push(page);
       continue;
     }
     // Inside a page in the trash: not in the tree.
-    if (parent.archived) continue;
+    if (inTrash(pages, parent.id) || left.has(parent.id)) continue;
     const siblings = children.get(parent.id);
     if (siblings) siblings.push(page);
     else children.set(parent.id, [page]);
@@ -71,6 +71,29 @@ export function buildTree(pages: Record<string, NotePage>, sort: SidebarSort): P
   roots.sort(compare);
   for (const siblings of children.values()) siblings.sort(compare);
   return { roots, children };
+}
+
+/** All visible pages reachable from `tree.roots` in tree order, cycle-safe. */
+export function flattenTree(tree: PageTree): NotePage[] {
+  const out: NotePage[] = [];
+  const seen = new Set<string>();
+  const stack: NotePage[] = [...tree.roots].reverse();
+  while (stack.length) {
+    const page = stack.pop()!;
+    if (seen.has(page.id)) continue;
+    seen.add(page.id);
+    out.push(page);
+    const siblings = tree.children.get(page.id);
+    if (siblings?.length) {
+      for (let index = siblings.length - 1; index >= 0; index -= 1) stack.push(siblings[index]);
+    }
+  }
+  return out;
+}
+
+/** Exact number of visible pages reachable from `tree.roots`. */
+export function countTree(tree: PageTree): number {
+  return flattenTree(tree).length;
 }
 
 /* Which pages something links to from outside where they live — the page
@@ -108,7 +131,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
     if (before === after) continue;
     if (!after) return false;
     if (before.title !== after.title || before.icon !== after.icon || before.icon_image !== after.icon_image || before.parent_id !== after.parent_id
-      || before.archived !== after.archived || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
+      || before.archived !== after.archived || before.purging !== after.purging || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
     if (byTime && (before.updated_at !== after.updated_at || before.created_at !== after.created_at)) return false;
     if (!after.title && pageName(before) !== pageName(after)) return false;
   }

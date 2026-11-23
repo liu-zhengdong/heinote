@@ -1,6 +1,7 @@
 import { blocksInOrder, pageName } from "../../core/block-tree";
 import { dateLabel, isoDate, mentionFromAttributes, type DescribeMention } from "../../core/inline-content";
 import { isImageType, normalizeStoredFile } from "../../core/files";
+import { inTrash, isPurging } from "../../core/page-tree";
 import type { BlockTree, NotePage } from "../../core/types";
 
 /* Mentions — `@` and `[[` — as Notion has them: a page named among the words
@@ -20,9 +21,10 @@ export function mentionDescriber(
   const describe: DescribeMention = (mention) => {
     if (mention.kind === "date") return { label: dateLabel(mention.date, now()) };
     if (mention.kind === "image") return { label: mention.file.name };
-    const page = pages()[mention.page_id];
-    if (!page) return { label: "No access", state: "missing" };
-    const state = page.archived ? "trashed" as const : here.includes(page.id) ? "here" as const : undefined;
+    const all = pages();
+    const page = all[mention.page_id];
+    if (!page || isPurging(all, page.id)) return { label: "No access", state: "missing" };
+    const state = inTrash(all, page.id) ? "trashed" as const : here.includes(page.id) ? "here" as const : undefined;
     // Links inside an unnamed page's first line read as the titles they
     // link to — but never by a first line again, which could go round
     // forever: an unnamed one reads "…".
@@ -73,7 +75,7 @@ export function mentionItems(
 ): MentionItem[] {
   const needle = query.trim().toLowerCase();
   const found = Object.values(pages)
-    .filter((page) => !page.archived && page.id !== currentPageId)
+    .filter((page) => !inTrash(pages, page.id) && page.id !== currentPageId)
     .map((page) => {
       const name = pageName(page);
       return { page, name, rank: rank(name.toLowerCase(), needle) };
@@ -194,7 +196,7 @@ export function referenceIndex(pages: Record<string, NotePage>): ReadonlyMap<str
   const sources = Object.values(pages)
     // Unloaded bodies index nothing (UC-48): the index is partial and a
     // missing link only means "not pulled in", never "nobody links here".
-    .filter((page) => !page.archived && page.block_tree)
+    .filter((page) => !inTrash(pages, page.id) && page.block_tree)
     .toSorted((left, right) => nameOf(left).localeCompare(nameOf(right)) || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0));
   for (const page of sources) {
     for (const [target, paragraphs] of linksIn(page.block_tree!).targets) {

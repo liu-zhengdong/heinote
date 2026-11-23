@@ -24,6 +24,7 @@
 
 import { inlineFromText, normalizeInlineContent } from "./inline-content";
 import { nextHistoryOrder } from "./history-clock";
+import { isPurging } from "./page-tree";
 import type { Block, InlineContent, WorkspaceMutation, WorkspaceState } from "./types";
 
 export interface HistoryTextRange {
@@ -405,7 +406,8 @@ export class WorkspaceHistory {
       if (!replayed) continue;
       const target = replayed.value;
       if (sameValue(current, target)) continue;
-      // A field of a page that is gone is not brought back on its own.
+      // A page being purged or already gone is never touched or brought back by undo/redo.
+      if (change.path[0] === "pages" && isPurging(state.pages, change.path[1])) continue;
       if (change.path[0] === "pages" && change.path.length > 2 && target !== undefined && !state.pages[change.path[1]]) continue;
       mutations.push(target === undefined
         ? { type: "delete", path: [...change.path] }

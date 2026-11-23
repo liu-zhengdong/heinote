@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canMovePage, isHomed, withoutUnhomed } from "./page-tree";
+import { canDeletePage, canMovePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
 import type { NotePage, WorkspaceState } from "./types";
 import { emptyWorkspace } from "./workspace-state";
 
@@ -78,5 +78,65 @@ describe("where a page may be moved", () => {
   it("moves nothing a viewer can only read, and nothing into it", () => {
     expect(canMovePage(pages, admin, "readOnlyChild", null)).toBe(false);
     expect(canMovePage(pages, admin, "note", "readOnly")).toBe(false);
+  });
+});
+
+describe("UC-57: multi-level trash, purging state, and descendant counts", () => {
+  it("recognizes multi-level archived and purging descendants and protects against cycles", () => {
+    const pages = workspace(
+      page("liveRoot"),
+      page("liveChild", { parent_id: "liveRoot" }),
+      page("trashedRoot", { archived: true }),
+      page("trashedChild", { parent_id: "trashedRoot" }),
+      page("trashedGrand", { parent_id: "trashedChild" }),
+      page("trashedGreat", { parent_id: "trashedGrand" }),
+      page("purgingRoot", { archived: true, purging: true }),
+      page("purgingChild", { parent_id: "purgingRoot" }),
+      page("purgingGrand", { parent_id: "purgingChild" }),
+      page("cycleA", { parent_id: "cycleB" }),
+      page("cycleB", { parent_id: "cycleA" }),
+      page("db", { kind: "database" }),
+      page("dbRowArchived", { parent_id: "db", archived: true }),
+      page("dbRowPurging", { parent_id: "db", archived: true, purging: true }),
+      page("dbRowLive", { parent_id: "db" }),
+    ).pages;
+
+    expect(inTrash(pages, "liveRoot")).toBe(false);
+    expect(inTrash(pages, "liveChild")).toBe(false);
+    for (const id of ["trashedRoot", "trashedChild", "trashedGrand", "trashedGreat", "purgingRoot", "purgingChild", "purgingGrand"]) {
+      expect(inTrash(pages, id)).toBe(true);
+    }
+    expect(isPurging(pages, "trashedGreat")).toBe(false);
+    for (const id of ["purgingRoot", "purgingChild", "purgingGrand"]) {
+      expect(isPurging(pages, id)).toBe(true);
+    }
+    expect(inTrash(pages, "cycleA")).toBe(false);
+    expect(isPurging(pages, "cycleB")).toBe(false);
+
+    const counts = subtreeDescendantCounts(pages);
+    expect(counts.get("liveRoot")).toBe(1);
+    expect(counts.get("trashedRoot")).toBe(3);
+    expect(counts.get("trashedChild")).toBe(2);
+    expect(counts.get("trashedGreat")).toBe(0);
+    expect(descendantCount(pages, "purgingRoot")).toBe(0);
+    expect(descendantCount(pages, "db")).toBe(2); // dbRowLive + dbRowArchived (excludes purging)
+    expect(pageHolders(pages).has("trashedRoot")).toBe(false);
+    expect(pageHolders(pages).has("liveRoot")).toBe(true);
+
+    expect(canMovePage(pages, {}, "trashedGreat", "liveRoot")).toBe(false);
+    expect(canTrashPage(pages, {}, "trashedGreat")).toBe(false);
+    expect(canDeletePage(pages, {}, "trashedRoot")).toBe(true);
+    expect(canDeletePage(pages, {}, "purgingRoot")).toBe(false);
+    expect(canDeletePage(pages, {}, "purgingGrand")).toBe(false);
+  });
+
+  it("restricts permanent deletion of ordinary shared root pages to owners", () => {
+    const pages = workspace(
+      page("sharedRoot", { share_space_id: "space_s", archived: true }),
+      page("sharedChild", { parent_id: "sharedRoot", archived: true }),
+    ).pages;
+    expect(canDeletePage(pages, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canDeletePage(pages, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    expect(canDeletePage(pages, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
   });
 });

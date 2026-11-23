@@ -658,6 +658,77 @@ test("the trash banner asks before deleting permanently too", async ({ page }) =
   await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual([]);
 });
 
+test("UC-57: multi-level trashed subpages are excluded from page count and purged cleanly", async ({ page }) => {
+  await register(page, "sidebar_nested_trash");
+  await createDocument(page, "Keep active");
+  await createDocument(page, "Parent folder");
+
+  const filesTab = page.getByRole("tab", { name: "Files", exact: true });
+  const trashTab = page.getByRole("tab", { name: "Trash", exact: true });
+  const files = page.getByRole("tree", { name: "Files", exact: true });
+
+  // Build 3 nested descendant levels under Parent folder.
+  await files.locator(".tree-row", { hasText: "Parent folder" }).hover();
+  await page.getByRole("button", { name: "New page inside Parent folder", exact: true }).click();
+  await page.getByLabel("Page title", { exact: true }).fill("Child A");
+
+  await files.locator(".tree-row", { hasText: "Child A" }).hover();
+  await page.getByRole("button", { name: "New page inside Child A", exact: true }).click();
+  await page.getByLabel("Page title", { exact: true }).fill("Grandchild B");
+
+  await files.locator(".tree-row", { hasText: "Grandchild B" }).hover();
+  await page.getByRole("button", { name: "New page inside Grandchild B", exact: true }).click();
+  await page.getByLabel("Page title", { exact: true }).fill("Great-grandchild C");
+
+  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("5");
+
+  // Move Parent folder to trash: All pages drops immediately to 1 (no ghost descendants).
+  await files.locator(".tree-row", { hasText: "Parent folder" }).hover();
+  await page.getByRole("button", { name: "Actions for Parent folder", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
+
+  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect(trashTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect(files.locator(".tree-row")).toHaveCount(1);
+
+  // Trash row shows descendant count; Delete permanently confirm shows total pages.
+  await trashTab.click();
+  const list = page.getByRole("listbox", { name: "Pages in the trash", exact: true });
+  const parentOption = list.getByRole("option", { name: /Parent folder/ });
+  await expect(parentOption).toContainText("含 3 个子页面");
+  await parentOption.hover();
+  await list.getByRole("button", { name: "Delete Parent folder permanently", exact: true }).click();
+  const confirm = page.getByRole("dialog", { name: "Delete permanently", exact: true });
+  await expect(confirm).toContainText("「Parent folder」及底下 3 个子页面（共 4 个页面）将被永久删除");
+  await confirm.getByRole("button", { name: "Delete permanently", exact: true }).click();
+
+  await expect(list).toHaveText(/Trash is empty/);
+  await expect(trashTab).not.toContainText(/[1-9]/);
+
+  // Reload and verify only Keep active survives.
+  await page.reload();
+  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Keep active"]);
+
+  // Also verify Empty trash dialog displays total count including descendants.
+  await createDocument(page, "Empty root");
+  await files.locator(".tree-row", { hasText: "Empty root" }).hover();
+  await page.getByRole("button", { name: "New page inside Empty root", exact: true }).click();
+  await page.getByLabel("Page title", { exact: true }).fill("Empty child");
+  await files.locator(".tree-row", { hasText: "Empty root" }).hover();
+  await page.getByRole("button", { name: "Actions for Empty root", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
+  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
+
+  await trashTab.click();
+  await page.getByRole("button", { name: "Empty trash", exact: true }).click();
+  const emptyConfirm = page.getByRole("dialog", { name: "Empty the trash", exact: true });
+  await expect(emptyConfirm).toContainText("回收站中的 1 个页面及底下 1 个子页面（共 2 个页面）将被永久删除");
+  await emptyConfirm.getByRole("button", { name: "Empty trash", exact: true }).click();
+  await expect(list).toHaveText(/Trash is empty/);
+  await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Keep active"]);
+});
+
 test("the shared view lists public links and shares pages at once", async ({ page }) => {
   const errors: string[] = []; page.on("pageerror", (error) => errors.push(error.message));
   await register(page, "sidebar_shared");

@@ -153,7 +153,8 @@ function planOperations(store: Store, who: Actor, scopeName: string, pageId: str
           find(operation.blockId);
           if (operation.pageId === pageId) fail(400, "页面不能嵌入自身。", "bad_request");
           const target = store.page(who, operation.pageId);
-          if (target.page.archived) fail(404, "目标页面不存在。", "not_found");
+          const targetTrash = store.pageTrashState(target.scope, target.page.id);
+          if (targetTrash.archived || targetTrash.purging) fail(404, "目标页面不存在。", "not_found");
           const text = textOf(operation.blockId);
           const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
           boundary(text, index);

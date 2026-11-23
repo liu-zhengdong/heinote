@@ -19,6 +19,7 @@ export function activePage(store: Store, who: Actor, pageId: string, write = fal
   // vault-wide projection (ISS-13 follow-up: state() per request melted
   // the server on large vaults).
   for (let page: Row | undefined = found.page; page; page = page.parent_id ? store.pageRecord(who, String(page.parent_id)) : undefined) {
+    if (page.purging) fail(404, "页面不存在。", "not_found");
     if (page.archived) fail(409, "页面或父页面已归档。", "conflict");
   }
   return found;

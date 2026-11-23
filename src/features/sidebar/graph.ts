@@ -1,5 +1,5 @@
 import { bodyBlock, lineLink, pageName } from "../../core/block-tree";
-import { pageAncestry } from "../../core/page-tree";
+import { inTrash, pageAncestry } from "../../core/page-tree";
 import { DEFAULT_GRAPH_SETTINGS, matchesGraphQuery, pagePath, parseGraphQuery } from "../../core/graph-settings";
 import type { GraphSettings, NotePage } from "../../core/types";
 import type { BlockReference } from "../editor/mentions";
@@ -35,8 +35,8 @@ export type Point = { x: number; y: number };
 
 /** Every page not in the trash is drawn — a database's rows too, joined to
  *  it as the pages it holds, as the page list shows them under it. */
-function listed(page: NotePage | undefined): page is NotePage {
-  return Boolean(page?.id && !page.archived);
+function listed(pages: Record<string, NotePage>, page: NotePage | undefined): page is NotePage {
+  return Boolean(page?.id && !inTrash(pages, page.id));
 }
 
 export function buildGraph(pages: Record<string, NotePage>, references: ReadonlyMap<string, readonly BlockReference[]>): Graph {
@@ -53,7 +53,7 @@ export function buildGraph(pages: Record<string, NotePage>, references: Readonly
     edges.push({ from, to, kind });
   };
   const shown = Object.values(pages)
-    .filter((page) => listed(page))
+    .filter((page) => listed(pages, page))
     .toSorted((left, right) => left.id.localeCompare(right.id));
   for (const page of shown) {
     nodes.set(page.id, {
@@ -83,7 +83,7 @@ export function buildGraph(pages: Record<string, NotePage>, references: Readonly
 /** The node a page is drawn as: itself — or, for one in the trash, the
  *  nearest page above it that is not. */
 export function graphAnchor(pages: Record<string, NotePage>, pageId: string | null): string | null {
-  return pageAncestry(pages, pageId).findLast((page) => listed(page))?.id ?? null;
+  return pageAncestry(pages, pageId).findLast((page) => listed(pages, page))?.id ?? null;
 }
 
 /** What the graph's filters leave of it (Obsidian's Filters): the pages its

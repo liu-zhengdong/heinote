@@ -60,7 +60,7 @@ export function fieldsInPage(pageId: string, page: JsonRecord, blocks: Array<{ i
 }
 export function structureOf(page: JsonRecord, blocks: Array<{ id: string; value: JsonRecord }>): unknown {
   return {
-    page: [page.parent_id, page.share_space_id, page.kind, page.archived],
+    page: [page.parent_id, page.share_space_id, page.kind, page.archived, page.purging],
     blocks: blocks.map(({ id, value }) => ({ id, kind: value.kind, parent: value.parent_id, order: value.order,
       table: isObject(value.table) ? { columns: Array.isArray(value.table.columns) ? value.table.columns.map((column) => isObject(column) ? column.id : null) : [], rows: isObject(value.table.rows) ? Object.entries(value.table.rows).sort(([a], [b]) => a.localeCompare(b)).map(([id, row]) => [id, isObject(row) ? row.order : null]) : [] } : undefined,
     })),

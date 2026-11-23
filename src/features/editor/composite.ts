@@ -1,5 +1,6 @@
 import { bodyPath, trashWrites } from "../../app/page-rows";
 import { createBlock, descendantsOf, lineLink, pageLine } from "../../core/block-tree";
+import { isPurging } from "../../core/page-tree";
 import type { Block, BlockTree, NotePage } from "../../core/types";
 import type { WorkspaceMutation } from "../../platform/workspace-document";
 import { applyEditorTransaction, duplicateBlocks, topLevelBlocks, type EditorTransaction } from "./editor-commands";
@@ -74,7 +75,7 @@ export function composeTree(pages: Record<string, NotePage>, top: NotePage, show
     const link = lineLink(row);
     if (!link?.expanded || link.locked) return undefined;
     const target = pages[link.page_id];
-    if (!target || target.archived || target.kind !== "document" || target.parent_id !== holder.id) return undefined;
+    if (!target || target.archived || isPurging(pages, target.id) || target.kind !== "document" || target.parent_id !== holder.id) return undefined;
     // An expanded target not pulled in is asked for — and drawn as the row
     // it is until its blocks arrive (UC-48).
     if (!target.block_tree) { unloaded.add(target.id); return undefined; }

@@ -50,8 +50,8 @@ import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
-import { pageAncestry, spaceOfPage } from "../../core/page-tree";
-import { buildTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
+import { descendantPageIds, inTrash, isPurging, pageAncestry, spaceOfPage } from "../../core/page-tree";
+import { buildTree, countTree, flattenTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
 import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
@@ -373,7 +373,7 @@ export function Sidebar() {
   const view: SidebarView = inLibrary && preferences.sidebar_view === "shared" ? "files" : preferences.sidebar_view;
   const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
-    () => preferences.favorites.flatMap((id): NotePage[] => (pages[id] && !pages[id].archived ? [pages[id]] : [])),
+    () => preferences.favorites.flatMap((id): NotePage[] => (pages[id] && !inTrash(pages, id) ? [pages[id]] : [])),
     [pages, preferences.favorites],
   );
   /* A page shared with others is a root of its own space; whose it is comes
@@ -387,7 +387,7 @@ export function Sidebar() {
     return owner ? owner.id === me : true;
   }, [me, rosters, spaces]);
   const sharedRoots = useMemo(
-    () => tree.roots.concat([...tree.children.values()].flat()).filter((page) => Boolean(page.share_space_id)),
+    () => flattenTree(tree).filter((page) => Boolean(page.share_space_id)),
     [tree],
   );
   const sharedWithMe = sharedRoots.filter((page) => !ownedByMe(page));
@@ -397,13 +397,26 @@ export function Sidebar() {
   const publicLinks = usePublicLinks();
   const linkedPages = useMemo(
     () => [...new Set(publicLinks.map((link) => link.pageId))]
-      .filter((pageId) => pages[pageId] && !pages[pageId].archived)
+      .filter((pageId) => pages[pageId] && !inTrash(pages, pageId))
       .map((pageId) => pages[pageId]),
     [publicLinks, pages],
   );
-  const trashed = useMemo(() => Object.values(pages).filter((page) => page.archived), [pages]);
+  const trashed = useMemo(() => Object.values(pages).filter((page) => page.archived && !isPurging(pages, page.id)), [pages]);
+  const deletableTrash = useMemo(() => {
+    const candidates = trashed.filter((page) => canDeletePage(page.id));
+    const candidateIds = new Set(candidates.map((page) => page.id));
+    const topTargets = candidates.filter((page) => !pageAncestry(pages, page.id).slice(0, -1).some((ancestor) => candidateIds.has(ancestor.id)));
+    const affected = new Set<string>();
+    for (const target of topTargets) {
+      affected.add(target.id);
+      for (const descendantId of descendantPageIds(pages, target.id)) {
+        if (!isPurging(pages, descendantId)) affected.add(descendantId);
+      }
+    }
+    return { topTargets, totalCount: affected.size };
+  }, [canDeletePage, pages, trashed]);
   const viewCounts: Partial<Record<SidebarView, number>> = {
-    files: tree.roots.length + [...tree.children.values()].reduce((count, children) => count + children.length, 0),
+    files: countTree(tree),
     favorites: favorites.length,
     shared: new Set([...sharedRoots.map((page) => page.id), ...linkedPages.map((page) => page.id)]).size,
     trash: trashed.length,
@@ -765,23 +778,23 @@ export function Sidebar() {
     );
   };
 
-  /** Every deletable page in the trash, gone for good one by one: the trash
-   *  API takes a page at a time. */
+  /** Every deletable page in the trash, gone for good root-by-root. */
   const emptyTrash = useCallback(async () => {
-    const targets = trashed.filter((page) => canDeletePage(page.id));
+    const { topTargets } = deletableTrash;
     setEmptyTrashConfirm(false);
-    if (!targets.length) return;
-    let done = 0;
-    for (const page of targets) {
+    if (!topTargets.length) return;
+    const deletedIds = new Set<string>();
+    for (const page of topTargets) {
+      const subtreeIds = [page.id, ...descendantPageIds(pages, page.id).filter((id) => !isPurging(pages, id))];
       try {
         await deletePage(page.id);
-        done += 1;
+        for (const id of subtreeIds) deletedIds.add(id);
       } catch (reason) {
         toast(reason instanceof Error ? reason.message : "无法永久删除页面，请重试。", "error");
       }
     }
-    if (done) toast(`${done} 个页面已永久删除`, "success");
-  }, [canDeletePage, deletePage, toast, trashed]);
+    if (deletedIds.size) toast(`${deletedIds.size} 个页面已永久删除`, "success");
+  }, [deletableTrash, deletePage, pages, toast]);
 
   const beforeAccountSettings = useCallback(() => { if (folded) setDrawerOpen(true); }, [folded, setDrawerOpen]);
 
@@ -1042,7 +1055,7 @@ export function Sidebar() {
   const copyTargets = useWorkspaceState(
     (state) => (copyPage
       ? Object.values(state.pages).filter((candidate) =>
-          candidate.id !== copyPage.id && candidate.kind === "document" && !candidate.archived && canEdit(candidate.id))
+          candidate.id !== copyPage.id && candidate.kind === "document" && !inTrash(state.pages, candidate.id) && canEdit(candidate.id))
       : null),
     (left, right) => (left && right ? sameItems(left, right) : left === right),
   );
@@ -1274,7 +1287,8 @@ export function Sidebar() {
 
       <EmptyTrashConfirm
         open={emptyTrashConfirm}
-        count={trashed.filter((page) => canDeletePage(page.id)).length}
+        count={deletableTrash.topTargets.length}
+        totalCount={deletableTrash.totalCount}
         onCancel={() => setEmptyTrashConfirm(false)}
         onConfirm={() => void emptyTrash()}
       />

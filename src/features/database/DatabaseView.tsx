@@ -162,7 +162,7 @@ import { linkedWordsAt, NameWords, TitleField } from "../editor/TitleField";
 import { RemoteCarets } from "../editor/RemoteCarets";
 import { titleField } from "../../collaboration/protocol";
 import { followHref } from "../editor/RichField";
-import { inTrash, isBareRow, spaceOfPage } from "../../core/page-tree";
+import { inTrash, isBareRow, isPurging, spaceOfPage } from "../../core/page-tree";
 import { relationPeerMutations } from "./relation";
 import { pagePatchMutations } from "../../app/page-mutations";
 import { pageCover } from "../editor/page-decoration";
@@ -1856,7 +1856,7 @@ export function DatabaseView({
   // The row open in the side peek, when it is one of these.
   const peeked = useWorkspaceState((state) => {
     const row = peekPageId ? state.pages[peekPageId] : undefined;
-    return row && row.parent_id === databaseId && !row.archived ? row.id : null;
+    return row && row.parent_id === databaseId && !row.archived && !isPurging(state.pages, row.id) ? row.id : null;
   });
   const config = database?.database;
   /* A linked view pins its view on the link — which it is belongs to the

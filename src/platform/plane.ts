@@ -176,6 +176,14 @@ export class Plane {
     ]);
   }
 
+  /** Pull the latest directory and settings deltas from the server. */
+  async refreshMetadata(): Promise<void> {
+    await Promise.all([
+      this.live.get("pages")?.sync(),
+      this.live.get("workspace_settings")?.sync(),
+    ]);
+  }
+
   /** Toggle background polling for this plane while keeping personal settings alive. */
   setActive(active: boolean): void {
     for (const [name, live] of this.live) {

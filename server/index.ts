@@ -13,6 +13,7 @@ import { newPage } from "../src/core/block-tree.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { blockTreeToMarkdown, readableDescriber } from "../src/core/export-markdown.ts";
 import { restoredPage } from "../src/core/versions.ts";
+import { inTrash } from "../src/core/page-tree.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
@@ -87,6 +88,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await migrateDatabase(dataDir);
   const store = new Store(dataDir);
   initializeImports(store);
+  store.purge.setPaused(importActive);
+  store.purge.start();
   const updateConfig: UpdateConfig = {
     repository: packageMeta.repository, version: packageMeta.version || "0.0.0",
     dataDir, apiBase: options.update?.apiBase, runnerPath: options.update?.runnerPath,
@@ -542,6 +545,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const who = actor(req); const write = parse(writeSchema, { ...req.body, scope: req.params.scope, collection: req.params.collection, id: req.params.id });
     res.json(store.apply(who, [write])[0]);
   });
+  app.post("/api/pages/:id/purge", (req, res) => {
+    const who = actor(req);
+    const input = parse(z.object({ scope: z.string().min(1).max(256).optional() }).strict(), req.body ?? {});
+    res.status(202).json(store.purge.enqueue(who, input.scope, text(req.params.id)));
+  });
   const fileInput = (req: Request, write = false) => {
     const who = actor(req); const scope = store.scope(who, text(req.params.scope), write); const path = parse(z.string().min(1).max(2048), req.query.path);
     return { scope, path };
@@ -723,7 +731,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (fileScope !== publishedScope) fail(403, "附件必须先移入发布页面所在的空间。");
     sendFile(res, fileScope, path);
   });
-  app.get("/api/v1/pages", (req, res) => { const who = actor(req); res.json(Object.values(store.state(who).pages).filter((page) => !page.archived).map((page) => store.pageDto(who, page.id))); });
+  app.get("/api/v1/pages", (req, res) => {
+    const who = actor(req);
+    const pages = store.state(who).pages;
+    res.json(Object.values(pages).filter((page) => !inTrash(pages, page.id)).map((page) => store.pageDto(who, page.id)));
+  });
   app.post("/api/v1/pages", (req, res) => {
     const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).optional(), markdown: z.string().max(100000).optional(), kind: z.enum(["document", "app"]).default("document"), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
     if (input.kind === "app" && (input.text || input.markdown)) fail(400, "应用页面没有正文。", "bad_request");
@@ -945,7 +957,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { store.purge.stop(); backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

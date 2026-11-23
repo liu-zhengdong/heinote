@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from "react";
 import { Modal } from "../../components/Modal";
 import { imeComposing } from "../../core/keyboard";
 import { pageName } from "../../core/block-tree";
-import { inTrash, pageAncestry } from "../../core/page-tree";
+import { descendantCount, inTrash, isPurging, pageAncestry } from "../../core/page-tree";
 import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
@@ -36,8 +36,12 @@ export function TrashView({ pages, onOpenPage }: {
 
   const needle = query.trim().toLowerCase();
   const hits = useMemo(() => Object.values(pages)
-    .filter((page) => page.archived)
-    .map((page) => ({ page, crumb: pageAncestry(pages, page.id).slice(0, -1).map((item) => pageName(item) || "Untitled").join(" / ") }))
+    .filter((page) => page.archived && !isPurging(pages, page.id))
+    .map((page) => ({
+      page,
+      crumb: pageAncestry(pages, page.id).slice(0, -1).map((item) => pageName(item) || "Untitled").join(" / "),
+      childCount: descendantCount(pages, page.id),
+    }))
     .filter(({ page, crumb }) => !needle || pageName(page).toLowerCase().includes(needle) || crumb.toLowerCase().includes(needle))
     .toSorted((left, right) => (right.page.archived_at ?? "").localeCompare(left.page.archived_at ?? "")), [needle, pages]);
 
@@ -83,7 +87,7 @@ export function TrashView({ pages, onOpenPage }: {
         />
       </div>
       <div className="move-to__list trash-view__list" ref={listRef} role="listbox" aria-label="Pages in the trash">
-        {hits.length ? hits.map(({ page, crumb }, index) => {
+        {hits.length ? hits.map(({ page, crumb, childCount }, index) => {
           const parentTrashed = Boolean(page.parent_id && inTrash(pages, page.parent_id));
           const pending = pendingIds.has(page.id);
           return <div
@@ -97,7 +101,9 @@ export function TrashView({ pages, onOpenPage }: {
             <span className="move-to__icon" aria-hidden="true">{pageGlyph(page, 15)}</span>
             <span className="move-to__copy">
               <span className="move-to__title">{pageName(page) || "Untitled"}</span>
-              <span className="move-to__crumb">{[crumb, when(page.archived_at)].filter(Boolean).join(" · ")}</span>
+              <span className="move-to__crumb">
+                {[crumb, childCount > 0 ? `含 ${childCount} 个子页面` : "", when(page.archived_at)].filter(Boolean).join(" · ")}
+              </span>
               {parentTrashed ? <span className="move-to__crumb">先恢复父页面</span> : null}
             </span>
             <span className="trash__actions">
@@ -131,6 +137,7 @@ export function TrashView({ pages, onOpenPage }: {
       <DeletePageConfirm
         open={Boolean(confirmingPage)}
         title={confirmingPage ? pageName(confirmingPage) || "Untitled" : ""}
+        childCount={confirmingPage ? descendantCount(pages, confirmingPage.id) : 0}
         onCancel={() => setConfirming(null)}
         onConfirm={() => confirmingPage && void removePermanently(confirmingPage.id)}
       />
@@ -140,16 +147,21 @@ export function TrashView({ pages, onOpenPage }: {
 
 /** The "gone for good" ask, shared by the trash row, the banner and every
  *  other permanent delete: the page name, then Cancel and the danger verb. */
-export function DeletePageConfirm({ open, title, onCancel, onConfirm }: {
+export function DeletePageConfirm({ open, title, childCount = 0, onCancel, onConfirm }: {
   open: boolean;
   title: string;
+  childCount?: number;
   onCancel(): void;
   onConfirm(): void;
 }) {
   return (
     <Modal open={open} label="Delete permanently" onClose={onCancel} className="confirm">
       <h2>Delete permanently?</h2>
-      <p>「{title}」将被永久删除，连同其中所有内容和历史。此操作不可撤销。</p>
+      <p>
+        {childCount > 0
+          ? `「${title}」及底下 ${childCount} 个子页面（共 ${childCount + 1} 个页面）将被永久删除，连同其中所有内容和历史。此操作不可撤销。`
+          : `「${title}」将被永久删除，连同其中所有内容和历史。此操作不可撤销。`}
+      </p>
       <div className="confirm__actions">
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>
         <button type="button" className="btn btn--danger" onClick={onConfirm}>Delete permanently</button>
@@ -160,16 +172,22 @@ export function DeletePageConfirm({ open, title, onCancel, onConfirm }: {
 
 /** The confirm shared by the row X and Empty trash: same copy, one more
  *  sweep on top when the button stands for the whole list. */
-export function EmptyTrashConfirm({ open, count, onCancel, onConfirm }: {
+export function EmptyTrashConfirm({ open, count, totalCount, onCancel, onConfirm }: {
   open: boolean;
   count: number;
+  totalCount?: number;
   onCancel(): void;
   onConfirm(): void;
 }) {
+  const effectiveTotal = totalCount ?? count;
   return (
     <Modal open={open} label="Empty the trash" onClose={onCancel} className="confirm">
       <h2>Empty the trash?</h2>
-      <p>回收站中的 {count} 个页面将被永久删除，连同其中所有内容和历史。此操作不可撤销。</p>
+      <p>
+        {effectiveTotal > count
+          ? `回收站中的 ${count} 个页面及底下 ${effectiveTotal - count} 个子页面（共 ${effectiveTotal} 个页面）将被永久删除，连同其中所有内容和历史。此操作不可撤销。`
+          : `回收站中的 ${count} 个页面将被永久删除，连同其中所有内容和历史。此操作不可撤销。`}
+      </p>
       <div className="confirm__actions">
         <button type="button" className="btn" onClick={onCancel}>Cancel</button>
         <button type="button" className="btn btn--danger" onClick={onConfirm}>Empty trash</button>

@@ -23,6 +23,7 @@ import { useFold } from "../../hooks/useFold";
 import { imeComposing } from "../../core/keyboard";
 import type { NotePage } from "../../core/types";
 import { lineLink, pageName } from "../../core/block-tree";
+import { inTrash } from "../../core/page-tree";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { LAND_EVENT, requestLanding } from "../editor/landing";
@@ -100,7 +101,7 @@ export function PageActions({
   const copyTargets = useWorkspaceState(
     (state) => (copyAnchor
       ? Object.values(state.pages).filter((candidate) =>
-          candidate.id !== page.id && candidate.kind === "document" && !candidate.archived && canEdit(candidate.id))
+          candidate.id !== page.id && candidate.kind === "document" && !inTrash(state.pages, candidate.id) && canEdit(candidate.id))
       : null),
     (left, right) => (left && right ? sameItems(left, right) : left === right),
   );

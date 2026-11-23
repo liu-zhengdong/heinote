@@ -1,5 +1,5 @@
 import { pageName } from "../../core/block-tree";
-import { descendantPageIds } from "../../core/page-tree";
+import { descendantPageIds, inTrash } from "../../core/page-tree";
 import { cleanAttachmentPath, Namer } from "../../core/export-names";
 import type { NotePage, StoredFile } from "../../core/types";
 import type { PlatformClient } from "../../platform/client";
@@ -40,7 +40,7 @@ function exportEntries(pages: Record<string, NotePage>, root: NotePage): Entry[]
   const childrenOf = (id: string) =>
     descendantPageIds(pages, id)
       .map((child) => pages[child])
-      .filter((page): page is NotePage => Boolean(page && !page.archived && page.parent_id === id));
+      .filter((page): page is NotePage => Boolean(page && !inTrash(pages, page.id) && page.parent_id === id));
   const entries: Entry[] = [];
   const walk = (page: NotePage, dir: string) => {
     const base = namerOf(dir).claim(pageName(page));
@@ -88,7 +88,7 @@ export interface ExportSource {
 /** Pull the whole subtree's bodies in, then build the export's model of
  *  `root` — the page as the member sees it now. */
 export async function exportPages(source: ExportSource, rootId: string): Promise<ExportPage> {
-  const ids = descendantPageIds(source.pages, rootId).filter((id) => !source.pages[id]?.archived);
+  const ids = descendantPageIds(source.pages, rootId).filter((id) => !inTrash(source.pages, id));
   await source.loadPages([rootId, ...ids]);
   // Re-read state after loading: bodies may have arrived mid-walk.
   const pages = source.pages;

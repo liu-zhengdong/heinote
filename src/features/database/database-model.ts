@@ -1,5 +1,6 @@
 import { COLOR_NAMES, PROPERTY_TYPES as DECLARED_PROPERTY_TYPES, VIEW_KINDS } from "../../../schema";
 import { normalizeStoredFile } from "../../core/files";
+import { isPurging } from "../../core/page-tree";
 import type {
   DatabaseConfig,
   DatabaseProperty,
@@ -1457,7 +1458,7 @@ export function databaseRows(pages: Record<string, NotePage>, databaseId: string
   if (!index) {
     index = new Map();
     for (const page of Object.values(pages)) {
-      if (!page?.parent_id || page.archived || pages[page.parent_id]?.kind !== "database") continue;
+      if (!page?.parent_id || page.archived || isPurging(pages, page.id) || pages[page.parent_id]?.kind !== "database") continue;
       const rows = index.get(page.parent_id);
       if (rows) rows.push(page);
       else index.set(page.parent_id, [page]);

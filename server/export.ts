@@ -2,6 +2,7 @@ import type { Actor, Row, Store } from "./store.ts";
 import { pageName } from "../src/core/block-tree.ts";
 import { blockTreeToMarkdown, wikilinkDescriber } from "../src/core/export-markdown.ts";
 import { cleanAttachmentPath, Namer, safeName } from "../src/core/export-names.ts";
+import { isPurging, purgingPageIds } from "../src/core/page-tree.ts";
 import type { LoadedNotePage, NotePage, StoredFile } from "../src/core/types.ts";
 import { ZipStream } from "../src/core/zip.ts";
 
@@ -40,6 +41,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
   let state: { pages: Record<string, LoadedNotePage> };
   try {
     state = store.state(who);
+    const purgingIds = purgingPageIds(state.pages);
     const personal = `user:${who.user.id}`;
     const spaces = store.all("SELECT s.id,s.name FROM spaces s JOIN members m ON s.id=m.space_id WHERE m.user_id=? ORDER BY s.name", who.user.id);
     const scopes = [personal, ...spaces.map((space) => String(space.id))];
@@ -50,12 +52,17 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
     for (const scope of scopes) {
       const held: Record<string, Record<string, Row>> = {};
       for (const collection of COLLECTIONS) {
-        held[collection] = Object.fromEntries(store.records(scope, collection).map((row) => [row.id, row.value]));
+        const rows = store.records(scope, collection).filter((row) => {
+          if (collection === "pages") return !purgingIds.has(row.id) && !row.value.purging;
+          if (collection === "blocks" || collection === "versions") return !purgingIds.has(String(row.value.page));
+          return true;
+        });
+        held[collection] = Object.fromEntries(rows.map((row) => [row.id, row.value]));
       }
       recordsByScope.set(scope, held);
       for (const id of Object.keys(held.pages)) planes.set(id, [...planes.get(id) ?? [], scope]);
     }
-    const homes = new Map(Object.keys(state.pages).map((id) => [id, homeOfPage(state.pages, planes, id, personal)]));
+    const homes = new Map(Object.keys(state.pages).filter((id) => !purgingIds.has(id)).map((id) => [id, homeOfPage(state.pages, planes, id, personal)]));
 
     const dirs = new Namer();
     const scopeDir = new Map(scopes.map((scope, index) => [
@@ -66,7 +73,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
       scope,
       label: scope === personal ? "个人笔记" : String(spaces.find((space) => String(space.id) === scope)?.name ?? scope),
       dir: scopeDir.get(scope)!,
-      pages: Object.values(state.pages).filter((page) => homes.get(page.id) === scope),
+      pages: Object.values(state.pages).filter((page) => !purgingIds.has(page.id) && homes.get(page.id) === scope),
       records: recordsByScope.get(scope)!,
     }));
     store.db.exec("COMMIT");
@@ -179,7 +186,7 @@ export async function writeExport(out: NodeJS.WritableStream, store: Store, who:
 }
 
 function pageMarkdown(pages: Record<string, LoadedNotePage>, page: LoadedNotePage, depth: number): string {
-  const titleOf = (id: string) => pages[id] ? pageName(pages[id]) : "";
+  const titleOf = (id: string) => pages[id] && !isPurging(pages, id) ? pageName(pages[id]) : "";
   const prefix = "../".repeat(depth);
   const markdown = blockTreeToMarkdown(page.block_tree, titleOf,
     (file: StoredFile) => `${prefix}attachments/${encodeURI(cleanAttachmentPath(file.path) ?? file.path)}`,

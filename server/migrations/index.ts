@@ -5,6 +5,7 @@ import migration002 from "./002-token-identity.ts";
 import migration003 from "./003-quota-columns.ts";
 import migration004 from "./004-agent-auth-requests.ts";
 import migration005 from "./005-record-delta.ts";
+import migration006 from "./006-purge-queue.ts";
 
 /** A migration mutates the open database inside the runner's transaction. */
 export interface Migration {
@@ -17,7 +18,7 @@ export interface Migration {
  * The ordered migration chain. Versions must be contiguous starting at 2;
  * version 1 is the baseline every pre-migration database already carries.
  */
-export const MIGRATIONS: Migration[] = [migration002, migration003, migration004, migration005];
+export const MIGRATIONS: Migration[] = [migration002, migration003, migration004, migration005, migration006];
 export const LATEST_VERSION = MIGRATIONS.length ? Math.max(...MIGRATIONS.map((m) => m.version)) : 1;
 
 const SNAPSHOTS_KEPT = 3;

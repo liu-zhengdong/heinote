@@ -5,7 +5,7 @@ import { APP_SOURCE_BUDGET_BYTES } from "../../core/artifact";
 import { AppSurface } from "./AppSurface";
 import { usePages } from "../../app/workspace-store";
 import { useWorkspace } from "../../app/workspace-context";
-import { spaceOfPage } from "../../core/page-tree";
+import { inTrash, spaceOfPage } from "../../core/page-tree";
 import "./artifact.css";
 
 /** The app page itself: the running app is the page's body. Source,
@@ -113,7 +113,7 @@ export function AppPage({ page }: Props) {
   const bindings = app.databases ?? [];
   const appScope = spaceOfPage(pages, page.id);
   const databases = useMemo(
-    () => Object.values(pages).filter((entry) => entry.kind === "database" && !entry.archived && spaceOfPage(pages, entry.id) === appScope),
+    () => Object.values(pages).filter((entry) => entry.kind === "database" && !inTrash(pages, entry.id) && spaceOfPage(pages, entry.id) === appScope),
     [pages, appScope],
   );
   const boundIds = useMemo(() => new Set(bindings.map((binding) => binding.id)), [bindings]);
@@ -125,7 +125,7 @@ export function AppPage({ page }: Props) {
     const map = new Map<string, NotePage[]>();
     for (const binding of bindings) {
       const rows = Object.values(pages)
-        .filter((entry) => entry.parent_id === binding.id && !entry.archived)
+        .filter((entry) => entry.parent_id === binding.id && !inTrash(pages, entry.id))
         .sort((a, b) => (b.updated_at ?? "").localeCompare(a.updated_at ?? ""));
       map.set(binding.id, rows);
     }

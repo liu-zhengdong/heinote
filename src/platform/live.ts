@@ -833,6 +833,8 @@ export class LiveCollection<R extends object> {
   /** Pull the row delta now — a committed push pokes this so structural
    *  changes land without waiting for the 1.2s poll. */
   refreshNow(): void { void this.refresh().catch(() => undefined); }
+  /** Pull the latest delta and settle once local state reflects it. */
+  sync(): Promise<void> { return this.refresh(); }
   /** Rows this client committed a moment ago — the snapshot was fetched
    *  while its write was in flight, so it may not know them yet. Touching
    *  them would roll the DOM back past data the server already holds. */

@@ -26,7 +26,7 @@ import type {
   WorkspacePreferences,
   WorkspaceState,
 } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
 import { renamedTitle } from "../core/title";
 import {
   WorkspaceHistory,
@@ -349,6 +349,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           store.set(nextState);
           setState(nextState);
           setDirectoryLoading(next.directoryLoading);
+          if (selectedRef.current && isPurging(nextState.pages, selectedRef.current)) {
+            setEmptySpaceId(navigationSpaceOf(nextState.pages, spacesRef.current, selectedRef.current));
+            setSelectedPageId("");
+          }
         });
         unsubscribe = () => {
           stopChanges();
@@ -372,7 +376,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [store, setSpaceCatalog]);
 
   useEffect(() => {
-    if (!platform || !selectedPageId || !document?.state.pages[selectedPageId] || document.state.pages[selectedPageId].archived) return;
+    if (!platform || !selectedPageId || !document?.state.pages[selectedPageId] || inTrash(document.state.pages, selectedPageId)) return;
     rememberSpacePage(platform.bootstrap.user.id, activeSpaceId, selectedPageId);
   }, [document, platform, activeSpaceId, selectedPageId]);
 
@@ -833,31 +837,26 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (options.select !== false) selectPage(pageId);
   }, [commit, document, selectPage]);
 
-  /** Permanent removal from the trash: the page, its whole subtree, and any
-   *  root reference to them. */
+  /** Permanent removal from the trash: queues background bottom-up purge on
+   *  the server and syncs the immediate `purging` marker back to this window. */
   const deletePage = useCallback(async (pageId: string) => {
     if (!document) return;
     const page = document.state.pages[pageId];
     if (!page) return;
     if (!canDeletePageIn(document.state.pages, spacesRef.current, pageId)) throw new ApiError("当前角色不能永久删除此页面。", 403, "forbidden");
+    const scopeName = spaceOfPage(document.state.pages, pageId) ?? "personal";
     const navigationSpace = navigationSpaceOf(document.state.pages, spacesRef.current, pageId);
-    const ids = [pageId, ...descendantPageIds(document.state.pages, pageId)];
-    const removed = new Set(ids);
-    const mutations: WorkspaceMutation[] = ids.flatMap((id) => [
-      { type: "delete" as const, path: ["pages", id] },
-      { type: "delete" as const, path: ["versions", id] },
-    ]);
-    mutations.push({
-      type: "set",
-      path: ["roots"],
-      value: document.state.roots.filter((id) => !removed.has(id)),
+    const removed = new Set([pageId, ...descendantPageIds(document.state.pages, pageId)]);
+    await document.flush();
+    await request(`/api/pages/${encodeURIComponent(pageId)}/purge`, {
+      method: "POST",
+      body: JSON.stringify({ scope: scopeName }),
     });
-    // Deleting for good is not a step: it cannot be undone.
-    commit(mutations, false);
+    await document.refreshScope(scopeName);
+    if (scopeName !== "personal") await document.refreshScope("personal");
     if (removed.has(selectedRef.current)) setEmptySpaceId(navigationSpace);
     setSelectedPageId((current) => (removed.has(current) ? "" : current));
-    await document.flush();
-  }, [commit, document]);
+  }, [document]);
 
   const restoreVersion = useCallback((pageId: string, version: PageVersion) => {
     if (!document || !platform) return;
@@ -1130,7 +1129,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     flushSync(() => {
       withStrictRecordReplay(() => document.transact([...replay.mutations, ...stamps]));
       const { pages, roots } = document.state;
-      const openable = (id: string) => Boolean(pages[id] && !pages[id].archived);
+      const openable = (id: string) => Boolean(pages[id] && !inTrash(pages, id));
       const view = replay.cursor?.view;
       // Undone on another page, the change is shown there.
       if (view && openable(view)) {
