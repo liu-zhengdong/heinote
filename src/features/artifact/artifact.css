@@ -137,6 +137,15 @@
 .app-surface--grow .app-surface__frame { flex: 1; min-height: 0; height: auto; }
 .app-surface--grow .app-surface__empty { flex: 1; justify-content: center; }
 
+/* Public share: the app is the page's body, so it fills the column the
+ *  reader leaves under the title — the content flexes to at least the
+ *  viewport height minus the share header (≈50px) and the document's own
+ *  padding. min-height keeps a short viewport from collapsing it below
+ *  the embedded 420px. */
+.app-surface--fill { min-height: 420px; }
+.app-surface--fill .app-surface__frame { flex: 1; min-height: 0; height: 100%; }
+.app-surface--fill .app-surface__empty { min-height: 44px; }
+
 /* The summary strip: quiet metadata, one action. */
 .app-strip {
   flex-shrink: 0;

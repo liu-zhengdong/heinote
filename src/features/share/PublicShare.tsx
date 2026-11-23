@@ -138,7 +138,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
             <h1>{active.title_content?.length ? <ReaderInline content={active.title_content} context={context} /> : titleOf(active)}</h1>
             {active.kind === "app" ? (
               active.app?.enabled
-                ? <AppSurface page={active} shareToken={token} />
+                ? <AppSurface page={active} shareToken={token} fill />
                 : <p className="account-muted">小应用尚未启用。</p>
             ) : active.kind === "database" ? (
               <PublicDatabase database={active} pages={document?.pages ?? []} context={{ pages: context.pages, pageHref, pageTitle: titleOf, fileHref: (path) => fileHref({ path }, token), pageIcon: (page) => <ReaderPageIcon page={page} context={context} size={16} /> }} />

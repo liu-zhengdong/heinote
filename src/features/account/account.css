@@ -234,7 +234,8 @@
 .public-reader__nav-branch { padding-left: 12px; }
 .public-reader__document { min-width: 0; padding-bottom: 64px; animation: account-appear var(--t-base) var(--e-out); }
 .public-reader__cover { display: block; width: 100%; height: clamp(120px, 22vw, 240px); object-fit: cover; }
-.public-reader__content { max-width: 780px; margin: 0 auto; padding: 38px clamp(20px, 4vw, 48px); font-size: 16px; line-height: 1.75; overflow-wrap: anywhere; }
+.public-reader__content { max-width: 780px; margin: 0 auto; padding: 38px clamp(20px, 4vw, 48px); font-size: 16px; line-height: 1.75; overflow-wrap: anywhere; min-height: calc(100dvh - 75px); display: flex; flex-direction: column; }
+.public-reader__content .app-surface--fill { flex: 1; min-height: 0; }
 .public-reader__document--wide .public-reader__content { max-width: none; }
 .public-reader__content--serif { font-family: var(--heinote-font-serif, Georgia, "Noto Serif SC", serif); }
 .public-reader__content--mono { font-family: var(--heinote-font-code, monospace); }

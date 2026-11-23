@@ -29,6 +29,9 @@ interface Props {
   previewSource?: string | null;
   /** Fill the stage instead of a fixed height — the standalone page. */
   grow?: boolean;
+  /** Fill whatever vertical space the surrounding layout leaves — the
+   *  public share route, whose document scrolls like a page. */
+  fill?: boolean;
   /** A public-reader run. The app's bound databases are shared with it:
    *  calls go through `/api/public/:token`, which re-checks the bindings
    *  server-side — read and write under the owner, stamped 公开分享.
@@ -61,7 +64,7 @@ function useResolvedTheme(): "light" | "dark" {
   return theme;
 }
 
-export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false, shareToken }: Props) {
+export function AppSurface({ page, embedded = false, onOpen, previewSource, grow = false, fill = false, shareToken }: Props) {
   const pages = usePages();
   const enabled = page.app?.enabled ?? "";
   const source = previewSource ?? enabled;
@@ -127,7 +130,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
   const doc = useMemo(() => (source ? appDocument(source, theme) : ""), [source, theme]);
 
   return (
-    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}${grow ? " app-surface--grow" : ""}`}>
+    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}${grow ? " app-surface--grow" : ""}${fill ? " app-surface--fill" : ""}`}>
       {running && source ? (
         <iframe
           key={runKey}
