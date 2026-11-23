@@ -6093,7 +6093,10 @@ pre.block__editable {
    more of it: the far edge fades while columns are past it, and the name
    column draws its edge once columns have gone under it — the table's own
    borders scroll away with them. Both follow the scroll; a table that fits
-   has no scroll timeline, and neither. */
+   has no scroll timeline, and neither. Where the browser has no scroll
+   timelines, the wrap's tableEdges ref (table-edges.ts) writes the same two
+   properties instead; the fade tracks the scroll pixel for pixel, so only
+   the name edge keeps a short transition. */
 @property --table-fade {
   syntax: "<length>";
   inherits: false;
@@ -6109,18 +6112,29 @@ pre.block__editable {
 .db__table-wrap {
   overflow-x: auto;
   mask-image: linear-gradient(to left, transparent, #000 var(--table-fade));
-  animation: table-fade linear both, name-edge linear both;
-  animation-timeline: scroll(self inline);
-  animation-range: calc(100% - 48px) 100%, 0 16px;
+  transition: --name-edge 150ms var(--e-out);
 }
 
-@keyframes table-fade {
-  from { --table-fade: 48px; }
-  to { --table-fade: 0px; }
-}
+@supports (animation-timeline: scroll()) {
+  .db__table-wrap {
+    /* The duration says "auto" out loud, and in its own longhand: written
+       inside the shorthand the minifier expands it to 0s, and a
+       scroll-driven animation with a time duration counts as finished at
+       once — progress pinned at 1, the name edge drawn at scroll zero. */
+    animation: table-fade linear both, name-edge linear both;
+    animation-duration: auto, auto;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - 48px) 100%, 0 16px;
+  }
 
-@keyframes name-edge {
-  to { --name-edge: var(--hairline-strong); }
+  @keyframes table-fade {
+    from { --table-fade: 48px; }
+    to { --table-fade: 0px; }
+  }
+
+  @keyframes name-edge {
+    to { --name-edge: var(--hairline-strong); }
+  }
 }
 
 /* Every column is as wide as its view says — `table-layout: fixed`, the

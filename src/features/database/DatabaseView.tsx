@@ -156,6 +156,7 @@ import * as columnIcons from "./property-icons";
 import { provideIcons } from "./property-icon-store";
 import { CardImage, ImageStrip, useHomedImages } from "./ImageProperty";
 import { databaseConvertible, databaseToBlocks } from "./convert";
+import { tableEdges } from "./table-edges";
 import { ordersBetween } from "../editor/editor-commands";
 import { linkedWordsAt, NameWords, TitleField } from "../editor/TitleField";
 import { RemoteCarets } from "../editor/RemoteCarets";
@@ -987,7 +988,7 @@ function TableLayout({
   }, [bare, foldedGroups, groupedBy, groups, minimal, namesWrap, onAddInline, onOpen, oneLine, onRename, onSetProperty, onStartRename, onStopRename, peekId, properties, readOnly, renameCaret, renamingId, reorderable, rows, titleLabel, view.calcs]);
 
   return (
-    <div className="db__table-wrap scroller" role="region" tabIndex={0} aria-label="Database table">
+    <div ref={tableEdges} className="db__table-wrap" role="region" tabIndex={0} aria-label="Database table">
       <table className="db__table" style={{ width: tableWidth }}>
         <colgroup>
           <col style={{ width: title }} />
@@ -1132,7 +1133,7 @@ function BoardLayout({
   };
 
   return (
-    <div className="board scroller">
+    <div className="board">
       {columns.map((value) => {
         const items = rows.filter((row) => propertyValue(row, property) === value);
         const label = value || `No ${propertyName(property)}`;

@@ -18,6 +18,7 @@ import {
   visibleProperties,
 } from "../database/database-model";
 import { formatDay, formatMoment, OptionTag, PropertyIcon, PropertyLink, TitleIcon } from "../database/properties";
+import { tableEdges } from "../database/table-edges";
 
 /** What the public database view needs of the reader that hosts it: its
  *  pages for relation names, the link a page opens under, and where a file
@@ -174,7 +175,7 @@ export function PublicDatabase({ database, pages, context }: {
 
   return (
     <div className="db public-reader__db">
-      <div className="db__table-wrap scroller">
+      <div ref={tableEdges} className="db__table-wrap">
         <table className="db__table" aria-label={database.title || "Database"}>
           <colgroup>
             <col className="db__name" style={{ width: columnWidth(view, TITLE_COLUMN) ?? 240 }} />
