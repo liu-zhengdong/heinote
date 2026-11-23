@@ -15,6 +15,7 @@ interface PageDto {
   title: string;
   revision: string;
   scope?: string;
+  trashed?: boolean;
   page: { id: string; kind: string; parent_id?: string; archived?: boolean; app?: { databases?: unknown; enabled?: string; draft?: string } };
 }
 
@@ -32,13 +33,13 @@ const ERR = (code: string, message: string) => Object.assign(new Error(message),
 async function loadApp(appPageId: string): Promise<{ bindings: AppBinding[]; scope?: string }> {
   const dto = await api<PageDto>(`/api/v1/pages/${encodeURIComponent(appPageId)}`);
   const page = dto.page;
-  if (page.kind !== "app" || page.archived) throw ERR("not_running", "小应用不存在或已归档。");
+  if (page.kind !== "app" || page.archived || dto.trashed) throw ERR("not_running", "小应用不存在或已归档。");
   return { bindings: normalizeBindings(page.app?.databases), scope: dto.scope };
 }
 
 async function dbPage(id: string): Promise<PageDto> {
   const dto = await api<PageDto>(`/api/v1/pages/${encodeURIComponent(id)}`);
-  if (dto.page.kind !== "database" || dto.page.archived) throw ERR("not_found", "数据源不存在或已归档。");
+  if (dto.page.kind !== "database" || dto.page.archived || dto.trashed) throw ERR("not_found", "数据源不存在或已归档。");
   return dto;
 }
 

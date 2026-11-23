@@ -732,7 +732,7 @@ export class LiveCollection<R extends object> {
       for (let index = 0; index < specs.length; index += 100) chunks.push(specs.slice(index, index + 100));
       let changed = false;
       for (const chunk of chunks) {
-        const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
+        const delta = await request<{ latest: number; epoch?: string; reset?: boolean; rows: Array<{ id: string; value: R }>; deleted: string[] }>(
           `/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=0&pages=${chunk.map((spec) => encodeURIComponent(spec)).join(",")}`);
         if (this.closed) return;
         if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
@@ -741,7 +741,7 @@ export class LiveCollection<R extends object> {
           const since = Number(spec.slice(spec.lastIndexOf(":") + 1));
           return since > 0 && delta.latest < since;
         });
-        if (epochMismatch || rewound) {
+        if (delta.reset || epochMismatch || rewound) {
           this.serverEpoch = delta.epoch ?? "";
           this.remote.clear();
           this.mirrorBlocks.clear();
@@ -774,10 +774,10 @@ export class LiveCollection<R extends object> {
     // Delta since our watermark; an epoch mismatch or watermark rewind (restored
     // backup, fresh database) clears the cache and re-pulls cold with after=0.
     const cold = this.latest === 0;
-    const delta = await request<{ latest: number; epoch?: string; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
+    const delta = await request<{ latest: number; epoch?: string; reset?: boolean; rows: Array<{ id: string; value: R }>; deleted: string[] }>(`/api/records/${encodeURIComponent(this.scope)}/${this.name}?after=${this.latest}`);
     if (this.closed) return;
     if (epoch !== this.epoch) { this.queuedRefresh = true; return; }
-    if ((delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch) || delta.latest < this.latest) {
+    if (delta.reset || (delta.epoch && this.serverEpoch && delta.epoch !== this.serverEpoch) || delta.latest < this.latest) {
       this.latest = 0;
       this.serverEpoch = delta.epoch ?? "";
       this.remote.clear();

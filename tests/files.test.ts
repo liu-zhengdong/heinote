@@ -260,7 +260,7 @@ test("binary uploads land under attachments/<hh>/<sha256> and round-trip byte fo
   const db = new DatabaseSync(join(f.directory, "notes.sqlite"), { readOnly: true });
   try {
     const columns = (db.prepare("PRAGMA table_info(files)").all() as Array<Record<string, unknown>>).map((column) => String(column.name)).sort();
-    assert.deepEqual(columns, ["hash", "path", "scope", "size", "type"]);
+    assert.deepEqual(columns, ["created_at", "hash", "path", "scope", "size", "type"]);
   } finally { db.close(); }
 });
 

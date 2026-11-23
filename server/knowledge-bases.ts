@@ -89,7 +89,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       return result;
     }
     const result = work();
-    store.db.prepare("INSERT INTO requests(user_id,request_id,digest,result) VALUES(?,?,?,?)").run(who.user.id, key, digest, JSON.stringify(result));
+    store.saveRequest(who.user.id, key, digest, result);
     return result;
   });
 

@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { inTrash } from "../../core/page-tree";
 import type { NotePage, StoredFile } from "../../core/types";
 import { PublicDatabase } from "../share/PublicDatabase";
 import { ReaderBlocks, ReaderInline, ReaderPageIcon, titleOf, type ReaderContext } from "../share/reader";
@@ -160,7 +161,7 @@ function ReaderArticle({ page, context, children }: { page: NotePage; context: R
      one, so the page keeps no children list — as the public reader draws
      it. A document's children, the table cannot show, still get the nav. */
   const childPages = page.kind === "database" ? []
-    : [...context.pages.values()].filter((item) => item.parent_id === page.id && !item.archived);
+    : [...context.pages.values()].filter((item) => item.parent_id === page.id && !inTrash(context.pages, item.id));
   return (
     <article className={`public-reader__document${page.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(page)}>
       {page.cover_image ? <img className="public-reader__cover" src={context.fileHref(page.cover_image)} alt="" /> : null}

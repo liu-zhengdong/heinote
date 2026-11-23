@@ -10,15 +10,17 @@ import { inTrash, isPurging } from "../src/core/page-tree.ts";
 import { emptyPlane, Projector, type PlaneRecords, type RecordValue } from "../src/platform/records.ts";
 import { historyParts } from "../src/platform/history-record.ts";
 import { blockRecordId, eventId, parseBlockRecordId, parseHistoryId } from "../src/platform/record-ids.ts";
-import type { LoadedNotePage, LoadedWorkspaceState, NotePage, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
+import type { LoadedNotePage, LoadedWorkspaceState, NotePage, PageEvent, PageVersion, Person, SpaceRole } from "../src/core/types.ts";
 import { CollaborationStore } from "./collaboration.ts";
 import { FileStore } from "./files.ts";
 import { AvatarStore } from "./avatars.ts";
 import { KnowledgeBases } from "./knowledge-bases.ts";
 import { Quotas } from "./quotas.ts";
 import { PURGE_QUEUE_DDL, PurgeManager } from "./purge.ts";
+import { MaintenanceManager } from "./maintenance.ts";
 import { LATEST_VERSION } from "./migrations/index.ts";
 import { DELTA_DDL, DELTA_TRIGGERS } from "./record-delta.ts";
+import { rebuildScopeUsage, SCOPE_USAGE_DDL, SCOPE_USAGE_TRIGGERS } from "./scope-usage.ts";
 import { documentKey, pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
@@ -62,6 +64,7 @@ export class Store {
   readonly collaboration: CollaborationStore;
   readonly quotas!: Quotas;
   readonly purge!: PurgeManager;
+  readonly maintenance!: MaintenanceManager;
   readonly dbEpoch!: string;
   readonly dataDir: string;
   private transactionDepth = 0;
@@ -85,11 +88,12 @@ export class Store {
       CREATE INDEX IF NOT EXISTS invitations_user ON invitations(user_id,status);
       CREATE TABLE IF NOT EXISTS records(scope TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(scope,collection,id));
       CREATE INDEX IF NOT EXISTS records_page ON records(scope,collection,json_extract(value,'$.page'));
+      CREATE INDEX IF NOT EXISTS records_parent ON records(scope,collection,json_extract(value,'$.parent_id'));
       CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, display_name TEXT, avatar TEXT, access TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, embed INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS token_events(id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES tokens(id), action TEXT NOT NULL, page_id TEXT NOT NULL, page_title TEXT NOT NULL, version_id TEXT, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS token_events_token ON token_events(token_id,created_at);
       CREATE TABLE IF NOT EXISTS shares(id TEXT PRIMARY KEY, token TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), scope TEXT NOT NULL, page_id TEXT NOT NULL, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(user_id,request_id));
+      CREATE TABLE IF NOT EXISTS requests(user_id TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT, PRIMARY KEY(user_id,request_id));
       CREATE TABLE IF NOT EXISTS agent_auth_requests(id TEXT PRIMARY KEY, name TEXT NOT NULL, access TEXT NOT NULL, ip TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', user_id TEXT REFERENCES users(id), token_id TEXT REFERENCES tokens(id), granted_token TEXT, created_at TEXT NOT NULL, expires INTEGER NOT NULL, resolved_at TEXT);
       CREATE INDEX IF NOT EXISTS idx_agent_auth_requests_status ON agent_auth_requests(status);
       ${PURGE_QUEUE_DDL}
@@ -104,6 +108,16 @@ export class Store {
     if (version === 0 && !hadUsersTable) this.db.exec(`PRAGMA user_version=${LATEST_VERSION}`);
     else if (version !== LATEST_VERSION)
       throw new Error(`数据库版本 ${version} 与本应用版本 ${LATEST_VERSION} 不一致：请先通过 migrateDatabase 完成迁移。`);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, structure TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY(scope,page_id));
+      CREATE TABLE IF NOT EXISTS collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
+      CREATE TABLE IF NOT EXISTS collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(scope,page_id));
+      ${SCOPE_USAGE_DDL}
+      ${SCOPE_USAGE_TRIGGERS}
+    `);
+    if (!this.one("SELECT 1 FROM scope_usage LIMIT 1") && (this.one("SELECT 1 FROM records LIMIT 1") || this.one("SELECT 1 FROM collaboration_documents LIMIT 1"))) {
+      rebuildScopeUsage(this.db);
+    }
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
     this.files = new FileStore(this.db, dataDir);
     this.avatars = new AvatarStore(this.db, this.files);
@@ -119,6 +133,8 @@ export class Store {
     }
     this.collaboration = new CollaborationStore(this);
     this.purge = new PurgeManager(this);
+    this.maintenance = new MaintenanceManager(this);
+    this.purge.onDrained(() => this.maintenance.scheduleSoon());
     this.quotaSuspended = true;
     try { this.collaboration.initialize(); } finally { this.quotaSuspended = false; }
   }
@@ -200,24 +216,34 @@ export class Store {
   records(scope: string, collection: string): Array<{ id: string; value: Row }> {
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection=? ORDER BY id", scope, collection).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
+  saveRequest(userId: string, requestId: string, digest: string, result: unknown): void {
+    this.stmt("INSERT INTO requests(user_id,request_id,digest,result,created_at) VALUES(?,?,?,?,?)")
+      .run(userId, requestId, digest, JSON.stringify(result), now());
+  }
+  private watermarkState(scope: string, collection: string): { latest: number; prunedBefore: number } {
+    const found = this.one("SELECT seq, pruned_before FROM record_seq WHERE scope=? AND collection=?", scope, collection);
+    if (found) return { latest: Number(found.seq), prunedBefore: Number(found.pruned_before ?? 0) };
+    this.db.prepare("INSERT INTO record_seq(scope,collection,seq) SELECT ?,?,1 WHERE NOT EXISTS(SELECT 1 FROM record_seq WHERE scope=? AND collection=?)").run(scope, collection, scope, collection);
+    return { latest: 1, prunedBefore: 0 };
+  }
   /** The collection's watermark, lazily seeded: collections whose rows all
    *  predate the changelog (or that nobody wrote since) carry no record_seq
    *  row, and reporting 0 there tells clients to cold-pull the whole
    *  collection on every poll (ISS-12). The first read plants seq=1 — later
    *  writes bump it through the trigger like anywhere else. */
   private watermark(scope: string, collection: string): number {
-    const found = this.one("SELECT seq FROM record_seq WHERE scope=? AND collection=?", scope, collection);
-    if (found) return Number(found.seq);
-    this.db.prepare("INSERT INTO record_seq SELECT ?,?,1 WHERE NOT EXISTS(SELECT 1 FROM record_seq WHERE scope=? AND collection=?)").run(scope, collection, scope, collection);
-    return 1;
+    return this.watermarkState(scope, collection).latest;
   }
   /** The collection's watermark plus the rows touched after `after`: each
    *  changed row under its record id, and each removed row's id under
    *  `deleted`. `after` 0 yields the whole collection (rows written before
-   *  the changelog never entered it, so they're read from `records`). */
-  recordsSince(scope: string, collection: string, after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
-    const latest = this.watermark(scope, collection);
+   *  the changelog never entered it, so they're read from `records`).
+   *  When tombstones at or past `after` were compacted, `reset: true` tells
+   *  the client to perform a fresh `after=0` snapshot pull (UC-59). */
+  recordsSince(scope: string, collection: string, after: number): { latest: number; epoch: string; reset?: boolean; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const { latest, prunedBefore } = this.watermarkState(scope, collection);
     if (after <= 0) return { latest, epoch: this.dbEpoch, rows: this.records(scope, collection), deleted: [] };
+    if (after <= prunedBefore) return { latest, epoch: this.dbEpoch, reset: true, rows: [], deleted: [] };
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
     const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
@@ -246,8 +272,9 @@ export class Store {
    *  rows match through their `page` field (via the records_page index on a
    *  cold read) and tombstones through the page-scoped record id
    *  (`<len>_<pageId>_<rest>`). UC-48 lazy loading polls per loaded page. */
-  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; epoch: string; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
-    const latest = this.watermark(scope, collection);
+  recordsSincePages(scope: string, collection: string, pageIds: string[], after: number): { latest: number; epoch: string; reset?: boolean; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+    const { latest, prunedBefore } = this.watermarkState(scope, collection);
+    if (after > 0 && after <= prunedBefore) return { latest, epoch: this.dbEpoch, reset: true, rows: [], deleted: [] };
     const wanted = new Set(pageIds);
     const inPage = (id: string, value: Row | null): boolean => {
       if (value && typeof value.page === "string") return wanted.has(value.page);
@@ -346,6 +373,67 @@ export class Store {
   }
   plane(scope: string): PlaneRecords {
     return Object.fromEntries(Object.keys(emptyPlane()).map((collection) => [collection, new Map(this.records(scope, collection).map((row) => [row.id, row.value as RecordValue]))])) as unknown as PlaneRecords;
+  }
+  private partialPlane(scope: string, collections: ReadonlySet<keyof PlaneRecords>): PlaneRecords {
+    const plane = emptyPlane();
+    for (const collection of collections) {
+      (plane as Record<keyof PlaneRecords, Map<string, RecordValue>>)[collection] = new Map(
+        this.records(scope, collection).map((row) => [row.id, row.value as RecordValue]),
+      );
+    }
+    return plane;
+  }
+  /** Project only the requested collections (and optionally a single scope)
+   *  so narrow read paths avoid deserializing blocks/versions/events across the
+   *  entire vault (UC-59). */
+  projectScopes(actor: Actor, collections: ReadonlyArray<keyof PlaneRecords>, onlyScope?: string): LoadedWorkspaceState {
+    const wanted = new Set(collections);
+    const personal = `user:${actor.user.id}`;
+    const planes = new Map<string, PlaneRecords>();
+    if (!onlyScope || onlyScope === personal) planes.set("personal", this.partialPlane(personal, wanted));
+    for (const member of this.all("SELECT space_id FROM members WHERE user_id=?", actor.user.id)) {
+      const spaceId = String(member.space_id);
+      if (onlyScope && onlyScope !== spaceId) continue;
+      planes.set(spaceId, this.partialPlane(spaceId, wanted));
+    }
+    return new Projector().project(planes) as LoadedWorkspaceState;
+  }
+  /** Projected page metadata across all visible scopes without loading bodies,
+   *  versions, or timeline events. */
+  pagesState(actor: Actor): Record<string, LoadedNotePage> {
+    return this.projectScopes(actor, ["pages"]).pages;
+  }
+  /** Versions for a single page, loaded by indexed prefix instead of full vault. */
+  pageVersions(actor: Actor, pageId: string): Record<string, PageVersion> {
+    return this.pageProjection(actor, pageId).projected.versions[pageId] ?? {};
+  }
+  /** Timeline events for a single page via the `records_page` index. */
+  pageEvents(actor: Actor, pageId: string): PageEvent[] {
+    const { scope } = this.page(actor, pageId);
+    const rows = this.all(
+      "SELECT value FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=?",
+      scope,
+      pageId,
+    );
+    const events: PageEvent[] = [];
+    for (const row of rows) {
+      const record = JSON.parse(String(row.value)) as {
+        event: string; author_id: string; author_name: string; author_avatar_url?: string;
+        label: string; targets: string[]; merged: number; created_at: string;
+      };
+      events.push({
+        id: record.event,
+        page_id: pageId,
+        author_id: record.author_id,
+        author_name: record.author_name,
+        author_avatar_url: record.author_avatar_url ?? null,
+        label: record.label,
+        targets: [...(record.targets ?? [])],
+        merged: record.merged,
+        created_at: record.created_at,
+      });
+    }
+    return events.sort((a, b) => a.created_at.localeCompare(b.created_at));
   }
   /* The server's window is everything: no lazy bodies server-side, so the
      projected pages are all LoadedNotePage (UC-48). */
@@ -551,6 +639,21 @@ export class Store {
         scoped.set(name, resolved);
         return resolved;
       };
+      const planeTouches = new Map<string, {
+        putPages: Set<string>;
+        deletedPages: Set<string>;
+        putBlocks: Map<string, Row>;
+        putVersions: Map<string, Row>;
+      }>();
+      const touchPlane = (scope: string) => {
+        let entry = planeTouches.get(scope);
+        if (!entry) {
+          entry = { putPages: new Set(), deletedPages: new Set(), putBlocks: new Map(), putVersions: new Map() };
+          planeTouches.set(scope, entry);
+        }
+        return entry;
+      };
+      const touchedVersionPages = new Map<string, Set<string>>();
       // Pages that the transaction itself dirtied: bulk commits suspend the
       // per-write trigger and mark them in one indexed insert at the end.
       const dirtyPages = new Set<string>();
@@ -638,6 +741,31 @@ export class Store {
           }
         }
         result.push(next ?? null); scopes.add(scope);
+        const planeTouch = touchPlane(scope);
+        if (write.collection === "pages") {
+          if (next) {
+            planeTouch.putPages.add(write.id);
+            planeTouch.deletedPages.delete(write.id);
+          } else {
+            planeTouch.deletedPages.add(write.id);
+            planeTouch.putPages.delete(write.id);
+          }
+        } else if (write.collection === "blocks") {
+          if (next) planeTouch.putBlocks.set(write.id, next);
+          else planeTouch.putBlocks.delete(write.id);
+        } else if (write.collection === "versions") {
+          if (next) {
+            planeTouch.putVersions.set(write.id, next);
+            const verPage = String(next.page ?? "");
+            if (verPage) {
+              let set = touchedVersionPages.get(scope);
+              if (!set) touchedVersionPages.set(scope, set = new Set());
+              set.add(verPage);
+            }
+          } else {
+            planeTouch.putVersions.delete(write.id);
+          }
+        }
         if (write.collection === "pages" || write.collection === "blocks") {
           const { eventPage, row } = write.collection === "pages"
             ? this.eventPageOf(scope, write.id, { deleted: !next, prior: current })
@@ -684,17 +812,17 @@ export class Store {
       }
       // Validate the complete transaction, after sharing has moved all
       // records. A text-only batch touches no record the plane or version
-      // checks can break, so their full-scope scans stay for write batches.
+      // checks can break, so checks stay incremental on touched records.
       if (requested.length) {
-        for (const scope of scopes) this.validatePlane(actor, scope);
-        for (const scope of scopes) this.pruneHistory(scope);
+        for (const scope of scopes) this.validatePlane(actor, scope, planeTouches.get(scope));
+        for (const [scope, pageIds] of touchedVersionPages) this.pruneHistory(scope, [...pageIds]);
       }
       for (const entry of touched.values()) {
         if (entry.deleted) continue;
         this.recordPageEvent(actor, entry.scope, entry.pageId, [...entry.labels], [...entry.targets]);
         this.pruneEvents(entry.scope, entry.pageId);
       }
-      if (requestId) this.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(actor.user.id, requestId, digest, JSON.stringify(result));
+      if (requestId) this.saveRequest(actor.user.id, requestId, digest, result);
       return result;
     });
   }
@@ -719,7 +847,11 @@ export class Store {
   /** One entry on a page's timeline — or into the latest, when the same
    *  author edits again inside the window history coalesces on. */
   private recordPageEvent(actor: Actor, scope: string, pageId: string, labels: string[], targets: string[]): void {
-    const latest = this.all("SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND id LIKE ? ORDER BY value->>'created_at' DESC LIMIT 1", scope, `${pageId.length}_${pageId}_event.%`)[0];
+    const latest = this.all(
+      "SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=? ORDER BY json_extract(value,'$.created_at') DESC LIMIT 1",
+      scope,
+      pageId,
+    )[0];
     const author = asAuthor(actor);
     if (latest) {
       const value = JSON.parse(String(latest.value)) as { created_at: string; author_id: string; author_name: string; label: string; targets: string[]; merged: number };
@@ -737,15 +869,107 @@ export class Store {
   /** A page's timeline keeps its newest 300 entries within the window —
    *  small records, so count and age bound them. */
   private pruneEvents(scope: string, pageId: string): void {
-    const rows = this.all("SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND id LIKE ?", scope, `${pageId.length}_${pageId}_event.%`);
+    const rows = this.all(
+      "SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=?",
+      scope,
+      pageId,
+    );
     const ordered = rows.map((row) => ({ id: String(row.id), time: String(JSON.parse(String(row.value)).created_at) })).sort((a, b) => b.time.localeCompare(a.time));
     for (const [index, entry] of ordered.entries()) {
       if (index >= 300 || Date.parse(entry.time) < Date.now() - HISTORY_AGE_MS) this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND id=?").run(scope, entry.id);
     }
   }
-  private validatePlane(actor: Actor | undefined, scope: string): void {
-    const pages = new Map(this.records(scope, "pages").map((row) => [row.id, row.value]));
+  validatePlane(
+    actor: Actor | undefined,
+    scope: string,
+    touched?: {
+      putPages: ReadonlySet<string>;
+      deletedPages: ReadonlySet<string>;
+      putBlocks: ReadonlyMap<string, Row>;
+      putVersions: ReadonlyMap<string, Row>;
+    },
+  ): void {
     const library = this.knowledgeBases.get(scope);
+    if (touched) {
+      const pageCache = new Map<string, Row | null>();
+      const getPage = (pageId: string): Row | undefined => {
+        if (pageCache.has(pageId)) return pageCache.get(pageId) ?? undefined;
+        const found = this.record(scope, "pages", pageId);
+        pageCache.set(pageId, found ?? null);
+        return found;
+      };
+      if (library) {
+        const home = getPage(library.homePageId);
+        if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
+      }
+      for (const pageId of touched.putPages) {
+        const page = getPage(pageId);
+        if (!page) continue;
+        if (library && pageId !== library.homePageId && page.share_space_id !== undefined) fail(400, "知识库页面必须继承首页的空间。", "knowledge_base_boundary");
+        const seen = new Set([pageId]);
+        let parentId = page.parent_id;
+        while (typeof parentId === "string") {
+          if (seen.has(parentId)) fail(400, "页面不能形成循环。");
+          seen.add(parentId);
+          const parent = getPage(parentId);
+          if (!parent) {
+            if (page.share_space_id === scope) break;
+            fail(400, "父页面必须位于同一空间。");
+          }
+          parentId = parent.parent_id;
+        }
+        if (library && !seen.has(library.homePageId)) fail(400, "知识库页面必须位于首页下。", "knowledge_base_boundary");
+        if (!scope.startsWith("user:")) {
+          let root = page;
+          const visited = new Set<string>();
+          while (root.share_space_id !== scope && typeof root.parent_id === "string" && !visited.has(String(root.id))) {
+            visited.add(String(root.id));
+            const parent = getPage(root.parent_id);
+            if (!parent) break;
+            root = parent;
+          }
+          if (root.share_space_id !== scope) fail(400, "空间页面必须属于已分享的页面树。");
+        }
+        if (actor && scope === `user:${actor.user.id}` && typeof page.share_space_id === "string") this.role(actor, page.share_space_id);
+      }
+      if (touched.deletedPages.size) {
+        const deletedList = [...touched.deletedPages];
+        for (let i = 0; i < deletedList.length; i += 400) {
+          const chunk = deletedList.slice(i, i + 400);
+          const marks = chunk.map(() => "?").join(",");
+          const orphans = this.all(
+            `SELECT value FROM records WHERE scope=? AND collection='pages' AND json_extract(value,'$.parent_id') IN (${marks})`,
+            scope,
+            ...chunk,
+          );
+          for (const row of orphans) {
+            const child = JSON.parse(String(row.value)) as Row;
+            if (child.share_space_id !== scope) fail(400, "父页面必须位于同一空间。");
+          }
+          for (const collection of ["blocks", "versions"] as const) {
+            const stray = this.one(
+              `SELECT 1 FROM records WHERE scope=? AND collection=? AND json_extract(value,'$.page') IN (${marks}) LIMIT 1`,
+              scope,
+              collection,
+              ...chunk,
+            );
+            if (stray) fail(400, "记录必须属于当前空间的页面。");
+          }
+        }
+      }
+      for (const [recordId, value] of touched.putBlocks) {
+        if (!getPage(String(value.page))) fail(400, "记录必须属于当前空间的页面。");
+        const parsed = parseBlockRecordId(recordId);
+        if (!parsed || parsed.pageId !== value.page || parsed.blockId !== value.id) fail(400, "段落 ID 与页面不一致。");
+      }
+      for (const [recordId, value] of touched.putVersions) {
+        if (!getPage(String(value.page))) fail(400, "记录必须属于当前空间的页面。");
+        const parsed = parseHistoryId(recordId);
+        if (!parsed || parsed.pageId !== value.page || parsed.versionId !== value.version || parsed.part !== value.part) fail(400, "历史 ID 与页面不一致。");
+      }
+      return;
+    }
+    const pages = new Map(this.records(scope, "pages").map((row) => [row.id, row.value]));
     if (library) {
       const home = pages.get(library.homePageId);
       if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
@@ -790,8 +1014,22 @@ export class Store {
       }
     }
   }
-  pruneHistory(scope: string): void {
-    const rows = this.records(scope, "versions");
+  pruneHistory(scope: string, pageIds?: readonly string[]): void {
+    let rows: Array<{ id: string; value: Row }>;
+    if (pageIds) {
+      if (!pageIds.length) return;
+      rows = [];
+      const seen = new Set<string>();
+      for (const pageId of pageIds) {
+        if (seen.has(pageId)) continue;
+        seen.add(pageId);
+        for (const row of this.all("SELECT id,value FROM records WHERE scope=? AND collection='versions' AND json_extract(value,'$.page')=?", scope, pageId)) {
+          rows.push({ id: String(row.id), value: JSON.parse(String(row.value)) });
+        }
+      }
+    } else {
+      rows = this.records(scope, "versions");
+    }
     const groups = new Map<string, typeof rows>();
     for (const row of rows) { const key = `${row.value.page}/${row.value.version}`; groups.set(key, [...groups.get(key) ?? [], row]); }
     const byPage = new Map<string, Array<{ rows: typeof rows; time: string; bytes: number }>>();
@@ -803,7 +1041,7 @@ export class Store {
       let bytes = 0;
       entries.sort((a, b) => b.time.localeCompare(a.time)).forEach((entry, index) => {
         bytes += entry.bytes;
-        if (index >= 20 || bytes > 10 * 1024 * 1024 || Date.parse(entry.time) < Date.now() - 30 * 86400000) for (const row of entry.rows) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='versions' AND id=?").run(scope, row.id);
+        if (index >= 20 || bytes > 10 * 1024 * 1024 || Date.parse(entry.time) < Date.now() - 30 * 86400000) for (const row of entry.rows) this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND id=?").run(scope, row.id);
       });
     }
   }
@@ -815,7 +1053,7 @@ export class Store {
     const version: PageVersion = { id: id(), page_id: pageId, author_id: actor.user.id, author_name: asAuthor(actor), author_avatar_url: actor.avatar ?? null, summary, created_at: now(), snapshot: structuredClone(page), ...(restored ? { restored: true } : {}) };
     if (Buffer.byteLength(JSON.stringify(version)) > HISTORY_BUDGET_BYTES) fail(413, "此页面超过版本保存大小限制。", "too_large");
     for (const part of historyParts(version)) this.put(scope, "versions", part.id, part.value as unknown as Row);
-    this.pruneHistory(scope); return version;
+    this.pruneHistory(scope, [pageId]); return version;
   }
   /** Content hash used for optimistic concurrency. The hash itself cost
    *  700ms on the largest vault page — cache it against the same
@@ -839,7 +1077,8 @@ export class Store {
     const text = blocks.map((block) => block.content.map((run) => run.text).join("")).join("\n");
     const revision = this.revision(scope, pageId);
     const collaboration = this.collaboration.snapshot(actor, scope.startsWith("user:") ? "personal" : scope, pageId);
-    return { id: page.id, title: page.title, text, revision, scope, page, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
+    const trashed = this.pageTrashState(scope, pageId).archived;
+    return { id: page.id, title: page.title, text, revision, scope, page, trashed, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
   }
   savePage(scope: string, page: LoadedNotePage, who?: Actor, label = "修改了页面"): void {
     this.transaction(() => {
@@ -848,10 +1087,14 @@ export class Store {
       if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
       const { block_tree, title, title_content, parent_id, ...fields } = page;
       this.put(scope, "pages", page.id, { ...fields, title_content: title_content ?? [{ text: title }], ...(parent_id ? { parent_id } : {}) });
-      for (const row of this.blocksOf(scope, page.id)) this.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
+      for (const row of this.blocksOf(scope, page.id)) this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
+      const putBlocks = new Map<string, Row>();
       for (const block of Object.values(block_tree.by_id)) {
         const { parent_id: parent, ...rest } = block;
-        this.put(scope, "blocks", blockRecordId(page.id, block.id), { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) });
+        const recordId = blockRecordId(page.id, block.id);
+        const value: Row = { ...rest, page: page.id, ...(parent ? { parent_id: parent } : {}), content: block.content.map((run) => run.mention ? { embed: { mention: run.mention }, ...(run.marks ? { marks: run.marks } : {}) } : run) };
+        this.put(scope, "blocks", recordId, value);
+        putBlocks.set(recordId, value);
       }
       // Direct writes bypass apply's touch collection; the caller says what
       // the act was and it lands on the page's own timeline.
@@ -860,7 +1103,14 @@ export class Store {
         this.recordPageEvent(who, scope, eventPage, [label], [page.id]);
         this.pruneEvents(scope, eventPage);
       }
-      if (library) this.validatePlane(undefined, scope);
+      if (library) {
+        this.validatePlane(undefined, scope, {
+          putPages: new Set([page.id]),
+          deletedPages: new Set(),
+          putBlocks,
+          putVersions: new Map(),
+        });
+      }
     });
   }
   /** The share's page subtree with full page records, and the owner actor
@@ -874,17 +1124,30 @@ export class Store {
     try { actual = this.page({ user: owner }, String(share.page_id)); } catch { fail(404, "分享链接已失效。"); }
     const rootTrash = this.pageTrashState(actual.scope, actual.page.id);
     if (actual.scope !== share.scope || rootTrash.archived || rootTrash.purging) fail(404, "分享链接已失效。");
-    const all = this.state({ user: owner }).pages;
+    // Load pages-only metadata first, then fetch blocks only for the shared
+    // subtree instead of deserializing the owner's entire vault (UC-59).
+    const all = this.pagesState({ user: owner });
     if (inTrash(all, actual.page.id)) fail(404, "分享链接已失效。");
-    const pages: NotePage[] = [];
-    const queue = [actual.page]; const seen = new Set<string>();
-    while (queue.length) {
-      const page = queue.shift()!;
-      if (seen.has(page.id) || inTrash(all, page.id)) continue;
-      seen.add(page.id);
-      pages.push(page);
-      for (const child of Object.values(all)) if (child.parent_id === page.id && this.page({ user: owner }, child.id).scope === actual.scope) queue.push(child);
+    const childrenByParent = new Map<string, NotePage[]>();
+    for (const candidate of Object.values(all)) {
+      if (!candidate.parent_id) continue;
+      const list = childrenByParent.get(candidate.parent_id);
+      if (list) list.push(candidate);
+      else childrenByParent.set(candidate.parent_id, [candidate]);
     }
+    const subtreeIds: string[] = [];
+    const queue = [actual.page.id];
+    const seen = new Set<string>();
+    while (queue.length) {
+      const pageId = queue.shift()!;
+      if (seen.has(pageId) || inTrash(all, pageId)) continue;
+      seen.add(pageId);
+      subtreeIds.push(pageId);
+      for (const child of childrenByParent.get(pageId) ?? []) {
+        if (this.page({ user: owner }, child.id).scope === actual.scope) queue.push(child.id);
+      }
+    }
+    const pages: NotePage[] = subtreeIds.map((pageId) => this.page({ user: owner }, pageId).page);
     return { owner, root: actual.page, pages, scope: actual.scope };
   }
 

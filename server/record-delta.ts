@@ -12,13 +12,13 @@
  *  the conflict-clause-free equivalent. */
 
 export const DELTA_DDL = `
-  CREATE TABLE IF NOT EXISTS record_seq(scope TEXT NOT NULL, collection TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(scope,collection));
+  CREATE TABLE IF NOT EXISTS record_seq(scope TEXT NOT NULL, collection TEXT NOT NULL, seq INTEGER NOT NULL, pruned_before INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(scope,collection));
   CREATE TABLE IF NOT EXISTS record_changes(scope TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(scope,collection,id));
   CREATE INDEX IF NOT EXISTS record_changes_seq ON record_changes(scope,collection,seq);`;
 
 const BUMP = (alias: string) => `
     UPDATE record_seq SET seq=seq+1 WHERE scope=${alias}.scope AND collection=${alias}.collection;
-    INSERT INTO record_seq SELECT ${alias}.scope,${alias}.collection,1
+    INSERT INTO record_seq(scope,collection,seq) SELECT ${alias}.scope,${alias}.collection,1
       WHERE NOT EXISTS(SELECT 1 FROM record_seq WHERE scope=${alias}.scope AND collection=${alias}.collection);`;
 
 const CHANGELOG = (alias: string, deleted: number) => `

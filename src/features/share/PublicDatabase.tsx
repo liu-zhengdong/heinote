@@ -1,5 +1,6 @@
 import { Check, FileText, Lock } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
+import { inTrash } from "../../core/page-tree";
 import type { DatabaseProperty, NotePage } from "../../core/types";
 import { Avatar } from "../../components/Avatar";
 import {
@@ -93,7 +94,7 @@ function PublicCell({ row, property, context }: { row: NotePage; property: Datab
         <span className="db-rel__list">
           {ids.map((id) => {
             const linked = context.pages.get(id);
-            const gone = !linked || linked.archived;
+            const gone = !linked || inTrash(context.pages, id);
             return gone ? (
               <span key={id} className="db-rel db-rel--ghost"><Lock size={10} aria-hidden="true" /><span className="db-rel__name">No access</span></span>
             ) : (

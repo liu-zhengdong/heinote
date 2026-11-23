@@ -33,27 +33,6 @@ const safeFileName = (name: string): string => {
 };
 const copiedPath = (file: StoredFile) => `files/agent/${randomUUID().replaceAll("-", "")}/${safeFileName(file.name)}`;
 
-async function drain(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
-  return Buffer.concat(chunks);
-}
-
-/** Every StoredFile a page holds: paragraphs, inline pictures, cover and
- *  icon, database-row pictures. `preview` paths travel with their file. */
-function storedFiles(page: LoadedNotePage): StoredFile[] {
-  const found: StoredFile[] = [];
-  const push = (file: StoredFile | undefined) => { if (file) found.push(file); };
-  push(page.cover_image);
-  push(page.icon_image);
-  for (const files of Object.values(page.property_files ?? {})) for (const file of files) push(file);
-  for (const block of Object.values(page.block_tree.by_id)) {
-    push(block.file);
-    for (const run of block.content) if (run.mention?.kind === "image") push(run.mention.file);
-  }
-  return found;
-}
-
 /** Rewrites every StoredFile nested anywhere in `value` through `rewrite`
  *  (blocks' `file`, image mentions, cover/icon/property pictures).
  *  A StoredFile is the only record shape carrying path+owner+size+type. */
@@ -76,11 +55,10 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
     const input = inputSchema.parse(req.body);
     const pageId = String(req.params.id);
 
-    // Attachment bytes move with the copy: drained now, re-stored inside the
-    // mutation's transaction. Files whose bytes are already gone keep their
-    // original (broken) reference — the copy can't resurrect them.
+    // Load page metadata only (no full-vault blocks/versions) and clone
+    // content-addressed attachment index rows zero-copy inside the transaction.
     const source = store.page(who, pageId);
-    const all = store.state(who).pages;
+    const all = store.pagesState(who);
     if (inTrash(all, pageId)) {
       if (isPurging(all, pageId)) fail(404, "页面不存在。", "not_found");
       fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
@@ -91,16 +69,6 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
       if (inTrash(all, idInTree)) continue;
       const found = store.page(who, idInTree);
       if (found.scope === source.scope) pages.push(found.page);
-    }
-    const bytes = new Map<string, Buffer>();
-    for (const page of pages) {
-      for (const file of storedFiles(page)) {
-        for (const path of [file.path, file.preview]) {
-          if (!path || bytes.has(path)) continue;
-          const stored = store.files.read(source.scope, path);
-          if (stored) bytes.set(path, await drain(stored.stream));
-        }
-      }
     }
 
     mutation(store, actor, req, res, input,
@@ -132,10 +100,15 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
         const copyFile = (file: StoredFile): StoredFile => {
           const path = pathsBySource.get(file.path) ?? copiedPath(file);
           pathsBySource.set(file.path, path);
-          const data = bytes.get(file.path);
-          if (data && !store.files.write(targetScope, path, file.type, data)) fail(409, "附件路径冲突。", "conflict");
+          const cloned = store.files.clone(source.scope, file.path, targetScope, path);
+          if (cloned === "conflict") fail(409, "附件路径冲突。", "conflict");
           const preview = file.preview
-            ? (() => { const next = copiedPath(file); const p = bytes.get(file.preview); if (p) store.files.write(targetScope, next, "image/jpeg", p); return next; })()
+            ? (() => {
+                const next = copiedPath(file);
+                const previewCloned = store.files.clone(source.scope, file.preview, targetScope, next);
+                if (previewCloned === "conflict") fail(409, "附件路径冲突。", "conflict");
+                return next;
+              })()
             : undefined;
           const { space: _space, ...rest } = file;
           return { ...rest, path, owner: who.user.id, ...(inPersonal ? {} : { space: targetScope }), ...(preview ? { preview } : {}) };

@@ -37,6 +37,7 @@ export class PurgeManager {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private pausedCheck?: () => boolean;
+  private drainedHandler?: () => void;
 
   constructor(
     private readonly store: Store,
@@ -45,6 +46,10 @@ export class PurgeManager {
     this.chunkSize = Math.max(1, options.chunkSize ?? 100);
     this.chunkDelayMs = Math.max(0, options.chunkDelayMs ?? 20);
     this.reloadScopes();
+  }
+
+  onDrained(handler: () => void): void {
+    this.drainedHandler = handler;
   }
 
   private reloadScopes(): void {
@@ -92,6 +97,7 @@ export class PurgeManager {
       try {
         const more = this.step();
         if (more) this.schedule(this.chunkDelayMs);
+        else this.drainedHandler?.();
       } catch (error) {
         if (!this.store.db.isOpen) return;
         console.error("purge: 后台清理分片失败", error);

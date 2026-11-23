@@ -85,15 +85,31 @@ export class Quotas {
     return [];
   }
 
-  /** Persisted content bytes for one scope: records, collaboration documents
-   *  and retained archives, and deduplicated attachment/avatar payloads. */
+  /** Persisted content bytes for one scope: trigger-maintained records,
+   *  collaboration documents and archives, plus deduplicated files. */
   private scopeBytes(scope: string): number {
-    const records = Number(this.store.one("SELECT COALESCE(SUM(LENGTH(value)),0) AS n FROM records WHERE scope=?", scope)?.n ?? 0);
-    const documents = Number(this.store.one("SELECT COALESCE(SUM(LENGTH(state)),0) AS n FROM collaboration_documents WHERE scope=?", scope)?.n ?? 0);
-    const archives = Number(this.store.one("SELECT COALESCE(SUM(LENGTH(state)),0) AS n FROM collaboration_archives WHERE scope=?", scope)?.n ?? 0);
+    const tracked = Number(this.store.one(
+      "SELECT COALESCE(records_bytes + docs_bytes + archives_bytes, 0) AS n FROM scope_usage WHERE scope=?",
+      scope,
+    )?.n ?? 0);
     // Same content hash under one subject counts once (attachments + avatars).
     const files = Number(this.store.one("SELECT COALESCE(SUM(n),0) AS n FROM (SELECT MIN(size) AS n FROM files WHERE scope=? GROUP BY hash)", scope)?.n ?? 0);
-    return records + documents + archives + files;
+    return tracked + files;
+  }
+
+  /** O(scopes) aggregate across every scope in two SQL queries instead of
+   *  scanning `records` once per user/KB on every transaction. */
+  private allScopeBytes(): Map<string, number> {
+    const totals = new Map<string, number>();
+    for (const row of this.store.all("SELECT scope, (records_bytes + docs_bytes + archives_bytes) AS n FROM scope_usage")) {
+      const n = Number(row.n ?? 0);
+      if (n > 0) totals.set(String(row.scope), n);
+    }
+    for (const row of this.store.all("SELECT scope, SUM(n) AS n FROM (SELECT scope, MIN(size) AS n FROM files GROUP BY scope, hash) GROUP BY scope")) {
+      const scope = String(row.scope);
+      totals.set(scope, (totals.get(scope) ?? 0) + Number(row.n ?? 0));
+    }
+    return totals;
   }
 
   usage(subject: string): number {
@@ -102,8 +118,26 @@ export class Quotas {
 
   /** Subject → usage for every subject that stores data or has an account. */
   usageAll(): Map<string, number> {
+    const byScope = this.allScopeBytes();
     const map = new Map<string, number>();
-    for (const subject of this.subjects()) map.set(subject, this.usage(subject));
+    const ownedShares = new Map<string, string[]>();
+    for (const row of this.store.all("SELECT s.id, s.owner_id FROM spaces s LEFT JOIN knowledge_bases k ON k.space_id=s.id WHERE k.space_id IS NULL")) {
+      const ownerId = String(row.owner_id);
+      const list = ownedShares.get(ownerId);
+      if (list) list.push(String(row.id));
+      else ownedShares.set(ownerId, [String(row.id)]);
+    }
+    for (const row of this.store.all("SELECT id FROM users")) {
+      const userId = String(row.id);
+      const subject = `user:${userId}`;
+      let total = (byScope.get(subject) ?? 0) + (byScope.get(`avatar:${userId}`) ?? 0);
+      for (const shareId of ownedShares.get(userId) ?? []) total += byScope.get(shareId) ?? 0;
+      map.set(subject, total);
+    }
+    for (const row of this.store.all("SELECT space_id FROM knowledge_bases")) {
+      const spaceId = String(row.space_id);
+      map.set(`kb:${spaceId}`, byScope.get(spaceId) ?? 0);
+    }
     return map;
   }
 
@@ -174,8 +208,9 @@ export class Quotas {
    * captured before the transaction's writes.
    */
   enforceAfter(base: Map<string, number>): void {
+    const afterAll = this.usageAll();
     for (const [subject, before] of base) {
-      const after = this.usage(subject);
+      const after = afterAll.get(subject) ?? 0;
       if (after <= before) continue;
       const { limit } = this.effectiveLimit(subject);
       if (after <= limit) continue;

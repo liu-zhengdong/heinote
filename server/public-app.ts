@@ -92,8 +92,7 @@ export function attachPublicApp(app: Express, store: Store): void {
           ...(input.filters !== undefined ? { filter: undefined, filters: input.filters as DatabaseView["filters"] }
             : input.filter !== undefined ? { filter: (input.filter as DatabaseView["filter"]) ?? undefined } : {}),
           ...(input.sorts !== undefined ? { sorts: input.sorts as DatabaseView["sorts"] } : {}) };
-        const pages = store.state(owner).pages;
-        const rows = viewRows(db.rows, actual, db.config.properties, input.query, (pageId) => pages[pageId]?.title);
+        const rows = viewRows(db.rows, actual, db.config.properties, input.query, (pageId) => db.pages[pageId]?.title);
         const selected = rows.slice(input.offset, input.offset + input.limit);
         const hasMore = input.offset + selected.length < rows.length;
         res.json({ databaseId: db.page.id, revision: store.revision(db.scope, db.page.id), rows: selected.map((row) => rowDto(store, owner, row.id, db.config)), total: rows.length, hasMore, nextOffset: hasMore ? input.offset + selected.length : null });
@@ -123,13 +122,13 @@ export function attachPublicApp(app: Express, store: Store): void {
         mutation(store, () => owner, req, res, input, (who) => {
           const found = activePage(store, who, rowId, true);
           if (found.scope !== db.scope || found.page.parent_id !== db.page.id || found.page.kind !== "document") fail(400, "条目不属于此数据库。", "bad_request");
-          return db;
-        }, (who, target) => {
+          return { db, row: found };
+        }, (who, { db: target, row }) => {
           checkRevision(store, target.scope, target.page.id, input.databaseRevision);
           checkRevision(store, target.scope, rowId, input.baseRevision);
           const patch = rowPatch(store, who, target, input);
           const normalized = patch.properties as Record<string, string | null> | undefined;
-          const peers = normalized ? relationPeers(store, who, target, rowId, store.state(who).pages[rowId]?.properties, normalized) : [];
+          const peers = normalized ? relationPeers(store, who, target, rowId, row.page.properties, normalized) : [];
           commit(store, who, [pagePatch(store, who, target.scope, rowId, patch), ...peers], [rowId]);
           return { status: 200, body: rowDto(store, who, rowId, target.config), scope: target.scope, pageIds: [target.page.id, rowId, ...peers.map((write) => write.id)] };
         });

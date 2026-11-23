@@ -142,6 +142,41 @@ beforeEach(() => {
       });
       return json(result);
     }
+    const transferMatch = /^\/api\/pages\/([^/]+)\/transfer$/.exec(path);
+    if (transferMatch && init?.method === "POST") {
+      const rootId = decodeURIComponent(transferMatch[1]);
+      const body = JSON.parse(String(init.body)) as { action: "share" | "stop-share" | "move"; spaceId?: string };
+      const moveTree = (fromScope: string, toScope: string, share: boolean) => {
+        const srcPages = records(fromScope, "pages");
+        const dstPages = records(toScope, "pages");
+        const ids = [rootId];
+        for (let i = 0; i < ids.length; i += 1) {
+          for (const [id, value] of srcPages) if (value.parent_id === ids[i] && !ids.includes(id)) ids.push(id);
+        }
+        for (const id of ids) {
+          const val = { ...srcPages.get(id)! };
+          if (id === rootId) {
+            if (share) val.share_space_id = toScope;
+            else delete val.share_space_id;
+          }
+          dstPages.set(id, val); bump(toScope, "pages", id, false);
+          if (id === rootId && share) { srcPages.set(id, val); bump(fromScope, "pages", id, false); }
+          else { srcPages.delete(id); bump(fromScope, "pages", id, true); }
+        }
+        const srcBlocks = records(fromScope, "blocks"); const dstBlocks = records(toScope, "blocks");
+        for (const [id, val] of [...srcBlocks]) {
+          if (!ids.includes(String(val.page))) continue;
+          dstBlocks.set(id, val); bump(toScope, "blocks", id, false);
+          srcBlocks.delete(id); bump(fromScope, "blocks", id, true);
+        }
+      };
+      if (body.action === "share" && body.spaceId) moveTree("personal", body.spaceId, true);
+      if (body.action === "stop-share") {
+        const spaceId = String(records("personal", "pages").get(rootId)?.share_space_id ?? "ordinary");
+        moveTree(spaceId, "personal", false);
+      }
+      return json({ ok: true, pageId: rootId });
+    }
     const held = heldReads.get(path.split("?")[0])?.shift();
     if (held) { held.started(); return held.response; }
     const match = /^\/api\/records\/([^/]+)\/([^/?]+)\??(.*)$/.exec(path);
@@ -336,19 +371,17 @@ describe("workspace read-only metadata", () => {
   });
 });
 
-it("shares and stops an ordinary tree in one HTTP batch per document transaction", async () => {
+it("shares and stops an ordinary tree via server-side transfer without batch writes", async () => {
   seedPage("personal", "root"); seedPage("personal", "child", { parent_id: "root" });
   const document = await open();
   await document.sharePageTree("root", "ordinary"); await drain();
-  expect(sent).toHaveLength(1);
-  expect(new Set(sent[0].writes.map((write) => write.scope))).toEqual(new Set(["ordinary", "personal"]));
+  expect(sent).toHaveLength(0);
   expect([...records("ordinary", "pages").keys()].sort()).toEqual(["child", "root"]);
   expect(records("personal", "pages").get("root")!.share_space_id).toBe("ordinary");
   expect(records("personal", "pages").has("child")).toBe(false);
   expect(records("ordinary", "blocks").size).toBe(2); expect(records("personal", "blocks").size).toBe(0);
   await document.stopSharing("root"); await drain();
-  expect(sent).toHaveLength(2);
-  expect(new Set(sent[1].writes.map((write) => write.scope))).toEqual(new Set(["ordinary", "personal"]));
+  expect(sent).toHaveLength(0);
   expect([...records("personal", "pages").keys()].sort()).toEqual(["child", "root"]);
   expect(records("ordinary", "pages").size).toBe(0);
   expect(records("personal", "blocks").size).toBe(2); expect(records("ordinary", "blocks").size).toBe(0);

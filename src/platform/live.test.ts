@@ -688,4 +688,35 @@ describe("lazy collection pulls (UC-48)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("re-pulls a full snapshot when delta responds with reset:true after tombstone compaction (UC-59)", async () => {
+    let compacted = false;
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      asked.push(path);
+      if (path.includes("after=0")) {
+        return json({
+          latest: compacted ? 50 : 5,
+          epoch: "e1",
+          rows: compacted
+            ? [{ id: "survivor", value: { id: "survivor", title: "Fresh" } }]
+            : [{ id: "survivor", value: { id: "survivor", title: "Old" } }, { id: "gone", value: { id: "gone", title: "Gone" } }],
+          deleted: [],
+        });
+      }
+      if (path.includes("after=5") && compacted) {
+        return json({ latest: 50, epoch: "e1", reset: true, rows: [], deleted: [] });
+      }
+      return json({ latest: 5, epoch: "e1", rows: [], deleted: [] });
+    }));
+
+    const pages = await live.LiveCollection.open<{ id: string; title: string }>("pages", "personal");
+    opened.push(pages);
+    expect(pages.get("gone")?.title).toBe("Gone");
+    compacted = true;
+    await pages.sync();
+    expect(pages.get("gone")).toBeUndefined();
+    expect(pages.get("survivor")?.title).toBe("Fresh");
+    expect(asked.filter((url) => url.includes("after=0")).length).toBeGreaterThanOrEqual(2);
+  });
 });

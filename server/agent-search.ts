@@ -38,7 +38,7 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
     const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
 
-    const pages = store.state(who).pages;
+    const pages = store.projectScopes(who, ["pages", "blocks"], wanted).pages;
     const readable = readableDescriber((pageId) => pages[pageId] ? pageName(pages[pageId]) : "");
     const scopeOf = (page: NotePage): string => {
       let current = page;

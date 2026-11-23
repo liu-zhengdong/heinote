@@ -1,8 +1,10 @@
 import { applyMutation, emptyWorkspace, isWorkspaceMutation } from "../core/workspace-state";
+import { descendantPageIds, spaceOfPage } from "../core/page-tree";
 import type { RichText } from "./schema";
 import { storedRuns } from "../core/stored-runs";
 import type { SpaceSummary, WorkspaceMutation, WorkspaceState } from "../core/types";
 import type { PlatformClient } from "./client";
+import { request } from "./http";
 import { Plane } from "./plane";
 import { deleteScopeMirror, setMirrorUser } from "./mirror";
 import { blockRecordId } from "./record-ids";
@@ -440,7 +442,10 @@ export class WorkspaceDocument {
       if (ref.collection !== "pages") continue;
       const from = planeOfPage(before, ref.id);
       const to = planeOfPage(next, ref.id);
-      if (from && to && from !== to) for (const id of this.descendantPages(ref.id)) carried.add(id);
+      if (from && to && from !== to) {
+        carried.add(ref.id);
+        for (const id of descendantPageIds(this.state.pages, ref.id)) carried.add(id);
+      }
     }
     const writeAll = () => {
       for (const ref of touched.values()) {
@@ -558,25 +563,8 @@ export class WorkspaceDocument {
     if (this.writing.size) throw new Error("Some changes are not saved yet: they go on trying.");
   }
 
-  /** A page and every page under it. */
-  private descendantPages(rootId: string): string[] {
-    const ids: string[] = [];
-    const seen = new Set<string>();
-    const queue = [rootId];
-    while (queue.length) {
-      const id = queue.shift()!;
-      if (seen.has(id) || !this.state.pages[id]) continue;
-      seen.add(id);
-      ids.push(id);
-      for (const child of Object.values(this.state.pages)) if (child.parent_id === id) queue.push(child.id);
-    }
-    return ids;
-  }
-
-  /** Shares a page tree through a shared space: the space is read first,
-   *  then the page's home becomes it, so it is copied in whole (see
-   *  `transact`), and from then on every member of the space reads and
-   *  writes it there. */
+  /** Shares a page tree through a shared space via server-side SQLite transfer
+   *  (UC-59), avoiding full-subtree client fetches and the 10k batch write cap. */
   async sharePageTree(pageId: string, spaceId: string): Promise<void> {
     const page = this.state.pages[pageId];
     if (!page) throw new Error("Page no longer exists");
@@ -585,24 +573,45 @@ export class WorkspaceDocument {
        opening — wait for it so sharing does not die on that race. */
     const plane = planeOfPage(this.state, pageId);
     if (plane) await awaitCollaborativeBasis(plane, pageId);
-    /* Sharing writes the tree whole into the space: bodies and history not
-       pulled in yet are pulled first, or they would be left behind. */
-    const subtree = this.descendantPages(pageId);
-    await Promise.all([this.loadPages(subtree), this.loadHistory(subtree)]);
-    await this.addSpace(spaceId);
-    if (page.share_space_id !== spaceId) this.transact([{ type: "set", path: ["pages", pageId, "share_space_id"], value: spaceId }]);
     await this.flush();
+    await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ action: "share", spaceId }),
+    });
+    await this.addSpace(spaceId);
+    await Promise.all([this.refreshScope(PERSONAL), this.refreshScope(spaceId)]);
+    await this.loadPages([pageId]);
   }
 
-  /** Stops sharing a page tree: it comes back to the member's own plane, whole,
-   *  and leaves the space, whose members lose it. */
+  /** Stops sharing a page tree via server-side SQLite transfer (UC-59): moves
+   *  the whole subtree back to personal and revokes members/invitations/shares
+   *  in one atomic transaction. */
   async stopSharing(pageId: string): Promise<void> {
-    if (!this.state.pages[pageId]?.share_space_id) return;
-    // Same contract as sharing: every body and history of the tree is here first.
-    const subtree = this.descendantPages(pageId);
-    await Promise.all([this.loadPages(subtree), this.loadHistory(subtree)]);
-    this.transact([{ type: "delete", path: ["pages", pageId, "share_space_id"] }]);
+    const spaceId = this.state.pages[pageId]?.share_space_id;
+    if (!spaceId) return;
     await this.flush();
+    await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ action: "stop-share" }),
+    });
+    await this.refreshScope(PERSONAL);
+    this.removeSpace(spaceId);
+    await this.loadPages([pageId]);
+  }
+
+  /** Moves a page tree across personal / ordinary shared scopes via server-side
+   *  SQLite transfer (UC-59). */
+  async transferPage(pageId: string, targetParentId: string | null): Promise<void> {
+    const sourceScope = spaceOfPage(this.state.pages, pageId) ?? PERSONAL;
+    const targetScope = targetParentId ? (spaceOfPage(this.state.pages, targetParentId) ?? PERSONAL) : PERSONAL;
+    await this.flush();
+    await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ action: "move", targetParentId }),
+    });
+    const scopes = new Set([sourceScope, targetScope, PERSONAL]);
+    await Promise.all([...scopes].map((scope) => this.refreshScope(scope)));
+    await this.loadPages([pageId]);
   }
 
   async close(): Promise<void> {

@@ -19,6 +19,7 @@ import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
 import { attachCollaborationSocket } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
 import { attachAgentCopy } from "./agent-copy.ts";
+import { transferPageTree, transferSchema } from "./tree-transfer.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
@@ -91,6 +92,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   initializeImports(store);
   store.purge.setPaused(importActive);
   store.purge.start();
+  store.maintenance.setPaused(() => importActive() || store.purge.pendingCount() > 0);
+  store.maintenance.start();
   const updateConfig: UpdateConfig = {
     repository: packageMeta.repository, version: packageMeta.version || "0.0.0",
     dataDir, apiBase: options.update?.apiBase, runnerPath: options.update?.runnerPath,
@@ -561,16 +564,17 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       // response shape — the collection watermark — with rows of every
       // group merged and ids deduped. Cold pages (since=0) share one query —
       // each per-page call would scan its own partition otherwise (ISS-13).
-      const rows = new Map<string, Row>(); const deleted = new Set<string>(); let latest = 0;
-      const merge = (delta: { latest: number; rows: Array<{ id: string; value: Row }>; deleted: string[] }) => {
+      const rows = new Map<string, Row>(); const deleted = new Set<string>(); let latest = 0; let reset = false;
+      const merge = (delta: { latest: number; reset?: boolean; rows: Array<{ id: string; value: Row }>; deleted: string[] }) => {
         latest = Math.max(latest, delta.latest);
+        if (delta.reset) reset = true;
         for (const row of delta.rows) rows.set(row.id, row.value);
         for (const id of delta.deleted) deleted.add(id);
       };
       const cold = groups.filter((group) => group.since <= 0).map((group) => group.pageId);
       if (cold.length) merge(store.recordsSincePages(scope, collection, cold, 0));
       for (const group of groups) if (group.since > 0) merge(store.recordsSincePages(scope, collection, [group.pageId], group.since));
-      res.json({ latest, epoch: store.dbEpoch, rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
+      res.json({ latest, epoch: store.dbEpoch, ...(reset ? { reset: true } : {}), rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
     }
     else if (after === undefined) res.json(store.records(scope, collection));
     else res.json(store.recordsSince(scope, collection, after));
@@ -591,6 +595,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const who = actor(req);
     const input = parse(z.object({ scope: z.string().min(1).max(256).optional() }).strict(), req.body ?? {});
     res.status(202).json(store.purge.enqueue(who, input.scope, text(req.params.id)));
+  });
+  app.post("/api/pages/:id/transfer", (req, res) => {
+    const who = actor(req);
+    const input = parse(transferSchema, req.body ?? {});
+    res.json(transferPageTree(store, who, text(req.params.id), input));
   });
   const fileInput = (req: Request, write = false) => {
     const who = actor(req); const scope = store.scope(who, text(req.params.scope), write); const path = parse(z.string().min(1).max(2048), req.query.path);
@@ -781,7 +790,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.get("/api/v1/pages", (req, res) => {
     const who = actor(req);
-    const pages = store.state(who).pages;
+    const pages = store.pagesState(who);
     res.json(Object.values(pages).filter((page) => !inTrash(pages, page.id)).map((page) => store.pageDto(who, page.id)));
   });
   app.post("/api/v1/pages", (req, res) => {
@@ -922,13 +931,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
         return { status: 200, body: store.pageDto(who, page.id), scope, pageIds: [page.id] };
       });
   });
-  app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).versions[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
-  app.get("/api/v1/pages/:id/events", (req, res) => { const who = actor(req); const pageId = text(req.params.id); store.page(who, pageId); res.json(Object.values(store.state(who).pageEvents[pageId] ?? {}).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
+  app.get("/api/v1/pages/:id/versions", (req, res) => { const who = actor(req); const pageId = text(req.params.id); res.json(Object.values(store.pageVersions(who, pageId)).sort((a, b) => a.created_at.localeCompare(b.created_at))); });
+  app.get("/api/v1/pages/:id/events", (req, res) => { const who = actor(req); const pageId = text(req.params.id); res.json(store.pageEvents(who, pageId)); });
   app.post("/api/v1/pages/:id/checkpoint", (req, res) => {
     const who = actor(req); const pageId = text(req.params.id);
     const version = store.transaction(() => {
       const made = store.checkpoint(who, pageId, text(req.body?.summary).slice(0, 200) || "手动保存");
-      const title = store.state(who).pages[pageId]?.title ?? "";
+      const title = made.snapshot.title ?? "";
       recordTokenEvent(store.db, who.tokenId, { action: "checkpoint", pageId, pageTitle: title, versionId: made?.id });
       return made;
     });
@@ -939,7 +948,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     store.transaction(() => {
       const { page, scope } = store.page(who, pageId); store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       if (baseRevision && store.revision(scope, pageId) !== baseRevision) fail(409, "页面已有新修改。请重新检查后恢复。", "conflict");
-      const version = store.state(who).versions[pageId]?.[versionId]; if (!version) fail(404, "版本不存在。");
+      const version = store.pageVersions(who, pageId)[versionId]; if (!version) fail(404, "版本不存在。");
       store.checkpoint(who, pageId, "恢复前", true);
       // A version's snapshot was written from a whole page: it keeps its body.
       const restored: LoadedNotePage = restoredPage(version.snapshot, page) as LoadedNotePage; restored.updated_at = currentTime(); restored.updated_by = asAuthor(who);
@@ -1007,7 +1016,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { store.purge.stop(); backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { store.maintenance.stop(); store.purge.stop(); backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

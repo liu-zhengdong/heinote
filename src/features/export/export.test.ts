@@ -140,4 +140,61 @@ describe("exportPages + buildExport", () => {
     const entries = zipEntries(await result.body.arrayBuffer());
     expect(entries.get("missing.txt")).toContain("a.png");
   });
+
+  it("excludes multi-level trashed subpages and relation targets in CSV, Markdown, and HTML exports (UC-59)", async () => {
+    const trashedRoot = page({ id: "t_root", title: "已删父目录", archived: true, archived_at: "2026-11-23T00:00:00Z" });
+    const trashedGrand = page({ id: "t_grand", parent_id: "t_root", title: "回收站孙子页" });
+    const liveTarget = page({ id: "live_t", title: "存活目标页" });
+    const db = page({
+      id: "db_rel",
+      kind: "database",
+      title: "关联表",
+      database: {
+        title_name: "名称",
+        properties: [{ id: "rel", name: "关联", type: "relation", relation_database: "other" }],
+        views: [{ id: "v1", name: "全部", kind: "table", hidden: [] }],
+      },
+    });
+    const row = page({
+      id: "row_rel",
+      parent_id: "db_rel",
+      title: "记录一",
+      properties: { rel: JSON.stringify(["live_t", "t_grand"]) },
+      block_tree: blockTree({
+        id: "b_ref",
+        kind: "text",
+        parent_id: null,
+        order: 1024,
+        content: [
+          { text: "看 " },
+          { text: "", mention: { kind: "page", page_id: "live_t" } },
+          { text: " 与 " },
+          { text: "", mention: { kind: "page", page_id: "t_grand" } },
+        ],
+      } as Block),
+    });
+    const map = new Map([trashedRoot, trashedGrand, liveTarget, db, row].map((p) => [p.id, p]));
+    const csv = databaseCsv(db, map, "v1") ?? "";
+    expect(csv).toContain("存活目标页");
+    expect(csv).not.toContain("回收站孙子页");
+
+    const md = pageMarkdown(row, "", map);
+    expect(md).toContain("存活目标页");
+    expect(md).not.toContain("回收站孙子页");
+
+    const htmlRoot = page({ id: "h_root", title: "导出根", block_tree: blockTree(textBlock("根内容")) });
+    const htmlDb = { ...db, parent_id: "h_root" };
+    const htmlLive = { ...liveTarget, parent_id: "h_root" };
+    const htmlTrashedRoot = { ...trashedRoot, parent_id: "h_root" };
+    const htmlSource: ExportSource = {
+      ...source,
+      pages: { h_root: htmlRoot, db_rel: htmlDb, row_rel: row, live_t: htmlLive, t_root: htmlTrashedRoot, t_grand: trashedGrand },
+    };
+    const htmlZip = await buildExport(htmlSource, await exportPages(htmlSource, "h_root"), "html", { viewId: "v1" });
+    const htmlEntries = zipEntries(await htmlZip.body.arrayBuffer());
+    expect(htmlEntries.get("导出根/关联表.html")).toContain("存活目标页");
+    expect(htmlEntries.get("导出根/关联表.html")).not.toContain("回收站孙子页");
+    expect(htmlEntries.get("导出根.html")).toContain("存活目标页");
+    expect(htmlEntries.get("导出根.html")).not.toContain("回收站孙子页");
+  });
 });

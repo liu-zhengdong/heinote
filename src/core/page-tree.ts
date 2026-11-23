@@ -181,16 +181,21 @@ export function canDeletePage(pages: Record<string, NotePage>, spaces: Record<st
   return space.knowledgeBase.homePageId !== pageId && ["owner", "admin"].includes(space.role ?? "");
 }
 
+export type PageCollection = Record<string, NotePage> | ReadonlyMap<string, NotePage>;
+
 function ancestorMarkedSet(
-  pages: Record<string, NotePage>,
-  cache: WeakMap<Record<string, NotePage>, ReadonlySet<string>>,
+  pages: PageCollection,
+  cache: WeakMap<PageCollection, ReadonlySet<string>>,
   predicate: (page: NotePage) => boolean,
 ): ReadonlySet<string> {
   const known = cache.get(pages);
   if (known) return known;
+  const isMap = pages instanceof Map;
+  const get = (id: string): NotePage | undefined => (isMap ? pages.get(id) : (pages as Record<string, NotePage>)[id]);
+  const all = isMap ? pages.values() : Object.values(pages);
   const result = new Set<string>();
   const resolved = new Set<string>();
-  for (const page of Object.values(pages)) {
+  for (const page of all) {
     if (!page?.id || resolved.has(page.id)) continue;
     const chain: NotePage[] = [];
     const visiting = new Set<string>();
@@ -207,7 +212,7 @@ function ancestorMarkedSet(
         hit = true;
         break;
       }
-      cursor = cursor.parent_id ? pages[cursor.parent_id] : undefined;
+      cursor = cursor.parent_id ? get(cursor.parent_id) : undefined;
     }
     for (const item of chain) {
       resolved.add(item.id);
@@ -218,27 +223,27 @@ function ancestorMarkedSet(
   return result;
 }
 
-const purgingSets = new WeakMap<Record<string, NotePage>, ReadonlySet<string>>();
-const trashedSets = new WeakMap<Record<string, NotePage>, ReadonlySet<string>>();
+const purgingSets = new WeakMap<PageCollection, ReadonlySet<string>>();
+const trashedSets = new WeakMap<PageCollection, ReadonlySet<string>>();
 const descendantCountMaps = new WeakMap<Record<string, NotePage>, ReadonlyMap<string, number>>();
 
 /** Pages queued for background permanent deletion, directly or under a purging ancestor. */
-export function purgingPageIds(pages: Record<string, NotePage>): ReadonlySet<string> {
+export function purgingPageIds(pages: PageCollection): ReadonlySet<string> {
   return ancestorMarkedSet(pages, purgingSets, (page) => Boolean(page.purging));
 }
 
 /** Pages in the trash or being purged, directly or under a trashed/purging ancestor. */
-export function trashedPageIds(pages: Record<string, NotePage>): ReadonlySet<string> {
+export function trashedPageIds(pages: PageCollection): ReadonlySet<string> {
   return ancestorMarkedSet(pages, trashedSets, (page) => Boolean(page.archived || page.purging));
 }
 
 /** Whether a page is queued for background permanent deletion, itself or with an ancestor. */
-export function isPurging(pages: Record<string, NotePage>, pageId: string): boolean {
+export function isPurging(pages: PageCollection, pageId: string): boolean {
   return Boolean(pageId) && purgingPageIds(pages).has(pageId);
 }
 
 /** Whether a page is in the trash (or being purged), itself or with a parent. */
-export function inTrash(pages: Record<string, NotePage>, pageId: string): boolean {
+export function inTrash(pages: PageCollection, pageId: string): boolean {
   return Boolean(pageId) && trashedPageIds(pages).has(pageId);
 }
 

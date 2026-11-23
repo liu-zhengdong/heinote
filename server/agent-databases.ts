@@ -115,7 +115,7 @@ export const querySchema = z.object({
   limit: z.number().int().min(1).max(100).default(100),
 }).strict();
 
-export type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[] };
+export type Database = { page: NotePage; scope: string; scopeName: string; config: DatabaseConfig; rows: readonly NotePage[]; pages: Record<string, NotePage> };
 const stamp = () => new Date().toISOString();
 function bad(message: string): never { fail(400, message, "bad_request"); }
 
@@ -207,7 +207,8 @@ export function database(store: Store, who: Actor, pageId: string, write = false
   const found = activePage(store, who, pageId, write);
   if (found.page.kind !== "database") bad("目标页面不是 Database。");
   const config = found.page.database ?? { properties: [], views: [{ id: "table", name: "Table", kind: "table" }] };
-  return { ...found, config, scopeName: externalScope(found.scope), rows: databaseRows(store.state(who).pages, pageId) };
+  const pages = store.pagesState(who);
+  return { ...found, config, scopeName: externalScope(found.scope), rows: databaseRows(pages, pageId), pages };
 }
 // 关联的目标必须是个能看见的数据库；镜像字段交给 checkProperty 把关。
 function checkRelationTarget(store: Store, who: Actor, property: DatabaseProperty): Database | undefined {
@@ -605,16 +606,17 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const db = database(store, who, safeKey.parse(req.params.id), true);
       const row = activePage(store, who, rowId, true);
       if (row.scope !== db.scope || row.page.parent_id !== db.page.id || row.page.kind !== "document") bad("条目不属于此数据库。");
-      return db;
-    }, (who, db) => {
+      return { db, row };
+    }, (who, { db, row }) => {
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
       const patch = rowPatch(store, who, db, input);
       const normalized = patch.properties as Record<string, string | null> | undefined;
-      const peers = normalized ? relationPeers(store, who, db, rowId, store.state(who).pages[rowId]?.properties, normalized) : [];
+      const peers = normalized ? relationPeers(store, who, db, rowId, row.page.properties, normalized) : [];
       commit(store, who, [pagePatch(store, who, db.scope, rowId, patch), ...peers], [rowId]);
-      recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: rowId, pageTitle: store.state(who).pages[rowId]?.title ?? "" });
-      return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId, ...peers.map((write) => write.id)] };
+      const dto = rowDto(store, who, rowId, db.config);
+      recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId: rowId, pageTitle: dto.title ?? "" });
+      return { status: 200, body: dto, scope: db.scope, pageIds: [db.page.id, rowId, ...peers.map((write) => write.id)] };
     });
   });
   app.delete("/api/v1/databases/:id/rows/:rowId", (req, res) => {
@@ -625,7 +627,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       const row = activePage(store, who, rowId, true);
       if (row.scope !== db.scope || row.page.parent_id !== db.page.id || row.page.kind !== "document") bad("条目不属于此数据库。");
       return { db, row };
-    }, (who, { db }) => {
+    }, (who, { db, row }) => {
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
       // Archiving is structural: the row's collaboration document asks for
@@ -634,7 +636,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       store.apply(who, [pagePatch(store, who, db.scope, rowId, { archived: true, archived_at: stamp() })], undefined, [],
         [{ scope: snapshot.scope, pageId: rowId, generation: snapshot.generation, revision: snapshot.revision }]);
       store.collaboration.flush();
-      recordTokenEvent(store.db, who.tokenId, { action: "delete", pageId: rowId, pageTitle: store.state(who).pages[rowId]?.title ?? "" });
+      recordTokenEvent(store.db, who.tokenId, { action: "delete", pageId: rowId, pageTitle: row.page.title ?? "" });
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
     });
   });
@@ -650,8 +652,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
       // filters 给了就用它，并压住视图自带的旧字段；单写 filter 仍是旧语义。
       ...(input.filters !== undefined ? { filter: undefined, filters: input.filters } : input.filter !== undefined ? { filter: input.filter ?? undefined } : {}),
       ...(input.sorts !== undefined ? { sorts: input.sorts } : {}) };
-    const pages = store.state(who).pages;
-    const rows = viewRows(db.rows, actual, db.config.properties, input.query, (pageId) => pages[pageId]?.title);
+    const rows = viewRows(db.rows, actual, db.config.properties, input.query, (pageId) => db.pages[pageId]?.title);
     const selected = rows.slice(input.offset, input.offset + input.limit);
     const hasMore = input.offset + selected.length < rows.length;
     res.json({ databaseId: db.page.id, revision: store.revision(db.scope, db.page.id), rows: selected.map((row) => rowDto(store, who, row.id, db.config)), total: rows.length, hasMore, nextOffset: hasMore ? input.offset + selected.length : null });

@@ -93,6 +93,46 @@ export class CollaborationStore {
       catch (error) { console.error("Collaboration notification failed", error); }
     }
   }
+  /** Bulk-migrate collaboration documents across scopes inside a transaction
+   *  without decoding unchanged descendant Y.Docs (UC-59). Preserves committed
+   *  Yjs binary state, rotates generation for every moved page, archives prior
+   *  state, and queues removal/reset events for commit-time notification. */
+  migrateScope(fromScope: string, toScope: string, pageIds: readonly string[], rootId: string): void {
+    if (fromScope === toScope || !pageIds.length) return;
+    const archivedAt = stamp();
+    for (let i = 0; i < pageIds.length; i += 400) {
+      const chunk = pageIds.slice(i, i + 400);
+      const marks = chunk.map(() => "?").join(",");
+      this.store.db.prepare(
+        `INSERT OR IGNORE INTO collaboration_archives(scope,page_id,generation,state,created_at)
+         SELECT scope,page_id,generation,state,? FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})`,
+      ).run(archivedAt, fromScope, ...chunk);
+      this.store.db.prepare(
+        `INSERT INTO collaboration_documents(scope,page_id,generation,structure,state)
+         SELECT ?,page_id,lower(hex(randomblob(16))),structure,state FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})
+         ON CONFLICT(scope,page_id) DO UPDATE SET generation=excluded.generation,structure=excluded.structure,state=excluded.state`,
+      ).run(toScope, fromScope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_dirty WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_dirty WHERE scope=? AND page_id IN (${marks})`).run(toScope, ...chunk);
+      for (const pageId of chunk) {
+        this.events.set(documentKey({ scope: fromScope, pageId }), { scope: fromScope, pageId, type: "removed" });
+        this.events.set(documentKey({ scope: toScope, pageId }), { scope: toScope, pageId, type: "reset" });
+      }
+    }
+    // Root's share_space_id/parent_id changed, so refresh its structure digest
+    // (or seed it via dirty flush if it did not yet have a Y.Doc).
+    const rootData = this.pageData(toScope, rootId);
+    if (rootData) {
+      const existing = this.stored(toScope, rootId);
+      if (existing) {
+        this.store.db.prepare("UPDATE collaboration_documents SET structure=? WHERE scope=? AND page_id=?")
+          .run(rootData.structure, toScope, rootId);
+      } else {
+        this.store.db.prepare("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)").run(toScope, rootId);
+      }
+    }
+  }
   reset(scope: string, pageId: string): void {
     this.forced.add(documentKey({ scope, pageId }));
     this.store.db.prepare("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)").run(scope, pageId);

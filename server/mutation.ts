@@ -49,7 +49,7 @@ export function mutation<T extends { requestId: string }, Target>(
     }
     store.collaboration.markRequest(input.requestId);
     const result = execute(who, target);
-    store.db.prepare("INSERT INTO requests VALUES(?,?,?,?)").run(who.user.id, requestId, digest, JSON.stringify(result));
+    store.saveRequest(who.user.id, requestId, digest, result);
     return result;
   });
   res.status(reply.status).json(reply.body);

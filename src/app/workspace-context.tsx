@@ -730,21 +730,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     if (!page || page.parent_id === parentId || pageId === parentId) return;
     if (!canMovePageIn(document.state.pages, spacesRef.current, pageId, parentId)) return;
     if (parentId && descendantPageIds(document.state.pages, pageId).includes(parentId)) return;
-    /* A move across spaces carries the tree's records into the other plane:
-       bodies not pulled in (UC-48) are pulled first, then the move retries —
-       same contract sharePageTree holds. */
-    const crossing = parentId && spaceOfPage(document.state.pages, pageId) !== spaceOfPage(document.state.pages, parentId);
+    /* A move across scopes runs server-side (UC-59) so large subtrees transfer
+       in SQLite without pulling all bodies/histories into the browser. */
+    const crossing = spaceOfPage(document.state.pages, pageId) !== (parentId ? spaceOfPage(document.state.pages, parentId) : undefined);
     if (crossing) {
-      const subtree = [pageId, ...descendantPageIds(document.state.pages, pageId)];
-      const missing = subtree.filter((id) => !isLoadedPage(document.state.pages[id]));
-      const needHistory = !document.hasHistoryLoaded(subtree);
-      if (missing.length || needHistory) {
-        void Promise.all([
-          missing.length ? document.loadPages(missing) : Promise.resolve(),
-          needHistory ? document.loadHistory(subtree) : Promise.resolve(),
-        ]).then(() => movePage(pageId, parentId)).catch(() => undefined);
-        return;
-      }
+      void document.transferPage(pageId, parentId).catch((error) => {
+        if (platform) publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "页面移动失败。", writes: [] });
+      });
+      return;
     }
     const mutations: WorkspaceMutation[] = [
       { type: "set", path: ["pages", pageId, "parent_id"], value: parentId },

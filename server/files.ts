@@ -10,7 +10,7 @@ export class FileStore {
   constructor(private readonly db: DatabaseSync, dataDir: string) {
     this.directory = resolve(dataDir, "attachments");
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
-    this.db.exec("CREATE TABLE IF NOT EXISTS files(scope TEXT NOT NULL, path TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, PRIMARY KEY(scope,path))");
+    this.db.exec("CREATE TABLE IF NOT EXISTS files(scope TEXT NOT NULL, path TEXT NOT NULL, type TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, created_at TEXT, PRIMARY KEY(scope,path))");
     this.reconcileOrphans();
   }
 
@@ -34,7 +34,7 @@ export class FileStore {
 
   // Calls remain synchronous until the index commits. Different bytes cannot win the same path.
   private batched = false;
-  private pending: Array<{ scope: string; path: string; type: string; size: number; hash: string }> = [];
+  private pending: Array<{ scope: string; path: string; type: string; size: number; hash: string; createdAt: string }> = [];
   private pendingKeys = new Map<string, string>();
   private touchedDirs = new Set<string>();
   /** Blobs written this batch, hash → file, so abortBatch can reclaim the
@@ -65,7 +65,7 @@ export class FileStore {
         }
       }
       for (const row of this.pending)
-        (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash) VALUES(?,?,?,?,?)")).run(row.scope, row.path, row.type, row.size, row.hash);
+        (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash,created_at) VALUES(?,?,?,?,?,?)")).run(row.scope, row.path, row.type, row.size, row.hash, row.createdAt);
     } finally {
       this.pending = [];
       this.pendingKeys.clear();
@@ -141,8 +141,35 @@ export class FileStore {
       }
     }
     if (known) return true;
-    if (this.batched) { this.pending.push({ scope, path, type, size: bytes.length, hash }); this.pendingKeys.set(`${scope}\0${path}`, hash); }
-    else (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash) VALUES(?,?,?,?,?)")).run(scope, path, type, bytes.length, hash);
+    const createdAt = new Date().toISOString();
+    if (this.batched) { this.pending.push({ scope, path, type, size: bytes.length, hash, createdAt }); this.pendingKeys.set(`${scope}\0${path}`, hash); }
+    else (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash,created_at) VALUES(?,?,?,?,?,?)")).run(scope, path, type, bytes.length, hash, createdAt);
+    return true;
+  }
+
+  /** Zero-copy index clone: immutable content-addressed blobs are already on
+   *  disk under `attachments/<hh>/<hash>`, so cloning into another scope or
+   *  path only adds an index row without reading or writing bytes. */
+  clone(fromScope: string, fromPath: string, toScope: string, toPath: string): "ok" | "missing" | "conflict" {
+    const source = this.db.prepare("SELECT type,size,hash FROM files WHERE scope=? AND path=?").get(fromScope, fromPath) as { type: string; size: number; hash: string } | undefined;
+    if (!source) return "missing";
+    const location = join(this.directory, source.hash.slice(0, 2), source.hash);
+    if (!existsSync(location)) return "missing";
+    const known = (this.checkStmt ??= this.db.prepare("SELECT hash FROM files WHERE scope=? AND path=?")).get(toScope, toPath) as { hash: string } | undefined;
+    if (known) return known.hash === source.hash ? "ok" : "conflict";
+    (this.insertStmt ??= this.db.prepare("INSERT INTO files(scope,path,type,size,hash,created_at) VALUES(?,?,?,?,?,?)"))
+      .run(toScope, toPath, source.type, source.size, source.hash, new Date().toISOString());
+    return "ok";
+  }
+
+  /** Remove the on-disk blob for `hash` only if no `files` row references it. */
+  unlinkIfUnreferenced(hash: string): boolean {
+    if (!/^[a-f0-9]{64}$/.test(hash)) return false;
+    const stillUsed = this.db.prepare("SELECT 1 FROM files WHERE hash=? LIMIT 1").get(hash);
+    if (stillUsed) return false;
+    const location = join(this.directory, hash.slice(0, 2), hash);
+    if (!existsSync(location)) return false;
+    rmSync(location, { force: true });
     return true;
   }
 
