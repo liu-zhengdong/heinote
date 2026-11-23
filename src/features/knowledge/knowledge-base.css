@@ -41,8 +41,7 @@
 .knowledge-base-modal__header + .knowledge-base-form { padding: 0 20px 20px; overflow-y: auto; }
 .knowledge-base-field { display: flex; min-width: 0; flex-direction: column; gap: 7px; color: var(--ink); font-size: 13.5px; }
 .knowledge-base-field input,
-.knowledge-base-field textarea,
-.knowledge-base-field select {
+.knowledge-base-field textarea {
   width: 100%;
   min-width: 0;
   min-height: 40px;
@@ -58,13 +57,10 @@
 .knowledge-base-field textarea { resize: vertical; min-height: 92px; max-height: 240px; }
 .knowledge-base-field input:read-only,
 .knowledge-base-field textarea:read-only { color: var(--ink-2); background: var(--fill); }
-.knowledge-base-field :is(input, textarea, select):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.knowledge-base-field :is(input, textarea):focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .knowledge-base-field :disabled { opacity: .65; }
 .knowledge-base-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .knowledge-base-actions > button { flex: none; }
-.knowledge-base-primary { background: var(--blue); color: var(--blue-ink); }
-.knowledge-base-primary:hover:not(:disabled) { background: var(--blue-press); color: var(--blue-ink); }
-.knowledge-base-danger { color: var(--danger); }
 .knowledge-base-error { margin: 0; color: var(--danger); font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .knowledge-base-note,
 .knowledge-base-recovery p { margin: 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; }

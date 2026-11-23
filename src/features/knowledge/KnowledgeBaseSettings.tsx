@@ -1,8 +1,8 @@
 import { Archive, ArrowRightLeft, RotateCcw, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useWorkspace } from "../../app/workspace-context";
-import { Button } from "../../components/Button";
 import { Modal } from "../../components/Modal";
+import { Select } from "../../components/Select";
 import { personName } from "../../components/ProfileAvatar";
 import type { SpaceSummary } from "../../core/types";
 import { uuid } from "../../core/ids";
@@ -163,38 +163,43 @@ export function KnowledgeBaseSettings({ space, onClose }: { space: SpaceSummary;
             <textarea id={`${id}-description`} value={description} rows={3} maxLength={2000} readOnly={!editable || Boolean(unknown)} disabled={pending}
               onChange={(event) => { setDescription(event.target.value); setStatus(""); }} />
           </label>
-          {editable ? <div className="knowledge-base-actions"><Button type="submit" className="knowledge-base-primary" disabled={locked || conflict || !name.trim()}>{pending ? "正在保存…" : "保存"}</Button></div> : null}
+          {editable ? <div className="knowledge-base-actions"><button type="submit" className="btn btn--primary" disabled={locked || conflict || !name.trim()}>{pending ? "正在保存…" : "保存"}</button></div> : null}
         </form>
 
         {owner ? <section className="knowledge-base-management" aria-label="归档管理">
           <h2>{metadata?.archived ? "恢复知识库" : "归档知识库"}</h2>
           <p>{metadata?.archived ? "恢复后，成员可按原权限继续编写内容。" : "归档后，成员仍可阅读。内容和新邀请将暂停。你可以恢复知识库。"}</p>
-          {metadata?.archived ? <Button icon={RotateCcw} disabled={locked || conflict} onClick={() => void perform({ kind: "archive", requestId, revision, archived: false })}>恢复知识库</Button>
+          {metadata?.archived ? <button type="button" className="btn" disabled={locked || conflict} onClick={() => void perform({ kind: "archive", requestId, revision, archived: false })}><RotateCcw size={16} aria-hidden="true" />恢复知识库</button>
             : confirmation === "archive" ? <div className="knowledge-base-confirmation">
               <p>确认归档「{current.name}」？</p>
-              <div className="knowledge-base-actions"><Button disabled={locked} onClick={() => setConfirmation(null)}>取消</Button><Button className="knowledge-base-danger" disabled={locked || conflict} onClick={() => void perform({ kind: "archive", requestId, revision, archived: true })}>确认归档</Button></div>
-            </div> : <Button icon={Archive} disabled={locked || conflict} onClick={() => setConfirmation("archive")}>归档知识库</Button>}
+              <div className="knowledge-base-actions"><button type="button" className="btn" disabled={locked} onClick={() => setConfirmation(null)}>取消</button><button type="button" className="btn btn--danger" disabled={locked || conflict} onClick={() => void perform({ kind: "archive", requestId, revision, archived: true })}>确认归档</button></div>
+            </div> : <button type="button" className="btn" disabled={locked || conflict} onClick={() => setConfirmation("archive")}><Archive size={16} aria-hidden="true" />归档知识库</button>}
         </section> : null}
 
         {owner && members.length > 0 ? <section className="knowledge-base-management" aria-label="移交所有权">
           <h2>移交所有权</h2>
           <p>选择现有成员接任所有者。移交后，你将成为管理员。</p>
-          <label className="knowledge-base-field" htmlFor={`${id}-owner`}>
-            <span>新所有者</span>
-            <select id={`${id}-owner`} value={recipientId} disabled={locked} onChange={(event) => { setRecipientId(event.target.value); setConfirmation(null); }}>
-              <option value="" disabled>选择成员</option>
-              {members.map((member) => <option key={member.id} value={member.id}>{personName(member)} (@{member.handle})</option>)}
-            </select>
-          </label>
+          <div className="knowledge-base-field">
+            <label htmlFor={`${id}-owner`}>新所有者</label>
+            <Select
+              id={`${id}-owner`}
+              size="field"
+              placeholder="选择成员"
+              value={recipientId}
+              disabled={locked}
+              onValueChange={(next) => { setRecipientId(next); setConfirmation(null); }}
+              options={members.map((member) => ({ value: member.id, label: `${personName(member)} (@${member.handle})` }))}
+            />
+          </div>
           {confirmation === "transfer" && recipient ? <div className="knowledge-base-confirmation">
             <p>确认将「{current.name}」移交给 {personName(recipient)}？你将成为管理员。</p>
-            <div className="knowledge-base-actions"><Button disabled={locked} onClick={() => setConfirmation(null)}>取消</Button><Button disabled={locked || conflict} onClick={() => void perform({ kind: "transfer", requestId, revision, userId: recipient.id })}>确认移交</Button></div>
-          </div> : <Button icon={ArrowRightLeft} disabled={locked || conflict || !recipient} onClick={() => setConfirmation("transfer")}>移交所有权</Button>}
+            <div className="knowledge-base-actions"><button type="button" className="btn" disabled={locked} onClick={() => setConfirmation(null)}>取消</button><button type="button" className="btn btn--primary" disabled={locked || conflict} onClick={() => void perform({ kind: "transfer", requestId, revision, userId: recipient.id })}>确认移交</button></div>
+          </div> : <button type="button" className="btn" disabled={locked || conflict || !recipient} onClick={() => setConfirmation("transfer")}><ArrowRightLeft size={16} aria-hidden="true" />移交所有权</button>}
         </section> : null}
 
         {error ? <p id={`${id}-error`} className="knowledge-base-error" role="alert">{error}</p> : null}
-        {conflict ? <div className="knowledge-base-recovery"><p>重新读取会用最新设置替换当前输入。</p><Button disabled={pending} onClick={() => void reload()}>重新读取</Button></div> : null}
-        {unknown ? <div className="knowledge-base-actions"><Button disabled={pending} onClick={() => void perform(unknown, true)}>查询结果</Button><Button disabled={pending} onClick={() => void perform(unknown)}>重试原操作</Button></div> : null}
+        {conflict ? <div className="knowledge-base-recovery"><p>重新读取会用最新设置替换当前输入。</p><button type="button" className="btn" disabled={pending} onClick={() => void reload()}>重新读取</button></div> : null}
+        {unknown ? <div className="knowledge-base-actions"><button type="button" className="btn" disabled={pending} onClick={() => void perform(unknown, true)}>查询结果</button><button type="button" className="btn" disabled={pending} onClick={() => void perform(unknown)}>重试原操作</button></div> : null}
         {status ? <p className="knowledge-base-note" role="status">{status}</p> : null}
       </div>
     </div>

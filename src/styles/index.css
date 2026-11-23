@@ -876,6 +876,8 @@ kbd {
 .seg { display: inline-flex; min-height: 32px; align-items: stretch; padding: 2px; border-radius: var(--r-md); background: var(--fill); }
 .seg > button { display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: var(--r-sm); color: var(--ink-2); font-size: 13.5px; }
 .seg > button.is-on { background: var(--elevated); color: var(--ink); font-weight: 550; box-shadow: rgba(15, 15, 15, 0.06) 0 1px 3px, rgba(15, 15, 15, 0.1) 0 0 0 1px; }
+.seg--compact { min-height: 26px; gap: 2px; border-radius: 8px; }
+.seg--compact > button { padding: 3px 12px; border-radius: var(--r-md); font-size: 12.5px; }
 
 .account-muted { margin: 8px 0; color: var(--ink-2); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .account-error { margin: 8px 0; color: var(--danger); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }

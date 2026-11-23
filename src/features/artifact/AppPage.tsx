@@ -3,6 +3,7 @@ import { ChevronUp, Code2, Database, Eye, Plus, Settings2 } from "lucide-react";
 import type { NotePage } from "../../core/types";
 import { APP_SOURCE_BUDGET_BYTES } from "../../core/artifact";
 import { AppSurface } from "./AppSurface";
+import { Select } from "../../components/Select";
 import { usePages } from "../../app/workspace-store";
 import { useWorkspace } from "../../app/workspace-context";
 import { inTrash, spaceOfPage } from "../../core/page-tree";
@@ -56,7 +57,7 @@ function BindingDetail({
           </p>
         </div>
         {editable && !missing && (
-          <div className="app-seg" role="group" aria-label="读写方向">
+          <div className="seg seg--compact" role="group" aria-label="读写方向">
             <button type="button" className={!write ? "is-on" : ""} onClick={() => onDirection(false)}>只读</button>
             <button type="button" className={write ? "is-on" : ""} onClick={() => onDirection(true)}>读写</button>
           </div>
@@ -169,7 +170,7 @@ export function AppPage({ page }: Props) {
       {sheet && (
         <div className="app-sheet" role="dialog" aria-label="应用管理">
           <header className="app-sheet__head">
-            <div className="app-seg" role="tablist">
+            <div className="seg seg--compact" role="tablist">
               <button type="button" role="tab" aria-selected={sheet === "data"} className={sheet === "data" ? "is-on" : ""} onClick={() => openSheet("data")}>数据源</button>
               <button type="button" role="tab" aria-selected={sheet === "code"} className={sheet === "code" ? "is-on" : ""} onClick={() => openSheet("code")}>源码</button>
               <button type="button" role="tab" aria-selected={sheet === "general"} className={sheet === "general" ? "is-on" : ""} onClick={() => openSheet("general")}>通用</button>
@@ -210,12 +211,18 @@ export function AppPage({ page }: Props) {
               <div className="app-sheet__detail">
                 {adding && (
                   <div className="app-editor__picker">
-                    <select value={pickId} onChange={(event) => setPickId(event.target.value)}>
-                      <option value="">选择数据库…</option>
-                      {databases.filter((db) => !boundIds.has(db.id)).map((db) => (
-                        <option key={db.id} value={db.id}>{db.title || "未命名数据库"}</option>
-                      ))}
-                    </select>
+                    <Select
+                      aria-label="选择数据库"
+                      className="app-editor__select"
+                      size="compact"
+                      placeholder="选择数据库…"
+                      value={pickId}
+                      onValueChange={setPickId}
+                      options={databases.filter((db) => !boundIds.has(db.id)).map((db) => ({
+                        value: db.id,
+                        label: db.title || "未命名数据库",
+                      }))}
+                    />
                     <label className="app-editor__check">
                       <input type="checkbox" checked={pickWrite} onChange={(event) => setPickWrite(event.target.checked)} />
                       允许写入

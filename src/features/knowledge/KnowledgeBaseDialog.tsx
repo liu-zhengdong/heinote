@@ -1,7 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { useWorkspace } from "../../app/workspace-context";
-import { Button } from "../../components/Button";
 import { Modal } from "../../components/Modal";
 import { ApiError } from "../../platform/http";
 import { uuid } from "../../core/ids";
@@ -114,10 +113,10 @@ export function KnowledgeBaseDialog({ onClose }: { onClose(): void }) {
         </label>
         {error ? <p id={`${id}-error`} className="knowledge-base-error" role="alert">{error}</p> : null}
         <footer className="knowledge-base-actions">
-          {unknown ? <Button disabled={pending} onClick={() => void submit(true)}>查询结果</Button> : <Button disabled={pending} onClick={close}>取消</Button>}
-          <Button type="submit" className="knowledge-base-primary" disabled={pending || !name.trim()}>
+          {unknown ? <button type="button" className="btn" disabled={pending} onClick={() => void submit(true)}>查询结果</button> : <button type="button" className="btn" disabled={pending} onClick={close}>取消</button>}
+          <button type="submit" className="btn btn--primary" disabled={pending || !name.trim()}>
             {pending ? (unknown ? "正在确认…" : "正在创建…") : unknown ? "重试本次创建" : "创建团队知识库"}
-          </Button>
+          </button>
         </footer>
       </form>
     </div>

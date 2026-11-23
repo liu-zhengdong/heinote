@@ -1,6 +1,7 @@
 import { FileDown, FileText, FileCode, Table } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Modal } from "../../components/Modal";
+import { Select } from "../../components/Select";
 import { pageName } from "../../core/block-tree";
 import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
@@ -33,6 +34,7 @@ export function ExportDialog({ page, onClose }: { page: NotePage; onClose(): voi
   const views = isDatabase ? page.database!.views : [];
   const [viewId, setViewId] = useState<string>(() => isDatabase ? activeView(page.database!, preferences.database_views[page.id]).id : "");
   const [busy, setBusy] = useState(false);
+  const viewSelectId = useId();
 
   const run = async () => {
     if (busy || !platform) return;
@@ -79,12 +81,16 @@ export function ExportDialog({ page, onClose }: { page: NotePage; onClose(): voi
         })}
       </div>
       {views.length > 1 && format === "csv" ? (
-        <label className="export-dialog__view">
-          视图
-          <select value={viewId} onChange={(event) => setViewId(event.target.value)}>
-            {views.map((view) => <option key={view.id} value={view.id}>{view.name}</option>)}
-          </select>
-        </label>
+        <div className="export-dialog__view">
+          <label htmlFor={viewSelectId}>视图</label>
+          <Select
+            id={viewSelectId}
+            size="compact"
+            value={viewId}
+            onValueChange={setViewId}
+            options={views.map((view) => ({ value: view.id, label: view.name }))}
+          />
+        </div>
       ) : null}
       <div className="export-dialog__actions">
         <button type="button" className="btn btn--outline" onClick={onClose} disabled={busy}>取消</button>

@@ -26,6 +26,5 @@
   display: flex; align-items: center; gap: 10px; margin-top: 12px;
   font-size: 13px; color: var(--ink-2);
 }
-.export-dialog__view select { font: inherit; padding: 4px 8px; border: 1px solid var(--hairline-strong); border-radius: var(--r-sm); background: var(--paper); color: var(--ink); }
 
 .export-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
