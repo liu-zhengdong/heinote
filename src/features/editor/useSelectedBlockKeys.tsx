@@ -159,6 +159,7 @@ export function useSelectedBlockKeys(editor: Editor): void {
       const after = topLevelBlocks(tree, selectedIds).at(-1);
       if (!pasted || !after) return;
       event.preventDefault();
+      if (!Object.keys(pasted.fragment.by_id).length) return;
       adoptCutPages(pasted.incoming, pasted.fragment, after.id);
       executeOnBlocks(insertFragmentAfter(tree, after.id, pasted.fragment));
       const roots = orderedBlocks(pasted.fragment);

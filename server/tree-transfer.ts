@@ -66,7 +66,9 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
     const sourceScope = found.scope;
     const personalScope = `user:${actor.user.id}`;
     store.scope(actor, externalScope(sourceScope), true);
-    if (store.pageTrashState(sourceScope, pageId).purging) fail(404, "页面不存在。", "not_found");
+    const sourceTrash = store.pageTrashState(sourceScope, pageId);
+    if (sourceTrash.purging) fail(404, "页面不存在。", "not_found");
+    if (input.action === "move" && sourceTrash.archived) fail(409, "回收站中的页面不能移动，请先恢复。", "archived");
     if (store.knowledgeBases.get(sourceScope)) fail(403, "页面不能迁入或迁出团队知识库。", "knowledge_base_boundary");
 
     const sourceRoot = store.record(sourceScope, "pages", pageId);
@@ -207,9 +209,14 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
       targetScope = parentFound.scope;
       store.scope(actor, externalScope(targetScope), true);
       if (store.knowledgeBases.get(targetScope)) fail(403, "页面不能迁入或迁出团队知识库。", "knowledge_base_boundary");
-      if (store.pageTrashState(targetScope, input.targetParentId).purging) fail(409, "目标父页面正在删除中。", "purging");
+      const targetTrash = store.pageTrashState(targetScope, input.targetParentId);
+      if (targetTrash.purging) fail(409, "目标父页面正在删除中。", "purging");
+      if (targetTrash.archived) fail(409, "目标父页面在回收站中。", "archived");
       targetParent = store.record(targetScope, "pages", input.targetParentId);
       if (!targetParent) fail(404, "目标父页面不存在。", "not_found");
+      if (targetParent.kind === "database" || targetParent.kind === "app") {
+        fail(400, "不能将页面移入数据库或应用页面。", "bad_request");
+      }
     }
 
     if (sourceScope === targetScope) {

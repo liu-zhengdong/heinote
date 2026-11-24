@@ -61,7 +61,7 @@ function AppPageShell({ pageId }: { pageId: string }) {
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
+    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canRestorePage, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { user, githubOutcome, clearGithubOutcome } = useSession();
@@ -367,7 +367,7 @@ export function App() {
               <div className="history-banner trash-banner" role="status">
                 <Trash2 size={14} />
                 <span>In the trash</span>
-                <button type="button" className="btn btn--outline" disabled={deleting || !canEdit(trashedAt)} onClick={() => restorePage(trashedAt, { select: false })}>
+                <button type="button" className="btn btn--outline" disabled={deleting || !canRestorePage(trashedAt)} onClick={() => restorePage(trashedAt, { select: false })}>
                   <RotateCcw size={13} />Restore
                 </button>
                 {canDeletePage(trashedAt) ? (

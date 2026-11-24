@@ -568,7 +568,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
     async archivePage(input) {
       const h = await opened();
       const page = writablePage(h, input.page_id);
-      if (!h.workspace.canTrashPage(page.id)) refuse("read_only", `${describe(page)} is shared: only someone with Full access moves it to the trash.`);
+      if (!h.workspace.canTrashPage(page.id)) refuse("read_only", `${describe(page)} is shared: only its owner moves it to the trash.`);
       return change(h, () => {
         h.workspace.archivePage(page.id);
         return { page_id: page.id, in_trash: true };
@@ -583,6 +583,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
           ? `${describe(page)} is in the trash with a page above it: restore that page.`
           : `${describe(page)} is not in the trash.`);
       }
+      if (!h.workspace.canRestorePage(page.id)) refuse("read_only", `${describe(page)} is shared: only its owner restores it from the trash.`);
       return change(h, () => {
         h.workspace.restorePage(page.id, { select: false });
         return { page: summary(pagesOf(h), pagesOf(h)[page.id]) };

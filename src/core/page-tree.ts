@@ -152,7 +152,7 @@ export function canMovePage(
 }
 
 /** Whether a member may move a page to the trash: anything they can edit,
- *  but a page shared into a space only with Full access — it is gone for
+ *  except an ordinary shared root belongs to its owner only — it is gone for
  *  everyone it is shared with. One rule for the window and for agents. */
 export function canTrashPage(
   pages: Record<string, NotePage>,
@@ -165,7 +165,26 @@ export function canTrashPage(
   const role = spaceId ? spaces[spaceId]?.role : "owner";
   const library = spaceId ? spaces[spaceId]?.knowledgeBase : undefined;
   if (role === "viewer" || library?.archived || library?.homePageId === pageId) return false;
-  return !page.share_space_id || role === "owner" || role === "admin";
+  return !page.share_space_id || role === "owner";
+}
+
+/** Whether a member may restore a page from the trash: writable in its space,
+ *  its parent is not also in the trash, and an ordinary shared root belongs
+ *  to its owner only. */
+export function canRestorePage(
+  pages: Record<string, NotePage>,
+  spaces: Record<string, PermissionSpace>,
+  pageId: string,
+): boolean {
+  const page = pages[pageId];
+  if (!page || !page.archived || isPurging(pages, pageId)) return false;
+  if (page.parent_id && inTrash(pages, page.parent_id)) return false;
+  const spaceId = spaceOfPage(pages, pageId);
+  if (!spaceId) return true;
+  const space = spaces[spaceId];
+  if (!space || space.role === "viewer" || space.knowledgeBase?.archived) return false;
+  if (!space.knowledgeBase && page.share_space_id) return space.role === "owner";
+  return true;
 }
 
 /** Knowledge-base permanent removal belongs to its owner and administrators;

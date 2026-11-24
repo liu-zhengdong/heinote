@@ -5,7 +5,7 @@ import { databaseRows, newDatabaseConfig, rowKey, rowOrderAfter } from "../featu
 import { markFresh } from "../features/database/fresh";
 import { reidentify } from "../features/editor/editor-commands";
 import type { BlockMutation, BlockTree, DatabaseConfig, NotePage, PageVersion, SpaceSummary } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { renamedTitle } from "../core/title";
 import { pageBasis } from "../collaboration/client";
@@ -250,15 +250,21 @@ export function useWorkspacePageOps({
 
   const copyPageTo = useCallback(async (pageId: string, parentId: string | null): Promise<string | null> => {
     if (!document || !platform) return null;
+    const targetSpace = parentId ? spaceOfPage(document.state.pages, parentId) : undefined;
     const body: Record<string, string> = { requestId: `copy-${uuid()}` };
-    if (parentId) body.parentId = parentId;
-    else body.spaceId = "personal";
+    if (parentId) {
+      body.parentId = parentId;
+      if (targetSpace) body.spaceId = targetSpace;
+    } else {
+      body.spaceId = "personal";
+    }
     const answer = await request<{ id: string }>(`/api/v1/pages/${encodeURIComponent(pageId)}/copy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    void document.loadPages([answer.id]).catch(() => undefined);
+    await document.refreshScope(targetSpace ?? "personal");
+    void document.loadPages(parentId ? [answer.id, parentId] : [answer.id]).catch(() => undefined);
     return answer.id;
   }, [document, platform]);
 
@@ -350,11 +356,9 @@ export function useWorkspacePageOps({
   const restorePage = useCallback((pageId: string, options: { select?: boolean } = {}) => {
     if (!document) return;
     const page = document.state.pages[pageId];
-    if (!page) return;
+    if (!page || !canRestorePageIn(document.state.pages, spacesRef.current, pageId)) return;
     const scope = spaceOfPage(document.state.pages, pageId);
     const space = scope ? spacesRef.current[scope] : undefined;
-    if (scope && (!space || space.role === "viewer" || space.knowledgeBase?.archived)) return;
-    if (page.parent_id && inTrash(document.state.pages, page.parent_id)) return;
     const mutations: WorkspaceMutation[] = [
       { type: "delete", path: ["pages", pageId, "archived"] },
       { type: "delete", path: ["pages", pageId, "archived_at"] },

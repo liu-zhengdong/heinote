@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canDeletePage, canMovePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
+import { canDeletePage, canMovePage, canRestorePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
 import type { NotePage, WorkspaceState } from "./types";
 import { emptyWorkspace } from "./workspace-state";
 
@@ -171,13 +171,37 @@ describe("UC-57: multi-level trash, purging state, and descendant counts", () =>
     expect(canDeletePage(pages, {}, "purgingGrand")).toBe(false);
   });
 
-  it("restricts permanent deletion of ordinary shared root pages to owners", () => {
-    const pages = workspace(
+  it("restricts trash, restore, and permanent deletion of ordinary shared root pages to owners", () => {
+    const live = workspace(
+      page("sharedRoot", { share_space_id: "space_s" }),
+      page("sharedChild", { parent_id: "sharedRoot" }),
+    ).pages;
+    expect(canTrashPage(live, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canTrashPage(live, { space_s: { role: "admin" } }, "sharedRoot")).toBe(false);
+    expect(canTrashPage(live, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    expect(canTrashPage(live, { space_s: { role: "admin" } }, "sharedChild")).toBe(true);
+    expect(canTrashPage(live, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+
+    const trashedRoot = workspace(
       page("sharedRoot", { share_space_id: "space_s", archived: true }),
       page("sharedChild", { parent_id: "sharedRoot", archived: true }),
     ).pages;
-    expect(canDeletePage(pages, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
-    expect(canDeletePage(pages, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
-    expect(canDeletePage(pages, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+    expect(canDeletePage(trashedRoot, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canDeletePage(trashedRoot, { space_s: { role: "admin" } }, "sharedRoot")).toBe(false);
+    expect(canDeletePage(trashedRoot, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    expect(canDeletePage(trashedRoot, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+
+    expect(canRestorePage(trashedRoot, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canRestorePage(trashedRoot, { space_s: { role: "admin" } }, "sharedRoot")).toBe(false);
+    expect(canRestorePage(trashedRoot, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    // Child cannot restore while parent root is trashed.
+    expect(canRestorePage(trashedRoot, { space_s: { role: "owner" } }, "sharedChild")).toBe(false);
+
+    const trashedChildOnly = workspace(
+      page("sharedRoot", { share_space_id: "space_s" }),
+      page("sharedChild", { parent_id: "sharedRoot", archived: true }),
+    ).pages;
+    expect(canRestorePage(trashedChildOnly, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+    expect(canRestorePage(trashedChildOnly, { space_s: { role: "viewer" } }, "sharedChild")).toBe(false);
   });
 });

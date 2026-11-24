@@ -863,6 +863,22 @@ test("collaborator cannot drag or move a personal page into someone else's share
     await expect(moveDialog.getByRole("option", { name: /Alice shared page/ })).toHaveCount(0);
     await bob.keyboard.press("Escape");
 
+    // "拷贝到…" on Bob's personal note CAN copy into Alice's shared page while keeping Bob's original.
+    await bob.getByRole("button", { name: "More page actions", exact: true }).click();
+    await bob.getByRole("menuitem", { name: "拷贝到…", exact: true }).click();
+    const copyDialog = bob.getByRole("dialog", { name: "拷贝到…", exact: true });
+    await expect(copyDialog).toBeVisible();
+    await copyDialog.getByRole("option", { name: /Alice shared page/ }).click();
+    await expect(bob.getByText("已拷贝", { exact: true })).toBeVisible();
+    await expect.poll(async () => {
+      const spaceAfter = await (await bob.request.get(`${server.url}/api/records/${spaceId}/pages`)).json();
+      return spaceAfter.some((row: { id: string; value: { parent_id?: string; title_content?: Array<{ text: string }> } }) =>
+        row.id !== bobNote.id
+        && row.value.parent_id === sharedRoot.id
+        && row.value.title_content?.map((run) => run.text).join("") === "Bob personal note");
+    }).toBe(true);
+    expect((await savedPages(bob)).some((row) => row.id === bobNote.id && !row.parentId)).toBe(true);
+
     expect(errors).toEqual([]);
   } finally {
     await aliceCtx.close();

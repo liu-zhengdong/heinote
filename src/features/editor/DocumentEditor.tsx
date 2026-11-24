@@ -1233,10 +1233,39 @@ export function DocumentEditor({
       table: tableFromCells(grid.rows, (kind) => createId(kind === "column" ? "col" : "row"), { headerRow: grid.header, spans: grid.spans, aligns: grid.aligns, colors: grid.colors }),
     }) } } : null;
     const blocks = incoming?.tree ?? table ?? textToBlocks(data.getData("text/plain"), () => createId("block"));
+    if (!blocks) return null;
     const pages = store.getState().pages;
+    let cleaned = blocks;
+    if (incoming?.cut) {
+      const targetSpace = spaceOfPage(pages, page.id);
+      const blockedIds = new Set<string>();
+      for (const block of Object.values(blocks.by_id)) {
+        const link = lineLink(block);
+        const moved = link?.expanded ? pages[link.page_id] : undefined;
+        if (moved && spaceOfPage(pages, moved.id) !== targetSpace && !canMovePage(moved.id, page.id)) {
+          blockedIds.add(block.id);
+        }
+      }
+      if (blockedIds.size) {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const block of Object.values(blocks.by_id)) {
+            if (!blockedIds.has(block.id) && block.parent_id && blockedIds.has(block.parent_id)) {
+              blockedIds.add(block.id);
+              changed = true;
+            }
+          }
+        }
+        cleaned = {
+          by_id: Object.fromEntries(Object.entries(blocks.by_id).filter(([id]) => !blockedIds.has(id))),
+        };
+        toast("不能跨空间移动子页面，请使用「拷贝到…」", "info");
+      }
+    }
     const keep = (block: Block) => Boolean(incoming?.cut && block.kind === "page" && pages[block.id] && !composite.sources.has(block.id));
-    return blocks ? { incoming, fragment: reidentify(blocks, () => createId("block"), keep) } : null;
-  }, [composite, store]);
+    return { incoming, fragment: reidentify(cleaned, () => createId("block"), keep) };
+  }, [canMovePage, composite, page.id, store, toast]);
 
   /** A command on selected blocks keeps them selected: none of these puts a
    *  caret anywhere. */

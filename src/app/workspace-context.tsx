@@ -19,7 +19,7 @@ import type {
   SpaceSummary,
   WorkspacePreferences,
 } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
 import {
   WorkspaceHistory,
   type HistoryFocus,
@@ -110,6 +110,7 @@ export interface WorkspaceActionsValue {
   canMovePage(pageId: string, targetId?: string | null): boolean;
   /** Whether this member may move a page to the trash (`canTrashPage`). */
   canTrashPage(pageId: string): boolean;
+  canRestorePage(pageId: string): boolean;
   canDeletePage(pageId: string): boolean;
   isFavorite(pageId: string): boolean;
   toggleFavorite(pageId: string): void;
@@ -513,6 +514,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [spaces, store],
   );
 
+  const canRestorePage = useCallback(
+    (pageId: string) => canRestorePageIn(store.getState().pages, spaces, pageId),
+    [spaces, store],
+  );
+
   const canDeletePage = useCallback((pageId: string) => canDeletePageIn(store.getState().pages, spaces, pageId), [spaces, store]);
 
   const isFavorite = useCallback((pageId: string) => preferences.favorites.includes(pageId), [preferences.favorites]);
@@ -562,6 +568,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     canEdit,
     canMovePage,
     canTrashPage,
+    canRestorePage,
     canDeletePage,
     isFavorite,
     toggleFavorite,
@@ -605,6 +612,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     canEdit,
     canMovePage,
     canTrashPage,
+    canRestorePage,
     canDeletePage,
     isFavorite,
     toggleFavorite,

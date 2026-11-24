@@ -77,9 +77,11 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
         const sourceTrash = store.pageTrashState(source.scope, pageId);
         if (sourceTrash.purging) fail(404, "页面不存在。", "not_found");
         if (sourceTrash.archived) fail(409, "页面在回收站中，先恢复再拷贝。", "conflict");
-        const targetScope = store.scope(who, input.spaceId ?? "personal", true);
         const parent = input.parentId ? store.page(who, input.parentId) : undefined;
-        if (parent && parent.scope !== targetScope) fail(400, "父页面不属于目标空间。", "bad_request");
+        const explicitScope = input.spaceId ? store.scope(who, input.spaceId, true) : undefined;
+        if (parent && explicitScope && parent.scope !== explicitScope) fail(400, "父页面不属于目标空间。", "bad_request");
+        const targetScope = parent?.scope ?? explicitScope ?? store.scope(who, "personal", true);
+        store.scope(who, externalScope(targetScope), true);
         if (parent && parent.page.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");
         if (parent) {
           const parentTrash = store.pageTrashState(parent.scope, parent.page.id);
@@ -89,6 +91,9 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
         const library = store.knowledgeBases.get(targetScope);
         const destination = parent?.page ?? (library ? store.page(who, library.homePageId).page : undefined);
         if (destination && destination.kind !== "document") fail(400, "父页面必须是文档页面。", "bad_request");
+        if (!destination && !targetScope.startsWith("user:") && !library && !store.ownsScope(who, targetScope)) {
+          fail(403, "只有所有者可以在共享空间顶层创建页面。", "owner_required");
+        }
         return { source, targetScope, destination };
       },
       (who, { source, targetScope, destination }) => {

@@ -25,7 +25,7 @@ export function TrashView({ pages, onOpenPage }: {
   pages: Record<string, NotePage>;
   onOpenPage(pageId: string): void;
 }) {
-  const { restorePage, deletePage, canEdit, canDeletePage } = useWorkspace();
+  const { restorePage, deletePage, canEdit, canRestorePage, canDeletePage } = useWorkspace();
   const { toast } = useUi();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -111,9 +111,9 @@ export function TrashView({ pages, onOpenPage }: {
                 type="button"
                 className="icon-btn icon-btn--sm"
                 aria-label={`Restore ${pageName(page)}`}
-                disabled={pending || !canEdit(page.id) || parentTrashed}
-                title={parentTrashed ? "先恢复父页面" : !canEdit(page.id) ? "当前空间只读" : "Restore"}
-                onClick={(event) => { event.stopPropagation(); if (canEdit(page.id) && !parentTrashed && !pending) restorePage(page.id); }}
+                disabled={pending || !canRestorePage(page.id)}
+                title={parentTrashed ? "先恢复父页面" : !canEdit(page.id) ? "当前空间只读" : !canRestorePage(page.id) ? "只有所有者可以恢复共享根页面" : "Restore"}
+                onClick={(event) => { event.stopPropagation(); if (canRestorePage(page.id) && !pending) restorePage(page.id); }}
               >
                 <RotateCcw size={14} />
               </button>

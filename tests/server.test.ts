@@ -975,13 +975,77 @@ test("cross-space moves are restricted to spaces owned by the actor on both tran
   const movedChild = status(await bob.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_child_a").value;
   assert.equal(movedChild.parent_id, "shared_child_b");
 
-  // Copying bob's personal note into Alice's shared space works and preserves Bob's original note.
+  // Copying bob's personal note into Alice's shared space works (even when spaceId is omitted
+  // and inferred from parentId, as the UI's "拷贝到…" picker does) and preserves Bob's original note.
   const copied = status(await bob.request(`/api/v1/pages/${bobNote.id}/copy`, {
     method: "POST",
-    body: { requestId: "copy-into-share-1", spaceId, parentId: "shared_root" },
+    body: { requestId: "copy-into-share-1", parentId: "shared_root" },
   }), 201);
   assert.ok(copied.id && copied.id !== bobNote.id);
+  assert.equal(copied.scope, spaceId);
   assert.ok(status(await bob.request("/api/records/personal/pages"), 200).some((r: Json) => r.id === bobNote.id));
+
+  // Non-owners (both editor and admin) cannot create a top-level shared root without parentId
+  // via /api/v1/pages, /api/v1/databases, or /api/v1/pages/:id/copy.
+  for (const [who, reqPrefix] of [[bob, "bob"], [carol, "carol"]] as const) {
+    const roguePage = await who.request("/api/v1/pages", { method: "POST", body: { spaceId, title: "Rogue root" } });
+    assert.equal(roguePage.status, 403);
+    assert.equal(roguePage.body.code, "owner_required");
+    const rogueDb = await who.request("/api/v1/databases", { method: "POST", body: { requestId: `${reqPrefix}-db-root`, spaceId, title: "Rogue DB" } });
+    assert.equal(rogueDb.status, 403);
+    assert.equal(rogueDb.body.code, "owner_required");
+    const rogueCopy = await who.request(`/api/v1/pages/${who === bob ? bobNote.id : carolNote.id}/copy`, {
+      method: "POST",
+      body: { requestId: `${reqPrefix}-copy-root`, spaceId },
+    });
+    assert.equal(rogueCopy.status, 403);
+    assert.equal(rogueCopy.body.code, "owner_required");
+  }
+
+  // Non-owners (both editor and admin) cannot trash or restore the ordinary shared root page.
+  const rootBeforeTrash = status(await bob.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_root").value;
+  for (const who of [bob, carol]) {
+    const trashRoot = await who.structure(`/api/records/${spaceId}/pages/shared_root`, {
+      method: "POST",
+      body: { action: "patch", patch: { archived: true }, base: rootBeforeTrash },
+    });
+    assert.equal(trashRoot.status, 403);
+    assert.equal(trashRoot.body.code, "owner_required");
+  }
+  // Owner can trash the shared root; non-owners cannot restore it, while owner can.
+  status(await alice.structure(`/api/records/${spaceId}/pages/shared_root`, {
+    method: "POST",
+    body: { action: "patch", patch: { archived: true }, base: rootBeforeTrash },
+  }), 200);
+  const rootTrashed = status(await alice.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_root").value;
+  for (const who of [bob, carol]) {
+    const restoreRoot = await who.structure(`/api/records/${spaceId}/pages/shared_root`, {
+      method: "POST",
+      body: { action: "patch", patch: { archived: null }, base: rootTrashed },
+    });
+    assert.equal(restoreRoot.status, 403);
+    assert.equal(restoreRoot.body.code, "owner_required");
+  }
+  status(await alice.structure(`/api/records/${spaceId}/pages/shared_root`, {
+    method: "POST",
+    body: { action: "patch", patch: { archived: null }, base: rootTrashed },
+  }), 200);
+
+  // Server transfer rejects trashed pages and database/app parents; POST /api/v1/pages rejects trashed and database parents.
+  const aliceApp = status(await alice.request("/api/v1/pages", { method: "POST", body: { title: "Alice App", kind: "app" } }), 201);
+  const aliceDb = status(await alice.request("/api/v1/databases", { method: "POST", body: { requestId: "alice-db-check", title: "Alice DB" } }), 201);
+  const aliceTrashed = status(await alice.request("/api/v1/pages", { method: "POST", body: { title: "Alice Trashed" } }), 201);
+  const aliceTrashedRow = status(await alice.request("/api/records/personal/pages"), 200).find((r: Json) => r.id === aliceTrashed.id).value;
+  status(await alice.structure(`/api/records/personal/pages/${aliceTrashed.id}`, {
+    method: "POST",
+    body: { action: "patch", patch: { archived: true }, base: aliceTrashedRow },
+  }), 200);
+  assert.equal((await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: aliceApp.id } })).status, 400);
+  assert.equal((await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: aliceDb.id } })).status, 400);
+  assert.equal((await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: aliceTrashed.id } })).status, 409);
+  assert.equal((await alice.request(`/api/pages/${aliceTrashed.id}/transfer`, { method: "POST", body: { action: "move", targetParentId: "alice_private" } })).status, 409);
+  assert.equal((await alice.request("/api/v1/pages", { method: "POST", body: { title: "Under DB", parentId: aliceDb.id } })).status, 400);
+  assert.equal((await alice.request("/api/v1/pages", { method: "POST", body: { title: "Under Trash", parentId: aliceTrashed.id } })).status, 409);
 
   // Owner (Alice) can still move her own personal page into and back out of her own shared space.
   status(await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: "shared_root" } }), 200);

@@ -803,9 +803,18 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       const explicitScope = requested ? store.scope(who, requested, true) : undefined;
       if (input.scope && input.spaceId && store.scope(who, input.spaceId, true) !== explicitScope) fail(400, "指定空间不一致。", "bad_request");
       if (parent && explicitScope && parent.scope !== explicitScope) fail(400, "父页面与指定空间不一致。", "bad_request");
+      if (parent) {
+        const parentTrash = store.pageTrashState(parent.scope, parent.page.id);
+        if (parentTrash.purging) fail(404, "父页面不存在。", "not_found");
+        if (parentTrash.archived) fail(409, "父页面在回收站中。", "archived");
+        if (parent.page.kind === "database") fail(400, "数据库行请通过数据库接口创建。", "bad_request");
+      }
       const scope = parent?.scope ?? explicitScope ?? store.scope(who, "personal", true);
       store.scope(who, scope.startsWith("user:") ? "personal" : scope, true);
       const knowledgeBase = store.knowledgeBases.get(scope);
+      if (!parent && !scope.startsWith("user:") && !knowledgeBase && !store.ownsScope(who, scope)) {
+        fail(403, "只有所有者可以在共享空间顶层创建页面。", "owner_required");
+      }
       const page = newPage(id(), input.kind, input.parentId ?? knowledgeBase?.homePageId ?? null, { author: who.user.id, now: currentTime() }, id());
       page.title = input.title;
       if (input.markdown !== undefined) {

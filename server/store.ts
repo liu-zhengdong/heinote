@@ -603,6 +603,18 @@ export class Store {
             const existing = this.record(scope, "pages", write.id);
             if (Boolean(write.value.purging) !== Boolean(existing?.purging)) fail(403, "不能直接修改删除状态。", "forbidden");
           }
+          if (!scope.startsWith("user:") && !this.knowledgeBases.get(scope) && (write.action === "patch" || write.action === "put")) {
+            const touchingArchived = write.action === "patch"
+              ? Boolean(write.patch && "archived" in write.patch)
+              : true;
+            if (touchingArchived) {
+              const existing = this.record(scope, "pages", write.id);
+              const nextArchived = write.action === "patch" ? write.patch?.archived : write.value?.archived;
+              if (existing?.share_space_id === scope && Boolean(nextArchived) !== Boolean(existing.archived) && this.role(actor, scope) !== "owner") {
+                fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+              }
+            }
+          }
           if (this.purge.hasPendingInScope(scope)) {
             if (this.pageTrashState(scope, write.id).purging) fail(409, "页面正在删除中，无法修改。", "purging");
             const nextParent = write.action === "put" ? write.value?.parent_id : write.action === "patch" ? write.patch?.parent_id : undefined;
@@ -737,6 +749,9 @@ export class Store {
               if (scope !== `user:${actor.user.id}` && next.share_space_id !== scope) fail(400, "分享空间不一致。");
             }
             if (current && current.share_space_id !== next.share_space_id && scope !== `user:${actor.user.id}` && this.role(actor, scope) !== "owner") fail(403, "只有所有者可修改分享位置。", "owner_required");
+            if (current && !library && !scope.startsWith("user:") && current.share_space_id === scope && Boolean(next.archived) !== Boolean(current.archived) && this.role(actor, scope) !== "owner") {
+              fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+            }
           }
           if (!fastInserted) this.put(scope, write.collection, write.id, next);
         } else {
@@ -1102,6 +1117,15 @@ export class Store {
       this.assertPageLocation(scope, page.id, who);
       const library = this.knowledgeBases.get(scope);
       if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
+      if (who && !library && !scope.startsWith("user:")) {
+        const existing = this.record(scope, "pages", page.id);
+        if (page.share_space_id && (!existing || existing.share_space_id !== page.share_space_id) && !this.ownsScope(who, scope)) {
+          fail(403, "只有所有者可设置分享位置。", "owner_required");
+        }
+        if (existing?.share_space_id === scope && Boolean(page.archived) !== Boolean(existing.archived) && !this.ownsScope(who, scope)) {
+          fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+        }
+      }
       const { block_tree, title, title_content, parent_id, ...fields } = page;
       this.put(scope, "pages", page.id, { ...fields, title_content: title_content ?? [{ text: title }], ...(parent_id ? { parent_id } : {}) });
       for (const row of this.blocksOf(scope, page.id)) this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, row.id);
