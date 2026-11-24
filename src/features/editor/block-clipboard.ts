@@ -56,6 +56,8 @@ function blocksHtml(tree: BlockTree, parentId: string | null): string {
       case "heading1": html += `<h1>${inner}</h1>${children}`; break;
       case "heading2": html += `<h2>${inner}</h2>${children}`; break;
       case "heading3": html += `<h3>${inner}</h3>${children}`; break;
+      case "heading4": html += `<h4>${inner}</h4>${children}`; break;
+      case "heading5": html += `<h5>${inner}</h5>${children}`; break;
       case "todo": html += `<li>${block.checked ? "☑" : "☐"} ${inner}${children}</li>`; break;
       case "bullet":
       case "numbered": html += `<li>${inner}${children}</li>`; break;

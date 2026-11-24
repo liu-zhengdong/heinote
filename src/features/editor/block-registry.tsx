@@ -5,6 +5,8 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Heading4,
+  Heading5,
   List,
   ListOrdered,
   Minus,
@@ -64,6 +66,16 @@ export const BLOCK_DEFINITIONS: readonly BlockDefinition[] = [
     kind: "heading3", label: "Heading 3",
     icon: Heading3, tag: "h3", editable: true, continueAs: "text", shortcuts: ["###"], canHaveChildren: true,
     placeholder: "Heading 3",
+  },
+  {
+    kind: "heading4", label: "Heading 4",
+    icon: Heading4, tag: "h4", editable: true, continueAs: "text", shortcuts: ["####"], canHaveChildren: true,
+    placeholder: "Heading 4",
+  },
+  {
+    kind: "heading5", label: "Heading 5",
+    icon: Heading5, tag: "h5", editable: true, continueAs: "text", shortcuts: ["#####"], canHaveChildren: true,
+    placeholder: "Heading 5",
   },
   {
     kind: "todo", label: "To-do list",

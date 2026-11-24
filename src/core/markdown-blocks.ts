@@ -56,7 +56,7 @@ export function parseMarkdown(
       continue;
     }
     const depth = indentationDepth(line);
-    const heading = line.match(/^\s*(#{1,3})\s+(.+)$/);
+    const heading = line.match(/^\s*(#{1,5})\s+(.+)$/);
     if (heading) {
       drafts.push({ kind: `heading${heading[1].length}` as BlockKind, content: inline(heading[2]), depth: 0 });
       continue;

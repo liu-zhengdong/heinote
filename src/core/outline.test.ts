@@ -14,13 +14,15 @@ function block(id: string, kind: Block["kind"], text: string, order: number, par
 }
 
 describe("extractOutline", () => {
-  it("extracts H1/H2/H3 in visual order with relative depths", () => {
+  it("extracts H1–H5 in visual order with relative depths", () => {
     const tree: BlockTree = {
       by_id: {
+        b5: block("b5", "heading5", "Fine Print", 5),
         b3: block("b3", "heading3", "Details", 3),
         b1: block("b1", "heading1", "Overview", 1),
         p1: block("p1", "text", "Body paragraph", 1.5),
         b2: block("b2", "heading2", "Architecture", 2),
+        b4: block("b4", "heading4", "Edge Cases", 4),
       },
     };
 
@@ -28,20 +30,24 @@ describe("extractOutline", () => {
       { id: "b1", level: 1, text: "Overview", depth: 0 },
       { id: "b2", level: 2, text: "Architecture", depth: 1 },
       { id: "b3", level: 3, text: "Details", depth: 2 },
+      { id: "b4", level: 4, text: "Edge Cases", depth: 3 },
+      { id: "b5", level: 5, text: "Fine Print", depth: 4 },
     ]);
   });
 
-  it("normalizes indentation when a document starts at H2 or H3", () => {
+  it("normalizes indentation when a document starts at a deeper heading", () => {
     const tree: BlockTree = {
       by_id: {
-        h2: block("h2", "heading2", "Section A", 1),
-        h3: block("h3", "heading3", "Subsection A.1", 2),
+        h3: block("h3", "heading3", "Section A", 1),
+        h4: block("h4", "heading4", "Subsection A.1", 2),
+        h5: block("h5", "heading5", "Clause A.1.1", 3),
       },
     };
 
     expect(extractOutline(tree)).toEqual([
-      { id: "h2", level: 2, text: "Section A", depth: 0 },
-      { id: "h3", level: 3, text: "Subsection A.1", depth: 1 },
+      { id: "h3", level: 3, text: "Section A", depth: 0 },
+      { id: "h4", level: 4, text: "Subsection A.1", depth: 1 },
+      { id: "h5", level: 5, text: "Clause A.1.1", depth: 2 },
     ]);
   });
 

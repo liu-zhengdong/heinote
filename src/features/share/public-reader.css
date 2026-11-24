@@ -43,7 +43,9 @@
 .public-reader__content h1 { margin: 0 0 24px; font-size: clamp(26px, 4vw, 34px); font-weight: 700; line-height: 1.35; }
 .public-reader__content h2 { margin: 22px 0 8px; font-size: 25px; line-height: 1.4; font-weight: 650; }
 .public-reader__content h3 { margin: 18px 0 6px; font-size: 21px; line-height: 1.45; font-weight: 650; }
-.public-reader__content h4 { margin: 14px 0 4px; font-size: 18px; font-weight: 650; }
+.public-reader__content h4 { margin: 14px 0 4px; font-size: 18px; line-height: 1.45; font-weight: 650; }
+.public-reader__content h5 { margin: 12px 0 3px; font-size: 16.5px; line-height: 1.45; font-weight: 650; }
+.public-reader__content h6 { margin: 10px 0 2px; font-size: 15.5px; line-height: 1.5; font-weight: 650; }
 .public-reader__block { margin: 5px 0; white-space: pre-wrap; }
 .public-reader__paragraph { min-height: 1.75em; }
 .public-reader__empty-line { display: none; }

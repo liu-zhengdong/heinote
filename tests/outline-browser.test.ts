@@ -14,15 +14,19 @@ function fillerParagraphs(label: string, count: number): string {
 
 const LONG_DOC_MARKDOWN = [
   "# 项目背景与目标",
-  fillerParagraphs("背景", 5),
+  fillerParagraphs("背景", 4),
   "## 核心架构设计",
-  fillerParagraphs("架构", 5),
+  fillerParagraphs("架构", 4),
   "### 数据存储与事务",
-  fillerParagraphs("存储", 5),
+  fillerParagraphs("存储", 3),
+  "#### SQLite 事务边界",
+  fillerParagraphs("事务边界", 3),
+  "##### 冲突重试细节",
+  fillerParagraphs("冲突重试", 3),
   "### 实时同步机制",
-  fillerParagraphs("同步", 5),
+  fillerParagraphs("同步", 4),
   "## 验收与发布计划",
-  fillerParagraphs("发布", 6),
+  fillerParagraphs("发布", 5),
   "# 附录与参考资料",
   fillerParagraphs("附录", 5),
 ].join("\n\n");
@@ -63,27 +67,29 @@ test("document editor shows Notion-style outline rail, hover popover, scroll jum
 
     const rail = page.locator(".page-outline__rail");
     await expect(rail).toBeVisible();
-    await expect(rail.locator(".page-outline__tick")).toHaveCount(6);
+    await expect(rail.locator(".page-outline__tick")).toHaveCount(8);
     await expect(page.locator(".page-outline__card")).toHaveCount(0);
 
     await page.screenshot({ path: "test-results/outline-edit-rail.png" });
 
-    // Hover opens the floating outline card with hierarchical indentation.
+    // Hover opens the floating outline card with hierarchical indentation across H1–H5.
     await rail.hover();
     const card = page.locator(".page-outline__card");
     await expect(card).toBeVisible();
     const items = card.locator(".page-outline__item");
-    await expect(items).toHaveCount(6);
+    await expect(items).toHaveCount(8);
     await expect(items.nth(0)).toContainText("项目背景与目标");
     await expect(items.nth(0)).toHaveClass(/page-outline__item--d0/);
     await expect(items.nth(1)).toHaveClass(/page-outline__item--d1/);
     await expect(items.nth(2)).toHaveClass(/page-outline__item--d2/);
+    await expect(items.nth(3)).toHaveClass(/page-outline__item--d3/);
+    await expect(items.nth(4)).toHaveClass(/page-outline__item--d4/);
 
     await page.screenshot({ path: "test-results/outline-edit-popover.png" });
 
     // Clicking a lower heading smoothly scrolls the page surface to it and marks it active.
-    await items.nth(4).click();
-    await expect(items.nth(4)).toHaveAttribute("aria-current", "location");
+    await items.nth(6).click();
+    await expect(items.nth(6)).toHaveAttribute("aria-current", "location");
     await expect.poll(async () => {
       return page.locator(".page-surface").evaluate((el) => el.scrollTop);
     }).toBeGreaterThan(400);
@@ -95,6 +101,11 @@ test("document editor shows Notion-style outline rail, hover popover, scroll jum
     await expect(page.locator(".page-outline--pinned")).toBeVisible();
     await expect(page.locator(".page-outline__rail")).toHaveCount(0);
 
+    // Scroll to H3/H4/H5 section to verify typography hierarchy in the pinned screenshot.
+    await page.locator(".page-outline__item").nth(2).click();
+    await expect(page.locator(".block--heading4 h4.block__editable")).toContainText("SQLite 事务边界");
+    await expect(page.locator(".block--heading5 h5.block__editable")).toContainText("冲突重试细节");
+
     const overlap = await page.evaluate(() => {
       const inner = document.querySelector(".doc__inner")?.getBoundingClientRect();
       const outline = document.querySelector(".page-outline__card")?.getBoundingClientRect();
@@ -105,12 +116,20 @@ test("document editor shows Notion-style outline rail, hover popover, scroll jum
 
     await page.screenshot({ path: "test-results/outline-edit-pinned.png" });
 
-    // Live editing a heading updates the outline immediately.
+    // Live typing #### and ##### shortcuts creates H4/H5 blocks and updates the outline live.
     const firstHeading = page.locator('.block--heading1 [contenteditable="true"]').first();
     await firstHeading.click();
     await page.keyboard.press("End");
     await page.keyboard.type("（已修订）");
     await expect(page.locator(".page-outline__item").first()).toContainText("项目背景与目标（已修订）");
+
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("#### 动态四级标题");
+    await expect(page.locator(".block--heading4 h4.block__editable").first()).toContainText("动态四级标题");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("##### 动态五级标题");
+    await expect(page.locator(".block--heading5 h5.block__editable").first()).toContainText("动态五级标题");
+    await expect(page.locator(".page-outline__item")).toHaveCount(10);
 
     // Reloading preserves the pinned state.
     await page.reload();
@@ -178,11 +197,13 @@ test("public share page renders the shared outline without corrupting page hash 
     const card = reader.locator(".page-outline__card");
     await expect(card).toBeVisible();
     const items = card.locator(".page-outline__item");
-    await expect(items).toHaveCount(6);
+    await expect(items).toHaveCount(8);
+    await expect(reader.locator(".public-reader__content h5")).toContainText("SQLite 事务边界");
+    await expect(reader.locator(".public-reader__content h6")).toContainText("冲突重试细节");
 
     // Jumping to a heading scrolls the public reader AND preserves the #page= hash.
     const beforeHash = await reader.evaluate(() => window.location.hash);
-    await items.nth(4).click();
+    await items.nth(6).click();
     await expect.poll(async () => {
       return reader.locator(".public-reader").evaluate((el) => el.scrollTop);
     }).toBeGreaterThan(300);

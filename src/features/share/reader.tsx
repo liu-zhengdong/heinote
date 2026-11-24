@@ -95,6 +95,8 @@ function BlockBody({ block, context }: { block: Block; context: ReaderContext })
     case "heading1": return <h2>{text}</h2>;
     case "heading2": return <h3>{text}</h3>;
     case "heading3": return <h4>{text}</h4>;
+    case "heading4": return <h5>{text}</h5>;
+    case "heading5": return <h6>{text}</h6>;
     case "divider": return <hr />;
     case "quote": return <blockquote>{text}</blockquote>;
     case "callout": return <aside className="public-reader__callout"><span aria-hidden="true">{block.icon || "💡"}</span><div>{text}</div></aside>;

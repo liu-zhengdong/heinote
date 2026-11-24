@@ -85,7 +85,7 @@ export function LinkForm({
 }
 
 const TURN_INTO: BlockKind[] = [
-  "text", "heading1", "heading2", "heading3", "todo", "bullet", "numbered",
+  "text", "heading1", "heading2", "heading3", "heading4", "heading5", "todo", "bullet", "numbered",
   "quote", "callout", "code",
 ];
 

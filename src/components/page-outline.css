@@ -68,8 +68,10 @@
 }
 
 .page-outline__tick--d0 { width: 16px; }
-.page-outline__tick--d1 { width: 11px; }
-.page-outline__tick--d2 { width: 7px; }
+.page-outline__tick--d1 { width: 13px; }
+.page-outline__tick--d2 { width: 10px; }
+.page-outline__tick--d3 { width: 7px; }
+.page-outline__tick--d4 { width: 5px; }
 
 .page-outline__tick.is-active {
   height: 2.5px;
@@ -201,8 +203,10 @@
 }
 
 .page-outline__item--d0 { padding-left: 10px; }
-.page-outline__item--d1 { padding-left: 22px; font-size: 12.5px; }
-.page-outline__item--d2 { padding-left: 34px; font-size: 12.5px; }
+.page-outline__item--d1 { padding-left: 20px; font-size: 12.5px; }
+.page-outline__item--d2 { padding-left: 30px; font-size: 12.5px; }
+.page-outline__item--d3 { padding-left: 40px; font-size: 12px; }
+.page-outline__item--d4 { padding-left: 50px; font-size: 12px; }
 
 .page-outline__item:hover {
   background: var(--fill-hover);
@@ -244,11 +248,11 @@
 
 /* ── Landing flash & scroll-margin on heading blocks ───────────────────── */
 
-.doc .block:is(.block--heading1, .block--heading2, .block--heading3) {
+.doc .block:is(.block--heading1, .block--heading2, .block--heading3, .block--heading4, .block--heading5) {
   scroll-margin-top: calc(var(--topbar-h) + 16px);
 }
 
-.public-reader__block:is(.public-reader__block--heading1, .public-reader__block--heading2, .public-reader__block--heading3) {
+.public-reader__block:is(.public-reader__block--heading1, .public-reader__block--heading2, .public-reader__block--heading3, .public-reader__block--heading4, .public-reader__block--heading5) {
   scroll-margin-top: 24px;
 }
 

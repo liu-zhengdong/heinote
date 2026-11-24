@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { orderedBlocks } from "./block-tree";
+import { blockTreeToMarkdown } from "./export-markdown";
 import { createId } from "./ids";
 import { inlinePlainText } from "./inline-content";
 import { markdownInlineToContent, mentionQueryAt } from "./inline-markdown";
@@ -32,6 +34,20 @@ describe("markdownInlineToContent", () => {
   it("keeps entities literal inside a fenced code block", () => {
     const tree = markdownToBlockTree("```\n&amp;\n```", () => createId("block"));
     expect(inlinePlainText(Object.values(tree.by_id)[0].content)).toBe("&amp;");
+  });
+
+  it("round-trips Markdown headings H1 through H5", () => {
+    const source = "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five";
+    const tree = markdownToBlockTree(source, () => createId("block"));
+    const blocks = orderedBlocks(tree, null);
+    expect(blocks.map((block) => [block.kind, inlinePlainText(block.content)])).toEqual([
+      ["heading1", "One"],
+      ["heading2", "Two"],
+      ["heading3", "Three"],
+      ["heading4", "Four"],
+      ["heading5", "Five"],
+    ]);
+    expect(blockTreeToMarkdown(tree, () => "")).toBe("# One\n## Two\n### Three\n#### Four\n##### Five");
   });
 });
 

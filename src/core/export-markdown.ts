@@ -54,6 +54,8 @@ function markdownLine(block: Block, number: number, describe: DescribeMention, h
     case "heading1": return `# ${text}`;
     case "heading2": return `## ${text}`;
     case "heading3": return `### ${text}`;
+    case "heading4": return `#### ${text}`;
+    case "heading5": return `##### ${text}`;
     case "todo": return `- [${block.checked ? "x" : " "}] ${text}`;
     case "bullet": return `- ${text}`;
     case "numbered": return `${number}. ${text}`;
