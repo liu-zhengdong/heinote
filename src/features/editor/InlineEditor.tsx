@@ -1,5 +1,6 @@
 import {
   memo,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -75,9 +76,14 @@ export const InlineEditor = memo(function InlineEditor({
    *  to resync: the bound Y.Text lives outside the record prop, so without
    *  a per-field subscription a remote delta under an unchanged record
    *  leaves the DOM frozen at whatever the last render decided. */
+  const collaborationPageId = collaboration?.pageId;
+  const subscribe = useCallback(
+    (listener: () => void) => (collaborationPageId ? subscribeCollaboration(listener, collaborationPageId) : () => {}),
+    [collaborationPageId],
+  );
   const collaborationSnapshot = () => collaboration ? collaborationFieldTick(collaboration.pageId, collaboration.key) : "none";
   const collaborationTick = useSyncExternalStore(
-    subscribeCollaboration,
+    subscribe,
     collaborationSnapshot,
     /* read-only HTML is rendered off the DOM by react-dom/server, which
        requires a server snapshot even though no store subscription is
@@ -86,9 +92,17 @@ export const InlineEditor = memo(function InlineEditor({
   );
   const commit = useRef<(element: HTMLElement) => void>(() => {});
   const compositionDraft = useRef<{ bound: BoundText | null; content: InlineContent; address?: { pageId: string; key: string } } | null>(null);
-  /** The HTML last written into a focused code block, to tell a redraw that
-   *  is needed from one that is not. */
+  /** The HTML last written into this element and what produced it, so an
+   *  unchanged unfocused block skips both `editableHtml` and DOM reads. */
   const drawn = useRef("");
+  const drawnMeta = useRef<{
+    element: HTMLElement;
+    content: InlineContent;
+    kind: Block["kind"];
+    language: string | undefined;
+    coloured: boolean;
+    describe: DescribeMention | undefined;
+  } | null>(null);
   const sync = useRef<(marks?: boolean) => void>(() => {});
   /** The once-registered `beforeinput` listener calls through these so it
    *  always reaches this render's `run` and `onBeforeInput`. */
@@ -239,15 +253,36 @@ export const InlineEditor = memo(function InlineEditor({
        *  mid-typing ever tears. */
       const wroteElsewhere = chainHead !== null && (lastInput.current === null || !sameInlineContent(chainHead, lastInput.current));
       const content = boundContent ?? (wroteElsewhere ? chainHead : showing ?? chainHead ?? block.content);
-      const html = editableHtml({ ...block, content }, describe);
-      element.toggleAttribute("data-blank", !inlinePlainText(content));
       if (document.activeElement !== element) {
-        if (element.innerHTML !== html) element.innerHTML = html;
+        const prev = drawnMeta.current;
+        if (
+          prev
+          && prev.element === element
+          && prev.kind === block.kind
+          && prev.language === block.language
+          && prev.coloured === coloured
+          && prev.describe === describe
+          && (prev.content === content || sameInlineContent(prev.content, content))
+        ) {
+          bound.current = nextBound;
+          lastInput.current = content;
+          return;
+        }
+        const html = editableHtml({ ...block, content }, describe);
+        element.toggleAttribute("data-blank", !inlinePlainText(content));
+        if (!prev || prev.element !== element) {
+          if (html || element.innerHTML) element.innerHTML = html;
+        } else if (drawn.current !== html) {
+          element.innerHTML = html;
+        }
         drawn.current = html;
+        drawnMeta.current = { element, content, kind: block.kind, language: block.language, coloured, describe };
         bound.current = nextBound;
         lastInput.current = content;
         return;
       }
+      const html = editableHtml({ ...block, content }, describe);
+      element.toggleAttribute("data-blank", !inlinePlainText(content));
       const shown = showing ? inlinePlainText(showing) : element.textContent ?? "";
       const wanted = inlinePlainText(content);
       const agree = showing
@@ -259,9 +294,12 @@ export const InlineEditor = memo(function InlineEditor({
         const resolved = anchored && nextBound ? resolveSelection(nextBound.field.text, anchored) : null;
         element.innerHTML = html;
         drawn.current = html;
+        drawnMeta.current = { element, content, kind: block.kind, language: block.language, coloured, describe };
         if (selection) focusRange(element,
           resolved?.start ?? keptOffset(shown, wanted, selection.start),
           resolved?.end ?? keptOffset(shown, wanted, selection.end));
+      } else {
+        drawnMeta.current = { element, content, kind: block.kind, language: block.language, coloured, describe };
       }
       // Capture only after the DOM contains these complete shared runs.
       bound.current = nextBound;

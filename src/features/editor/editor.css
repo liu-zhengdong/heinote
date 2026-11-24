@@ -43,7 +43,8 @@
 }
 
 .doc--full,
-.history-banner:has(+ :where(.doc--full)) {
+.history-banner:has(+ :where(.doc--full)),
+.history-banner:has(+ .page-cache-host .doc--full) {
   --gutter: 60px;
   --column: 100%;
 }
@@ -369,6 +370,23 @@
   position: relative;
   display: flex;
   flex-direction: column;
+}
+
+/* Below-the-fold progressive chunks: skip off-screen layout/paint while
+   preserving gutter room so negative-positioned "+" and "⋮⋮" controls are
+   never clipped by paint containment. */
+.blocks__chunk {
+  display: flex;
+  flex-direction: column;
+  margin-inline: calc(-1 * var(--gutter-start)) calc(-1 * var(--gutter-end));
+  padding-inline: var(--gutter-start) var(--gutter-end);
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto var(--chunk-height, 1800px);
+}
+
+.blocks__tail {
+  height: 1px;
+  pointer-events: none;
 }
 
 /* A page whose body is still being pulled in (UC-48): quiet lines where its

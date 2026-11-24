@@ -2,7 +2,6 @@ import { Check, ChevronRight, Copy, GripVertical, Plus } from "lucide-react";
 import { memo, type CSSProperties, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import { rectOf } from "../../hooks/useAnchoredPosition";
-import { Tooltip } from "../../components/Tooltip";
 import { Select } from "../../components/Select";
 import { inlinePlainText } from "../../core/inline-content";
 import type { DescribeMention } from "../../core/inline-content";
@@ -159,25 +158,25 @@ function RowMark({
 }) {
   return (
     <span className="block__page-mark">
-      <Tooltip label="Show here" hint={readOnly ? "Right-click for more" : "Drag to move · right-click for more"}>
-        <button
-          type="button"
-          className={`block__page-toggle ${still ? "is-static" : ""}`}
-          aria-label={`Show ${label} here`}
-          aria-expanded={false}
-          aria-haspopup="menu"
-          disabled={disabled}
-          // A press that moves carries the link it marks (pictures.ts).
-          onClick={() => { if (!still) onShow(); }}
-          onContextMenu={(event) => {
-            event.preventDefault();
-            onMenu(rectOf(event.currentTarget));
-          }}
-        >
-          <span className="block__page-icon">{mark}</span>
-          <ChevronRight className="block__page-twist" size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
+      <button
+        type="button"
+        className={`block__page-toggle ${still ? "is-static" : ""}`}
+        aria-label={`Show ${label} here`}
+        aria-expanded={false}
+        aria-haspopup="menu"
+        disabled={disabled}
+        data-tooltip="Show here"
+        data-tooltip-hint={readOnly ? "Right-click for more" : "Drag to move · right-click for more"}
+        // A press that moves carries the link it marks (pictures.ts).
+        onClick={() => { if (!still) onShow(); }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onMenu(rectOf(event.currentTarget));
+        }}
+      >
+        <span className="block__page-icon">{mark}</span>
+        <ChevronRight className="block__page-twist" size={16} aria-hidden="true" />
+      </button>
       {count ? (
         <button
           type="button"
@@ -241,22 +240,22 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           its frame. */}
       {props.replace ?? <div className="block__content">
         {readOnly ? null : (
-          <Tooltip label="Click to add below" hint="Alt-click to add above">
-            <button
-              type="button"
-              className="block__add"
-              contentEditable={false}
-              // The keyboard's way in is "/"; a stop on every line would
-              // make tabbing through a page a crawl.
-              tabIndex={-1}
-              aria-label="Add below"
-              // The caret stays where it was until the new line takes it.
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={(event) => actions.add(block, rectOf(event.currentTarget), event.altKey)}
-            >
-              <Plus size={16} />
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            className="block__add"
+            contentEditable={false}
+            // The keyboard's way in is "/"; a stop on every line would
+            // make tabbing through a page a crawl.
+            tabIndex={-1}
+            aria-label="Add below"
+            data-tooltip="Click to add below"
+            data-tooltip-hint="Alt-click to add above"
+            // The caret stays where it was until the new line takes it.
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={(event) => actions.add(block, rectOf(event.currentTarget), event.altKey)}
+          >
+            <Plus size={16} />
+          </button>
         )}
         {block.kind === "todo" ? (
           <span className="block__marker">
@@ -306,28 +305,28 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         ) : null}
 
         {!readOnly && lineMarks === 0 ? (
-          <Tooltip label="Drag to move" hint="Click or ⌘/ to open menu">
-            <button
-              type="button"
-              className="block__handle"
-              contentEditable={false}
-              tabIndex={-1}
-              aria-label={block.kind === "table" ? "Table options" : "Line options"}
-              aria-haspopup="menu"
-              // No preventDefault on its press: that would stop the drag
-              // before it began.
-              draggable
-              onDragStart={(event) => actions.rowDragStart(block, event)}
-              onDragEnd={actions.rowDragEnd}
-              onClick={(event) => actions.openBlockMenu(block, rectOf(event.currentTarget))}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                actions.openBlockMenu(block, rectOf(event.currentTarget));
-              }}
-            >
-              <GripVertical size={14} />
-            </button>
-          </Tooltip>
+          <button
+            type="button"
+            className="block__handle"
+            contentEditable={false}
+            tabIndex={-1}
+            aria-label={block.kind === "table" ? "Table options" : "Line options"}
+            aria-haspopup="menu"
+            data-tooltip="Drag to move"
+            data-tooltip-hint="Click or ⌘/ to open menu"
+            // No preventDefault on its press: that would stop the drag
+            // before it began.
+            draggable
+            onDragStart={(event) => actions.rowDragStart(block, event)}
+            onDragEnd={actions.rowDragEnd}
+            onClick={(event) => actions.openBlockMenu(block, rectOf(event.currentTarget))}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              actions.openBlockMenu(block, rectOf(event.currentTarget));
+            }}
+          >
+            <GripVertical size={14} />
+          </button>
         ) : null}
 
         {block.kind === "table" ? (

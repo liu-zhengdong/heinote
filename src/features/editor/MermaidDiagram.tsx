@@ -43,12 +43,47 @@ function peleModule(): Promise<PeleLazy | null> {
 const OPTIONS = { links: false, images: false, zoom: false, fontSize: 14 } as const;
 
 export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: string }) {
+  const region = useRef<HTMLDivElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const mounted = useRef<PeleMounted | null>(null);
   const engine = useRef<PeleLazy | null>(null);
   const latest = useRef(text);
   latest.current = text;
   const [down, setDown] = useState(false);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+
+  /* Off-screen Mermaid blocks wait until they approach the viewport before
+     loading Pele and laying out SVG, avoiding main-thread work for diagrams
+     screens below the fold. Once activated, the mount stays alive. */
+  useEffect(() => {
+    if (visible) return;
+    const target = region.current;
+    if (!target || typeof IntersectionObserver === "undefined") {
+      setVisible(true);
+      return;
+    }
+    const reveal = () => setVisible(true);
+    const scrollRoot = target.closest<HTMLElement>(".page-surface, .public-reader");
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          reveal();
+          observer.disconnect();
+        }
+      },
+      { root: scrollRoot, rootMargin: "400px 0px" },
+    );
+    observer.observe(target);
+    const chunk = target.closest<HTMLElement>(".blocks__chunk");
+    const onVisibilityState = (event: Event) => {
+      if (!(event as Event & { skipped?: boolean }).skipped) reveal();
+    };
+    chunk?.addEventListener("contentvisibilityautostatechange", onVisibilityState);
+    return () => {
+      observer.disconnect();
+      chunk?.removeEventListener("contentvisibilityautostatechange", onVisibilityState);
+    };
+  }, [visible]);
 
   /** An edit's way in: a type the mount hasn't met goes through load()
    *  first, else update() takes it straight. */
@@ -76,6 +111,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: str
      typed meanwhile land through push. The mount dies with the component —
      nothing else tears it down, so a text change never rebuilds it. */
   useEffect(() => {
+    if (!visible) return;
     let alive = true;
     void peleModule().then((module) => {
       if (!module) {
@@ -98,7 +134,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: str
       mounted.current?.destroy();
       mounted.current = null;
     };
-  }, []);
+  }, [visible]);
 
   // Edits after the mount flows through push; before it, `latest` carries
   // them into the initial render.
@@ -107,7 +143,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ text }: { text: str
   }, [text]);
 
   return (
-    <div className="mermaid" role="region" tabIndex={0} aria-label="Mermaid diagram" contentEditable={false}>
+    <div ref={region} className="mermaid" role="region" tabIndex={0} aria-label="Mermaid diagram" contentEditable={false}>
       <div ref={host} className="mermaid__host" />
       {down ? <p className="mermaid__hint">Diagram engine unavailable — showing source only.</p> : null}
     </div>

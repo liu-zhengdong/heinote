@@ -1,6 +1,5 @@
 import { ChevronRight, GripVertical } from "lucide-react";
 import type { CSSProperties, DragEvent, ReactNode } from "react";
-import { Tooltip } from "../../components/Tooltip";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { PageIcon } from "./block-registry";
 
@@ -90,42 +89,42 @@ export function PageFrame({
       data-head-kind={headKind}
       style={{ "--depth-base": depth, "--frame-level": level, "--frame-shift": shift } as CSSProperties}
     >
-      <Tooltip label={readOnly ? "Open menu" : "Drag to move"} hint={readOnly ? undefined : "Click to open menu"}>
-        <button
-          type="button"
-          className="page-frame__handle"
-          contentEditable={false}
-          tabIndex={-1}
-          aria-label={`Options for ${name}`}
-          aria-haspopup="menu"
-          draggable={!readOnly}
-          onDragStart={readOnly ? undefined : onDragStart}
-          onDragEnd={readOnly ? undefined : onDragEnd}
-          onClick={menu}
-          onContextMenu={menu}
-        >
-          <GripVertical size={14} />
-        </button>
-      </Tooltip>
+      <button
+        type="button"
+        className="page-frame__handle"
+        contentEditable={false}
+        tabIndex={-1}
+        aria-label={`Options for ${name}`}
+        aria-haspopup="menu"
+        data-tooltip={readOnly ? "Open menu" : "Drag to move"}
+        data-tooltip-hint={readOnly ? undefined : "Click to open menu"}
+        draggable={!readOnly}
+        onDragStart={readOnly ? undefined : onDragStart}
+        onDragEnd={readOnly ? undefined : onDragEnd}
+        onClick={menu}
+        onContextMenu={menu}
+      >
+        <GripVertical size={14} />
+      </button>
       {/* Opening it as a page of its own is its name's to do. */}
-      <Tooltip label="Fold" hint={hint ? hint.charAt(0).toUpperCase() + hint.slice(1) : undefined}>
-        <button
-          type="button"
-          className="page-frame__mark"
-          contentEditable={false}
-          aria-label={`Fold ${name}`}
-          aria-expanded
-          aria-haspopup="menu"
-          draggable={!readOnly}
-          onDragStart={readOnly ? undefined : onDragStart}
-          onDragEnd={readOnly ? undefined : onDragEnd}
-          onClick={() => onToggle?.(pageId)}
-          onContextMenu={menu}
-        >
-          <span className="page-frame__mark-icon" aria-hidden="true">{mark ?? <PageIcon size={16} />}</span>
-          <ChevronRight className="page-frame__mark-twist" size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
+      <button
+        type="button"
+        className="page-frame__mark"
+        contentEditable={false}
+        aria-label={`Fold ${name}`}
+        aria-expanded
+        aria-haspopup="menu"
+        data-tooltip="Fold"
+        data-tooltip-hint={hint ? hint.charAt(0).toUpperCase() + hint.slice(1) : undefined}
+        draggable={!readOnly}
+        onDragStart={readOnly ? undefined : onDragStart}
+        onDragEnd={readOnly ? undefined : onDragEnd}
+        onClick={() => onToggle?.(pageId)}
+        onContextMenu={menu}
+      >
+        <span className="page-frame__mark-icon" aria-hidden="true">{mark ?? <PageIcon size={16} />}</span>
+        <ChevronRight className="page-frame__mark-twist" size={16} aria-hidden="true" />
+      </button>
       {references ? (
         <button
           type="button"

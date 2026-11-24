@@ -2,7 +2,8 @@ import { CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { routes } from "../platform/schema";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
-import { DocumentEditor } from "../features/editor/DocumentEditor";
+import { DelegatedTooltip } from "../components/Tooltip";
+import { CachedDocumentPages, OpenPage } from "./CachedDocumentPages";
 import { linkedPageId } from "../features/editor/mentions";
 import { QuickFind } from "../features/quickfind/QuickFind";
 import { Sidebar } from "../features/sidebar/Sidebar";
@@ -33,20 +34,6 @@ const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then(
 const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
-
-/** The open page's editor, redrawn as the page changes — the shell around it
- *  is not. A page whose body is still being pulled in (UC-48) shows a quiet
- *  loading row where its words will be. */
-function OpenPage({ pageId, preview, readOnly }: { pageId: string; preview: NotePage | null; readOnly: boolean }) {
-  const page = usePage(pageId);
-  const { loadPages } = useWorkspace();
-  useEffect(() => { loadPages([pageId]); }, [loadPages, pageId]);
-  if (!page) return null;
-  if (!preview && page.block_tree === undefined) {
-    return <div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>;
-  }
-  return <DocumentEditor page={preview ?? page} readOnly={readOnly} historical={Boolean(preview)} />;
-}
 
 /** An app page redrawn as the page changes — its run surface and editor. */
 function AppPageShell({ pageId }: { pageId: string }) {
@@ -383,6 +370,12 @@ export function App() {
               </div>
             ) : null}
 
+            <CachedDocumentPages
+              activePageId={selectedKind === "document" && !historyPreview && !trashedAt ? selectedPageId : null}
+              surfaceEl={surfaceEl}
+              canEdit={canEdit}
+            />
+
             {historyPreview && historyPreview.kind !== "document" ? (
               /* A non-document checkpoint holds the page's definition, not
                  a body: show what restoring it restores. */
@@ -393,9 +386,9 @@ export function App() {
               </Suspense>
             ) : selectedKind === "app" && !historyPreview ? (
               <AppPageShell pageId={selectedPageId} />
-            ) : selectedKind ? (
+            ) : selectedKind && (historyPreview || trashedAt) ? (
               <OpenPage key="page" pageId={selectedPageId} preview={historyPreview} readOnly={Boolean(historyPreview) || Boolean(trashedAt) || !canEdit(selectedPageId)} />
-            ) : (
+            ) : selectedKind ? null : (
               <div className="empty-page">
                 <FileText size={28} strokeWidth={1.4} />
                 <h1>{activeSpace?.knowledgeBase ? "知识库首页尚未读取" : "No page open"}</h1>
@@ -453,6 +446,7 @@ export function App() {
         onConfirm={() => void removeTrashedPage()}
       />
       <QuickFind />
+      <DelegatedTooltip />
       {mobile ? <MobileDock surface={surfaceEl} historyOpen={historyOpen} /> : null}
       {mobile ? <MobileEditBar /> : null}
       {user && accountSettingsOpen ? (

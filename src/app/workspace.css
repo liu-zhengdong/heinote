@@ -384,13 +384,14 @@
   flex-direction: column;
 }
 
-.page-surface:has(> .history-banner + .db) > .db {
+.page-surface:has(> .history-banner ~ .db) > .db {
   flex: 1 0 auto;
   min-height: 0;
 }
 
 /* A cover drawn straight under the notice would touch it. */
-.history-banner + .doc--covered {
+.history-banner + .doc--covered,
+.history-banner + .page-cache-host .doc--covered {
   margin-top: 12px;
 }
 
@@ -573,7 +574,8 @@
   }
 
   .doc--full,
-  .history-banner:has(+ :where(.doc--full)) {
+  .history-banner:has(+ :where(.doc--full)),
+  .history-banner:has(+ .page-cache-host .doc--full) {
     --gutter: 26px;
   }
 

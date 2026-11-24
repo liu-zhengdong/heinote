@@ -42,10 +42,20 @@ interface Session {
    *  manager observed dies on every generation swap, and these do not. */
   shadowUndo: TextStep[];
   shadowRedo: TextStep[];
+  /** Cached page revision keyed by the record arrays/objects that produced it,
+   *  avoiding O(N²) full-page SHA-256 hashing while rendering N blocks. */
+  basisCache: {
+    pagesRef: Array<{ id: string; value: JsonRecord }>;
+    blocksRef: Array<{ id: string; value: JsonRecord }>;
+    page: JsonRecord | undefined;
+    blocks: Array<{ id: string; value: JsonRecord }>;
+    revision: string;
+  } | null;
 }
 interface TextStep { keys: string[]; fields: Record<string, { base: RichText; next: RichText }>; time: number; view: string }
 export interface LocalTextChange { update: TextUpdate; sessionKey: string; keys?: string[] }
 const sessions = new Map<string, Session>();
+const sessionsByPage = new Map<string, Session>();
 const opening = new Map<string, Promise<void>>();
 const resyncTails = new Map<string, Promise<unknown>>();
 const pageLifecycles = new Map<string, number>();
@@ -63,12 +73,47 @@ let accountId = "";
 let lifecycle = 0;
 let suspended = false;
 let notifying = false;
+let collabVersion = 0;
 const changedScopes = new Set<string>();
 const versionListeners = new Set<() => void>();
+const pageListeners = new Map<string, Set<() => void>>();
 
-function notify(scope: string): void {
+function setSession(key: string, session: Session): void {
+  sessions.set(key, session);
+  sessionsByPage.set(session.snapshot.pageId, session);
+  collabVersion += 1;
+}
+function deleteSession(key: string): void {
+  const existing = sessions.get(key);
+  sessions.delete(key);
+  if (existing && sessionsByPage.get(existing.snapshot.pageId) === existing) {
+    sessionsByPage.delete(existing.snapshot.pageId);
+    for (const other of sessions.values()) {
+      if (other.snapshot.pageId === existing.snapshot.pageId) {
+        sessionsByPage.set(other.snapshot.pageId, other);
+        break;
+      }
+    }
+  }
+  collabVersion += 1;
+}
+
+/** Monotonic version incremented synchronously on any collaboration state change,
+ *  so record caches stay exact even before queued scope microtasks flush. */
+export function collaborationVersion(): number { return collabVersion; }
+
+function notify(scope: string, pageId?: string): void {
+  collabVersion += 1;
   changedScopes.add(scope);
   for (const listener of [...versionListeners]) listener();
+  if (pageId) {
+    for (const listener of [...(pageListeners.get(pageId) ?? [])]) listener();
+  } else {
+    for (const session of sessions.values()) {
+      if (session.snapshot.scope !== scope) continue;
+      for (const listener of [...(pageListeners.get(session.snapshot.pageId) ?? [])]) listener();
+    }
+  }
   if (notifying) return;
   notifying = true;
   queueMicrotask(() => {
@@ -82,28 +127,36 @@ let sessionSerial = 0;
  *  its field moved — the bound Y.Text lives outside the record prop. The
  *  tick carries the session's serial, this field's remote revision, and a
  *  counter bumped whenever the write chain mutates, so each of those alone
- *  resubscribes the element. */
-export function subscribeCollaboration(listener: () => void): () => void {
-  versionListeners.add(listener);
-  return () => versionListeners.delete(listener);
+ *  resubscribes the element. Passing `pageId` scopes notifications to that
+ *  page so edits on one page never wake cached/other pages' editors. */
+export function subscribeCollaboration(listener: () => void, pageId?: string): () => void {
+  if (!pageId) {
+    versionListeners.add(listener);
+    return () => versionListeners.delete(listener);
+  }
+  let group = pageListeners.get(pageId);
+  if (!group) pageListeners.set(pageId, group = new Set());
+  group.add(listener);
+  return () => {
+    group.delete(listener);
+    if (!group.size) pageListeners.delete(pageId);
+  };
 }
 export function collaborationFieldTick(pageId: string, key: string): string {
-  for (const session of sessions.values()) {
-    if (session.snapshot.pageId !== pageId) continue;
-    return `${session.serial}:${session.fieldRevs.get(key) ?? 0}:${session.pendingRev}`;
-  }
-  return "none";
+  const session = sessionsByPage.get(pageId);
+  if (!session) return "none";
+  return `${session.serial}:${session.fieldRevs.get(key) ?? 0}:${session.pendingRev}`;
 }
 function sessionFor(scope: string, pageId: string): Session | undefined { return sessions.get(documentKey({ scope, pageId })); }
 function newSession(snapshot: DocumentSnapshot): Session {
   const doc = new Y.Doc(); Y.applyUpdate(doc, base64ToBytes(snapshot.state), REMOTE);
-  const session: Session = { snapshot, doc, lastField: "", lastKind: "", stepAt: 0, foldStop: false, pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map(), recentEcho: new Map(), serial: ++sessionSerial, pendingRev: 0, shadowUndo: [], shadowRedo: [] };
+  const session: Session = { snapshot, doc, lastField: "", lastKind: "", stepAt: 0, foldStop: false, pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map(), recentEcho: new Map(), serial: ++sessionSerial, pendingRev: 0, shadowUndo: [], shadowRedo: [], basisCache: null };
   doc.on("update", (_update: Uint8Array, origin: unknown, _doc: Y.Doc, transaction: Y.Transaction) => {
-    session.fieldsByRecord = null; session.projections.clear();
+    session.fieldsByRecord = null; session.projections.clear(); session.basisCache = null;
     if (origin === REMOTE)
       for (const [type] of transaction.changed) if (type instanceof Y.Text)
         for (const [key, text] of session.doc.getMap<Y.Text>("fields")) if (text === type) { session.fieldRevs.set(key, (session.fieldRevs.get(key) ?? 0) + 1); break; }
-    notify(snapshot.scope);
+    notify(snapshot.scope, snapshot.pageId);
   });
   return session;
 }
@@ -192,11 +245,11 @@ export async function resyncSession(scope: string, pageId: string, snapshot?: Do
       session.shadowUndo = current.shadowUndo.map(migrateStep);
       session.shadowRedo = current.shadowRedo.map(migrateStep);
       session.pendingRev += 1;
-      destroySession(current); sessions.set(key, session);
+      destroySession(current); setSession(key, session);
       const delta = Y.encodeStateAsUpdate(session.doc, vector);
       return { snapshot: next, session, update: delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null, orphanFields };
     }
-    sessions.set(key, session);
+    setSession(key, session);
     return { snapshot: next, session, update: null, orphanFields };
   });
   resyncTails.set(key, task);
@@ -210,18 +263,18 @@ function refused(session: Session, message: string): void {
 }
 function receive(snapshot: DocumentSnapshot, reset = false): void {
   const key = documentKey(snapshot); const current = sessions.get(key); const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
-  if (!current) { sessions.set(key, newSession(snapshot)); consumeSnapshot(snapshot); notify(snapshot.scope); return; }
+  if (!current) { setSession(key, newSession(snapshot)); consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId); return; }
   if (current.snapshot.generation !== snapshot.generation) {
     void resyncSession(snapshot.scope, snapshot.pageId, snapshot).then((result) => {
       if (!result || epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
       if (Object.keys(result.orphanFields).length)
         publishRecovery(accountId, { message: "页面结构已变化。被移除段落的未保存文字已保留为草稿。", writes: [], documents: [{ scope: snapshot.scope, pageId: snapshot.pageId, generation: snapshot.generation, fields: result.orphanFields }] });
-      consumeSnapshot(snapshot); notify(snapshot.scope);
+      consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
     }).catch(() => {
       if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key) || sessions.get(key) !== current) return;
       refused(current, "页面结构或版本已变化。未保存的文字已保留为草稿。");
-      destroySession(current); sessions.set(key, newSession(snapshot));
-      consumeSnapshot(snapshot); notify(snapshot.scope);
+      destroySession(current); setSession(key, newSession(snapshot));
+      consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
     });
     window.dispatchEvent(new CustomEvent("notes:collaboration-reset", { detail: { scope: snapshot.scope, pageId: snapshot.pageId } }));
     return;
@@ -229,7 +282,7 @@ function receive(snapshot: DocumentSnapshot, reset = false): void {
   current.snapshot = snapshot;
   Y.applyUpdate(current.doc, base64ToBytes(snapshot.state), REMOTE);
   if (reset) current.foldStop = true;
-  consumeSnapshot(snapshot); notify(snapshot.scope);
+  consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
 }
 /** A committed push carries the delta and the new sequence instead of a
  *  rebuilt snapshot. Reset events and skipped sequences pull instead —
@@ -270,7 +323,7 @@ function connect(): void {
       pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
       if (session) {
         refused(session, "访问权限已撤销。未保存的文字已保留为草稿。");
-        session.doc.destroy(); sessions.delete(key); notify(message.scope);
+        session.doc.destroy(); deleteSession(key); notify(message.scope, message.pageId);
       }
       window.dispatchEvent(new CustomEvent("notes:collaboration-revoked", { detail: { scope: message.scope, pageId: message.pageId } }));
     }
@@ -401,52 +454,62 @@ export function projectRecord(scope: string, collection: string, id: string, rec
  *  through the record like any keystroke and stays internal: the focused
  *  element keeps its caret and the prop's next render draws it. */
 export function fieldChainExternal(pageId: string, key: string): boolean {
-  for (const session of sessions.values()) {
-    if (session.snapshot.pageId !== pageId) continue;
-    let external = false;
-    for (const entry of session.pendingText) if (entry.fields[key]) external = Boolean(entry.external);
-    return external;
-  }
-  return false;
+  const session = sessionsByPage.get(pageId);
+  if (!session) return false;
+  let external = false;
+  for (const entry of session.pendingText) if (entry.fields[key]) external = Boolean(entry.external);
+  return external;
 }
 export function fieldIsSettledEcho(pageId: string, key: string, value: RichText): boolean {
-  for (const session of sessions.values()) {
-    if (session.snapshot.pageId !== pageId) continue;
-    return (session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value));
-  }
-  return false;
+  const session = sessionsByPage.get(pageId);
+  if (!session) return false;
+  return (session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value));
 }
 export function fieldIsOurs(pageId: string, key: string, value: RichText, chain?: { next?: RichText }): boolean {
-  for (const session of sessions.values()) {
-    if (session.snapshot.pageId !== pageId) continue;
-    let tail: RichText | undefined;
-    let hit = false;
-    for (const entry of session.pendingText) {
-      const held = entry.fields[key];
-      if (!held) continue;
-      tail = held.next;
-      if (JSON.stringify(held.base) === JSON.stringify(value) || JSON.stringify(held.next) === JSON.stringify(value)) hit = true;
-    }
-    if (chain) chain.next = tail;
-    if (!hit && !(session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value))) return false;
-    return true;
+  const session = sessionsByPage.get(pageId);
+  if (!session) return false;
+  let tail: RichText | undefined;
+  let hit = false;
+  for (const entry of session.pendingText) {
+    const held = entry.fields[key];
+    if (!held) continue;
+    tail = held.next;
+    if (JSON.stringify(held.base) === JSON.stringify(value) || JSON.stringify(held.next) === JSON.stringify(value)) hit = true;
   }
-  return false;
+  if (chain) chain.next = tail;
+  if (!hit && !(session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value))) return false;
+  return true;
 }
 export function fieldStale(pageId: string, key: string): boolean {
-  for (const session of sessions.values()) {
-    if (session.snapshot.pageId !== pageId) continue;
-    const wrote = session.revAtWrite.get(key);
-    if (wrote === undefined) continue;
-    return (session.fieldRevs.get(key) ?? 0) <= wrote;
-  }
-  return false;
+  const session = sessionsByPage.get(pageId);
+  if (!session) return false;
+  const wrote = session.revAtWrite.get(key);
+  if (wrote === undefined) return false;
+  return (session.fieldRevs.get(key) ?? 0) <= wrote;
 }
 export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
   const session = sessionFor(scope, pageId); if (!session) return null;
-  const page = readRecords(scope, "pages").find((row) => row.id === pageId)?.value;
-  const blocks = readRecords(scope, "blocks").filter((row) => row.value.page === pageId);
-  return { scope, pageId, generation: session.snapshot.generation, revision: pageRevision(page, blocks) };
+  const pagesRef = readRecords(scope, "pages");
+  const blocksRef = readRecords(scope, "blocks");
+  const cached = session.basisCache;
+  if (cached && cached.pagesRef === pagesRef && cached.blocksRef === blocksRef) {
+    return { scope, pageId, generation: session.snapshot.generation, revision: cached.revision };
+  }
+  const page = pagesRef.find((row) => row.id === pageId)?.value;
+  const blocks = blocksRef.filter((row) => row.value.page === pageId);
+  if (
+    cached
+    && cached.page === page
+    && cached.blocks.length === blocks.length
+    && cached.blocks.every((item, index) => item.id === blocks[index].id && item.value === blocks[index].value)
+  ) {
+    cached.pagesRef = pagesRef;
+    cached.blocksRef = blocksRef;
+    return { scope, pageId, generation: session.snapshot.generation, revision: cached.revision };
+  }
+  const revision = pageRevision(page, blocks);
+  session.basisCache = { pagesRef, blocksRef, page, blocks, revision };
+  return { scope, pageId, generation: session.snapshot.generation, revision };
 }
 /** A structural write (sharing a page into a space, moving it out) is only
  *  allowed when the client can name the page's live collaborative document —
@@ -496,8 +559,8 @@ function registeredField(session: Session, key: string): RegisteredField | null 
   return text instanceof Y.Text ? { userId: accountId, scope: session.snapshot.scope, pageId: session.snapshot.pageId, key, generation: session.snapshot.generation, text, canEdit: session.snapshot.canEdit, revision: pageBasis(session.snapshot.scope, session.snapshot.pageId)?.revision } : null;
 }
 installTextLookup((pageId, key) => {
-  for (const session of sessions.values()) if (session.snapshot.pageId === pageId) { const field = registeredField(session, key); if (field) return field; }
-  return null;
+  const session = sessionsByPage.get(pageId);
+  return session ? registeredField(session, key) : null;
 });
 export function recordTextManaged(scope: string, collection: string, id: string, before: JsonRecord | undefined, after: JsonRecord | undefined): boolean {
   if (collection !== "pages" && collection !== "blocks") return true;
@@ -589,6 +652,7 @@ export function localRecordText(scope: string, collection: string, id: string, b
   }
   session.pendingText.push({ keys, change, update: change.update, fields });
   session.pendingRev += 1;
+  collabVersion += 1;
   return change;
 }
 export function settleText(change: LocalTextChange): void {
@@ -612,7 +676,7 @@ export function settleText(change: LocalTextChange): void {
         echoes.push(held.next);
         session.recentEcho.set(field, echoes.slice(-16));
       }
-      notify(session.snapshot.scope);
+      notify(session.snapshot.scope, session.snapshot.pageId);
       return;
     }
   }
@@ -620,7 +684,7 @@ export function settleText(change: LocalTextChange): void {
 export async function resetRefusedText(address: DocumentAddress): Promise<void> {
   const key = documentKey(address); pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
   const current = sessionFor(address.scope, address.pageId);
-  if (current) { destroySession(current); sessions.delete(documentKey(address)); }
+  if (current) { destroySession(current); deleteSession(documentKey(address)); }
   await openCollaborativePage(address.scope, address.pageId).catch(() => undefined);
 }
 export function restorePendingText(update: TextUpdate, change?: LocalTextChange): string[] | null {
@@ -634,9 +698,10 @@ export function restorePendingText(update: TextUpdate, change?: LocalTextChange)
   session.pendingText.push({ keys, change, update, external: true, fields });
   session.shadowRedo.push({ keys, fields: structuredClone(fields), time: nextHistoryOrder(), view: historyView });
   session.pendingRev += 1;
+  collabVersion += 1;
   return keys;
 }
-function sessionForPage(pageId: string): Session | undefined { return [...sessions.values()].find((session) => session.snapshot.pageId === pageId); }
+function sessionForPage(pageId: string): Session | undefined { return sessionsByPage.get(pageId); }
 export function textHistoryTime(pageId: string, direction: "undo" | "redo"): number {
   const session = sessionForPage(pageId); const stack = direction === "undo" ? session?.shadowUndo : session?.shadowRedo;
   return stack?.at(-1)?.time ?? 0;
@@ -685,6 +750,7 @@ export function replayTextHistory(pageId: string, direction: "undo" | "redo"): P
   const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope: session.snapshot.scope, pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
   session.pendingText.push({ keys, change, update: change.update, external: true, fields: Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }])) });
   session.pendingRev += 1;
+  collabVersion += 1;
   return submitUndo(change.update).then((result) => result, (reason) => { throw reason; }).finally(() => settleText(change));
 }
 export function latestTextHistory(direction: "undo" | "redo"): { pageId: string; order: number; view: string } | null {
@@ -711,5 +777,6 @@ export function collaborativePageOpening(scope: string, pageId: string): boolean
 export function closeCollaboration(): void {
   lifecycle += 1; suspended = true; clearTimeout(reconnect); socket?.close(); socket = null;
   for (const session of sessions.values()) { session.doc.destroy(); }
-  sessions.clear(); opening.clear(); resyncTails.clear(); pageLifecycles.clear(); scopeListeners.clear();
+  sessions.clear(); sessionsByPage.clear(); opening.clear(); resyncTails.clear(); pageLifecycles.clear(); scopeListeners.clear(); pageListeners.clear();
+  collabVersion += 1;
 }

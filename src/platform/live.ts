@@ -4,7 +4,7 @@ import { ApiError, request } from "./http";
 import type { RecordPatch, RichText } from "./schema";
 import { pageOfRecordId, parseBlockRecordId } from "./record-ids";
 import { MAX_CACHED_BLOCK_PAGES, MIRRORED_COLLECTIONS, readMirror, scheduleWriteMirror } from "./mirror";
-import { awaitCollaborativeBasis, collaborationAccount, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, protectSettledRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
+import { awaitCollaborativeBasis, collaborationAccount, collaborationVersion, installRecordReader, installRecordRefresh, installSnapshotConsumer, installUndoSubmitter, localRecordText, onScopeChange, openWhenDocument, pageBasis, projectRecord, protectSettledRecord, registerPendingCommit, releasePendingCommit, restorePendingText, resyncSession, settleText, type LocalTextChange } from "../collaboration/client";
 import { observedText } from "../collaboration/binding";
 import { rebaseText } from "../collaboration/text";
 import { navigationClosing, publishRecovery } from "../collaboration/recovery";
@@ -518,6 +518,9 @@ export class LiveCollection<R extends object> {
   private paused: boolean;
   private inFlight: Promise<void> | null = null;
   private queuedRefresh = false;
+  private cachedValues: Map<string, R> | null = null;
+  private cachedRecords: Array<{ id: string; value: R }> | null = null;
+  private cachedCollabVersion = -1;
   private stop: () => void;
   private constructor(readonly name: string, readonly scope: string, private readonly lazy = false, paused = false) {
     this.paused = paused;
@@ -526,6 +529,10 @@ export class LiveCollection<R extends object> {
       if (name === "pages" || name === "blocks") this.epoch += 1;
       this.emit();
     });
+  }
+  private invalidateView(): void {
+    this.cachedValues = null;
+    this.cachedRecords = null;
   }
   /** True while cold boot showed the target page via `?ancestors=` and the
    *  background `?after=0` directory pull is still streaming in. */
@@ -744,6 +751,7 @@ export class LiveCollection<R extends object> {
         if (delta.reset || epochMismatch || rewound) {
           this.serverEpoch = delta.epoch ?? "";
           this.remote.clear();
+          this.invalidateView();
           this.mirrorBlocks.clear();
           this.settledPages.clear();
           for (const pageId of this.pageWatermarks.keys()) this.pageWatermarks.set(pageId, 0);
@@ -781,6 +789,7 @@ export class LiveCollection<R extends object> {
       this.latest = 0;
       this.serverEpoch = delta.epoch ?? "";
       this.remote.clear();
+      this.invalidateView();
       this.queuedRefresh = true;
       return;
     }
@@ -810,6 +819,8 @@ export class LiveCollection<R extends object> {
     }
   }
   private values(): Map<string, R> {
+    const version = collaborationVersion();
+    if (this.cachedValues && this.cachedCollabVersion === version) return this.cachedValues;
     const values = new Map(this.remote);
     const editing = new Set<string>();
     for (const write of this.pending) {
@@ -824,12 +835,19 @@ export class LiveCollection<R extends object> {
        *  write — the server only learns it through this batch — rolls the
        *  shown text back mid-typing and tears the caret. */
       if (!ours(id)) values.set(id, projectRecord(this.scope, this.name, id, record as Value) as R);
+    this.cachedValues = values;
+    this.cachedRecords = null;
+    this.cachedCollabVersion = version;
     return values;
   }
-  get records(): Array<{ id: string; value: R }> { return [...this.values()].map(([id, value]) => ({ id, value })); }
+  get records(): Array<{ id: string; value: R }> {
+    const map = this.values();
+    if (!this.cachedRecords) this.cachedRecords = [...map].map(([id, value]) => ({ id, value }));
+    return this.cachedRecords;
+  }
   get(id: string): R | undefined { return this.values().get(id); }
   subscribe(listener: () => void, options: { immediate?: boolean } = {}): () => void { this.listeners.add(listener); if (options.immediate !== false) listener(); return () => { this.listeners.delete(listener); }; }
-  private emit(): void { if (!this.closed) for (const listener of this.listeners) listener(); }
+  private emit(): void { this.invalidateView(); if (!this.closed) for (const listener of this.listeners) listener(); }
   /** Pull the row delta now — a committed push pokes this so structural
    *  changes land without waiting for the 1.2s poll. */
   refreshNow(): void { void this.refresh().catch(() => undefined); }
@@ -842,6 +860,7 @@ export class LiveCollection<R extends object> {
   applySnapshot(snapshot: DocumentSnapshot): void {
     if (!snapshot.records || this.closed) return;
     this.epoch += 1;
+    this.invalidateView();
     const fresh = (id: string) => (this.settled.get(id) ?? 0) + 30_000 > Date.now();
     if (this.name === "pages") { if (!fresh(snapshot.pageId)) this.remote.set(snapshot.pageId, snapshot.records.page as R); else protectSettledRecord(snapshot.scope, "pages", snapshot.pageId); }
     if (this.name === "blocks") {

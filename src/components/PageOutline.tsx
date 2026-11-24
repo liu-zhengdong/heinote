@@ -68,6 +68,10 @@ export interface PageOutlineProps {
   pinnedTopOffset?: number;
   /** localStorage key used to persist the user's pinned preference. */
   pinStorageKey?: string;
+  /** Called before jumping if the heading block has not mounted yet (progressive rendering). */
+  onEnsureBlock?: (blockId: string) => void;
+  /** Bumped as progressive chunks mount so scrollspy observes newly arrived headings. */
+  renderRevision?: number;
 }
 
 /** Shared Notion-style document outline: a quiet right-edge tick rail at rest,
@@ -80,6 +84,8 @@ export function PageOutline({
   topOffset = 44,
   pinnedTopOffset = 72,
   pinStorageKey = PIN_STORAGE_KEY,
+  onEnsureBlock,
+  renderRevision = 0,
 }: PageOutlineProps) {
   const [pinnedPref, setPinnedPref] = useState(() => readPinnedPreference(pinStorageKey));
   const [hovered, setHovered] = useState(false);
@@ -157,6 +163,7 @@ export function PageOutline({
 
     const containerRect = scrollContainer.getBoundingClientRect();
     const threshold = topOffset + 56;
+    const viewportBottom = scrollContainer.clientHeight;
     let currentId = items[0].id;
     let lastVisibleId: string | null = null;
 
@@ -167,9 +174,12 @@ export function PageOutline({
       if (relativeTop <= threshold) {
         currentId = item.id;
       }
-      if (relativeTop >= topOffset && relativeTop <= scrollContainer.clientHeight - 24) {
+      if (relativeTop >= topOffset && relativeTop <= viewportBottom - 24) {
         lastVisibleId = item.id;
       }
+      // Headings are in document order; stop once past the viewport so we do
+      // not force layout on off-screen `content-visibility: auto` chunks.
+      if (relativeTop > viewportBottom) break;
     }
 
     // When scrolled all the way to the bottom, activate the last visible heading
@@ -221,7 +231,7 @@ export function PageOutline({
       window.removeEventListener("resize", schedule);
       intersection?.disconnect();
     };
-  }, [computeActive, contentRoot, itemIdsKey, items, scrollContainer, topOffset, visible]);
+  }, [computeActive, contentRoot, itemIdsKey, items, renderRevision, scrollContainer, topOffset, visible]);
 
   // Keep the active item visible inside the outline card's own scroll list.
   useEffect(() => {
@@ -294,7 +304,11 @@ export function PageOutline({
   const jumpTo = (item: OutlineItem, event: MouseEvent<HTMLAnchorElement>) => {
     event.preventDefault();
     if (!scrollContainer || !contentRoot) return;
-    const target = findBlockElement(contentRoot, item.id);
+    let target = findBlockElement(contentRoot, item.id);
+    if (!target && onEnsureBlock) {
+      onEnsureBlock(item.id);
+      target = findBlockElement(contentRoot, item.id);
+    }
     if (!target) return;
 
     const containerRect = scrollContainer.getBoundingClientRect();

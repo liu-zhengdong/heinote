@@ -117,6 +117,9 @@ export function highlighterReady(): boolean {
   return highlight !== null;
 }
 
+const CODE_HTML_CACHE_LIMIT = 250;
+const codeHtmlCache = new Map<string, string>();
+
 /** A code block's HTML. The text is exactly the block's — newlines are real
  *  newline characters, never `<br>` — so a caret offset counts the same in the
  *  model and in the DOM. A final newline gets a `<br>` after it, which no text
@@ -125,11 +128,24 @@ export function highlighterReady(): boolean {
 export function codeHtml(code: string, language: string | undefined): string {
   if (!code) return "";
   const grammar = codeLanguage(language).grammar;
-  let html: string;
-  try {
-    html = grammar && highlight ? highlight(code, grammar) : escapeHtml(code);
-  } catch {
-    html = escapeHtml(code);
+  if (grammar && highlight) {
+    const key = `${grammar}\0${code}`;
+    const cached = codeHtmlCache.get(key);
+    if (cached !== undefined) return cached;
+    let html: string;
+    try {
+      html = highlight(code, grammar);
+    } catch {
+      html = escapeHtml(code);
+    }
+    const result = code.endsWith("\n") ? `${html}<br>` : html;
+    if (codeHtmlCache.size >= CODE_HTML_CACHE_LIMIT) {
+      const oldest = codeHtmlCache.keys().next().value;
+      if (oldest !== undefined) codeHtmlCache.delete(oldest);
+    }
+    codeHtmlCache.set(key, result);
+    return result;
   }
+  const html = escapeHtml(code);
   return code.endsWith("\n") ? `${html}<br>` : html;
 }

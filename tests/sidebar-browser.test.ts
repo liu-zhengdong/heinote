@@ -784,7 +784,8 @@ test("copy to… lands a copy under the chosen page and at the top level", async
     const target = rows.find((row) => row.title === "Target folder");
     return JSON.stringify({ copies: copies.length, nested: copies.filter((row) => row.parentId === target?.id).length });
   }).toContain('"copies":2,"nested":1');
-  await expect(tree.getByRole("button", { name: "Expand Target folder", exact: true })).toBeVisible();
+  // Selecting the newly copied child page turns Target folder into a branch and expands it.
+  await expect(tree.getByRole("button", { name: "Collapse Target folder", exact: true })).toBeVisible();
 
   // A copy at the top level through the picker's "Top level".
   await tree.getByRole("button", { name: "Target folder", exact: true }).first().hover();

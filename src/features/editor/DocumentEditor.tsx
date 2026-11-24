@@ -13,12 +13,14 @@ import {
   useState,
   type ClipboardEvent,
   type ComponentProps,
+  type CSSProperties,
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
 } from "react";
+import { flushSync } from "react-dom";
 import { Popover } from "../../components/Popover";
 import { PageOutline } from "../../components/PageOutline";
 import { extractOutline } from "../../core/outline";
@@ -194,6 +196,11 @@ import { RemoteCarets } from "./RemoteCarets";
 
 /* The icon and cover pickers are loaded the first time one opens. */
 const IconPicker = lazy(() => import("./IconPicker").then((module) => ({ default: module.IconPicker })));
+
+/* Long documents mount the first ~2 screens immediately so switching pages
+   paints without blocking, then append remaining top-level items in chunks. */
+const PROGRESSIVE_INITIAL = 60;
+const PROGRESSIVE_BATCH = 60;
 
 /** Where the one link of a line that is nothing but a link sits among its
  *  characters. */
@@ -392,6 +399,64 @@ export function DocumentEditor({
   const caretX = useRef(0);
 
   const { rows, items } = useMemo(() => layout(tree), [tree]);
+  const [renderWindow, setRenderWindow] = useState<{ pageId: string; count: number }>(() => ({
+    pageId: page.id,
+    count: !embed && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY,
+  }));
+  const effectiveLimit = renderWindow.pageId === page.id
+    ? renderWindow.count
+    : (!embed && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY);
+  const visibleCount = embed ? items.length : Math.min(items.length, effectiveLimit);
+  const hasMoreItems = visibleCount < items.length;
+  const tailSentinelRef = useRef<HTMLDivElement | null>(null);
+  const progressiveRef = useRef({ pageId: page.id, hasMore: hasMoreItems });
+  progressiveRef.current = { pageId: page.id, hasMore: hasMoreItems };
+
+  const ensureAllRendered = useCallback(() => {
+    if (!progressiveRef.current.hasMore) return;
+    const targetPageId = progressiveRef.current.pageId;
+    flushSync(() => {
+      setRenderWindow({ pageId: targetPageId, count: Number.POSITIVE_INFINITY });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!hasMoreItems) return;
+    let frame = 0;
+    let timer = 0;
+    frame = window.requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        setRenderWindow((current) => {
+          const base = current.pageId === page.id ? current.count : PROGRESSIVE_INITIAL;
+          const next = base + PROGRESSIVE_BATCH;
+          return { pageId: page.id, count: next >= items.length ? Number.POSITIVE_INFINITY : next };
+        });
+      }, 0);
+    });
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [hasMoreItems, items.length, page.id, visibleCount]);
+
+  useEffect(() => {
+    if (!hasMoreItems || typeof IntersectionObserver === "undefined") return;
+    const sentinel = tailSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((entry) => entry.isIntersecting)) return;
+        setRenderWindow((current) => {
+          const base = current.pageId === page.id ? current.count : PROGRESSIVE_INITIAL;
+          const next = base + PROGRESSIVE_BATCH * 2;
+          return { pageId: page.id, count: next >= items.length ? Number.POSITIVE_INFINITY : next };
+        });
+      },
+      { rootMargin: "800px 0px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreItems, items.length, page.id, visibleCount]);
   const selectedIds = useMemo(() => {
     if (!blockSelection) return [] as string[];
     const from = rows.findIndex((row) => row.block.id === blockSelection.anchor);
@@ -431,6 +496,10 @@ export function DocumentEditor({
   useLayoutEffect(() => {
     const textSelection = pendingTextSelection.current;
     if (textSelection) {
+      if (hasMoreItems && textSelection.ranges.some((range) => !editableWithin(blocksRef.current, range.blockId))) {
+        setRenderWindow({ pageId: page.id, count: Number.POSITIVE_INFINITY });
+        return;
+      }
       pendingTextSelection.current = null;
       for (const blockId of textSelection.forceIds) {
         const element = editableWithin(blocksRef.current, blockId);
@@ -442,13 +511,20 @@ export function DocumentEditor({
     }
     const focus = pendingFocus.current;
     if (!focus) return;
-    pendingFocus.current = null;
     const element = editableWithin(blocksRef.current, focus.id);
-    if (!element) return;
+    if (!element) {
+      if (hasMoreItems && tree.by_id[focus.id]) {
+        setRenderWindow({ pageId: page.id, count: Number.POSITIVE_INFINITY });
+      } else {
+        pendingFocus.current = null;
+      }
+      return;
+    }
+    pendingFocus.current = null;
     const forced = tree.by_id[focus.id];
     if (focus.force && forced) element.innerHTML = editableHtml(forced, describeMention);
     focusRange(element, focus.start, focus.end ?? focus.start);
-  }, [describeMention, tree]);
+  }, [describeMention, hasMoreItems, page.id, tree, visibleCount]);
 
   /* A page renamed, a page trashed, a new day: every mention on screen is
      brought up to date by attribute, never by rewriting the text it sits in. */
@@ -916,6 +992,9 @@ export function DocumentEditor({
   /** Selects blocks as blocks. The caret lets go — typing must not reach a
    *  block — and any text selection goes, since it would read as theirs. */
   const selectBlocks = useCallback((anchor: string, focus: string = anchor) => {
+    if (progressiveRef.current.hasMore) {
+      setRenderWindow({ pageId: progressiveRef.current.pageId, count: Number.POSITIVE_INFINITY });
+    }
     const active = document.activeElement;
     if (active instanceof HTMLElement && blocksRef.current?.contains(active)) active.blur();
     window.getSelection()?.removeAllRanges();
@@ -1635,8 +1714,13 @@ export function DocumentEditor({
       if (!blockId) return;
       window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
         const container = blocksRef.current;
-        const row = rowsWithin(container).find((item) => item.dataset.blockId === blockId)
+        const findRow = () => rowsWithin(container).find((item) => item.dataset.blockId === blockId)
           ?? container?.querySelector<HTMLElement>(`[data-frame-of="${CSS.escape(blockId)}"]`);
+        let row = findRow();
+        if (!row && progressiveRef.current.hasMore) {
+          ensureAllRendered();
+          row = findRow();
+        }
         if (!row) return;
         row.scrollIntoView({ block: row.offsetHeight > window.innerHeight / 2 ? "start" : "center" });
         // A timer, not animationend: with reduced motion the flash is a
@@ -2124,6 +2208,7 @@ export function DocumentEditor({
 
   const appendBlock = useCallback(() => {
     if (readOnly) return;
+    if (progressiveRef.current.hasMore) ensureAllRendered();
     const last = rows.at(-1);
     if (!last) return;
     if (last.block.kind === "text" && !inlinePlainText(last.block.content)) {
@@ -2133,7 +2218,7 @@ export function DocumentEditor({
     }
     const end = orderedBlocks(tree).at(-1) ?? last.block;
     execute(insertBlockAfter(tree, end.id, createId("block")));
-  }, [execute, readOnly, rows, tree]);
+  }, [ensureAllRendered, execute, readOnly, rows, tree]);
 
   /* A page or block shown in this page from another is drawn exactly as it
      is there — a block with its line, grip and count, a page as the block it
@@ -2461,6 +2546,30 @@ export function DocumentEditor({
     );
   });
 
+  const renderDocumentItems = (): ReactNode[] => {
+    if (embed || items.length <= PROGRESSIVE_INITIAL) {
+      return renderItems(items, embed && !page.title ? 1 : 0);
+    }
+    const firstEnd = Math.min(PROGRESSIVE_INITIAL, visibleCount);
+    const nodes: ReactNode[] = renderItems(items.slice(0, firstEnd), 0);
+    for (let start = PROGRESSIVE_INITIAL; start < visibleCount; start += PROGRESSIVE_BATCH) {
+      const slice = items.slice(start, Math.min(start + PROGRESSIVE_BATCH, visibleCount));
+      nodes.push(
+        <div
+          key={`chunk-${start}`}
+          className="blocks__chunk"
+          style={{ "--chunk-height": `${Math.max(240, slice.length * 34)}px` } as CSSProperties}
+        >
+          {renderItems(slice, 0)}
+        </div>,
+      );
+    }
+    if (hasMoreItems) {
+      nodes.push(<div key="tail-sentinel" ref={tailSentinelRef} className="blocks__tail" aria-hidden="true" />);
+    }
+    return nodes;
+  };
+
   const blocksContainer = (
     <div
       ref={blocksRef}
@@ -2496,7 +2605,7 @@ export function DocumentEditor({
       onDragStart={blockTextDrags}
     >
       {/* Shown in another page untitled, its first line is its frame's. */}
-      {renderItems(items, embed && !page.title ? 1 : 0)}
+      {renderDocumentItems()}
       {historical ? null : <RemoteCarets root={blocksRef} />}
     </div>
   );
@@ -3075,7 +3184,14 @@ export function DocumentEditor({
       ) : null}
 
       {showOutline && outlineItems.length > 0 ? (
-        <PageOutline items={outlineItems} contentRoot={articleEl} topOffset={44} pinnedTopOffset={68} />
+        <PageOutline
+          items={outlineItems}
+          contentRoot={articleEl}
+          topOffset={44}
+          pinnedTopOffset={68}
+          onEnsureBlock={ensureAllRendered}
+          renderRevision={visibleCount}
+        />
       ) : null}
 
       {overlays}
