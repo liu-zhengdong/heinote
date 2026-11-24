@@ -11,7 +11,7 @@ type User = { id: string; handle: string; displayName: string; siteRole: "admin"
 type RecordRow = { id: string; value: Record<string, unknown> };
 type Invitation = { id: string; spaceId: string; spaceName: string; expiresAt: string };
 type Batch = {
-  writes?: Array<{ collection: string; id: string; value?: { page?: string }; patch?: { page?: string } }>;
+  writes?: Array<{ collection: string; id: string; value?: { page?: string }; patch?: { page?: string }; base?: { page?: string } | null }>;
   pageOps?: Array<{ pageId: string }>;
 };
 const password = "Account-settings-recovery-password-2026!";
@@ -104,7 +104,13 @@ function containsPageWrite(request: Request, pageId: string) {
   const body = request.postDataJSON() as Batch;
   return Boolean(body.pageOps?.some((sub) => sub.pageId === pageId)
     || body.writes?.some((write) => (write.collection === "pages" && write.id === pageId)
-      || (write.collection === "blocks" && (write.value?.page === pageId || write.patch?.page === pageId || write.id.startsWith(`${pageId}/`)))));
+      || (write.collection === "blocks" && (
+        write.value?.page === pageId
+        || write.patch?.page === pageId
+        || write.base?.page === pageId
+        || write.id.startsWith(`${pageId}/`)
+        || write.id.startsWith(`${pageId.length}_${pageId}_`)
+      ))));
 }
 async function secretAbsentFromStorage(page: Page, secret: string) {
   expect(await page.evaluate((value) => [localStorage, sessionStorage].every((storage) =>
