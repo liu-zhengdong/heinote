@@ -218,7 +218,6 @@ test("UC-15: apps embedded in a page are their surfaces; plain and scripted both
   // the same request the editor would send.
   const doc = await agent(token, "POST", "/api/v1/pages", { title: "宿主文档" });
   for (const target of [plain.body.id, scripted.body.id]) {
-    const snap = await page.request.get(`${server.url}/api/collaboration/personal/${doc.body.id}`).then((r) => r.json());
     const blockId = `blk-${target.slice(0, 8)}`;
     const put = await page.request.post(`${server.url}/api/records/batch`, {
       data: {
@@ -229,7 +228,6 @@ test("UC-15: apps embedded in a page are their surfaces; plain and scripted both
             content: [{ embed: { mention: { kind: "page", page_id: target, expanded: true } } }],
           },
         }],
-        expectedPages: [{ scope: "personal", pageId: doc.body.id, generation: snap.generation, revision: snap.revision }],
       },
     });
     expect(put.status()).toBe(200);

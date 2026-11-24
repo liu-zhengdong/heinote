@@ -44,10 +44,10 @@ class Wire {
    *  arrival means a document event naming the page. Rendered text is
    *  asserted on the DOM afterwards. */
   async sawText(_value: string, after = 0, pageId?: string): Promise<void> {
-    await expect.poll(() => this.documents(after).some((event) => (event.type === "document" && typeof event.update === "string" && (!pageId || event.pageId === pageId)) || event.snapshot), { message: `The actual WebSocket must deliver ${_value}` }).toBe(true);
+    await expect.poll(() => this.documents(after).some((event) => (event.type === "op" && Array.isArray(event.ops) && (!pageId || event.pageId === pageId)) || event.snapshot), { message: `The actual WebSocket must deliver ${_value}` }).toBe(true);
   }
-  async sawReset(pageId: string, oldGeneration: string, after = 0): Promise<void> {
-    await expect.poll(() => this.documents(after).some((event) => event.type === "reset" && event.pageId === pageId && event.generation !== oldGeneration)).toBe(true);
+  async sawReset(pageId: string, oldEpoch: string, after = 0): Promise<void> {
+    await expect.poll(() => this.documents(after).some((event) => event.type === "reset" && event.pageId === pageId && (event.epoch ?? event.generation) !== oldEpoch)).toBe(true);
   }
   async reconnect(pageId: string): Promise<void> {
     expect(this.links.length).toBeGreaterThan(0);
@@ -244,11 +244,13 @@ async function typeAt(pair: Pair, page: Page, text: string, edge: "start" | "end
 async function dto(pair: Pair): Promise<Json> { return api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}`, { token: pair.token }); }
 async function persisted(pair: Pair, expected: string): Promise<void> { await expect.poll(async () => (await dto(pair)).text).toBe(expected); }
 async function current(pair: Pair): Promise<Json> { return api(pair.ownerContext, pair.url, `/api/collaboration/${pair.scope}/${pair.pageId}`); }
-const textBatch = (pair: Pair) => (request: Json) => Array.isArray(request?.textUpdates) && request.textUpdates.some((update: Json) => update.pageId === pair.pageId && update.scope === pair.scope);
-const structureBatch = (pair: Pair) => (request: Json) => Array.isArray(request?.writes) && request.writes.some((write: Json) => write.collection === "blocks" && (write.action === "put" || write.action === "delete") && (write.value?.page === pair.pageId || write.base?.page === pair.pageId));
+const textBatch = (pair: Pair) => (request: Json) => Array.isArray(request?.pageOps) && request.pageOps.some((sub: Json) => sub.pageId === pair.pageId && sub.scope === pair.scope && Array.isArray(sub.ops) && sub.ops.some((op: Json) => op.type === "text"));
+const structureBatch = (pair: Pair) => (request: Json) =>
+  (Array.isArray(request?.pageOps) && request.pageOps.some((sub: Json) => sub.pageId === pair.pageId && sub.scope === pair.scope && Array.isArray(sub.ops) && sub.ops.some((op: Json) => op.type !== "text")))
+  || (Array.isArray(request?.writes) && request.writes.some((write: Json) => write.collection === "blocks" && (write.action === "put" || write.action === "delete") && (write.value?.page === pair.pageId || write.base?.page === pair.pageId)));
 async function agentInsert(pair: Pair, text: string): Promise<void> {
   const snapshot = await current(pair);
-  await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, data: { requestId: randomUUID(), generation: snapshot.generation, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text }] } });
+  await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, data: { requestId: randomUUID(), epoch: snapshot.epoch, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text }] } });
 }
 async function downloadDraft(page: Page, contains: string): Promise<void> {
   // Refusals are non-modal now: expand the draft marker first.
@@ -286,8 +288,8 @@ test("two independent DOM edits converge in reverse commit order; undo retains p
   const a = await app.gate(pair.owner, textBatch(pair)); const b = await app.gate(pair.peer, textBatch(pair));
   await typeAt(pair, pair.owner, "甲方"); await a.waitFor();
   await typeAt(pair, pair.peer, "乙方"); await b.waitFor();
-  expect(a.held[0].body.textUpdates[0].generation).toBe(baseline.generation);
-  expect(b.held[0].body.textUpdates[0].generation).toBe(baseline.generation);
+  expect(a.held[0].body.pageOps[0].epoch).toBe(baseline.epoch);
+  expect(b.held[0].body.pageOps[0].epoch).toBe(baseline.epoch);
   await expect(body(pair)).toHaveText("共享基线甲方"); await expect(body(pair, pair.peer)).toHaveText("共享基线乙方");
   await persisted(pair, "共享基线");
   expect((await b.release()).status).toBe(200); expect((await a.release()).status).toBe(200);
@@ -471,12 +473,12 @@ test("a real restore during native composition keeps the old DOM out of the new 
   await focusEdge(body(pair), "end"); await cdp.send("Input.imeSetComposition", { text: "未确认中文", selectionStart: 5, selectionEnd: 5 });
   await expect(body(pair)).toHaveText("恢复目标旧版文字未确认中文");
   await api(pair.peerContext, pair.url, `/api/v1/pages/${pair.pageId}/restore`, { method: "POST", token: pair.peerToken, data: { versionId: version.id } });
-  await pair.ownerWire.sawReset(pair.pageId, baseline.generation, frame);
+  await pair.ownerWire.sawReset(pair.pageId, baseline.epoch, frame);
   await cdp.send("Input.insertText", { text: "未确认中文" });
   await persisted(pair, "恢复目标");
   await downloadDraft(pair.owner, "未确认中文");
   await expect(body(pair)).toHaveText("恢复目标"); await expect(body(pair, pair.peer)).toHaveText("恢复目标");
-  expect((await current(pair)).generation).not.toBe(baseline.generation);
+  expect((await current(pair)).epoch).not.toBe(baseline.epoch);
   await cdp.detach(); await openEditor(pair, pair.owner, "恢复目标");
 });
 
@@ -487,7 +489,7 @@ test("the first edit after a peer's restore lands and keeps the restored words",
   await expect.poll(async () => (await dto(pair)).title).toBe("协作测试页甲");
   const baseline = await current(pair); const frame = pair.ownerWire.received.length;
   await api(pair.peerContext, pair.url, `/api/v1/pages/${pair.pageId}/restore`, { method: "POST", token: pair.peerToken, data: { versionId: version.id } });
-  await pair.ownerWire.sawReset(pair.pageId, baseline.generation, frame);
+  await pair.ownerWire.sawReset(pair.pageId, baseline.epoch, frame);
   /* Whichever side of the resync this keystroke lands on, the intent must
      survive: a stale binding may not eat the input, and a stale-DOM commit
      may not replay the pre-restore words over the restored ones. */
@@ -512,18 +514,18 @@ test("native Enter and Backspace retain structural undo and redo for split and m
   await expect(paragraphs(pair, pair.peer)).toHaveText(["前半后半"]);
 });
 
-test("a stale native split replays onto the peer's edit and keeps both intents", async ({ app }) => {
+test("UC-60 AC-02: concurrent native split merges cleanly with peer typing without 409 conflict", async ({ app }) => {
   const pair = await app.pair("前半后半"); const gate = await app.gate(pair.owner, structureBatch(pair));
   await focusEdge(body(pair), "start"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("Enter");
-  const held = await gate.waitFor(); expect(held.body.expectedPages?.length).toBeGreaterThan(0);
+  const held = await gate.waitFor();
+  expect(held.body.pageOps?.[0]?.ops?.some((op: Json) => op.type === "split_block")).toBe(true);
   await expect(paragraphs(pair)).toHaveText(["前半", "后半"]); await persisted(pair, "前半后半");
   await typeAt(pair, pair.peer, "乙的新增"); await persisted(pair, "前半后半乙的新增");
-  // The stale request loses once, then the rebase diff-aligns the split onto
-  // the peer's committed text: both the split and the peer's edit land.
-  expect((await gate.release()).status).toBe(409); await gate.close();
-  await persisted(pair, "前半乙的新增\n后半");
-  await expect(paragraphs(pair)).toHaveText(["前半乙的新增", "后半"]);
-  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半乙的新增", "后半"]);
+  // Server-authoritative semantic OT transforms split_block against the peer's suffix edit on the first try (HTTP 200, zero 409).
+  expect((await gate.release()).status).toBe(200); await gate.close();
+  await persisted(pair, "前半\n后半乙的新增");
+  await expect(paragraphs(pair)).toHaveText(["前半", "后半乙的新增"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半", "后半乙的新增"]);
   await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);
   await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toHaveCount(0);
 });
@@ -540,7 +542,7 @@ test("revocation stops document pushes, refuses pending text, and preserves a do
   await typeAt(pair, pair.owner, "撤权后新内容"); await persisted(pair, "撤权基线撤权后新内容");
   await pair.ownerWire.sawText("撤权后新内容");
   await pair.peer.waitForTimeout(150); // Observe the absence of content after the permission barrier.
-  expect(pair.peerWire.documents(afterRevocation).some((event) => event.snapshot || event.update || event.revision)).toBe(false);
+  expect(pair.peerWire.documents(afterRevocation).some((event) => event.snapshot || event.ops || event.revision)).toBe(false);
   expect((await pair.peerContext.request.get(`${pair.url}/api/collaboration/${pair.scope}/${pair.pageId}`)).status()).toBe(403);
 });
 
@@ -549,7 +551,7 @@ test("a human reviews real Agent suggestions in the UI; apply reaches both edito
   const suggest = async (text: string) => {
     const basis = await current(pair);
     return api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, status: 201, data: {
-      requestId: randomUUID(), generation: basis.generation, baseRevision: basis.revision, mode: "suggest",
+      requestId: randomUUID(), epoch: basis.epoch, baseRevision: basis.revision, mode: "suggest",
       operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text }],
     } });
   };
@@ -591,7 +593,7 @@ test("contextual replacements show the actual edit and stale proposals cannot ap
   const suggest = async (operations: Json[]) => {
     const basis = await current(pair);
     return api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, status: 201, data: {
-      requestId: randomUUID(), generation: basis.generation, baseRevision: basis.revision, mode: "suggest", operations,
+      requestId: randomUUID(), epoch: basis.epoch, baseRevision: basis.revision, mode: "suggest", operations,
     } });
   };
   await suggest([{ type: "delete_text", blockId: pair.blockId, index: prefix.length + 2, length: 2 }, { type: "insert_text", blockId: pair.blockId, index: prefix.length + 2, text: "周四" }]);
@@ -614,7 +616,7 @@ test("contextual replacements show the actual edit and stale proposals cannot ap
   await expect(dialog.getByText("旧建议", { exact: true })).toBeVisible();
   const basis = await current(pair);
   await api(pair.ownerContext, pair.url, `/api/v1/pages/${pair.pageId}/operations`, { method: "POST", token: pair.token, data: {
-    requestId: randomUUID(), generation: basis.generation, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text: "远端修改" }],
+    requestId: randomUUID(), epoch: basis.epoch, mode: "apply", operations: [{ type: "insert_text", blockId: pair.blockId, index: "end", text: "远端修改" }],
   } });
   await expect(dialog.getByText("正文已变化，请重新生成提案。", { exact: true })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "应用提案", exact: true })).toBeDisabled();
@@ -648,7 +650,7 @@ test("an unchanged original host can split after a peer's other-paragraph edit h
   await persisted(pair, "前半后半\n另一段乙的修改"); await pair.ownerWire.sawText("另一段乙的修改", frame, pair.pageId);
   await expect(paragraphs(pair).nth(1)).toHaveText("另一段乙的修改");
   expect(await body(pair).innerHTML()).toBe(originalHtml);
-  const afterPeer = await current(pair); expect(afterPeer.generation).toBe(beforePeer.generation); expect(afterPeer.revision).not.toBe(beforePeer.revision);
+  const afterPeer = await current(pair); expect(afterPeer.epoch).toBe(beforePeer.epoch); expect(afterPeer.revision).not.toBe(beforePeer.revision);
   const committed = pair.owner.waitForResponse((response) => response.url().endsWith("/api/records/batch") && response.request().method() === "POST" && structureBatch(pair)(response.request().postDataJSON()));
   await focusEdge(body(pair), "start"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("Enter");
   expect((await committed).status()).toBe(200);
@@ -678,7 +680,7 @@ test("typing in a new paragraph before split acknowledgement retains its own und
   await expect(paragraphs(pair, pair.peer)).toHaveText(["abcDEF"]);
 });
 
-test("a peer's suffix edit rejects the entire structural undo without duplicating copied text", async ({ app }) => {
+test("UC-60: undoing a split after a peer edited the suffix cleanly merges both halves and preserves peer text", async ({ app }) => {
   const pair = await app.pair("abcDEF");
   await focusEdge(body(pair), "start");
   for (let index = 0; index < 3; index++) await pair.owner.keyboard.press("ArrowRight");
@@ -690,24 +692,18 @@ test("a peer's suffix edit rejects the entire structural undo without duplicatin
   await focusEdge(paragraphs(pair, pair.peer).nth(1), "start"); await pair.peer.keyboard.insertText("PEER");
   await persisted(pair, "abc\nPEERDEF"); await pair.ownerWire.sawText("PEER", frame, pair.pageId);
   await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]);
-  const before = await current(pair);
   await expect(pair.owner.getByRole("alertdialog")).toHaveCount(0);
-  const attempted: Json[] = [];
-  pair.owner.on("request", (request) => {
-    if (!request.url().endsWith("/api/records/batch") || request.method() !== "POST") return;
-    const payload = request.postDataJSON();
-    if (textBatch(pair)(payload) || payload.writes?.some((write: Json) => write.scope === pair.scope && write.collection === "blocks" && write.id.startsWith(`${pair.pageId.length}_${pair.pageId}_`))) attempted.push(payload);
-  });
+  // Selective semantic undo emits merge_block, preserving the peer's inserted text cleanly without conflict dialogs.
   await focusEdge(body(pair), "end"); await pair.owner.keyboard.press("ControlOrMeta+z");
-  // Refusals surface as a non-modal draft marker; expand it for the receipt.
-  await expect(pair.owner.getByRole("button", { name: "处理未保存草稿" })).toBeVisible();
-  await pair.owner.getByRole("button", { name: "处理未保存草稿" }).click();
-  await expect(pair.owner.getByRole("alertdialog")).toContainText("协作者已修改这次结构操作涉及的内容，未执行撤销或重做。");
-  expect(attempted, "A refused atomic receipt must not send part of its undo").toHaveLength(0);
-  const after = await current(pair);
-  expect(after.generation).toBe(before.generation); expect(after.revision).toBe(before.revision); expect(after.state).toBe(before.state);
+  await persisted(pair, "abcPEERDEF");
+  await expect(paragraphs(pair)).toHaveText(["abcPEERDEF"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["abcPEERDEF"]);
+  await expectNoDraft(pair);
+  // Redo splits back cleanly while keeping the peer's text intact.
+  await pair.owner.keyboard.press("ControlOrMeta+Shift+z");
   await persisted(pair, "abc\nPEERDEF");
-  await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]); await expect(paragraphs(pair, pair.peer)).toHaveText(["abc", "PEERDEF"]);
+  await expect(paragraphs(pair)).toHaveText(["abc", "PEERDEF"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["abc", "PEERDEF"]);
 });
 
 /* A collaborator's caret is drawn over a database the way it is over a
@@ -819,7 +815,7 @@ test("a row's side peek offers Page history, which opens the row as a page with 
   const rowPage = await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}`, { token: pair.token });
   await api(pair.ownerContext, pair.url, `/api/v1/pages/${rowId}/operations`, {
     method: "POST", token: pair.token,
-    data: { requestId: randomUUID(), generation: rowPage.collaboration.generation, baseRevision: rowPage.collaboration.revision, operations: [{ type: "insert_blocks", markdown: "行里的正文" }] },
+    data: { requestId: randomUUID(), epoch: rowPage.collaboration.epoch, baseRevision: rowPage.collaboration.revision, operations: [{ type: "insert_blocks", markdown: "行里的正文" }] },
   });
   await openPage(pair, pair.owner, database.id);
   const rowTr = pair.owner.locator(`tr[data-page-id="${rowId}"]`);
@@ -834,4 +830,98 @@ test("a row's side peek offers Page history, which opens the row as a page with 
   await expect(panel).toBeVisible();
   await expect(pair.owner.locator(`article[data-page-id="${rowId}"]`)).toBeVisible();
   await expect(panel.locator(".history-item", { hasText: "新增了段落" })).toBeVisible();
+});
+
+test("UC-60 AC-03: concurrent paragraph merge and typing converge cleanly without losing peer text", async ({ app }) => {
+  const pair = await app.pair("前半后半");
+  await focusEdge(body(pair), "start");
+  await pair.owner.keyboard.press("ArrowRight"); await pair.owner.keyboard.press("ArrowRight");
+  await pair.owner.keyboard.press("Enter");
+  await persisted(pair, "前半\n后半");
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半", "后半"]);
+
+  // Owner merges paragraph 2 into paragraph 1 (held at gate) while Peer concurrently types into paragraph 2.
+  const gate = await app.gate(pair.owner, structureBatch(pair));
+  await focusEdge(paragraphs(pair).nth(1), "start");
+  await pair.owner.keyboard.press("Backspace");
+  const held = await gate.waitFor();
+  expect(held.body.pageOps?.[0]?.ops?.some((op: Json) => op.type === "merge_block")).toBe(true);
+  await expect(paragraphs(pair)).toHaveText(["前半后半"]);
+
+  await focusEdge(paragraphs(pair, pair.peer).nth(1), "end");
+  await pair.peer.keyboard.insertText("乙补充");
+  await persisted(pair, "前半\n后半乙补充");
+
+  // Releasing owner's merge_block succeeds on the first try (HTTP 200) and retains peer's typing!
+  expect((await gate.release()).status).toBe(200);
+  await gate.close();
+  await persisted(pair, "前半后半乙补充");
+  await expect(paragraphs(pair)).toHaveText(["前半后半乙补充"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["前半后半乙补充"]);
+  await expectNoDraft(pair);
+  await expectNoDraft(pair, pair.peer);
+});
+
+test("UC-60 AC-04: concurrent block reorder and peer typing converge without 409 conflict", async ({ app }) => {
+  const pair = await app.pair("第一段");
+  await focusEdge(body(pair), "end");
+  await pair.owner.keyboard.press("Enter");
+  await pair.owner.keyboard.insertText("第二段");
+  await persisted(pair, "第一段\n第二段");
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["第一段", "第二段"]);
+
+  // Owner moves paragraph 2 above paragraph 1 (held at gate) while Peer concurrently edits paragraph 2.
+  const gate = await app.gate(pair.owner, structureBatch(pair));
+  await focusEdge(paragraphs(pair).nth(1), "end");
+  await pair.owner.keyboard.press("ControlOrMeta+Shift+ArrowUp");
+  const held = await gate.waitFor();
+  expect(held.body.pageOps?.[0]?.ops?.some((op: Json) => op.type === "move_blocks")).toBe(true);
+  await expect(paragraphs(pair)).toHaveText(["第二段", "第一段"]);
+
+  await focusEdge(paragraphs(pair, pair.peer).nth(1), "end");
+  await pair.peer.keyboard.insertText("乙改");
+  await persisted(pair, "第一段\n第二段乙改");
+
+  // Releasing owner's move_blocks succeeds with HTTP 200 and preserves both the new order and peer's text!
+  expect((await gate.release()).status).toBe(200);
+  await gate.close();
+  await persisted(pair, "第二段乙改\n第一段");
+  await expect(paragraphs(pair)).toHaveText(["第二段乙改", "第一段"]);
+  await expect(paragraphs(pair, pair.peer)).toHaveText(["第二段乙改", "第一段"]);
+  await expectNoDraft(pair);
+  await expectNoDraft(pair, pair.peer);
+});
+
+test("UC-60 AC-05: real-time collaborator carets push over WebSocket without HTTP presence polling", async ({ app }) => {
+  const pair = await app.pair("光标基线");
+  const httpPresenceRequests: string[] = [];
+  pair.owner.on("request", (request) => {
+    if (request.url().includes("/presence")) httpPresenceRequests.push(`${request.method()} ${request.url()}`);
+  });
+  pair.peer.on("request", (request) => {
+    if (request.url().includes("/presence")) httpPresenceRequests.push(`${request.method()} ${request.url()}`);
+  });
+
+  // Peer focuses and edits paragraph 1; Owner sees Peer's caret immediately over WebSocket.
+  await focusEdge(body(pair, pair.peer), "end");
+  await pair.peer.keyboard.insertText("实时");
+  await expect(body(pair)).toHaveText("光标基线实时");
+  const ownerCaret = pair.owner.locator(`article[data-page-id="${pair.pageId}"] .remote-caret`);
+  await expect(ownerCaret).toBeVisible({ timeout: 10_000 });
+  const beforeSplit = await ownerCaret.boundingBox();
+  expect(beforeSplit).not.toBeNull();
+
+  // Peer presses Enter to split into paragraph 2; Owner's remote caret moves down onto paragraph 2!
+  await pair.peer.keyboard.press("Enter");
+  await pair.peer.keyboard.insertText("第二行");
+  await expect(paragraphs(pair)).toHaveText(["光标基线实时", "第二行"]);
+  await expect.poll(async () => {
+    const caretBox = await ownerCaret.boundingBox();
+    const secondBox = await paragraphs(pair).nth(1).boundingBox();
+    return Boolean(caretBox && secondBox && caretBox.y >= secondBox.y - 4 && caretBox.y <= secondBox.y + secondBox.height + 4);
+  }, { timeout: 10_000, message: "Peer's real-time caret must follow onto the split second paragraph" }).toBe(true);
+
+  // Confirm presence traveled over WebSocket with zero HTTP presence polling!
+  expect(pair.ownerWire.received.some((message) => message.type === "presence")).toBe(true);
+  expect(httpPresenceRequests).toEqual([]);
 });

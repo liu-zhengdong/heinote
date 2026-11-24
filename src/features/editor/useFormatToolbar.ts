@@ -99,6 +99,7 @@ export function useFormatToolbar({ readOnly, tree, blocksRef, pointerDown, pendi
 
   const applyMarkToBlocks = useCallback((ranges: BlockTextRange[], mark: ToggleableMark | "link" | "color", value: boolean | string | undefined) => {
     const mutations: BlockMutation[] = [];
+    const semantic: NonNullable<EditorTransaction["semantic"]> = [];
     const forceIds: string[] = [];
     for (const range of ranges) {
       const block = tree.by_id[range.blockId];
@@ -108,12 +109,15 @@ export function useFormatToolbar({ readOnly, tree, blocksRef, pointerDown, pendi
         block.id,
         applyMarkToRange(block.content, range.start, range.end, mark, value),
       );
-      if (transaction) mutations.push(...transaction.mutations);
+      if (transaction) {
+        mutations.push(...transaction.mutations);
+        if (transaction.semantic) semantic.push(...transaction.semantic);
+      }
       forceIds.push(block.id);
     }
     if (!mutations.length) return;
     pendingTextSelection.current = { ranges, forceIds };
-    execute({ mutations });
+    execute({ mutations, ...(semantic.length ? { semantic } : {}) });
   }, [execute, pendingTextSelection, tree]);
 
   const applyMark = useCallback((mark: ToggleableMark | "link" | "color", value: boolean | string | undefined) => {

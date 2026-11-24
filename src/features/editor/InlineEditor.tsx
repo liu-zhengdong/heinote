@@ -14,7 +14,7 @@ import {
 import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, type DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { collaborationFieldTick, consumePendingCaretOps, subscribeCollaboration } from "../../collaboration/client";
+import { collaborationFieldTick, consumePendingCaretOps, hasPendingRawPageWrites, subscribeCollaboration } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { transformTextOffset } from "../../collaboration/ot/text";
 import { editableHtml } from "./block-html";
@@ -214,7 +214,8 @@ export const InlineEditor = memo(function InlineEditor({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const content = nextBound ? contentOfRuns(nextBound.shown) : block.content;
+      const useBound = Boolean(nextBound && collaboration && !hasPendingRawPageWrites(collaboration.pageId));
+      const content = useBound && nextBound ? contentOfRuns(nextBound.shown) : block.content;
       if (document.activeElement !== element) {
         const prev = drawnMeta.current;
         if (

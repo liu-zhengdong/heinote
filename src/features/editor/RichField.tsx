@@ -32,7 +32,7 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import { collaborationFieldTick, consumePendingCaretOps, subscribeCollaboration } from "../../collaboration/client";
+import { collaborationFieldTick, consumePendingCaretOps, hasPendingRawPageWrites, subscribeCollaboration } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
 import { transformTextOffset } from "../../collaboration/ot/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
@@ -260,7 +260,8 @@ export function RichField({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      const wantedContent = nextBound ? grammar.normalize(contentOfRuns(nextBound.shown)) : content;
+      const useBound = Boolean(nextBound && collaboration && !hasPendingRawPageWrites(collaboration.pageId));
+      const wantedContent = useBound && nextBound ? grammar.normalize(contentOfRuns(nextBound.shown)) : content;
       const html = grammar.html(wantedContent);
       if (document.activeElement !== element) {
         if (element.innerHTML !== html) element.innerHTML = html;

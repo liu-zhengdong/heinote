@@ -152,6 +152,7 @@ const authRequestListeners = new Set<(pending: unknown[]) => void>();
 const socketStateListeners = new Set<(connected: boolean) => void>();
 
 let readRecords: (scope: string, collection: string) => Array<{ id: string; value: JsonRecord }> = () => [];
+let pendingRawWriteChecker: (scope: string, pageId: string) => boolean = () => false;
 let submitUndo: (change: LocalPageChange) => Promise<unknown> = async () => {
   throw new Error("Page op transport is not installed");
 };
@@ -935,6 +936,15 @@ export function installRecordReader(reader: typeof readRecords): void {
   readRecords = reader;
 }
 
+export function installPendingWriteChecker(checker: typeof pendingRawWriteChecker): void {
+  pendingRawWriteChecker = checker;
+}
+
+export function hasPendingRawPageWrites(pageId: string): boolean {
+  const session = sessionsByPage.get(pageId);
+  return session ? pendingRawWriteChecker(session.scope, pageId) : false;
+}
+
 export function installUndoSubmitter(submitter: typeof submitUndo): void {
   submitUndo = submitter;
 }
@@ -1094,7 +1104,11 @@ export async function openCollaborativePage(scope: string, pageId: string): Prom
     pending = request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`)
       .then((snapshot) => {
         if (runEpoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
-        if (!sessions.has(key)) receiveSnapshot(snapshot);
+        if (!sessions.has(key)) {
+          // Do not open a brand-new session from a server snapshot that lags uncommitted local pre-session writes.
+          if (pendingRawWriteChecker(scope, pageId)) return;
+          receiveSnapshot(snapshot);
+        }
         subscribePageOnSocket(snapshot);
         connect();
       })
@@ -1138,6 +1152,11 @@ export async function openWhenDocument(scope: string, pageId: string, timeoutMs 
   let delay = 150;
   while (Date.now() < deadline) {
     if (sessionFor(scope, pageId)) return;
+    if (pendingRawWriteChecker(scope, pageId)) {
+      if (isOffline()) return;
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      continue;
+    }
     const error = await openCollaborativePage(scope, pageId).then(() => undefined, (reason: unknown) => reason);
     if (sessionFor(scope, pageId)) return;
     if (error instanceof ApiError && error.status === 404 && !readRecords(scope, "pages").some((row) => row.id === pageId)) return;

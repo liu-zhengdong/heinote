@@ -43,12 +43,19 @@ const operationSchema = z.discriminatedUnion("type", [
 ]);
 const commandSchema = z.object({
   requestId: z.string().min(1).max(256),
-  generation: z.string().min(1).max(100),
+  generation: z.string().min(1).max(100).optional(),
+  epoch: z.string().min(1).max(100).optional(),
   baseRevision: z.string().min(1).max(100).optional(),
   baseSeq: z.number().int().min(0).optional(),
   mode: z.enum(["apply", "suggest"]).default("apply"),
   operations: z.array(operationSchema).min(1).max(100),
-}).strict();
+}).strict().superRefine((val, ctx) => {
+  if (!val.generation && !val.epoch) {
+    ctx.addIssue({ code: "custom", path: ["epoch"], message: "必须提供 epoch 或 generation。" });
+  } else if (val.generation && val.epoch && val.generation !== val.epoch) {
+    ctx.addIssue({ code: "custom", path: ["epoch"], message: "epoch 与 generation 必须一致。" });
+  }
+});
 const reviewSchema = z.object({ baseRevision: z.string().min(1).max(100).optional() }).strict();
 type Operation = z.infer<typeof operationSchema>;
 type Command = z.infer<typeof commandSchema>;
@@ -283,12 +290,13 @@ function execute(
   pageId: string,
   scopeName: string,
   actualScope: string,
-  input: Pick<Command, "generation" | "baseRevision" | "baseSeq" | "operations">,
+  input: Pick<Command, "generation" | "epoch" | "baseRevision" | "baseSeq" | "operations">,
   suggest: boolean,
 ): object {
   const current = store.collaboration.snapshot(who, scopeName, pageId);
   if (!current.canEdit) fail(403, "此页面仅可查看。", "read_only");
-  if (current.generation !== input.generation) fail(409, "页面结构或版本已变化。请重新读取。", "generation_conflict");
+  const expectedEpoch = input.epoch ?? input.generation;
+  if (current.epoch !== expectedEpoch) fail(409, "页面结构或版本已变化。请重新读取。", "generation_conflict");
   if (input.baseSeq === undefined && needsRevision(input.operations) && !input.baseRevision) {
     fail(400, "数值范围与结构操作必须携带页面基础修订。", "bad_request");
   }

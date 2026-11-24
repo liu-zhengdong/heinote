@@ -13,6 +13,7 @@ import {
   collaborationAccount,
   collaborationVersion,
   failPageBatch,
+  installPendingWriteChecker,
   installRecordReader,
   installRecordRefresh,
   installSnapshotConsumer,
@@ -287,14 +288,23 @@ function assemble(items: Pending[], requestId: string): SavedBatch {
   }
 
   for (const item of items) {
-    if (item.elided) continue;
-    if (item.change && item.write?.action === "patch" && isObject(item.write.patch)) {
+    if (item.elided || item.write?.action !== "patch" || !isObject(item.write.patch)) continue;
+    const leaves = leafPaths(item.write.patch as JsonRecord);
+    if (item.change) {
       const recKey = `${item.write.collection}/${item.write.id}`;
-      const leaves = leafPaths(item.write.patch as JsonRecord);
       const set = coveredRecordPaths.get(recKey);
       if (leaves.every((path) => set?.has(JSON.stringify(path)) || (path.length === 1 && STAMP_FIELDS.has(path[0])))) {
         item.elided = true;
       }
+      continue;
+    }
+    // A page stamp-only patch (`updated_at`/`updated_by`) is redundant when the same batch carries `pageOps` for that page.
+    if (
+      item.write.collection === "pages"
+      && groupedOps.has(documentKey({ scope: item.write.scope, pageId: item.write.id }))
+      && leaves.every((path) => path.length === 1 && STAMP_FIELDS.has(path[0]))
+    ) {
+      item.elided = true;
     }
   }
 
@@ -738,6 +748,14 @@ export async function restoreSavedWrites(): Promise<void> {
 
 installUndoSubmitter((change) => submitPageOps(change));
 installRecordReader((scope, name) => [...(collections.get(collectionKey(scope, name)) ?? [])].at(-1)?.records as Array<{ id: string; value: JsonRecord }> ?? []);
+installPendingWriteChecker((scope, pageId) => {
+  for (const name of ["pages", "blocks"]) {
+    for (const live of collections.get(collectionKey(scope, name)) ?? []) {
+      if (live.hasPendingForPage(pageId)) return true;
+    }
+  }
+  return false;
+});
 installSnapshotConsumer((snapshot) => {
   for (const name of ["pages", "blocks"]) {
     for (const live of collections.get(collectionKey(snapshot.scope, name)) ?? []) {
@@ -797,6 +815,10 @@ export class LiveCollection<R extends object> {
 
   get isPaused(): boolean {
     return this.paused;
+  }
+
+  hasPendingForPage(pageId: string): boolean {
+    return this.pending.some((write) => pageOf(write) === pageId);
   }
 
   private attachSpaceDelta(): void {

@@ -368,7 +368,7 @@ Relation 的筛选运算符为 `contains`、`not_contains`、`is_empty`、`is_no
 
 ## 结构化修改
 
-多人正在编辑时，优先使用 `operations`。先读取页面，取得 `collaboration.generation`、`revision` 和目标块的 `id`。Agent 不需要浏览器 Cookie，也不需要连接浏览器 WebSocket。
+多人正在编辑时，优先使用 `operations`。先读取页面，取得 `collaboration.epoch`（或等价别名 `collaboration.generation`）、`revision` 和目标块的 `id`。请求体传 `epoch` 或 `generation` 均可。Agent 不需要浏览器 Cookie，也不需要连接浏览器 WebSocket。
 
 ```http
 POST /api/v1/pages/:id/operations

@@ -182,13 +182,13 @@ export function writeField(state: PageState, fieldKey: string, next: RichText): 
   if (!parsed || parsed.pageId !== state.pageId) return false;
   const normalized = normalizeRichText(next);
   if (parsed.kind === "title") {
-    state.page.title_content = normalized;
+    state.page = { ...state.page, title_content: normalized };
     return true;
   }
   const block = parsed.blockId ? state.blocks.get(parsed.blockId) : undefined;
-  if (!block) return false;
+  if (!block || !parsed.blockId) return false;
   if (parsed.kind === "block") {
-    block.content = normalized;
+    state.blocks.set(parsed.blockId, { ...block, content: normalized });
     return true;
   }
   if (!isObj(block.table) || !Array.isArray(block.table.columns) || !isObj(block.table.rows)) return false;
@@ -199,7 +199,10 @@ export function writeField(state: PageState, fieldKey: string, next: RichText): 
   const cells: JsonRecord = isObj(row.cells) ? { ...row.cells } : {};
   if (normalized.length) cells[parsed.columnId] = normalized;
   else delete cells[parsed.columnId];
-  block.table = { ...block.table, rows: { ...block.table.rows, [parsed.rowId]: { ...row, cells } } };
+  state.blocks.set(parsed.blockId, {
+    ...block,
+    table: { ...block.table, rows: { ...block.table.rows, [parsed.rowId]: { ...row, cells } } },
+  });
   return true;
 }
 
@@ -280,7 +283,7 @@ function applyRebalancedOrders(state: PageState, rebalanced?: Record<string, num
   if (!rebalanced) return;
   for (const [id, order] of Object.entries(rebalanced)) {
     const block = state.blocks.get(id);
-    if (block) block.order = order;
+    if (block) state.blocks.set(id, { ...block, order });
   }
 }
 
@@ -386,7 +389,8 @@ export function applyPageOp(
       applyRebalancedOrders(state, rebalancedOrders);
     }
 
-    block.content = left;
+    const latestBlock = state.blocks.get(op.blockId) ?? block;
+    state.blocks.set(op.blockId, { ...latestBlock, content: left });
     const newBlock: JsonRecord = {
       ...(op.newProps ? structuredClone(op.newProps) : {}),
       id: op.newBlockId,
@@ -431,7 +435,7 @@ export function applyPageOp(
     const joinOffset = richTextLength(intoContent);
     const intoParentId = parentOf(into);
 
-    into.content = concatRichText(intoContent, fromContent);
+    state.blocks.set(op.intoBlockId, { ...into, content: concatRichText(intoContent, fromContent) });
 
     // Reparent surviving direct children of `from` to the end of `into`'s children.
     const existingChildren = sortedSiblings(state, op.intoBlockId);
@@ -443,8 +447,7 @@ export function applyPageOp(
       const nextOrder = mode === "replay" && typeof op.movedChildOrders?.[childId] === "number"
         ? op.movedChildOrders[childId]
         : (tailOrder += ORDER_STEP);
-      child.parent_id = op.intoBlockId;
-      child.order = nextOrder;
+      state.blocks.set(childId, { ...child, parent_id: op.intoBlockId, order: nextOrder });
       movedChildOrders[childId] = nextOrder;
     }
 
@@ -558,9 +561,10 @@ export function applyPageOp(
       if (mode === "replay" && op.reparentTo?.[childId]) {
         const spec = op.reparentTo[childId];
         const targetParent = spec.parentId !== null && state.blocks.has(spec.parentId) ? spec.parentId : null;
-        if (targetParent !== null) child.parent_id = targetParent;
-        else delete child.parent_id;
-        child.order = spec.order;
+        const nextChild: JsonRecord = { ...(state.blocks.get(childId) ?? child), order: spec.order };
+        if (targetParent !== null) nextChild.parent_id = targetParent;
+        else delete nextChild.parent_id;
+        state.blocks.set(childId, nextChild);
         reparentTo[childId] = { parentId: targetParent, order: spec.order };
       } else {
         const targetParent = nearestSurvivingAncestor(parentOf(child));
@@ -568,9 +572,10 @@ export function applyPageOp(
         const allocated = allocateOrders(siblings, siblings.length, [childId]);
         applyRebalancedOrders(state, allocated.rebalancedOrders);
         const nextOrder = allocated.assignedOrders[childId];
-        if (targetParent !== null) child.parent_id = targetParent;
-        else delete child.parent_id;
-        child.order = nextOrder;
+        const nextChild: JsonRecord = { ...(state.blocks.get(childId) ?? child), order: nextOrder };
+        if (targetParent !== null) nextChild.parent_id = targetParent;
+        else delete nextChild.parent_id;
+        state.blocks.set(childId, nextChild);
         reparentTo[childId] = { parentId: targetParent, order: nextOrder };
       }
     }
@@ -635,10 +640,10 @@ export function applyPageOp(
     }
 
     for (const id of moving) {
-      const block = state.blocks.get(id)!;
-      if (targetParent !== null) block.parent_id = targetParent;
-      else delete block.parent_id;
-      block.order = assignedOrders[id];
+      const nextBlock: JsonRecord = { ...state.blocks.get(id)!, order: assignedOrders[id] };
+      if (targetParent !== null) nextBlock.parent_id = targetParent;
+      else delete nextBlock.parent_id;
+      state.blocks.set(id, nextBlock);
     }
 
     return {
@@ -657,8 +662,9 @@ export function applyPageOp(
   }
 
   if (op.type === "set_block_fields") {
-    const block = state.blocks.get(op.blockId);
-    if (!block) return { applied: null, orphaned };
+    const existing = state.blocks.get(op.blockId);
+    if (!existing) return { applied: null, orphaned };
+    const block: JsonRecord = { ...existing };
     const patch = structuredClone(op.patch);
     // Rich text content must travel via `text` ops; strip structural keys that belong to move/text ops if absent.
     delete patch.id;
@@ -704,17 +710,20 @@ export function applyPageOp(
       }
       block.table = tableObj;
     }
+    state.blocks.set(op.blockId, block);
     return { applied: structuredClone(op), orphaned };
   }
 
   if (op.type === "set_page_fields") {
+    const nextPage: JsonRecord = { ...state.page };
     const patch = structuredClone(op.patch);
     delete patch.id;
     delete patch.title_content;
     for (const [key, value] of Object.entries(patch)) {
-      if (value === null) delete state.page[key];
-      else state.page[key] = value;
+      if (value === null) delete nextPage[key];
+      else nextPage[key] = value;
     }
+    state.page = nextPage;
     return { applied: { type: "set_page_fields", patch }, orphaned };
   }
 

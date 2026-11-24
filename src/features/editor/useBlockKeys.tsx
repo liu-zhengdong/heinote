@@ -113,11 +113,12 @@ export function blockKeys(editor: Editor & BlockTyping) {
       return true;
     }
     if (mentionOpener(ch) && block.kind !== "code" && spans?.length === 1 && spans[0].blockId === block.id) {
-      const words = inlinePlainText(block.content).slice(spans[0].start, spans[0].end);
+      const liveBlock = liveTree().by_id[block.id] ?? block;
+      const words = inlinePlainText(liveBlock.content).slice(spans[0].start, spans[0].end);
       if (wordsCanQueryMention(words)) {
         const anchor = caretRect(element);
         checkpointHistory({ kind: "text", pageId: page.id, ranges: [{ blockId: block.id, start: spans[0].start, end: spans[0].start }] });
-        execute(updateBlockContent(liveTree(), block.id, replaceRange(block.content, spans[0].start, spans[0].start, "[[")), {
+        execute(updateBlockContent(liveTree(), block.id, replaceRange(liveBlock.content, spans[0].start, spans[0].start, "[[")), {
           id: block.id, start: spans[0].start + 2 + words.length, force: true,
         });
         setMention({ blockId: block.id, from: spans[0].start, query: words, trigger: "[[", anchor: pointRect(anchor?.left ?? 0, anchor?.bottom ?? 0) });

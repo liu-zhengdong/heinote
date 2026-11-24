@@ -194,13 +194,9 @@ test.describe("IME composition over empty fields", () => {
     page.on("request", (request) => {
       if (request.method() === "POST" && request.url().endsWith("/api/records/batch") && (request.postData() ?? "").includes(pageId)) saved.push(request.url());
     });
-    // The app's own next records poll is the barrier that gives a wrongly
-    // queued commit its chance to land, as `persisted` does in
-    // collaboration-browser.test.ts — no fixed sleeps.
-    const nextRefresh = () => page.waitForRequest(
-      (request) => request.method() === "GET" && /\/api\/records\//.test(request.url()),
-      { timeout: 5000 },
-    );
+    // Wait past the 400ms typing coalescing window so any wrongly queued batch
+    // has a chance to hit POST /api/records/batch before checking `saved`.
+    const settleBatchWindow = () => page.waitForTimeout(600);
     await caretAtEnd(editable);
 
     // A lone empty line shows its hint before any key is pressed.
@@ -215,7 +211,7 @@ test.describe("IME composition over empty fields", () => {
     await editable.screenshot({ path: composingShot });
     await testInfo.attach(`${label} composing`, { path: composingShot });
     await expect.poll(() => opacityOfBefore(editable), { message: `${label} placeholder hidden while pinyin preedit stands` }).toBe(0);
-    await nextRefresh();
+    await settleBatchWindow();
     expect(saved.length - beforeCompose, `${label} writes nothing while composing`).toBe(0);
     expect(await savedText(page), `${label} keeps pinyin out of saved records`).not.toContain("ni'hao");
     await cdp.send("Input.imeSetComposition", { text: "", selectionStart: 0, selectionEnd: 0 });
@@ -224,7 +220,7 @@ test.describe("IME composition over empty fields", () => {
     await editable.screenshot({ path: cancelledShot });
     await testInfo.attach(`${label} cancelled`, { path: cancelledShot });
     await expect.poll(() => opacityOfBefore(editable), { message: `${label} placeholder returns after the composition is cancelled` }).toBe(1);
-    await nextRefresh();
+    await settleBatchWindow();
     expect(saved.length - beforeCompose, `${label} writes nothing when the composition is cancelled`).toBe(0);
 
     // ── Commit: the candidate lands once, is saved, and reads back ─────────
@@ -239,7 +235,7 @@ test.describe("IME composition over empty fields", () => {
     await expect.poll(() => opacityOfBefore(editable), { message: `${label} placeholder stays hidden under committed words` }).toBe(0);
     await expect.poll(() => saved.length - beforeCompose, { message: `${label} commit reaches the server` }).toBe(1);
     await expect.poll(() => savedText(page), { message: `${label} saves the committed words` }).toContain("你好");
-    await nextRefresh();
+    await settleBatchWindow();
     expect(saved.length - beforeCompose, `${label} saves the commit exactly once`).toBe(1);
 
     // The committed words are the field's own after a reload — not residue of

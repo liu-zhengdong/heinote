@@ -269,7 +269,7 @@ function gate() {
 function targets(request: { method(): string; postDataJSON(): Json }, scope: string, pageId: string) {
   if (request.method() !== "POST") return false;
   const data = request.postDataJSON();
-  return Boolean(data?.textUpdates?.some((update: Json) => update.scope === scope && update.pageId === pageId)
+  return Boolean(data?.pageOps?.some((sub: Json) => sub.scope === scope && sub.pageId === pageId)
     || data?.writes?.some((write: Json) => write.scope === scope && (write.id === pageId || write.value?.page === pageId || write.base?.page === pageId)));
 }
 
@@ -483,8 +483,7 @@ test("UC-13 browser: search finds table-cell-only text and voluntary leave resto
     };
     // Change the existing paragraph through the public atomic record boundary.
     await api(owner, app, "/api/records/batch", "POST", {
-      requestId: randomUUID(), textUpdates: [],
-      expectedPages: [{ scope: kb.spaceId, pageId: document.id, generation: snapshot.generation, revision: snapshot.revision }],
+      requestId: randomUUID(),
       writes: [{ scope: kb.spaceId, collection: "blocks", id: block.id, action: "patch", base: block.value, patch: { kind: "table", content: [], table } }],
     });
     const seededBlocks = await records(owner, app, kb.spaceId, "blocks");

@@ -82,23 +82,12 @@ export class Browser {
     return { status: response.status, body: parsed, headers: response.headers };
   }
 
-  // Same structure-basis helper as tests/server.test.ts: expectedPages keeps
-  // page writes consistent with the collaboration projection.
+  // Atomic record batch helper matching /api/records/batch.
   async structure(path: string, options: RequestOptions): Promise<Reply> {
     const input = options.body as Json;
     const single = /^\/api\/records\/([^/]+)\/([^/]+)\/([^/]+)$/.exec(path);
     const writes: Json[] = single ? [{ ...input, scope: decodeURIComponent(single[1]), collection: decodeURIComponent(single[2]), id: decodeURIComponent(single[3]) }] : input.writes;
-    const expectedPages: Json[] = [];
-    const seen = new Set<string>();
-    for (const write of writes) {
-      const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? write.value?.page ?? write.base?.page : undefined;
-      if (!pageId) continue;
-      const key = JSON.stringify([write.scope, pageId]); if (seen.has(key)) continue; seen.add(key);
-      const reply = await this.request(`/api/collaboration/${encodeURIComponent(write.scope)}/${encodeURIComponent(pageId)}`);
-      if (![200, 404].includes(reply.status)) throw new Error(`Cannot establish the fixture's structure basis: ${JSON.stringify(reply.body)}`);
-      if (reply.status === 200) expectedPages.push({ scope: write.scope, pageId, generation: reply.body.generation, revision: reply.body.revision });
-    }
-    const reply = await this.request("/api/records/batch", { ...options, body: { ...(!single ? input : {}), writes, expectedPages } });
+    const reply = await this.request("/api/records/batch", { ...options, body: { ...(!single ? input : {}), writes } });
     return single && reply.status === 200 ? { ...reply, body: reply.body[0] } : reply;
   }
 }

@@ -12,8 +12,7 @@ type RecordRow = { id: string; value: Record<string, unknown> };
 type Invitation = { id: string; spaceId: string; spaceName: string; expiresAt: string };
 type Batch = {
   writes?: Array<{ collection: string; id: string; value?: { page?: string }; patch?: { page?: string } }>;
-  textUpdates?: Array<{ pageId: string }>;
-  expectedPages?: Array<{ pageId: string }>;
+  pageOps?: Array<{ pageId: string }>;
 };
 const password = "Account-settings-recovery-password-2026!";
 const batchPath = "**/api/records/batch";
@@ -103,8 +102,7 @@ async function savedBlocks(page: Page, app: App, pageId: string) {
 function containsPageWrite(request: Request, pageId: string) {
   if (request.method() !== "POST") return false;
   const body = request.postDataJSON() as Batch;
-  return Boolean(body.textUpdates?.some((update) => update.pageId === pageId)
-    || body.expectedPages?.some((page) => page.pageId === pageId)
+  return Boolean(body.pageOps?.some((sub) => sub.pageId === pageId)
     || body.writes?.some((write) => (write.collection === "pages" && write.id === pageId)
       || (write.collection === "blocks" && (write.value?.page === pageId || write.patch?.page === pageId || write.id.startsWith(`${pageId}/`)))));
 }

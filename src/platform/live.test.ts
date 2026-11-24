@@ -26,6 +26,7 @@ vi.mock("../collaboration/client", () => ({
   collaborationAccount: () => hooks.account,
   collaborationVersion: () => 0,
   failPageBatch: hooks.failPageBatch,
+  installPendingWriteChecker: () => {},
   installRecordReader: vi.fn(),
   installRecordRefresh: vi.fn(),
   installSnapshotConsumer: vi.fn(),
