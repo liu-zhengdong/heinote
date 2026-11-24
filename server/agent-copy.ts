@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { descendantPageIds, inTrash, isPurging } from "../src/core/page-tree.ts";
 import { relinkContent } from "../src/core/block-tree.ts";
-import { blockRecordId } from "../src/platform/record-ids.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { fail, id, type Actor, type Row, type Store } from "./store.ts";
 import { externalScope, mutation } from "./mutation.ts";
@@ -151,20 +150,22 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
         }
 
         // Same as POST /pages: a child page also appears as an expanded link
-        // at the end of its parent's body.
+        // at the end of its parent's body, appended as a semantic create_block op
+        // so active editors on the parent receive it without an epoch reset.
         if (destination) {
-          const siblings = Object.values(destination.block_tree.by_id).filter((block) => !block.parent_id);
-          const top = siblings.length ? Math.max(...siblings.map((block) => block.order)) : 0;
           const blockId = id();
-          const docRow = store.one("SELECT generation FROM collaboration_documents WHERE scope=? AND page_id=?", targetScope, destination.id);
-          const expected = docRow ? [{ scope: externalScope(targetScope), pageId: destination.id, generation: String(docRow.generation), revision: store.revision(targetScope, destination.id) }] : [];
-          store.apply(who, [{ scope: externalScope(targetScope), collection: "blocks", id: blockRecordId(destination.id, blockId), action: "put", base: null,
-            value: { id: blockId, page: destination.id, kind: "text", order: top + 1024, content: [{ embed: { mention: { kind: "page", page_id: newRoot, expanded: true } } }] } }], `copy-link:${input.requestId}`, [], expected);
+          store.collaboration.appendServerOps(who, externalScope(targetScope), destination.id, [{
+            type: "create_block",
+            block: {
+              id: blockId,
+              page: destination.id,
+              kind: "text",
+              content: [{ embed: { mention: { kind: "page", page_id: newRoot, expanded: true } } }],
+            },
+            parentId: null,
+          }]);
         }
         recordTokenEvent(store.db, who.tokenId, { action: "copy", pageId: newRoot, pageTitle: source.page.title });
-        // Materialize the copied pages' collaboration documents so the reply's
-        // snapshot (pageDto) finds them — commit-time flush hasn't run yet.
-        store.collaboration.flush();
         return { status: 201, body: store.pageDto(who, newRoot), scope: targetScope, pageIds: [newRoot, ...(destination ? [destination.id] : [])] };
       });
   });

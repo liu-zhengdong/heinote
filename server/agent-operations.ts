@@ -1,16 +1,24 @@
 import type { Express, Request } from "express";
-import * as Y from "yjs";
 import { z } from "zod";
-import schema, { BLOCK_KINDS, CONTENT_COLORS } from "../schema.ts";
-import { blockField, fieldAddress, setAt, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
-import { fieldOf, readFields, readText } from "../src/collaboration/text.ts";
-import { captureText, editText } from "../src/collaboration/text.ts";
+import { BLOCK_KINDS, CONTENT_COLORS } from "../schema.ts";
+import {
+  applyPageOp,
+  blockFieldKey,
+  clonePageState,
+  pageStateFromRecords,
+  parentOf,
+  readField,
+  wouldCreateCycle,
+} from "../src/collaboration/ot/page.ts";
+import { isValidTextBoundary, normalizeRichText, richTextLength } from "../src/collaboration/ot/text.ts";
+import type { PageOp, TextStep } from "../src/collaboration/protocol.ts";
 import { markdownInlineToContent } from "../src/core/inline-markdown.ts";
 import { markdownToBlockTree } from "../src/core/markdown-blocks.ts";
 import { isKeptLink } from "../src/core/inline-content.ts";
-import { blockRecordId } from "../src/platform/record-ids.ts";
+import { storedRuns } from "../src/core/stored-runs.ts";
+import type { RichText } from "../src/platform/schema.ts";
 import { checkedStoredFile, storedFileSchema } from "./agent-files.ts";
-import { fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
+import { fail, hash, id, type Actor, type Row, type Store } from "./store.ts";
 import { recordTokenEvent } from "./token-identity.ts";
 
 const identifier = z.string().min(1).max(256);
@@ -34,21 +42,23 @@ const operationSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("move_block"), blockId: identifier, parentId: identifier.nullable().optional(), order: z.number().finite() }).strict(),
 ]);
 const commandSchema = z.object({
-  requestId: z.string().min(1).max(256), generation: z.string().min(1).max(100),
-  baseRevision: z.string().min(1).max(100).optional(), mode: z.enum(["apply", "suggest"]).default("apply"),
+  requestId: z.string().min(1).max(256),
+  generation: z.string().min(1).max(100),
+  baseRevision: z.string().min(1).max(100).optional(),
+  baseSeq: z.number().int().min(0).optional(),
+  mode: z.enum(["apply", "suggest"]).default("apply"),
   operations: z.array(operationSchema).min(1).max(100),
 }).strict();
 const reviewSchema = z.object({ baseRevision: z.string().min(1).max(100).optional() }).strict();
 type Operation = z.infer<typeof operationSchema>;
 type Command = z.infer<typeof commandSchema>;
 type Reply = { status: number; body: object };
-type BlockRow = { id: string; value: Row };
-type Plan = { writes: Write[]; textUpdates: TextUpdate[]; expectedPages: ExpectedPage[] };
 
 const externalScope = (actual: string) => actual.startsWith("user:") ? "personal" : actual;
-const structural = (operation: Operation) => operation.type === "insert_block" || operation.type === "insert_blocks" || operation.type === "delete_block" || operation.type === "move_block";
-const needsRevision = (operations: Operation[]) => operations.some((operation) => structural(operation) || operation.type !== "insert_text" || typeof operation.index === "number");
-const parentOf = (block: Row) => typeof block.parent_id === "string" ? block.parent_id : null;
+const structural = (operation: Operation) =>
+  operation.type === "insert_block" || operation.type === "insert_blocks" || operation.type === "delete_block" || operation.type === "move_block";
+const needsRevision = (operations: Operation[]) =>
+  operations.some((operation) => structural(operation) || operation.type !== "insert_text" || typeof operation.index === "number");
 
 function authorizedPage(store: Store, who: Actor, pageId: string, write: boolean, requestedScope?: string) {
   const found = store.page(who, pageId);
@@ -58,212 +68,249 @@ function authorizedPage(store: Store, who: Actor, pageId: string, write: boolean
   return { ...found, scopeName };
 }
 
-function boundary(text: Y.Text, index: number): void {
-  if (index > text.length) fail(400, "文字范围超出段落。", "bad_request");
-  const plain = readText(text).map((run) => run.text ?? "\ufffc").join("");
-  if (index > 0 && index < plain.length) {
-    const left = plain.charCodeAt(index - 1); const right = plain.charCodeAt(index);
-    if (left >= 0xd800 && left <= 0xdbff && right >= 0xdc00 && right <= 0xdfff) fail(400, "文字范围不能切开 emoji 字符。", "bad_request");
-  }
+function assertBoundary(runs: RichText, index: number): void {
+  if (index > richTextLength(runs)) fail(400, "文字范围超出段落。", "bad_request");
+  if (!isValidTextBoundary(runs, index)) fail(400, "文字范围不能切开 emoji 字符。", "bad_request");
 }
 
-function validParents(blocks: Map<string, BlockRow>): void {
-  for (const [blockId, block] of blocks) {
-    const seen = new Set([blockId]);
-    let parent = parentOf(block.value);
-    while (parent !== null) {
-      if (seen.has(parent)) fail(400, "段落不能形成循环。", "bad_request");
-      seen.add(parent);
-      const ancestor = blocks.get(parent);
-      if (!ancestor) fail(400, "父段落必须位于当前页面。", "bad_request");
-      parent = parentOf(ancestor.value);
+function runsToInsertSteps(runs: RichText): TextStep[] {
+  const steps: TextStep[] = [];
+  for (const run of normalizeRichText(runs)) {
+    if (run.embed !== undefined) {
+      steps.push(run.marks ? { insert: { embed: structuredClone(run.embed) }, marks: structuredClone(run.marks) } : { insert: { embed: structuredClone(run.embed) } });
+    } else if (typeof run.text === "string" && run.text.length) {
+      steps.push(run.marks ? { insert: run.text, marks: structuredClone(run.marks) } : { insert: run.text });
     }
   }
+  return steps;
 }
 
-function planOperations(store: Store, who: Actor, scopeName: string, pageId: string, generation: string, revision: string, operations: Operation[], requireBasis: boolean): Plan {
-  const loaded = store.collaboration.fields(who, scopeName, pageId);
-  const doc = loaded.doc;
-  const before = Y.encodeStateVector(doc);
-  const original = new Map(store.records(loaded.scope, "blocks").filter(({ value }) => value.page === pageId).map((row) => [String(row.value.id), row]));
-  const working = new Map([...original].map(([key, row]) => [key, structuredClone(row)]));
-  const newTexts = new Map<string, Y.Text>();
-  const newDocs: Y.Doc[] = [];
-  const find = (blockId: string): BlockRow => {
-    const block = working.get(blockId);
+/** Translate Agent HTTP operations into semantic `PageOp[]` verified against the live page state. */
+function translateOperations(
+  store: Store,
+  who: Actor,
+  actualScope: string,
+  pageId: string,
+  operations: Operation[],
+): PageOp[] {
+  const bundle = store.pageBundle(actualScope, pageId);
+  if (!bundle.page) fail(404, "页面不存在。", "not_found");
+  const working = clonePageState(pageStateFromRecords(pageId, bundle.page, bundle.blocks));
+  const planned: PageOp[] = [];
+
+  const emit = (op: PageOp) => {
+    applyPageOp(working, op, "materialize");
+    planned.push(op);
+  };
+
+  const requireBlock = (blockId: string) => {
+    const block = working.blocks.get(blockId);
     if (!block) fail(404, "段落不存在或不属于当前页面。", "not_found");
     return block;
   };
-  const textOf = (blockId: string): Y.Text => {
-    const row = find(blockId);
-    const fresh = newTexts.get(blockId);
-    if (fresh) return fresh;
-    const key = blockField(row.id);
-    if (!(doc.getMap("fields").get(key) instanceof Y.Text)) fail(409, "段落的协作字段已变化。", "generation_conflict");
-    return fieldOf(doc, key);
+
+  const readBlockText = (blockId: string): RichText => {
+    requireBlock(blockId);
+    return readField(working, blockFieldKey(pageId, blockId)) ?? [];
   };
-  try {
-    doc.transact(() => {
-      for (const operation of operations) {
-        if (operation.type === "insert_block" || operation.type === "insert_blocks") {
-          const after = operation.afterId ? find(operation.afterId) : undefined;
-          const parent = after ? parentOf(after.value) : null;
-          const siblings = [...working.values()].filter((row) => parentOf(row.value) === parent).sort((a, b) => Number(a.value.order) - Number(b.value.order) || a.id.localeCompare(b.id));
-          const previous = after ? Number(after.value.order) : Number(siblings.at(-1)?.value.order ?? 0);
-          const next = after ? siblings.find((row) => Number(row.value.order) > previous) : undefined;
-          if (operation.type === "insert_blocks") {
-            const tree = markdownToBlockTree(operation.markdown, id);
-            const ordered = Object.values(tree.by_id).sort((a, b) => {
-              const depth = (block: typeof a): number => block.parent_id ? depth(tree.by_id[block.parent_id]) + 1 : 0;
-              return depth(a) - depth(b) || a.order - b.order;
-            });
-            /* Root-level entries share `after`'s sibling slot; children keep
-               their own parent and order. Roots need fractional slots between
-               `previous` and `next`. */
-            let slot = 1;
-            const roots = ordered.filter((block) => !block.parent_id).length;
-            const spacing = next ? (Number(next.value.order) - previous) / (roots + 1) : 1024;
-            if (!Number.isFinite(spacing) || spacing <= 0) fail(409, "段落顺序需要重新整理。", "structure_conflict");
-            for (const block of ordered) {
-              const blockId = block.id; const recordId = blockRecordId(pageId, blockId);
-              const fresh = new Y.Doc(); newDocs.push(fresh);
-              const text = fieldOf(fresh, blockField(recordId));
-              editText(text, captureText(text), block.content as ReturnType<typeof readText>);
-              newTexts.set(blockId, text);
-              const order = block.parent_id ? Number(block.order) : previous + spacing * slot++;
-              const { parent_id: blockParent, ...rest } = block;
-              working.set(blockId, { id: recordId, value: { ...rest, order, ...(blockParent ? { parent_id: blockParent } : {}), content: readText(text), page: pageId } });
-            }
-            continue;
+
+  for (const operation of operations) {
+    if (operation.type === "insert_block") {
+      const after = operation.afterId ? requireBlock(operation.afterId) : undefined;
+      const parentId = after ? parentOf(after) : null;
+      const kind = operation.file !== undefined ? "file" : operation.kind ?? "text";
+      const file = operation.file === undefined ? undefined : checkedStoredFile(store, who, actualScope, operation.file);
+      const blockId = id();
+      const content: RichText = operation.format === "markdown"
+        ? normalizeRichText(storedRuns(markdownInlineToContent(operation.text)) as RichText)
+        : operation.text ? [{ text: operation.text }] : [];
+      emit({
+        type: "create_block",
+        block: {
+          id: blockId,
+          page: pageId,
+          kind,
+          ...(file ? { file } : {}),
+          ...(parentId ? { parent_id: parentId } : {}),
+          content,
+        },
+        parentId,
+        ...(after ? { afterId: String(after.id) } : {}),
+      });
+      continue;
+    }
+
+    if (operation.type === "insert_blocks") {
+      const after = operation.afterId ? requireBlock(operation.afterId) : undefined;
+      const rootParent = after ? parentOf(after) : null;
+      const tree = markdownToBlockTree(operation.markdown, id);
+      const ordered = Object.values(tree.by_id).sort((a, b) => {
+        const depth = (block: typeof a): number => block.parent_id ? depth(tree.by_id[block.parent_id]) + 1 : 0;
+        return depth(a) - depth(b) || a.order - b.order;
+      });
+      let cursorAfterId = after ? String(after.id) : undefined;
+      for (const block of ordered) {
+        const isRoot = !block.parent_id;
+        const targetParent = isRoot ? rootParent : block.parent_id!;
+        const { parent_id: _p, ...rest } = block;
+        const content = normalizeRichText(storedRuns(block.content) as RichText);
+        emit({
+          type: "create_block",
+          block: {
+            ...rest,
+            page: pageId,
+            ...(targetParent ? { parent_id: targetParent } : {}),
+            content,
+          },
+          parentId: targetParent,
+          ...(isRoot && cursorAfterId ? { afterId: cursorAfterId } : {}),
+        });
+        if (isRoot) cursorAfterId = block.id;
+      }
+      continue;
+    }
+
+    if (operation.type === "insert_page_link") {
+      requireBlock(operation.blockId);
+      if (operation.pageId === pageId) fail(400, "页面不能嵌入自身。", "bad_request");
+      const target = store.page(who, operation.pageId);
+      const targetTrash = store.pageTrashState(target.scope, target.page.id);
+      if (targetTrash.archived || targetTrash.purging) fail(404, "目标页面不存在。", "not_found");
+      const current = readBlockText(operation.blockId);
+      const index = operation.index === "start" ? 0 : operation.index === "end" ? richTextLength(current) : operation.index;
+      assertBoundary(current, index);
+      const mention = { mention: { kind: "page", page_id: operation.pageId, ...(operation.expanded ? { expanded: true } : {}), ...(operation.locked ? { locked: true } : {}) } };
+      const steps: TextStep[] = [...(index > 0 ? [{ retain: index }] : []), { insert: { embed: mention } }];
+      emit({ type: "text", field: blockFieldKey(pageId, operation.blockId), ops: steps });
+      continue;
+    }
+
+    if (operation.type === "insert_image") {
+      const row = requireBlock(operation.blockId);
+      if (["file", "table", "divider", "embed"].includes(String(row.kind))) {
+        fail(400, "图片只能放进文字段落。", "bad_request");
+      }
+      const file = checkedStoredFile(store, who, actualScope, operation.file, true);
+      const current = readBlockText(operation.blockId);
+      const index = operation.index === "start" ? 0 : operation.index === "end" ? richTextLength(current) : operation.index;
+      assertBoundary(current, index);
+      const mention = { mention: { kind: "image", file, ...(operation.width ? { width: operation.width } : {}) } };
+      const steps: TextStep[] = [...(index > 0 ? [{ retain: index }] : []), { insert: { embed: mention } }];
+      emit({ type: "text", field: blockFieldKey(pageId, operation.blockId), ops: steps });
+      continue;
+    }
+
+    if (operation.type === "delete_block") {
+      requireBlock(operation.blockId);
+      const remove = new Set([operation.blockId]);
+      for (let changed = true; changed;) {
+        changed = false;
+        for (const [blockId, row] of working.blocks) {
+          if (!remove.has(blockId) && remove.has(parentOf(row) ?? "")) {
+            remove.add(blockId);
+            changed = true;
           }
-          const order = next ? previous + (Number(next.value.order) - previous) / 2 : previous + 1024;
-          if (!Number.isFinite(order) || order <= previous || (next && order >= Number(next.value.order))) fail(409, "段落顺序需要重新整理。", "structure_conflict");
-          const kind = operation.file !== undefined ? "file" : operation.kind ?? "text";
-          const file = operation.file === undefined ? undefined : checkedStoredFile(store, who, loaded.scope, operation.file);
-          const blockId = id(); const recordId = blockRecordId(pageId, blockId);
-          const fresh = new Y.Doc(); newDocs.push(fresh);
-          const text = fieldOf(fresh, blockField(recordId));
-          if (operation.format === "markdown") editText(text, captureText(text), markdownInlineToContent(operation.text) as ReturnType<typeof readText>);
-          else text.insert(0, operation.text);
-          newTexts.set(blockId, text);
-          working.set(blockId, { id: recordId, value: { id: blockId, page: pageId, kind, order, ...(file ? { file } : {}), ...(parent ? { parent_id: parent } : {}), content: readText(text) } });
-          continue;
-        }
-        if (operation.type === "insert_page_link") {
-          find(operation.blockId);
-          if (operation.pageId === pageId) fail(400, "页面不能嵌入自身。", "bad_request");
-          const target = store.page(who, operation.pageId);
-          const targetTrash = store.pageTrashState(target.scope, target.page.id);
-          if (targetTrash.archived || targetTrash.purging) fail(404, "目标页面不存在。", "not_found");
-          const text = textOf(operation.blockId);
-          const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
-          boundary(text, index);
-          const mention = { mention: { kind: "page", page_id: operation.pageId, ...(operation.expanded ? { expanded: true } : {}), ...(operation.locked ? { locked: true } : {}) } };
-          text.insertEmbed(index, mention, {});
-          continue;
-        }
-        if (operation.type === "insert_image") {
-          const row = find(operation.blockId);
-          if (row.value.kind === "file" || row.value.kind === "table" || row.value.kind === "divider" || row.value.kind === "embed") fail(400, "图片只能放进文字段落。", "bad_request");
-          const file = checkedStoredFile(store, who, loaded.scope, operation.file, true);
-          const text = textOf(operation.blockId);
-          const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
-          boundary(text, index);
-          const mention = { mention: { kind: "image", file, ...(operation.width ? { width: operation.width } : {}) } };
-          text.insertEmbed(index, mention, {});
-          continue;
-        }
-        if (operation.type === "delete_block") {
-          find(operation.blockId);
-          const remove = new Set([operation.blockId]);
-          for (let changed = true; changed;) {
-            changed = false;
-            for (const [blockId, row] of working) if (!remove.has(blockId) && remove.has(parentOf(row.value) ?? "")) { remove.add(blockId); changed = true; }
-          }
-          for (const blockId of remove) working.delete(blockId);
-          continue;
-        }
-        if (operation.type === "move_block") {
-          const row = find(operation.blockId);
-          const parent = operation.parentId === undefined ? parentOf(row.value) : operation.parentId;
-          if (parent !== null) find(parent);
-          if (parent === operation.blockId) fail(400, "段落不能成为自身的父段落。", "bad_request");
-          row.value.order = operation.order;
-          if (parent === null) delete row.value.parent_id; else row.value.parent_id = parent;
-          continue;
-        }
-        const text = textOf(operation.blockId);
-        const index = operation.index === "start" ? 0 : operation.index === "end" ? text.length : operation.index;
-        boundary(text, index);
-        if (operation.type === "insert_text") {
-          if (operation.format === "markdown") {
-            /* Inline Markdown expands to runs: marks ride Y.Text attributes,
-               mention runs are embeds. An absent marks object must be sent as
-               {} — Y.Text merges an insert with no attributes into the item
-               before it and silently inherits its marks. */
-            let at = index;
-            for (const run of markdownInlineToContent(operation.text) as Array<{ text?: string; embed?: Record<string, unknown>; marks?: Record<string, unknown> }>) {
-              if (run.embed) { text.insertEmbed(at, structuredClone(run.embed), run.marks ?? {}); at += 1; }
-              else if (run.text) { text.insert(at, run.text, run.marks ?? {}); at += run.text.length; }
-            }
-          } else text.insert(index, operation.text);
-        } else {
-          const end = index + operation.length;
-          if (!Number.isSafeInteger(end)) fail(400, "文字范围无效。", "bad_request");
-          boundary(text, end);
-          if (operation.type === "delete_text") text.delete(index, operation.length);
-          else text.format(index, operation.length, Object.fromEntries(Object.entries(operation.marks).filter(([, value]) => value !== undefined)));
         }
       }
-    }, "agent");
-    validParents(working);
-    const projectedBases = new Map([...original.values()].map((row) => [row.id, row.value]));
-    for (const [key, runs] of Object.entries(readFields(doc))) {
-      const address = fieldAddress(key);
-      if (address?.collection !== "blocks") continue;
-      const base = projectedBases.get(address.id);
-      if (base) projectedBases.set(address.id, setAt(base, address.path, runs));
+      emit({ type: "delete_blocks", blockIds: [...remove] });
+      continue;
     }
-    const writes: Write[] = [];
-    for (const [blockId, row] of original) {
-      const next = working.get(blockId);
-      if (!next) {
-        // The coordinator applies the CRDT update before structural writes.
-        writes.push({ scope: scopeName, collection: "blocks", id: row.id, action: "delete", base: projectedBases.get(row.id)! });
-      } else {
-        const patch: Row = {};
-        if (parentOf(next.value) !== parentOf(row.value)) patch.parent_id = parentOf(next.value);
-        if (next.value.order !== row.value.order) patch.order = next.value.order;
-        if (Object.keys(patch).length) writes.push({ scope: scopeName, collection: "blocks", id: row.id, action: "patch", patch, base: row.value });
+
+    if (operation.type === "move_block") {
+      const row = requireBlock(operation.blockId);
+      const parent = operation.parentId === undefined ? parentOf(row) : operation.parentId;
+      if (parent !== null) requireBlock(parent);
+      if (parent === operation.blockId) fail(400, "段落不能成为自身的父段落。", "bad_request");
+      if (wouldCreateCycle(working, operation.blockId, parent)) fail(400, "段落不能形成循环。", "bad_request");
+      // Explicit numeric order: resolve nearest sibling anchors so semantic move lands at requested order.
+      const siblings = [...working.blocks.values()]
+        .filter((b) => String(b.id) !== operation.blockId && parentOf(b) === parent)
+        .sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0) || String(a.id).localeCompare(String(b.id)));
+      const after = [...siblings].reverse().find((b) => Number(b.order ?? 0) < operation.order);
+      const before = siblings.find((b) => Number(b.order ?? 0) >= operation.order);
+      emit({
+        type: "move_blocks",
+        blockIds: [operation.blockId],
+        parentId: parent,
+        ...(after ? { afterId: String(after.id) } : {}),
+        ...(before ? { beforeId: String(before.id) } : {}),
+        assignedOrders: { [operation.blockId]: operation.order },
+      });
+      // Ensure explicit requested numeric order is preserved when unambiguous.
+      const placed = working.blocks.get(operation.blockId);
+      if (placed) placed.order = operation.order;
+      continue;
+    }
+
+    const current = readBlockText(operation.blockId);
+    const index = operation.index === "start" ? 0 : operation.index === "end" ? richTextLength(current) : operation.index;
+    assertBoundary(current, index);
+
+    if (operation.type === "insert_text") {
+      const insertSteps: TextStep[] = operation.format === "markdown"
+        ? runsToInsertSteps(storedRuns(markdownInlineToContent(operation.text)) as RichText)
+        : operation.text ? [{ insert: operation.text }] : [];
+      if (insertSteps.length) {
+        const steps: TextStep[] = [...(index > 0 ? [{ retain: index }] : []), ...insertSteps];
+        emit({ type: "text", field: blockFieldKey(pageId, operation.blockId), ops: steps });
+      }
+    } else if (operation.type === "delete_text") {
+      const end = index + operation.length;
+      if (!Number.isSafeInteger(end)) fail(400, "文字范围无效。", "bad_request");
+      assertBoundary(current, end);
+      if (operation.length > 0) {
+        const steps: TextStep[] = [...(index > 0 ? [{ retain: index }] : []), { delete: operation.length }];
+        emit({ type: "text", field: blockFieldKey(pageId, operation.blockId), ops: steps });
+      }
+    } else if (operation.type === "format_text") {
+      const end = index + operation.length;
+      if (!Number.isSafeInteger(end)) fail(400, "文字范围无效。", "bad_request");
+      assertBoundary(current, end);
+      const cleanMarks = Object.fromEntries(Object.entries(operation.marks).filter(([, value]) => value !== undefined));
+      if (operation.length > 0 && Object.keys(cleanMarks).length) {
+        const steps: TextStep[] = [...(index > 0 ? [{ retain: index }] : []), { retain: operation.length, marks: cleanMarks }];
+        emit({ type: "text", field: blockFieldKey(pageId, operation.blockId), ops: steps });
       }
     }
-    for (const [blockId, row] of working) if (!original.has(blockId)) {
-      row.value.content = readText(newTexts.get(blockId)!);
-      const value = z.object(schema.definition.collections.blocks.fields).strict().parse(row.value) as Row;
-      writes.push({ scope: scopeName, collection: "blocks", id: row.id, action: "put", value, base: null });
-    }
-    return {
-      writes,
-      textUpdates: [{ scope: scopeName, pageId, generation, update: Buffer.from(Y.encodeStateAsUpdate(doc, before)).toString("base64") }],
-      expectedPages: requireBasis ? [{ scope: scopeName, pageId, generation, revision }] : [],
-    };
-  } finally { doc.destroy(); newDocs.forEach((fresh) => fresh.destroy()); }
+  }
+
+  return planned;
 }
 
-function execute(store: Store, who: Actor, pageId: string, scopeName: string, input: Pick<Command, "generation" | "baseRevision" | "operations">, suggest: boolean): object {
+function execute(
+  store: Store,
+  who: Actor,
+  pageId: string,
+  scopeName: string,
+  actualScope: string,
+  input: Pick<Command, "generation" | "baseRevision" | "baseSeq" | "operations">,
+  suggest: boolean,
+): object {
   const current = store.collaboration.snapshot(who, scopeName, pageId);
   if (!current.canEdit) fail(403, "此页面仅可查看。", "read_only");
   if (current.generation !== input.generation) fail(409, "页面结构或版本已变化。请重新读取。", "generation_conflict");
-  if (needsRevision(input.operations) && !input.baseRevision) fail(400, "数值范围与结构操作必须携带页面基础修订。", "bad_request");
-  if (input.baseRevision !== undefined && input.baseRevision !== current.revision) fail(409, "页面已有新修改。请重新读取。", "conflict");
-  const plan = planOperations(store, who, scopeName, pageId, current.generation, current.revision, input.operations, input.baseRevision !== undefined || needsRevision(input.operations));
+  if (input.baseSeq === undefined && needsRevision(input.operations) && !input.baseRevision) {
+    fail(400, "数值范围与结构操作必须携带页面基础修订。", "bad_request");
+  }
+  if (input.baseRevision !== undefined && input.baseRevision !== current.revision) {
+    fail(409, "页面已有新修改。请重新读取。", "conflict");
+  }
+  const ops = translateOperations(store, who, actualScope, pageId, input.operations);
   if (suggest) return { baseRevision: current.revision, generation: current.generation };
-  store.apply(who, plan.writes, undefined, plan.textUpdates, plan.expectedPages);
-  store.collaboration.flush();
+  if (ops.length) {
+    const baseSeq = input.baseSeq !== undefined ? input.baseSeq : current.seq;
+    store.applyBatch(who, [], undefined, [{
+      scope: scopeName,
+      pageId,
+      epoch: current.epoch,
+      baseSeq,
+      ops,
+    }]);
+  }
   const dto = store.pageDto(who, pageId);
   recordTokenEvent(store.db, who.tokenId, { action: "edit", pageId, pageTitle: dto.title ?? "" });
   const snapshot = store.collaboration.snapshot(who, scopeName, pageId);
-  return { ...dto, collaboration: { scope: snapshot.scope, pageId, generation: snapshot.generation, revision: snapshot.revision } };
+  return { ...dto, collaboration: { scope: snapshot.scope, pageId, generation: snapshot.generation, epoch: snapshot.epoch, seq: snapshot.seq, revision: snapshot.revision } };
 }
 
 function proposalDto(row: Row) {
@@ -297,9 +344,10 @@ export function attachAgentOperations(app: Express, store: Store, actor: (req: R
         if (cached.digest !== digest) fail(409, "请求 ID 已用于其他操作。", "conflict");
         return JSON.parse(String(cached.result)) as Reply;
       }
+      store.collaboration.markRequest(input.requestId);
       let reply: Reply;
       if (input.mode === "suggest") {
-        const basis = execute(store, who, pageId, scopeName, input, true) as { baseRevision: string; generation: string };
+        const basis = execute(store, who, pageId, scopeName, scope, input, true) as { baseRevision: string; generation: string };
         const proposalId = id(); const createdAt = new Date().toISOString();
         const { siteRole: _siteRole, ...author } = who.user;
         const snapshot = { ...author, ...(who.displayName ? { displayName: who.displayName } : {}), ...(who.avatar ? { avatarUrl: who.avatar } : {}) };
@@ -307,7 +355,9 @@ export function attachAgentOperations(app: Express, store: Store, actor: (req: R
         const pageTitle = store.page(who, pageId).page.title ?? "";
         recordTokenEvent(store.db, who.tokenId, { action: "propose", pageId, pageTitle, versionId: proposalId });
         reply = { status: 201, body: proposalDto(store.one("SELECT * FROM collaboration_proposals WHERE id=?", proposalId)!) };
-      } else reply = { status: 200, body: execute(store, who, pageId, scopeName, input, false) };
+      } else {
+        reply = { status: 200, body: execute(store, who, pageId, scopeName, scope, input, false) };
+      }
       store.saveRequest(who.user.id, requestId, digest, reply);
       return reply;
     });
@@ -339,7 +389,7 @@ export function attachAgentOperations(app: Express, store: Store, actor: (req: R
       if (row.status !== "pending") fail(409, "此提案已处理。", "conflict");
       if (input.baseRevision !== undefined && input.baseRevision !== row.base_revision) fail(409, "审核不能替换提案的基础修订。", "conflict");
       const operations = z.array(operationSchema).min(1).max(100).parse(JSON.parse(String(row.operations)));
-      const body = execute(store, who, String(row.page_id), scopeName, { generation: String(row.generation), baseRevision: String(row.base_revision), operations }, false);
+      const body = execute(store, who, String(row.page_id), scopeName, scope, { generation: String(row.generation), baseRevision: String(row.base_revision), operations }, false);
       store.db.prepare("UPDATE collaboration_proposals SET status='applied' WHERE id=? AND status='pending'").run(proposalId);
       return body;
     });
@@ -351,7 +401,7 @@ export function attachAgentOperations(app: Express, store: Store, actor: (req: R
       const row = store.one("SELECT * FROM collaboration_proposals WHERE id=?", proposalId);
       if (!row) fail(404, "提案不存在。", "not_found");
       const { scope } = authorizedPage(store, who, String(row.page_id), true);
-      if (scope !== row.scope) fail(409, "页面分享位置已变化。", "generation_conflict");
+      if (scope !== row.scope) fail(409, "页面分享位置已变化。请重新生成提案。", "generation_conflict");
       if (row.status !== "pending") fail(409, "此提案已处理。", "conflict");
       store.db.prepare("UPDATE collaboration_proposals SET status='rejected' WHERE id=? AND status='pending'").run(proposalId);
     });

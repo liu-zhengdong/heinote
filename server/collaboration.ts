@@ -1,346 +1,664 @@
-import * as Y from "yjs";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { fieldAddress, fieldsInPage, setAt, structureOf, documentKey, isStructureChange, isObject, type DocumentSnapshot, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
-import { readFields, seedFields, updateFields } from "../src/collaboration/text.ts";
-import type { RichText } from "../src/platform/schema.ts";
-import { asAuthor, fail, hash, id, type Actor, type Row, type Store, type Write } from "./store.ts";
 import schema from "../schema.ts";
+import {
+  applyPageOp,
+  clonePageState,
+  pageStateFromRecords,
+  parseFieldKey,
+  recordsFromPageState,
+  transformPageOps,
+} from "../src/collaboration/ot/page.ts";
+import type {
+  OpsSinceResponse,
+  OrphanedText,
+  PageOp,
+  PageOpCommitResult,
+  PageOpSubmission,
+  TextStep,
+} from "../src/collaboration/protocol.ts";
+import { documentKey, type DocumentSnapshot } from "../src/collaboration/protocol.ts";
+import { blockRecordId, parseBlockRecordId } from "../src/platform/record-ids.ts";
+import { SEMANTIC_COLLAB_DDL } from "./migrations/009-semantic-collaboration.ts";
+import { asAuthor, fail, id, type Actor, type Row, type Store } from "./store.ts";
 
-export const textUpdateSchema = z.object({ scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256), generation: z.string().min(1).max(100), update: z.string().max(8 * 1024 * 1024) });
-export const expectedPageSchema = z.object({ scope: z.string().min(1).max(256), pageId: z.string().min(1).max(256), generation: z.string().min(1).max(100), revision: z.string().min(1).max(100) });
-export interface DocumentEvent { scope: string; pageId: string; type: "document" | "reset" | "removed"; requestId?: string; seq?: number; generation?: string; revision?: string; update?: Uint8Array }
+const markRecord = z.record(z.string(), z.unknown());
+
+export const textStepSchema: z.ZodType<TextStep> = z.union([
+  z.object({ retain: z.number().int().min(0).max(10_000_000), marks: markRecord.optional() }).strict(),
+  z.object({
+    insert: z.union([
+      z.string().max(1_000_000),
+      z.object({ embed: z.record(z.string(), z.unknown()) }).strict(),
+    ]),
+    marks: markRecord.optional(),
+  }).strict(),
+  z.object({ delete: z.number().int().min(0).max(10_000_000) }).strict(),
+]);
+
+export const pageOpSchema: z.ZodType<PageOp> = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("text"),
+    field: z.string().min(1).max(512),
+    ops: z.array(textStepSchema).max(5000),
+  }).strict(),
+  z.object({
+    type: z.literal("split_block"),
+    blockId: z.string().min(1).max(256),
+    offset: z.number().int().min(0).max(10_000_000),
+    newBlockId: z.string().min(1).max(256),
+    newKind: z.string().min(1).max(64),
+    newProps: z.record(z.string(), z.unknown()).optional(),
+    parentId: z.string().min(1).max(256).nullable().optional(),
+    order: z.number().finite().optional(),
+    rebalancedOrders: z.record(z.string(), z.number().finite()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("merge_block"),
+    intoBlockId: z.string().min(1).max(256),
+    fromBlockId: z.string().min(1).max(256),
+    joinOffset: z.number().int().min(0).optional(),
+    intoParentId: z.string().min(1).max(256).nullable().optional(),
+    movedChildOrders: z.record(z.string(), z.number().finite()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("create_block"),
+    block: z.record(z.string(), z.unknown()),
+    parentId: z.string().min(1).max(256).nullable().optional(),
+    afterId: z.string().min(1).max(256).nullable().optional(),
+    beforeId: z.string().min(1).max(256).nullable().optional(),
+    assignedOrder: z.number().finite().optional(),
+    rebalancedOrders: z.record(z.string(), z.number().finite()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("delete_blocks"),
+    blockIds: z.array(z.string().min(1).max(256)).min(1).max(2000),
+    reparentTo: z.record(z.string(), z.object({ parentId: z.string().nullable(), order: z.number().finite() }).strict()).optional(),
+    fallbackBlock: z.record(z.string(), z.unknown()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("move_blocks"),
+    blockIds: z.array(z.string().min(1).max(256)).min(1).max(2000),
+    parentId: z.string().min(1).max(256).nullable(),
+    afterId: z.string().min(1).max(256).nullable().optional(),
+    beforeId: z.string().min(1).max(256).nullable().optional(),
+    assignedOrders: z.record(z.string(), z.number().finite()).optional(),
+    rebalancedOrders: z.record(z.string(), z.number().finite()).optional(),
+    skippedIds: z.array(z.string()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("set_block_fields"),
+    blockId: z.string().min(1).max(256),
+    patch: z.record(z.string(), z.unknown()),
+    removedTableRows: z.array(z.string()).optional(),
+    removedTableColumns: z.array(z.string()).optional(),
+  }).strict(),
+  z.object({
+    type: z.literal("set_page_fields"),
+    patch: z.record(z.string(), z.unknown()),
+  }).strict(),
+]);
+
+export const pageOpSubmissionSchema = z.object({
+  scope: z.string().min(1).max(256),
+  pageId: z.string().min(1).max(256),
+  epoch: z.string().min(1).max(100),
+  baseSeq: z.number().int().min(0),
+  ops: z.array(pageOpSchema).min(1).max(2000),
+  fallbackFields: z.record(z.string(), z.unknown()).optional(),
+}).strict();
+
+export const expectedPageSchema = z.object({
+  scope: z.string().min(1).max(256),
+  pageId: z.string().min(1).max(256),
+  generation: z.string().min(1).max(100),
+  revision: z.string().min(1).max(100),
+});
+
+export interface DocumentEvent {
+  scope: string;
+  pageId: string;
+  type: "op" | "reset" | "removed";
+  requestId?: string;
+  epoch?: string;
+  generation?: string;
+  seq?: number;
+  revision?: string;
+  ops?: PageOp[];
+}
+
+export interface PermissionChangeFilter {
+  scope?: string;
+  userId?: string;
+  sessionHash?: string;
+  tokenId?: string;
+}
+
+export interface CommitNotification {
+  events: DocumentEvent[];
+  scopes: string[];
+  requestId?: string;
+}
+
+export interface PageOpTouch {
+  scope: string;
+  pageId: string;
+  targets: string[];
+  labels: string[];
+}
+
+export interface AppliedPageOpsOutcome {
+  results: PageOpCommitResult[];
+  touches: PageOpTouch[];
+  touchedScopes: Set<string>;
+}
+
+export const DEFAULT_EPOCH = "1";
+const OPS_SINCE_LIMIT = 500;
 const stamp = () => new Date().toISOString();
 
 export class CollaborationStore {
-  private readonly listeners = new Set<(events: DocumentEvent[]) => void>();
+  private readonly commitListeners = new Set<(notification: CommitNotification) => void>();
+  private readonly permissionListeners = new Set<(filter: PermissionChangeFilter) => void>();
   private events = new Map<string, DocumentEvent>();
-  private forced = new Set<string>();
-  private initial = new Map<string, Row | undefined>();
+  private scopes = new Set<string>();
+  private pendingPermissionChanges: PermissionChangeFilter[] = [];
   private requestId: string | undefined;
-  /** Per-document broadcast sequence, reset on restart. Deltas are pushed
-   *  against it; a gap in a subscriber's stream means a pull instead. */
-  private sequences = new Map<string, number>();
-  markRequest(requestId?: string): void { this.requestId = requestId; }
+
   constructor(private readonly store: Store) {}
 
-  /** Dirty-page triggers: one lookup per write is fine for edits, deadly for
-      bulk commits. suspend/resume swap them out inside a transaction. */
-  private static readonly DIRTY_TRIGGERS = `
-      CREATE TRIGGER collaboration_insert AFTER INSERT ON records WHEN NEW.collection IN ('pages','blocks') BEGIN
-        INSERT INTO collaboration_dirty SELECT NEW.scope,CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END WHERE NOT EXISTS(SELECT 1 FROM collaboration_dirty WHERE scope=NEW.scope AND page_id=CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END);
-      END;
-      CREATE TRIGGER collaboration_update AFTER UPDATE ON records WHEN NEW.collection IN ('pages','blocks') BEGIN
-        INSERT INTO collaboration_dirty SELECT NEW.scope,CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END WHERE NOT EXISTS(SELECT 1 FROM collaboration_dirty WHERE scope=NEW.scope AND page_id=CASE WHEN NEW.collection='pages' THEN NEW.id ELSE json_extract(NEW.value,'$.page') END);
-      END;
-      CREATE TRIGGER collaboration_delete AFTER DELETE ON records WHEN OLD.collection IN ('pages','blocks') BEGIN
-        INSERT INTO collaboration_dirty SELECT OLD.scope,CASE WHEN OLD.collection='pages' THEN OLD.id ELSE json_extract(OLD.value,'$.page') END WHERE NOT EXISTS(SELECT 1 FROM collaboration_dirty WHERE scope=OLD.scope AND page_id=CASE WHEN OLD.collection='pages' THEN OLD.id ELSE json_extract(OLD.value,'$.page') END);
-      END;`;
-
   initialize(): void {
-    this.store.db.exec(`
-      CREATE TABLE IF NOT EXISTS collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, structure TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY(scope,page_id));
-      CREATE TABLE IF NOT EXISTS collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
-      CREATE TABLE IF NOT EXISTS collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(scope,page_id));
-      DROP TRIGGER IF EXISTS collaboration_insert;
-      DROP TRIGGER IF EXISTS collaboration_update;
-      DROP TRIGGER IF EXISTS collaboration_delete;
-      ${CollaborationStore.DIRTY_TRIGGERS}
-      -- Only pages with no stored document need rebuilding. Re-marking every
-      -- page dirty costs a full-vault Y.Doc rebuild at every cold boot.
-      INSERT OR IGNORE INTO collaboration_dirty SELECT scope,id FROM records WHERE collection='pages' AND NOT EXISTS(SELECT 1 FROM collaboration_documents WHERE collaboration_documents.scope=records.scope AND collaboration_documents.page_id=records.id);
-    `);
-    this.store.transaction(() => {});
+    this.store.db.exec(SEMANTIC_COLLAB_DDL);
   }
-  suspendDirtyTracking(): void {
-    this.store.db.exec(`
-      DROP TRIGGER IF EXISTS collaboration_insert;
-      DROP TRIGGER IF EXISTS collaboration_update;
-      DROP TRIGGER IF EXISTS collaboration_delete;
-    `);
+
+  markRequest(requestId?: string): void {
+    this.requestId = requestId;
   }
-  resumeDirtyTracking(): void { this.store.db.exec(CollaborationStore.DIRTY_TRIGGERS); }
-  begin(): void { this.events.clear(); this.forced.clear(); this.initial.clear(); this.requestId = undefined; }
-  rollback(): void { this.events.clear(); this.forced.clear(); this.initial.clear(); this.requestId = undefined; }
-  onCommit(listener: (events: DocumentEvent[]) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+
+  begin(): void {
+    this.events.clear();
+    this.scopes.clear();
+    this.pendingPermissionChanges = [];
+    this.requestId = undefined;
+  }
+
+  rollback(): void {
+    this.events.clear();
+    this.scopes.clear();
+    this.pendingPermissionChanges = [];
+    this.requestId = undefined;
+  }
+
+  flush(): void {
+    // Single source of truth (`records`): no deferred binary rebuild needed.
+  }
+
+  onCommit(listener: (notification: CommitNotification) => void): () => void {
+    this.commitListeners.add(listener);
+    return () => { this.commitListeners.delete(listener); };
+  }
+
+  onPermissionChange(listener: (filter: PermissionChangeFilter) => void): () => void {
+    this.permissionListeners.add(listener);
+    return () => { this.permissionListeners.delete(listener); };
+  }
+
+  /** Queue or immediately emit a targeted permission/session recheck. */
+  notifyPermissionChange(filter: PermissionChangeFilter = {}): void {
+    if (this.store.inTransaction) {
+      this.pendingPermissionChanges.push(filter);
+      return;
+    }
+    for (const listener of this.permissionListeners) {
+      try { listener(filter); }
+      catch (error) { console.error("Permission recheck failed", error); }
+    }
+  }
+
+  /** Notify subscribers of a scope-level delta (e.g. after background worker import). */
+  notifyScopeDelta(scope: string): void {
+    if (this.store.inTransaction) {
+      this.scopes.add(scope);
+      return;
+    }
+    const notification: CommitNotification = { events: [], scopes: [scope] };
+    for (const listener of this.commitListeners) {
+      try { listener(notification); }
+      catch (error) { console.error("Collaboration scope delta failed", error); }
+    }
+  }
+
+  noteScope(scope: string): void {
+    this.scopes.add(scope);
+  }
+
   committed(): void {
-    /* Enrich once per document per commit — revision hashing and stored
-     *  rows used to be rebuilt inside every subscriber's snapshot. */
     for (const event of this.events.values()) {
-      const key = documentKey(event);
-      if (event.type === "removed") { this.sequences.delete(key); continue; }
-      /* One sequence step per commit per document: subscribers merge the
-       *  delta only while their stream is contiguous. */
-      const seq = (this.sequences.get(key) ?? 0) + 1;
-      this.sequences.set(key, seq);
-      event.seq = seq;
-      const row = this.stored(event.scope, event.pageId);
-      event.generation = row ? String(row.generation) : undefined;
-      event.revision = row ? this.store.revision(event.scope, event.pageId) : undefined;
+      if (event.type === "removed") continue;
+      const meta = this.pageMeta(event.scope, event.pageId);
+      event.epoch = meta.epoch;
+      event.generation = meta.epoch;
+      event.seq = meta.seq;
+      if (this.pageData(event.scope, event.pageId)) {
+        event.revision = this.store.revision(event.scope, event.pageId);
+      }
+      this.scopes.add(event.scope);
     }
-    const events = [...this.events.values()]; this.events.clear(); this.forced.clear();
-    for (const listener of this.listeners) { try { listener(events); } catch (error) { console.error("Collaboration notification failed", error); } }
+    const notification: CommitNotification = {
+      events: [...this.events.values()],
+      scopes: [...this.scopes],
+      requestId: this.requestId,
+    };
+    const perms = [...this.pendingPermissionChanges];
+    this.events.clear();
+    this.scopes.clear();
+    this.pendingPermissionChanges = [];
+    this.requestId = undefined;
+
+    for (const filter of perms) {
+      for (const listener of this.permissionListeners) {
+        try { listener(filter); }
+        catch (error) { console.error("Permission recheck failed", error); }
+      }
+    }
+    if (notification.events.length || notification.scopes.length) {
+      for (const listener of this.commitListeners) {
+        try { listener(notification); }
+        catch (error) { console.error("Collaboration notification failed", error); }
+      }
+    }
   }
+
   notifyRemoved(scope: string, pageIds: readonly string[]): void {
-    const events: DocumentEvent[] = [];
-    for (const pageId of pageIds) {
-      this.sequences.delete(documentKey({ scope, pageId }));
-      events.push({ scope, pageId, type: "removed" });
-    }
+    const events: DocumentEvent[] = pageIds.map((pageId) => ({ scope, pageId, type: "removed" }));
     if (!events.length) return;
-    for (const listener of this.listeners) {
-      try { listener(events); }
-      catch (error) { console.error("Collaboration notification failed", error); }
+    const notification: CommitNotification = { events, scopes: [scope] };
+    for (const listener of this.commitListeners) {
+      try { listener(notification); }
+      catch (error) { console.error("Collaboration removal notification failed", error); }
     }
   }
-  /** Bulk-migrate collaboration documents across scopes inside a transaction
-   *  without decoding unchanged descendant Y.Docs (UC-59). Preserves committed
-   *  Yjs binary state, rotates generation for every moved page, archives prior
-   *  state, and queues removal/reset events for commit-time notification. */
-  migrateScope(fromScope: string, toScope: string, pageIds: readonly string[], rootId: string): void {
-    if (fromScope === toScope || !pageIds.length) return;
-    const archivedAt = stamp();
-    for (let i = 0; i < pageIds.length; i += 400) {
-      const chunk = pageIds.slice(i, i + 400);
-      const marks = chunk.map(() => "?").join(",");
-      this.store.db.prepare(
-        `INSERT OR IGNORE INTO collaboration_archives(scope,page_id,generation,state,created_at)
-         SELECT scope,page_id,generation,state,? FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})`,
-      ).run(archivedAt, fromScope, ...chunk);
-      this.store.db.prepare(
-        `INSERT INTO collaboration_documents(scope,page_id,generation,structure,state)
-         SELECT ?,page_id,lower(hex(randomblob(16))),structure,state FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})
-         ON CONFLICT(scope,page_id) DO UPDATE SET generation=excluded.generation,structure=excluded.structure,state=excluded.state`,
-      ).run(toScope, fromScope, ...chunk);
-      this.store.db.prepare(`DELETE FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
-      this.store.db.prepare(`DELETE FROM collaboration_dirty WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
-      this.store.db.prepare(`DELETE FROM collaboration_dirty WHERE scope=? AND page_id IN (${marks})`).run(toScope, ...chunk);
-      for (const pageId of chunk) {
-        this.events.set(documentKey({ scope: fromScope, pageId }), { scope: fromScope, pageId, type: "removed" });
-        this.events.set(documentKey({ scope: toScope, pageId }), { scope: toScope, pageId, type: "reset" });
-      }
-    }
-    // Root's share_space_id/parent_id changed, so refresh its structure digest
-    // (or seed it via dirty flush if it did not yet have a Y.Doc).
-    const rootData = this.pageData(toScope, rootId);
-    if (rootData) {
-      const existing = this.stored(toScope, rootId);
-      if (existing) {
-        this.store.db.prepare("UPDATE collaboration_documents SET structure=? WHERE scope=? AND page_id=?")
-          .run(rootData.structure, toScope, rootId);
-      } else {
-        this.store.db.prepare("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)").run(toScope, rootId);
-      }
-    }
+
+  /** Read-only page collaboration cursor. Pages with no row yet return the deterministic
+   *  default `(epoch="1", seq=0, prunedBefore=0)` without mutating SQLite (UC-60 M3). */
+  pageMeta(scope: string, pageId: string): { epoch: string; seq: number; prunedBefore: number } {
+    const row = this.store.one(
+      "SELECT epoch, seq, pruned_before FROM collaboration_pages WHERE scope=? AND page_id=?",
+      scope,
+      pageId,
+    );
+    if (!row) return { epoch: DEFAULT_EPOCH, seq: 0, prunedBefore: 0 };
+    return {
+      epoch: String(row.epoch),
+      seq: Number(row.seq ?? 0),
+      prunedBefore: Number(row.pruned_before ?? 0),
+    };
   }
-  reset(scope: string, pageId: string): void {
-    this.forced.add(documentKey({ scope, pageId }));
-    this.store.db.prepare("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)").run(scope, pageId);
-  }
-  private stored(scope: string, pageId: string): Row | undefined { return this.store.one("SELECT * FROM collaboration_documents WHERE scope=? AND page_id=?", scope, pageId); }
-  private load(row: Row): Y.Doc { const doc = new Y.Doc(); Y.applyUpdate(doc, row.state as Uint8Array); return doc; }
+
   private pageData(scope: string, pageId: string) {
     const { page, blocks } = this.store.pageBundle(scope, pageId);
     if (!page || page.purging || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
-    return { page, blocks, fields: fieldsInPage(pageId, page, blocks), structure: hash(JSON.stringify(structureOf(page, blocks))) };
+    return { page, blocks };
   }
-  private writeDoc(scope: string, pageId: string, generation: string, structure: string, doc: Y.Doc, reset: boolean, update?: Uint8Array): void {
-    const documentId = documentKey({ scope, pageId });
-    if (!this.initial.has(documentId)) this.initial.set(documentId, this.stored(scope, pageId));
-    this.store.db.prepare("INSERT INTO collaboration_documents VALUES(?,?,?,?,?) ON CONFLICT(scope,page_id) DO UPDATE SET generation=excluded.generation,structure=excluded.structure,state=excluded.state").run(scope, pageId, generation, structure, Y.encodeStateAsUpdate(doc));
+
+  /** Rotate a page's epoch, clear its op log, and broadcast `reset` (used on version restore,
+   *  whole-page `savePage` overwrites, and non-OT structural writes). */
+  reset(scope: string, pageId: string): string {
+    const nextEpoch = id();
+    this.store.db.prepare(
+      `INSERT INTO collaboration_pages(scope, page_id, epoch, seq, pruned_before) VALUES(?,?,?,0,0)
+       ON CONFLICT(scope, page_id) DO UPDATE SET epoch=excluded.epoch, seq=0, pruned_before=0`,
+    ).run(scope, pageId, nextEpoch);
+    this.store.db.prepare("DELETE FROM collaboration_ops WHERE scope=? AND page_id=?").run(scope, pageId);
     const key = documentKey({ scope, pageId });
-    const prior = this.events.get(key);
-    /* One event per document per commit: later writeDocs merge their delta
-     *  into the event so subscribers receive one contiguous batch delta. */
-    const merged = prior?.update && update ? Y.mergeUpdates([prior.update, update]) : prior?.update ?? update;
-    const type = reset || prior?.type === "reset" ? "reset" : "document";
-    // A reset replaces the document's identity: receivers pull, so no delta.
-    this.events.set(key, { scope, pageId, type, requestId: this.requestId, update: type === "reset" ? undefined : merged });
+    this.events.set(key, {
+      scope,
+      pageId,
+      type: "reset",
+      epoch: nextEpoch,
+      generation: nextEpoch,
+      seq: 0,
+      requestId: this.requestId,
+    });
+    this.scopes.add(scope);
+    return nextEpoch;
   }
-  flush(): void {
-    const dirty = this.store.all("SELECT scope,page_id FROM collaboration_dirty ORDER BY scope,page_id");
-    const dirtyKeys = new Set(dirty.map((row) => documentKey({ scope: String(row.scope), pageId: String(row.page_id) })));
-    for (const row of dirty) {
-      const scope = String(row.scope); const pageId = String(row.page_id); const key = documentKey({ scope, pageId });
-      const previous = this.stored(scope, pageId); const data = this.pageData(scope, pageId);
-      if (!data) {
-        if (previous) {
-          const movedElsewhere = this.store.one("SELECT 1 FROM records WHERE collection='pages' AND id=? AND scope!=? LIMIT 1", pageId, scope);
-          if (movedElsewhere) this.archive(previous);
-          else this.store.db.prepare("DELETE FROM collaboration_archives WHERE scope=? AND page_id=?").run(scope, pageId);
-          this.store.db.prepare("DELETE FROM collaboration_documents WHERE scope=? AND page_id=?").run(scope, pageId);
-          this.events.set(key, { scope, pageId, type: "removed" });
-        }
-        continue;
-      }
-      if (!previous) {
-        // Rehoming may carry the same binary identity to an authorized new scope.
-        const moved = this.store.all("SELECT * FROM collaboration_documents WHERE page_id=?", pageId).find((candidate) => {
-          const otherScope = String(candidate.scope);
-          return dirtyKeys.has(documentKey({ scope: otherScope, pageId })) && !this.pageData(otherScope, pageId);
-        });
-        const doc = moved ? this.load(moved) : new Y.Doc();
-        if (moved && JSON.stringify(Object.keys(readFields(doc)).sort()) === JSON.stringify(Object.keys(data.fields).sort())) updateFields(doc, data.fields, "server");
-        else { doc.destroy(); const fresh = new Y.Doc(); seedFields(fresh, data.fields); this.writeDoc(scope, pageId, id(), data.structure, fresh, true); fresh.destroy(); continue; }
-        this.writeDoc(scope, pageId, id(), data.structure, doc, true); doc.destroy(); continue;
-      }
-      const original = this.initial.get(key) ?? previous;
-      const originalDoc = this.load(original);
-      const before = Y.encodeStateVector(originalDoc);
-      const originalFields = readFields(originalDoc); originalDoc.destroy();
-      const removed = Object.keys(originalFields).some((field) => !(field in data.fields));
-      const added = Object.keys(data.fields).some((field) => !(field in originalFields));
-      const changedExisting = Object.keys(originalFields).some((field) => field in data.fields && JSON.stringify(originalFields[field]) !== JSON.stringify(data.fields[field]));
-      const barrier = removed || added && changedExisting || this.forced.has(key);
-      if (barrier) {
-        this.archive(original);
-        const doc = new Y.Doc(); seedFields(doc, data.fields);
-        this.writeDoc(scope, pageId, id(), data.structure, doc, true); doc.destroy();
-      } else {
-        const doc = this.load(previous);
-        const changed = JSON.stringify(readFields(doc)) !== JSON.stringify(data.fields) || data.structure !== String(previous.structure);
-        /* applyUpdates already wrote the state when a text update ran in
-         *  this transaction; dirty markers re-run this sweep and a second
-         *  writeDoc would re-encode the whole document for nothing. */
-        if (changed) updateFields(doc, data.fields, "server");
-        if (changed || !this.events.has(key)) this.writeDoc(scope, pageId, String(previous.generation), data.structure, doc, false, changed ? Y.encodeStateAsUpdate(doc, before) : undefined);
-        doc.destroy();
+
+  /** Delete collaboration state for permanently removed pages. */
+  deletePages(scope: string, pageIds: readonly string[]): void {
+    for (let i = 0; i < pageIds.length; i += 400) {
+      const chunk = pageIds.slice(i, i + 400);
+      const marks = chunk.map(() => "?").join(",");
+      this.store.db.prepare(`DELETE FROM collaboration_ops WHERE scope=? AND page_id IN (${marks})`).run(scope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_pages WHERE scope=? AND page_id IN (${marks})`).run(scope, ...chunk);
+      for (const pageId of chunk) {
+        this.events.set(documentKey({ scope, pageId }), { scope, pageId, type: "removed" });
       }
     }
-    this.store.db.prepare("DELETE FROM collaboration_dirty").run();
+    if (pageIds.length) this.scopes.add(scope);
   }
-  private archive(row: Row): void {
-    this.store.db.prepare("INSERT OR IGNORE INTO collaboration_archives VALUES(?,?,?,?,?)").run(String(row.scope), String(row.page_id), String(row.generation), row.state as Uint8Array, stamp());
-    this.store.db.prepare("DELETE FROM collaboration_archives WHERE rowid IN (SELECT rowid FROM collaboration_archives WHERE scope=? AND page_id=? ORDER BY created_at DESC LIMIT -1 OFFSET 20)").run(String(row.scope), String(row.page_id));
+
+  /** Called by `Store.apply` / `Store.savePage` when non-OT raw writes modify pages/blocks:
+   *  rotates epoch + broadcasts `reset` for existing pages that did not emit a semantic `op`
+   *  in the same transaction, preventing silent state divergence (UC-60 H2). */
+  handleRawPageMutation(scope: string, pageId: string, action: "created" | "updated" | "deleted"): void {
+    this.scopes.add(scope);
+    if (action === "deleted") {
+      this.deletePages(scope, [pageId]);
+      return;
+    }
+    if (action === "created") {
+      // Newly created pages start at default (epoch="1", seq=0) on first read.
+      return;
+    }
+    // If an op was already recorded for this page in this transaction, don't clobber it unless
+    // raw writes also mutated records outside the op path.
+    this.reset(scope, pageId);
   }
-  /** The subscription's permission answer alone. Refresh runs per HTTP
-   *  response and once a second per subscription, where the full
-   *  snapshot's block scan, state-blob read and base64 encode would melt
-   *  the single-threaded server on a big vault (ISS-13). Returns null for
-   *  a page the client can no longer see; throws exactly like snapshot()
-   *  for access and readiness failures. */
+
+  /** Bulk-migrate collaboration metadata across scopes inside a transaction (UC-59/UC-60). */
+  migrateScope(fromScope: string, toScope: string, pageIds: readonly string[], _rootId: string): void {
+    if (fromScope === toScope || !pageIds.length) return;
+    for (let i = 0; i < pageIds.length; i += 400) {
+      const chunk = pageIds.slice(i, i + 400);
+      const marks = chunk.map(() => "?").join(",");
+      this.store.db.prepare(`DELETE FROM collaboration_ops WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_ops WHERE scope=? AND page_id IN (${marks})`).run(toScope, ...chunk);
+      this.store.db.prepare(`DELETE FROM collaboration_pages WHERE scope=? AND page_id IN (${marks})`).run(fromScope, ...chunk);
+      const insertPage = this.store.db.prepare(
+        `INSERT INTO collaboration_pages(scope, page_id, epoch, seq, pruned_before) VALUES(?,?,?,0,0)
+         ON CONFLICT(scope, page_id) DO UPDATE SET epoch=excluded.epoch, seq=0, pruned_before=0`,
+      );
+      for (const pageId of chunk) {
+        const nextEpoch = id();
+        insertPage.run(toScope, pageId, nextEpoch);
+        this.events.set(documentKey({ scope: fromScope, pageId }), { scope: fromScope, pageId, type: "removed" });
+        this.events.set(documentKey({ scope: toScope, pageId }), {
+          scope: toScope,
+          pageId,
+          type: "reset",
+          epoch: nextEpoch,
+          generation: nextEpoch,
+          seq: 0,
+        });
+      }
+    }
+    this.scopes.add(fromScope);
+    this.scopes.add(toScope);
+  }
+
+  /** Lightweight permission answer used for targeted WS rechecks. */
   permission(actor: Actor, scopeName: string, pageId: string): { canEdit: boolean } | null {
     const scope = this.store.scope(actor, scopeName);
-    const row = this.stored(scope, pageId);
-    if (!row) fail(409, "协作文档正在初始化。", "not_ready");
     const page = this.store.record(scope, "pages", pageId);
     if (!page || (scope.startsWith("user:") && typeof page.share_space_id === "string")) return null;
     if (this.store.purge.hasPendingInScope(scope) && this.store.pageTrashState(scope, pageId).purging) return null;
-    const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
+    const canEdit = actor.tokenAccess !== "read"
+      && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer")
+      && !this.store.knowledgeBases.get(scope)?.archived;
     return { canEdit };
   }
+
   snapshot(actor: Actor, scopeName: string, pageId: string): DocumentSnapshot {
     const scope = this.store.scope(actor, scopeName);
     if (this.store.pageTrashState(scope, pageId).purging) fail(404, "页面已移走或不存在。", "not_found");
     const data = this.pageData(scope, pageId);
     if (!data) fail(404, "页面已移走或不存在。", "not_found");
-    const row = this.stored(scope, pageId);
-    if (!row) fail(409, "协作文档正在初始化。", "not_ready");
-    const canEdit = actor.tokenAccess !== "read" && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer") && !this.store.knowledgeBases.get(scope)?.archived;
-    return { scope: scopeName, pageId, generation: String(row.generation), state: Buffer.from(row.state as Uint8Array).toString("base64"), revision: this.store.revision(scope, pageId), canEdit, seq: this.sequences.get(documentKey({ scope, pageId })), records: { page: data.page, blocks: data.blocks } };
+    const meta = this.pageMeta(scope, pageId);
+    const canEdit = actor.tokenAccess !== "read"
+      && (scope.startsWith("user:") || this.store.role(actor, scope) !== "viewer")
+      && !this.store.knowledgeBases.get(scope)?.archived;
+    return {
+      scope: scopeName,
+      pageId,
+      generation: meta.epoch,
+      epoch: meta.epoch,
+      seq: meta.seq,
+      prunedBefore: meta.prunedBefore,
+      revision: this.store.revision(scope, pageId),
+      canEdit,
+      records: { page: data.page, blocks: data.blocks },
+    };
   }
-  checkExpected(actor: Actor, expected: ExpectedPage[]): void {
-    for (const item of expected) {
-      const scope = this.store.scope(actor, item.scope, true); const row = this.stored(scope, item.pageId);
-      if (!row || row.generation !== item.generation || this.store.revision(scope, item.pageId) !== item.revision) fail(409, "页面已有新修改。结构操作未保存，草稿已保留。", "structure_conflict");
+
+  /** Fetch committed ops after `afterSeq` for WS gap recovery (UC-60 L1). */
+  opsSince(actor: Actor, scopeName: string, pageId: string, afterSeq: number, epoch?: string): OpsSinceResponse {
+    const scope = this.store.scope(actor, scopeName);
+    if (this.store.pageTrashState(scope, pageId).purging) fail(404, "页面已移走或不存在。", "not_found");
+    const data = this.pageData(scope, pageId);
+    if (!data) fail(404, "页面已移走或不存在。", "not_found");
+    const meta = this.pageMeta(scope, pageId);
+    if ((epoch && epoch !== meta.epoch) || afterSeq < meta.prunedBefore || afterSeq > meta.seq || meta.seq - afterSeq > OPS_SINCE_LIMIT) {
+      return { scope: scopeName, pageId, epoch: meta.epoch, seq: meta.seq, prunedBefore: meta.prunedBefore, reset: true, ops: [] };
     }
+    const rows = this.store.all(
+      "SELECT seq, epoch, request_id, actor_id, ops FROM collaboration_ops WHERE scope=? AND page_id=? AND seq > ? ORDER BY seq ASC LIMIT ?",
+      scope,
+      pageId,
+      afterSeq,
+      OPS_SINCE_LIMIT,
+    );
+    return {
+      scope: scopeName,
+      pageId,
+      epoch: meta.epoch,
+      seq: meta.seq,
+      prunedBefore: meta.prunedBefore,
+      ops: rows.map((row) => ({
+        seq: Number(row.seq),
+        epoch: String(row.epoch),
+        ...(row.request_id ? { requestId: String(row.request_id) } : {}),
+        ...(row.actor_id ? { actorId: String(row.actor_id) } : {}),
+        ops: JSON.parse(String(row.ops)) as PageOp[],
+      })),
+    };
   }
-  checkBarriers(actor: Actor, writes: Write[], expected: ExpectedPage[]): void {
-    // Whole-vault imports land in scopes with no documents yet; those writes
-    // can't collide with existing generations, so skip the per-write lookup.
-    const scopesWithDocs = new Set(this.store.all("SELECT DISTINCT scope FROM collaboration_documents").map((row) => String(row.scope)));
-    const merge = (value: Row, patch: Row): Row => {
-      const result = { ...value };
-      for (const [key, entry] of Object.entries(patch)) {
-        if (entry === null) delete result[key];
-        else result[key] = isObject(entry) ? merge(isObject(result[key]) ? result[key] : {}, entry) : entry;
+
+  /** Execute and persist one or more page semantic op submissions inside the active SQLite transaction. */
+  applyPageOps(actor: Actor, submissions: readonly PageOpSubmission[]): AppliedPageOpsOutcome {
+    const results: PageOpCommitResult[] = [];
+    const touches: PageOpTouch[] = [];
+    const touchedScopes = new Set<string>();
+
+    for (const sub of submissions) {
+      const scope = this.store.scope(actor, sub.scope, true);
+      if (this.store.purge.hasPendingInScope(scope) && this.store.pageTrashState(scope, sub.pageId).purging) {
+        fail(409, "页面正在删除中，无法修改。", "purging");
       }
-      return result;
-    };
-    const scoped = new Map<string, string>();
-    const scopeFor = (name: string): string => {
-      const cached = scoped.get(name);
-      if (cached) return cached;
-      const resolved = this.store.scope(actor, name, true);
-      scoped.set(name, resolved);
-      return resolved;
-    };
-    const addressed = new Map(expected.map((item) => [documentKey({ scope: scopeFor(item.scope), pageId: item.pageId }), item]));
-    for (const write of writes) {
-      const scope = scopeFor(write.scope);
-      if (!scopesWithDocs.has(scope)) continue;
-      const current = this.store.record(scope, write.collection, write.id);
-      const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? String(current?.page ?? write.value?.page ?? "") : "";
-      if (!pageId || !this.stored(scope, pageId)) continue;
-      const data = this.pageData(scope, pageId); if (!data) continue;
-      const after = write.action === "delete" ? undefined : write.action === "put" ? write.value : merge(current ?? {}, write.patch ?? {});
-      const structural = isStructureChange(write.collection, current, after);
-      if (structural && !addressed.has(documentKey({ scope, pageId }))) fail(409, "结构操作需要完整页面基础修订。", "structure_conflict");
-    }
-  }
-  applyUpdates(actor: Actor, updates: TextUpdate[]): Set<string> {
-    const approved = new Set<string>();
-    for (const input of updates) {
-      const scope = this.store.scope(actor, input.scope, true); const data = this.pageData(scope, input.pageId); const row = this.stored(scope, input.pageId);
-      if (!data || !row) fail(404, "协作页面不存在。", "not_found");
-      if (row.generation !== input.generation) fail(409, "页面结构或版本已变化。旧修改保留为草稿。", "generation_conflict");
-      const doc = this.load(row);
-      const before = Y.encodeStateVector(doc);
-      const typeId = (text: Y.Text) => { const position = Y.createRelativePositionFromTypeIndex(text, 0); return position.type ? `${position.type.client}:${position.type.clock}` : position.tname; };
-      const identities = new Map([...doc.getMap<Y.Text>("fields")].map(([key, text]) => [key, typeId(text)]));
-      try {
-        try { Y.applyUpdate(doc, Buffer.from(input.update, "base64"), "client"); } catch { fail(400, "协作更新格式无效。", "bad_request"); }
-        let projected: Record<string, RichText>;
-        try { projected = readFields(doc); } catch { fail(400, "协作更新包含无效字段。", "bad_request"); }
-        for (const [key, text] of doc.getMap<Y.Text>("fields")) if (identities.get(key) !== typeId(text)) fail(400, "文字更新不能替换共享字段身份。", "bad_request");
-        if (JSON.stringify(Object.keys(projected).sort()) !== JSON.stringify(Object.keys(data.fields).sort()) || Object.keys(doc.toJSON()).some((key) => key !== "fields")) fail(400, "文字更新不能修改页面结构。", "bad_request");
-        const nextRecords = new Map<string, { collection: "pages" | "blocks"; id: string; value: Row }>();
-        for (const [key, runs] of Object.entries(projected)) {
-          const address = fieldAddress(key); if (!address) fail(400, "无效的文字字段。");
-          const recordKey = `${address.collection}/${address.id}`;
-          const current = nextRecords.get(recordKey)?.value ?? this.store.record(scope, address.collection, address.id);
-          if (!current) fail(400, "文字字段缺少所属记录。");
-          const held = address.path.reduce<unknown>((record, part) => isObject(record) ? record[part] : undefined, current);
-          nextRecords.set(recordKey, { collection: address.collection, id: address.id, value: setAt(current, address.path, runs) });
-          // approved marks fields that changed: the timeline reads it as
-          // who did what, stripProjected as what a record write may keep.
-          if (!isDeepStrictEqual(held, runs)) approved.add(JSON.stringify([scope, address.collection, address.id, address.path]));
-        }
-        for (const record of nextRecords.values()) {
-          const spec = schema.definition.collections[record.collection];
-          if (record.collection === "blocks") record.value = { ...record.value, edited_at: stamp(), edited_by: asAuthor(actor) };
-          const valid = z.object(spec.fields).strict().parse(record.value) as Row;
-          this.store.put(scope, record.collection, record.id, valid);
-        }
-        this.store.put(scope, "pages", input.pageId, { ...this.store.record(scope, "pages", input.pageId), updated_at: stamp(), updated_by: actor.user.displayName });
-        this.writeDoc(scope, input.pageId, String(row.generation), String(row.structure), doc, false, Y.encodeStateAsUpdate(doc, before));
-      } finally { doc.destroy(); }
-    }
-    return approved;
-  }
-  stripProjected(write: Write, scope: string, approved: Set<string>): Write {
-    if (write.action !== "patch" || !write.patch || (write.collection !== "pages" && write.collection !== "blocks")) return write;
-    let patch = structuredClone(write.patch);
-    const remove = (target: Row, path: string[]): void => {
-      const [key, ...rest] = path;
-      if (!rest.length) { delete target[key]; return; }
-      if (target[key] && typeof target[key] === "object" && !Array.isArray(target[key])) {
-        remove(target[key] as Row, rest);
-        if (!Object.keys(target[key] as Row).length) delete target[key];
+      const data = this.pageData(scope, sub.pageId);
+      if (!data) fail(404, "协作页面不存在。", "not_found");
+
+      const meta = this.pageMeta(scope, sub.pageId);
+      if (sub.epoch !== meta.epoch) {
+        fail(409, "页面版本或位置已重置。", "epoch_conflict");
       }
-    };
-    for (const raw of approved) {
-      const [fieldScope, collection, recordId, path] = JSON.parse(raw) as [string, string, string, string[]];
-      if (fieldScope === scope && collection === write.collection && recordId === write.id) remove(patch, path);
+      if (sub.baseSeq < meta.prunedBefore) {
+        fail(409, "协作日志已超出同步窗口，请重新拉取最新页面。", "seq_pruned");
+      }
+      if (sub.baseSeq > meta.seq) {
+        fail(409, "提交序号超前于服务端。", "seq_conflict");
+      }
+
+      // Load concurrent ops committed after `sub.baseSeq`.
+      const historyRows = sub.baseSeq < meta.seq
+        ? this.store.all(
+            "SELECT ops FROM collaboration_ops WHERE scope=? AND page_id=? AND seq > ? ORDER BY seq ASC",
+            scope,
+            sub.pageId,
+            sub.baseSeq,
+          )
+        : [];
+      const historyOps: PageOp[] = [];
+      for (const row of historyRows) {
+        const parsed = JSON.parse(String(row.ops)) as PageOp[];
+        historyOps.push(...parsed);
+      }
+
+      const transformed = historyOps.length ? transformPageOps(sub.ops, historyOps) : sub.ops;
+      const beforeState = pageStateFromRecords(sub.pageId, data.page, data.blocks);
+      const workingState = clonePageState(beforeState);
+
+      const appliedOps: PageOp[] = [];
+      const orphaned: OrphanedText[] = [];
+      for (const op of transformed) {
+        // Guard against cross-page field targeting.
+        if (op.type === "text") {
+          const parsed = parseFieldKey(op.field);
+          if (!parsed || parsed.pageId !== sub.pageId) fail(400, "文字字段不属于目标页面。", "bad_request");
+        }
+        const outcome = applyPageOp(workingState, op, "materialize");
+        if (outcome.applied) appliedOps.push(outcome.applied);
+        if (outcome.orphaned.length) orphaned.push(...outcome.orphaned);
+      }
+
+      const nowIso = stamp();
+      const authorName = asAuthor(actor);
+      const targets = new Set<string>();
+      const labels = new Set<string>();
+
+      if (appliedOps.length) {
+        // Persist incremental record diffs into `records` (single source of truth).
+        const afterRecords = recordsFromPageState(workingState);
+        const beforeBlocksById = new Map(data.blocks.map((row) => [row.id, row.value]));
+        const afterBlocksById = new Map(afterRecords.blocks.map((row) => [row.id, row.value]));
+
+        const pageSpec = schema.definition.collections.pages;
+        const blockSpec = schema.definition.collections.blocks;
+
+        // 1. Delete removed blocks
+        for (const [recordId] of beforeBlocksById) {
+          if (!afterBlocksById.has(recordId)) {
+            this.store.db.prepare("DELETE FROM records WHERE scope=? AND collection='blocks' AND id=?").run(scope, recordId);
+            const parsedId = parseBlockRecordId(recordId);
+            if (parsedId) { targets.add(parsedId.blockId); labels.add("删除了段落"); }
+          }
+        }
+
+        // 2. Put added or modified blocks
+        let anyBlockChanged = false;
+        for (const [recordId, nextVal] of afterBlocksById) {
+          const prevVal = beforeBlocksById.get(recordId);
+          if (prevVal && isDeepStrictEqual(prevVal, nextVal)) continue;
+          anyBlockChanged = true;
+          const stamped: Row = { ...nextVal, edited_at: nowIso, edited_by: authorName };
+          const valid = z.object(blockSpec.fields).strict().parse(stamped) as Row;
+          this.store.put(scope, "blocks", recordId, valid);
+          const parsedId = parseBlockRecordId(recordId);
+          if (parsedId) {
+            targets.add(parsedId.blockId);
+            if (!prevVal) labels.add("新增了段落");
+            else if (!isDeepStrictEqual(prevVal.table, nextVal.table)) labels.add("编辑了表格");
+            else labels.add("编辑了正文");
+          }
+        }
+
+        // 3. Put page record if changed or any block changed (updates updated_at/updated_by)
+        const pageChanged = !isDeepStrictEqual(data.page, afterRecords.page);
+        if (pageChanged || anyBlockChanged) {
+          const nextPage: Row = {
+            ...afterRecords.page,
+            updated_at: nowIso,
+            updated_by: authorName,
+          };
+          // Prevent direct tampering with `purging`, `id`, `share_space_id`, or owner-only shared root archive.
+          if (Boolean(nextPage.purging) !== Boolean(data.page.purging)) {
+            fail(403, "不能直接修改删除状态。", "forbidden");
+          }
+          if (nextPage.id !== sub.pageId) fail(400, "页面 ID 不一致。", "bad_request");
+          if (nextPage.share_space_id !== data.page.share_space_id) {
+            fail(403, "分享位置变更须通过页面迁移接口执行。", "owner_required");
+          }
+          if (!scope.startsWith("user:") && !this.store.knowledgeBases.get(scope)
+            && data.page.share_space_id === scope
+            && Boolean(nextPage.archived) !== Boolean(data.page.archived)
+            && this.store.role(actor, scope) !== "owner") {
+            fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+          }
+          const validPage = z.object(pageSpec.fields).strict().parse(nextPage) as Row;
+          this.store.put(scope, "pages", sub.pageId, validPage);
+          if (pageChanged) {
+            targets.add(sub.pageId);
+            const titleChanged = !isDeepStrictEqual(data.page.title_content, afterRecords.page.title_content);
+            labels.add(titleChanged ? "修改了标题" : "修改了页面属性");
+          }
+        }
+
+        const nextSeq = meta.seq + 1;
+        this.store.db.prepare(
+          `INSERT INTO collaboration_pages(scope, page_id, epoch, seq, pruned_before) VALUES(?,?,?,?,?)
+           ON CONFLICT(scope, page_id) DO UPDATE SET epoch=excluded.epoch, seq=excluded.seq`,
+        ).run(scope, sub.pageId, meta.epoch, nextSeq, meta.prunedBefore);
+        this.store.db.prepare(
+          "INSERT INTO collaboration_ops(scope, page_id, seq, epoch, request_id, actor_id, ops, created_at) VALUES(?,?,?,?,?,?,?,?)",
+        ).run(scope, sub.pageId, nextSeq, meta.epoch, this.requestId ?? null, actor.user.id, JSON.stringify(appliedOps), nowIso);
+
+        const key = documentKey({ scope, pageId: sub.pageId });
+        const prior = this.events.get(key);
+        if (prior?.type === "reset") {
+          // A reset in the same transaction supersedes incremental ops.
+          this.events.set(key, { ...prior, seq: nextSeq, requestId: this.requestId });
+        } else {
+          this.events.set(key, {
+            scope,
+            pageId: sub.pageId,
+            type: "op",
+            epoch: meta.epoch,
+            generation: meta.epoch,
+            seq: nextSeq,
+            ops: prior?.ops ? [...prior.ops, ...appliedOps] : appliedOps,
+            requestId: this.requestId,
+          });
+        }
+        this.scopes.add(scope);
+        touchedScopes.add(scope);
+
+        if (targets.size) {
+          touches.push({ scope, pageId: sub.pageId, targets: [...targets], labels: [...labels] });
+        }
+
+        results.push({
+          scope: sub.scope,
+          pageId: sub.pageId,
+          epoch: meta.epoch,
+          seq: nextSeq,
+          revision: this.store.revision(scope, sub.pageId),
+          ops: appliedOps,
+          orphaned,
+        });
+      } else {
+        // Pure no-op or all-orphaned batch: keep current seq unchanged and return orphaned text to client.
+        results.push({
+          scope: sub.scope,
+          pageId: sub.pageId,
+          epoch: meta.epoch,
+          seq: meta.seq,
+          revision: this.store.revision(scope, sub.pageId),
+          ops: [],
+          orphaned,
+        });
+      }
     }
-    if (write.collection === "pages" && approved.size) { delete patch.updated_at; delete patch.updated_by; }
-    if (write.collection === "blocks") { delete patch.edited_at; delete patch.edited_by; }
-    return { ...write, patch };
+
+    return { results, touches, touchedScopes };
   }
-  fields(actor: Actor, scopeName: string, pageId: string): { doc: Y.Doc; generation: string; scope: string; fields: Record<string, RichText> } {
-    const scope = this.store.scope(actor, scopeName, true); const row = this.stored(scope, pageId);
-    if (this.store.pageTrashState(scope, pageId).purging || !row || !this.pageData(scope, pageId)) fail(404, "协作页面不存在。", "not_found");
-    const doc = this.load(row);
-    return { doc, scope, generation: String(row.generation), fields: readFields(doc) };
+
+  /** Helper for server-initiated incremental appends (e.g. `POST /api/v1/pages` or `agent-copy`
+   *  appending a child-page link block to its parent) so active parent editors receive a normal
+   *  `create_block` op instead of an epoch reset. */
+  appendServerOps(actor: Actor, scopeName: string, pageId: string, ops: PageOp[]): PageOpCommitResult {
+    const scope = this.store.scope(actor, scopeName, true);
+    const meta = this.pageMeta(scope, pageId);
+    const outcome = this.applyPageOps(actor, [{ scope: scopeName, pageId, epoch: meta.epoch, baseSeq: meta.seq, ops }]);
+    for (const touch of outcome.touches) {
+      const { eventPage } = this.store.eventPageOf(touch.scope, touch.pageId);
+      this.store.recordPageEvent(actor, touch.scope, eventPage, touch.labels, touch.targets);
+      this.store.pruneEvents(touch.scope, eventPage);
+    }
+    return outcome.results[0];
+  }
+
+  /** Helper for internal checks on block IDs. */
+  blockRecord(pageId: string, blockId: string): string {
+    return blockRecordId(pageId, blockId);
   }
 }

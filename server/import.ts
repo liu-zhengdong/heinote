@@ -247,6 +247,7 @@ function pump(): void {
       job.error = error instanceof Error ? error.message : error ? String(error) : "导入异常终止。";
     }
     persist(job);
+    if (job.status === "done") store.collaboration.notifyScopeDelta(`user:${job.userId}`);
     setImmediate(pump);
   };
   worker.on("error", (error) => finish(error));
@@ -413,7 +414,7 @@ function commit(store: Store, actor: Actor, _scope: string, _job: ImportJob, bui
     // The deferred attachment index lands in this transaction too, so the
     // import's files index rows can never outlive its content.
     store.files.commitBatch();
-    store.apply(actor, writes, undefined, [], [], 50_000_000);
+    store.apply(actor, writes, undefined, [], 50_000_000);
   });
 }
 

@@ -15,8 +15,8 @@ import { blockTreeToMarkdown, readableDescriber } from "../src/core/export-markd
 import { restoredPage } from "../src/core/versions.ts";
 import { inTrash } from "../src/core/page-tree.ts";
 import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
-import { textUpdateSchema, expectedPageSchema } from "./collaboration.ts";
-import { attachCollaborationSocket } from "./collaboration-socket.ts";
+import { pageOpSubmissionSchema } from "./collaboration.ts";
+import { attachCollaborationSocket, PresenceHub, type SocketCredentials } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
 import { attachAgentCopy } from "./agent-copy.ts";
 import { transferPageTree, transferSchema } from "./tree-transfer.ts";
@@ -27,7 +27,6 @@ import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-reque
 import { attachAgentOnboarding } from "./agent-onboarding.ts";
 import { attachPublicApp } from "./public-app.ts";
 import { activePage, externalScope, mutation } from "./mutation.ts";
-import { blockRecordId } from "../src/platform/record-ids.ts";
 import { APP_SOURCE_BUDGET_BYTES, normalizeBindings } from "../src/core/artifact.ts";
 import { attachKnowledgeBases, spaceSummary } from "./knowledge-bases.ts";
 import { LIMIT_BYTES, TEAM_LIMIT } from "./quotas.ts";
@@ -103,13 +102,12 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   // ISS-12: record payloads are tens of MB of JSON; gzip them in-app so
   // compression doesn't depend on the reverse proxy's gzip_types.
   app.use(compression());
-  app.use((_req, res, next) => { res.once("finish", () => collaborationSocket?.revalidate()); next(); });
   app.disable("x-powered-by");
   const secure = publicUrl?.startsWith("https://") ?? false;
   const registrationOpen = options.registrationOpen ?? process.env.REGISTRATION_OPEN !== "false";
   const registrationAllowed = () => registrationOpen || !store.one("SELECT id FROM users LIMIT 1");
   const attempts = new Map<string, { count: number; until: number }>();
-  const presence = new Map<string, { userId: string; clientId: string; state: unknown; time: number }>();
+  const presenceHub = new PresenceHub();
   const embed = createEmbed(store);
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -212,7 +210,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   backups.startScheduler();
   const establish = (req: Request, res: Response, userId: string) => {
     const previous = cookie(req);
-    if (previous) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(previous));
+    if (previous) {
+      const prevHash = hash(previous);
+      store.db.prepare("DELETE FROM sessions WHERE hash=?").run(prevHash);
+      store.collaboration.notifyPermissionChange({ sessionHash: prevHash });
+    }
     const token = secret();
     store.db.prepare("INSERT INTO sessions(hash,user_id,expires) VALUES(?,?,?)").run(hash(token), userId, Date.now() + 30 * 86400000);
     res.cookie("notes_session", token, { httpOnly: true, sameSite: "lax", secure, maxAge: 30 * 86400000, path: "/" });
@@ -271,8 +273,16 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
   app.post("/api/auth/logout", (req, res) => {
     const embedded = embed.resolve(req);
-    if (embedded) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(embedded.key);
-    const value = cookie(req); if (value) store.db.prepare("DELETE FROM sessions WHERE hash=?").run(hash(value));
+    if (embedded) {
+      store.db.prepare("DELETE FROM sessions WHERE hash=?").run(embedded.key);
+      store.collaboration.notifyPermissionChange({ sessionHash: embedded.key });
+    }
+    const value = cookie(req);
+    if (value) {
+      const key = hash(value);
+      store.db.prepare("DELETE FROM sessions WHERE hash=?").run(key);
+      store.collaboration.notifyPermissionChange({ sessionHash: key });
+    }
     res.clearCookie("notes_session", { path: "/", httpOnly: true, sameSite: "lax", secure });
     if (embedded) clearEmbedCookie(res);
     res.json({ ok: true });
@@ -509,27 +519,31 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.patch("/api/spaces/:id/members/:userId", (req, res) => {
     const { spaceId, myRole } = managedMember(req); const { role } = parse(z.object({ role: roleSchema }), req.body);
     if (role === "admin" && myRole !== "owner") fail(403, "只有所有者可授予管理权限。");
-    store.db.prepare("UPDATE members SET role=? WHERE space_id=? AND user_id=?").run(role, spaceId, text(req.params.userId)); res.json({ ok: true });
+    store.db.prepare("UPDATE members SET role=? WHERE space_id=? AND user_id=?").run(role, spaceId, text(req.params.userId));
+    store.collaboration.notifyPermissionChange({ scope: spaceId, userId: text(req.params.userId) });
+    res.json({ ok: true });
   });
   app.delete("/api/spaces/:id/members/:userId", (req, res) => {
-    const { spaceId } = managedMember(req); store.db.prepare("DELETE FROM members WHERE space_id=? AND user_id=?").run(spaceId, text(req.params.userId)); res.json({ ok: true });
+    const { spaceId } = managedMember(req); const targetUser = text(req.params.userId);
+    store.db.prepare("DELETE FROM members WHERE space_id=? AND user_id=?").run(spaceId, targetUser);
+    store.collaboration.notifyPermissionChange({ scope: spaceId, userId: targetUser });
+    res.json({ ok: true });
   });
   app.post("/api/spaces/:id/leave", (req, res) => {
     const who = actor(req); const spaceId = text(req.params.id); if (store.role(who, spaceId) === "owner") fail(403, "所有者不能退出自己的空间。");
-    store.db.prepare("DELETE FROM members WHERE space_id=? AND user_id=?").run(spaceId, who.user.id); res.json({ ok: true });
+    store.db.prepare("DELETE FROM members WHERE space_id=? AND user_id=?").run(spaceId, who.user.id);
+    store.collaboration.notifyPermissionChange({ scope: spaceId, userId: who.user.id });
+    res.json({ ok: true });
   });
   app.post("/api/spaces/:id/presence", (req, res) => {
     const who = actor(req); const spaceId = text(req.params.id); store.role(who, spaceId);
     const input = parse(z.object({ clientId: z.string().max(100), state: z.record(z.string(), z.unknown()).nullable() }), req.body);
-    const key = `${spaceId}:${who.user.id}:${input.clientId}`;
-    if (!input.state) presence.delete(key); else presence.set(key, { userId: who.user.id, clientId: input.clientId, state: input.state, time: Date.now() });
+    presenceHub.set(spaceId, who.user.id, input.clientId, input.state);
     res.json({ ok: true });
   });
   app.get("/api/spaces/:id/presence", (req, res) => {
     const who = actor(req); const spaceId = text(req.params.id); store.role(who, spaceId);
-    for (const [key, item] of presence) if (item.time < Date.now() - 45000) presence.delete(key);
-    const active = [...presence].filter(([key, item]) => key.startsWith(`${spaceId}:`) && store.one("SELECT role FROM members WHERE space_id=? AND user_id=?", spaceId, item.userId));
-    res.json([...new Map(active.map(([, item]) => [item.userId, { userId: item.userId, state: item.state, online: true }])).values()]);
+    res.json(presenceHub.list(store, spaceId));
   });
   app.get("/api/records/locate", (req, res) => {
     const who = actor(req);
@@ -579,13 +593,28 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     else if (after === undefined) res.json(store.records(scope, collection));
     else res.json(store.recordsSince(scope, collection, after));
   });
+  app.get("/api/collaboration/:scope/:pageId/ops", (req, res) => {
+    const after = parse(z.number().int().min(0), Number(req.query.after ?? 0));
+    const epoch = typeof req.query.epoch === "string" && req.query.epoch ? req.query.epoch : undefined;
+    res.json(store.collaboration.opsSince(actor(req), text(req.params.scope), text(req.params.pageId), after, epoch));
+  });
   app.get("/api/collaboration/:scope/:pageId", (req, res) => {
     res.json(store.collaboration.snapshot(actor(req), text(req.params.scope), text(req.params.pageId)));
   });
   app.post("/api/records/batch", (req, res) => {
     const who = actor(req);
-    const { writes, requestId, textUpdates, expectedPages } = parse(z.object({ writes: z.array(writeSchema).max(10000).default([]), requestId: z.string().max(100).optional(), textUpdates: z.array(textUpdateSchema).max(1000).default([]), expectedPages: z.array(expectedPageSchema).max(1000).default([]) }), req.body);
-    res.json(store.apply(who, writes, requestId, textUpdates, expectedPages));
+    const { writes, requestId, pageOps, protocol } = parse(z.object({
+      writes: z.array(writeSchema).max(10000).default([]),
+      requestId: z.string().max(100).optional(),
+      pageOps: z.array(pageOpSubmissionSchema).max(1000).default([]),
+      protocol: z.number().int().optional(),
+    }), req.body);
+    const batchResult = store.applyBatch(who, writes, requestId, pageOps as Parameters<Store["applyBatch"]>[3]);
+    if (pageOps.length || protocol === 2) {
+      res.json(batchResult);
+    } else {
+      res.json(batchResult.writes);
+    }
   });
   app.post("/api/records/:scope/:collection/:id", (req, res) => {
     const who = actor(req); const write = parse(writeSchema, { ...req.body, scope: req.params.scope, collection: req.params.collection, id: req.params.id });
@@ -716,6 +745,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (input.embed !== undefined) { fields.push("embed=?"); params.push(input.embed ? 1 : 0); }
     if (!fields.length) fail(400, "没有要修改的字段。", "bad_request");
     store.db.prepare(`UPDATE tokens SET ${fields.join(",")} WHERE id=?`).run(...params, tokenId);
+    if (input.embed === false) store.collaboration.notifyPermissionChange({ tokenId });
     res.json(tokenDto(ownedToken(who, tokenId)));
   });
   app.put("/api/tokens/:id/avatar", (req, _res, next) => { actor(req); next(); }, express.raw({ type: () => true, limit: MAX_AVATAR_BYTES }), async (req, res) => {
@@ -747,6 +777,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       // UC-58: revoking the token kills its embed sessions in the same stroke.
       store.db.prepare("DELETE FROM sessions WHERE token_id=?").run(tokenId);
       store.db.prepare("DELETE FROM tokens WHERE id=?").run(tokenId);
+      store.collaboration.notifyPermissionChange({ tokenId });
     });
     res.json({ ok: true });
   });
@@ -831,15 +862,17 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       // expanded link at the end of its parent's words, when the parent has
       // a body to carry it (documents do; apps and databases don't).
       if (parent && parent.page.kind === "document") {
-        const siblings = Object.values(parent.page.block_tree?.by_id ?? {}).filter((block) => !block.parent_id);
-        const top = siblings.length ? Math.max(...siblings.map((block) => block.order)) : 0;
         const blockId = id();
-        // A live collaboration page rejects structural writes without its
-        // current basis; a page never touched by collaboration has no basis.
-        const docRow = store.one("SELECT generation FROM collaboration_documents WHERE scope=? AND page_id=?", scope, parent.page.id);
-        const expected = docRow ? [{ scope: externalScope(scope), pageId: parent.page.id, generation: String(docRow.generation), revision: store.revision(scope, parent.page.id) }] : [];
-        store.apply(who, [{ scope: externalScope(scope), collection: "blocks", id: blockRecordId(parent.page.id, blockId), action: "put", base: null,
-          value: { id: blockId, page: parent.page.id, kind: "text", order: top + 1024, content: [{ embed: { mention: { kind: "page", page_id: page.id, expanded: true } } }] } }], undefined, [], expected);
+        store.collaboration.appendServerOps(who, externalScope(scope), parent.page.id, [{
+          type: "create_block",
+          block: {
+            id: blockId,
+            page: parent.page.id,
+            kind: "text",
+            content: [{ embed: { mention: { kind: "page", page_id: page.id, expanded: true } } }],
+          },
+          parentId: null,
+        }]);
       }
       recordTokenEvent(store.db, who.tokenId, { action: "create", pageId: page.id, pageTitle: page.title });
       return page.id;
@@ -1014,14 +1047,45 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     console.error(error); res.status(500).json({ error: "服务暂时无法完成请求。", code: "internal_error" });
   });
   const server = app.listen(options.port ?? Number(process.env.PORT ?? 3000), options.host ?? process.env.HOST ?? "0.0.0.0");
-  collaborationSocket = attachCollaborationSocket(server, store, (req) => {
-    if (req.headers.authorization) fail(403, "实时连接使用浏览器会话。");
-    const embedded = embed.actorFor(req as Request);
-    if (embedded) return embedded;
-    const user = sessionUser(req as Request);
-    if (!user) fail(401, "请重新登录。", "unauthorized");
-    return { user };
-  });
+  collaborationSocket = attachCollaborationSocket(
+    server,
+    store,
+    (req): SocketCredentials => {
+      if (req.headers.authorization) fail(403, "实时连接使用浏览器会话。");
+      const embedHash = embed.cookieHash(req.headers.cookie);
+      if (embedHash) {
+        const embedded = embed.resolveByHash(embedHash);
+        if (embedded) return { embedHash, userId: embedded.user.id, tokenId: embedded.tokenId };
+      }
+      const rawSession = /(?:^|;\s*)notes_session=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
+      const sessionHash = rawSession ? hash(rawSession) : undefined;
+      if (sessionHash) {
+        const resolved = store.resolveSessionByHash(sessionHash);
+        if (resolved) return { sessionHash, userId: resolved.user.id };
+      }
+      fail(401, "请重新登录。", "unauthorized");
+    },
+    (creds): Actor => {
+      if (creds.embedHash) {
+        const embedded = embed.resolveByHash(creds.embedHash);
+        if (!embedded) fail(401, "请重新登录。", "unauthorized");
+        return {
+          user: embedded.user,
+          tokenId: embedded.tokenId,
+          tokenAccess: embedded.tokenAccess,
+          displayName: embedded.displayName,
+          avatar: embedded.avatar,
+        };
+      }
+      if (creds.sessionHash) {
+        const resolved = store.resolveSessionByHash(creds.sessionHash);
+        if (!resolved) fail(401, "请重新登录。", "unauthorized");
+        return resolved;
+      }
+      fail(401, "请重新登录。", "unauthorized");
+    },
+    presenceHub,
+  );
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;

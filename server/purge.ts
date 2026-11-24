@@ -228,7 +228,8 @@ export class PurgeManager {
           "INSERT OR IGNORE INTO purge_queue(scope,root_id,created_at) VALUES(?,?,?)",
         ).run(target.scope, target.rootId, timestamp);
         if (Number(inserted.changes) > 0) queued += 1;
-        this.store.db.prepare("DELETE FROM collaboration_dirty WHERE scope=? AND page_id=?").run(target.scope, target.rootId);
+        this.store.db.prepare("DELETE FROM collaboration_ops WHERE scope=? AND page_id=?").run(target.scope, target.rootId);
+        this.store.db.prepare("DELETE FROM collaboration_pages WHERE scope=? AND page_id=?").run(target.scope, target.rootId);
         if (target.isShareRoot) {
           this.store.db.prepare("DELETE FROM members WHERE space_id=? AND role!='owner'").run(target.scope);
           this.store.db.prepare("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(target.scope);
@@ -254,6 +255,10 @@ export class PurgeManager {
 
     for (const target of targetMap.values()) this.purgingScopes.add(target.scope);
     for (const item of notifyList) this.store.collaboration.notifyRemoved(item.scope, [item.pageId]);
+    // Recheck the whole scope immediately so subscribers on any descendant page
+    // under the purging root are evicted without waiting for step() (UC-60 H5 #13).
+    const scopesToRecheck = new Set([...targetMap.values()].map((t) => t.scope));
+    for (const s of scopesToRecheck) this.store.collaboration.notifyPermissionChange({ scope: s });
     this.schedule(0);
     return { ok: true, status: "purging", pageId, scope: externalScope(primaryScope), queued };
   }
@@ -352,9 +357,8 @@ export class PurgeManager {
       this.store.db.prepare(`DELETE FROM records WHERE scope=? AND collection='versions' AND json_extract(value,'$.page') IN (${marks})`).run(scope, ...batch);
       this.store.db.prepare(`DELETE FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page') IN (${marks})`).run(scope, ...batch);
       this.store.db.prepare(`DELETE FROM records WHERE scope=? AND collection='pages' AND id IN (${marks})`).run(scope, ...batch);
-      this.store.db.prepare(`DELETE FROM collaboration_documents WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
-      this.store.db.prepare(`DELETE FROM collaboration_archives WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
-      this.store.db.prepare(`DELETE FROM collaboration_dirty WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
+      this.store.db.prepare(`DELETE FROM collaboration_ops WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
+      this.store.db.prepare(`DELETE FROM collaboration_pages WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
       this.store.db.prepare(`DELETE FROM shares WHERE scope=? AND page_id IN (${marks})`).run(scope, ...batch);
       if (includesRoot) {
         this.store.db.prepare("DELETE FROM purge_queue WHERE scope=? AND root_id=?").run(scope, rootId);

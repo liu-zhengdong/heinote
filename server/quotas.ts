@@ -85,11 +85,10 @@ export class Quotas {
     return [];
   }
 
-  /** Persisted content bytes for one scope: trigger-maintained records,
-   *  collaboration documents and archives, plus deduplicated files. */
+  /** Persisted content bytes for one scope: trigger-maintained records plus deduplicated files. */
   private scopeBytes(scope: string): number {
     const tracked = Number(this.store.one(
-      "SELECT COALESCE(records_bytes + docs_bytes + archives_bytes, 0) AS n FROM scope_usage WHERE scope=?",
+      "SELECT COALESCE(records_bytes, 0) AS n FROM scope_usage WHERE scope=?",
       scope,
     )?.n ?? 0);
     // Same content hash under one subject counts once (attachments + avatars).
@@ -101,7 +100,7 @@ export class Quotas {
    *  scanning `records` once per user/KB on every transaction. */
   private allScopeBytes(): Map<string, number> {
     const totals = new Map<string, number>();
-    for (const row of this.store.all("SELECT scope, (records_bytes + docs_bytes + archives_bytes) AS n FROM scope_usage")) {
+    for (const row of this.store.all("SELECT scope, records_bytes AS n FROM scope_usage")) {
       const n = Number(row.n ?? 0);
       if (n > 0) totals.set(String(row.scope), n);
     }

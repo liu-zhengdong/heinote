@@ -295,7 +295,6 @@ export function pagePatch(store: Store, who: Actor, scope: string, pageId: strin
 export function commit(store: Store, who: Actor, writes: Write[], checkpoints: string[] = []): void {
   for (const pageId of new Set(checkpoints)) store.checkpoint(who, pageId, "Agent 数据库修改前");
   store.apply(who, writes);
-  store.collaboration.flush();
 }
 export function createPage(store: Store, who: Actor, scope: string, kind: NotePage["kind"], parentId: string | null, title: string, text: string | undefined, extra: Row, markdown?: string): string {
   const page = newPage(id(), kind, parentId, { now: stamp(), author: asAuthor(who) }, id());
@@ -630,12 +629,7 @@ export function attachAgentDatabases(app: Express, store: Store, actor: (req: Re
     }, (who, { db, row }) => {
       checkRevision(store, db.scope, db.page.id, input.databaseRevision);
       checkRevision(store, db.scope, rowId, input.baseRevision);
-      // Archiving is structural: the row's collaboration document asks for
-      // the full basis, as any structure change does.
-      const snapshot = store.collaboration.snapshot(who, externalScope(db.scope), rowId);
-      store.apply(who, [pagePatch(store, who, db.scope, rowId, { archived: true, archived_at: stamp() })], undefined, [],
-        [{ scope: snapshot.scope, pageId: rowId, generation: snapshot.generation, revision: snapshot.revision }]);
-      store.collaboration.flush();
+      store.apply(who, [pagePatch(store, who, db.scope, rowId, { archived: true, archived_at: stamp() })]);
       recordTokenEvent(store.db, who.tokenId, { action: "delete", pageId: rowId, pageTitle: row.page.title ?? "" });
       return { status: 200, body: rowDto(store, who, rowId, db.config), scope: db.scope, pageIds: [db.page.id, rowId] };
     });

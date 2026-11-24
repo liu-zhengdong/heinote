@@ -62,29 +62,32 @@ export function createEmbed(store: Store, options: { now?: () => number } = {}) 
    *  actor both ask for the same session. */
   const cache = new WeakMap<Request, EmbedSession | null>();
 
+  /** Uncached DB lookup by hashed embed session cookie — used by WebSocket
+   *  revalidation so revoking a token or disabling `embed` takes effect
+   *  immediately instead of hitting the per-Request WeakMap cache (UC-60 H5). */
+  const resolveByHash = (key: string): EmbedSession | undefined => {
+    if (!key) return undefined;
+    const row = store.one(
+      `SELECT u.*, s.expires AS session_expires, s.embed_origin, t.id AS token_id,
+         t.access AS token_access, t.display_name AS token_display_name,
+         t.avatar AS token_avatar, t.embed AS token_embed
+       FROM sessions s JOIN tokens t ON t.id = s.token_id JOIN users u ON u.id = s.user_id
+       WHERE s.hash = ? AND s.token_id IS NOT NULL`, key);
+    if (!row || Number(row.session_expires) <= now() || Number(row.token_embed) !== 1) return undefined;
+    const tokenId = String(row.token_id);
+    const avatar = row.token_avatar == null ? undefined : tokenAvatarUrl(tokenId, String(row.token_avatar)) ?? String(row.token_avatar);
+    return {
+      user: store.user(row), tokenId,
+      tokenAccess: row.token_access as "read" | "write",
+      displayName: row.token_display_name == null ? undefined : String(row.token_display_name),
+      avatar, embedOrigin: String(row.embed_origin), key,
+    };
+  };
+
   const resolve = (req: Request): EmbedSession | undefined => {
     if (cache.has(req)) return cache.get(req) ?? undefined;
     const value = cookieValue(req);
-    let session: EmbedSession | null = null;
-    if (value) {
-      const key = hash(value);
-      const row = store.one(
-        `SELECT u.*, s.expires AS session_expires, s.embed_origin, t.id AS token_id,
-           t.access AS token_access, t.display_name AS token_display_name,
-           t.avatar AS token_avatar, t.embed AS token_embed
-         FROM sessions s JOIN tokens t ON t.id = s.token_id JOIN users u ON u.id = s.user_id
-         WHERE s.hash = ? AND s.token_id IS NOT NULL`, key);
-      if (row && Number(row.session_expires) > now() && Number(row.token_embed) === 1) {
-        const tokenId = String(row.token_id);
-        const avatar = row.token_avatar == null ? undefined : tokenAvatarUrl(tokenId, String(row.token_avatar)) ?? String(row.token_avatar);
-        session = {
-          user: store.user(row), tokenId,
-          tokenAccess: row.token_access as "read" | "write",
-          displayName: row.token_display_name == null ? undefined : String(row.token_display_name),
-          avatar, embedOrigin: String(row.embed_origin), key,
-        };
-      }
-    }
+    const session = value ? (resolveByHash(hash(value)) ?? null) : null;
     cache.set(req, session);
     return session ?? undefined;
   };
@@ -175,6 +178,7 @@ export function createEmbed(store: Store, options: { now?: () => number } = {}) 
         store.db.prepare("DELETE FROM sessions WHERE token_id=? AND embed_origin IS NOT NULL").run(ticket.tokenId);
         store.db.prepare("INSERT INTO sessions(hash,user_id,expires,token_id,embed_origin) VALUES(?,?,?,?,?)")
           .run(hash(session), ticket.userId, now() + SESSION_TTL, ticket.tokenId, ticket.origin);
+        store.collaboration.notifyPermissionChange({ tokenId: ticket.tokenId });
       });
       /* Browsers evaluate frame-ancestors/XFO per hop of a redirect; carry
          the allow-list on the 302 itself instead of relying on the target. */
@@ -188,6 +192,13 @@ export function createEmbed(store: Store, options: { now?: () => number } = {}) 
   return {
     /** The valid embed session behind this request, if any. */
     resolve,
+    /** Uncached lookup by hashed session token for WebSocket permission rechecks. */
+    resolveByHash,
+    /** Extract raw embed session cookie hash from a Cookie header. */
+    cookieHash: (cookieHeader?: string) => {
+      const value = /(?:^|;\s*)notes_embed=([^;]+)/.exec(cookieHeader ?? "")?.[1];
+      return value ? hash(value) : undefined;
+    },
     /** Actor for an embed session, enforcing the token-identity boundary. */
     actorFor,
     /** Parent origin this request's embed session is pinned to, for headers. */

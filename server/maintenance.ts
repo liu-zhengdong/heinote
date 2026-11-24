@@ -3,6 +3,9 @@ import type { Store } from "./store.ts";
 const DEFAULT_FILE_GRACE_MS = 10 * 60_000;
 const DEFAULT_REQUEST_TTL_MS = 7 * 86_400_000;
 const DEFAULT_MAX_TOMBSTONES = 2000;
+const DEFAULT_MAX_OPS_PER_PAGE = 500;
+const DEFAULT_MIN_OP_RETENTION_MS = 60 * 60_000;
+const DEFAULT_HARD_MAX_OPS_PER_PAGE = 5000;
 const DEFAULT_INTERVAL_MS = 30 * 60_000;
 
 const PATH_LITERAL = /"(?:path|preview)":"((?:\\.|[^"\\])*)"/g;
@@ -30,6 +33,7 @@ export interface MaintenanceSummary {
   files: FileSweepResult;
   prunedRequests: number;
   compactedTombstones: number;
+  prunedCollaborationOps: number;
 }
 
 /**
@@ -275,11 +279,92 @@ export class MaintenanceManager {
     return totalCompacted;
   }
 
-  /** Run one bounded maintenance cycle across files, requests, and tombstones. */
-  runOnce(options: { fileGraceMs?: number; requestTtlMs?: number; maxTombstones?: number } = {}): MaintenanceSummary {
+  /** Prune sliding-window `collaboration_ops` (UC-60): keeps the latest
+   *  `maxOpsPerPage` entries and any entry newer than `minRetentionMs`, subject
+   *  to a hard cap `hardMaxOpsPerPage`, and advances `collaboration_pages.pruned_before`
+   *  to the highest deleted `seq` (`seq <= pruned_before` deleted, `seq > pruned_before` intact). */
+  pruneCollaborationOps(options: {
+    maxOpsPerPage?: number;
+    minRetentionMs?: number;
+    hardMaxOpsPerPage?: number;
+    batchSize?: number;
+  } = {}): number {
+    if (this.stopped || !this.store.db.isOpen || this.store.inTransaction) return 0;
+    const maxOps = Math.max(0, options.maxOpsPerPage ?? DEFAULT_MAX_OPS_PER_PAGE);
+    const hardMax = Math.max(maxOps, options.hardMaxOpsPerPage ?? DEFAULT_HARD_MAX_OPS_PER_PAGE);
+    const minRetentionMs = Math.max(0, options.minRetentionMs ?? DEFAULT_MIN_OP_RETENTION_MS);
+    const batchSize = Math.max(1, options.batchSize ?? 500);
+    const cutoff = new Date(Date.now() - minRetentionMs).toISOString();
+
+    // Filter candidate pages via `collaboration_pages` metadata first (no full op-log scan).
+    const candidates = this.store.all(
+      "SELECT scope, page_id, seq, pruned_before FROM collaboration_pages WHERE (seq - pruned_before) > ?",
+      maxOps,
+    );
+    let totalPruned = 0;
+
+    for (const row of candidates) {
+      const scope = String(row.scope);
+      const pageId = String(row.page_id);
+      const headSeq = Number(row.seq);
+      const hardFloor = Math.max(0, headSeq - hardMax);
+      const softFloor = Math.max(0, headSeq - maxOps);
+
+      while (true) {
+        this.store.db.exec("BEGIN IMMEDIATE");
+        try {
+          const doomed = this.store.all(
+            `SELECT seq FROM collaboration_ops
+             WHERE scope=? AND page_id=? AND (seq <= ? OR (seq <= ? AND created_at <= ?))
+             ORDER BY seq ASC LIMIT ?`,
+            scope,
+            pageId,
+            hardFloor,
+            softFloor,
+            cutoff,
+            batchSize,
+          );
+          if (!doomed.length) {
+            this.store.db.exec("COMMIT");
+            break;
+          }
+          const maxDeletedSeq = Number(doomed[doomed.length - 1].seq);
+          const info = this.store.db.prepare(
+            "DELETE FROM collaboration_ops WHERE scope=? AND page_id=? AND seq <= ?",
+          ).run(scope, pageId, maxDeletedSeq);
+          this.store.db.prepare(
+            "UPDATE collaboration_pages SET pruned_before = MAX(pruned_before, ?) WHERE scope=? AND page_id=?",
+          ).run(maxDeletedSeq, scope, pageId);
+          this.store.db.exec("COMMIT");
+          const deleted = Number(info.changes);
+          totalPruned += deleted;
+          if (doomed.length < batchSize) break;
+        } catch (error) {
+          try { this.store.db.exec("ROLLBACK"); } catch { /* already rolled back */ }
+          throw error;
+        }
+      }
+    }
+    return totalPruned;
+  }
+
+  /** Run one bounded maintenance cycle across files, requests, tombstones, and op logs. */
+  runOnce(options: {
+    fileGraceMs?: number;
+    requestTtlMs?: number;
+    maxTombstones?: number;
+    maxOpsPerPage?: number;
+    minOpRetentionMs?: number;
+    hardMaxOpsPerPage?: number;
+  } = {}): MaintenanceSummary {
     const files = this.sweepFiles({ graceMs: options.fileGraceMs });
     const prunedRequests = this.pruneRequests({ ttlMs: options.requestTtlMs });
     const compactedTombstones = this.compactTombstones({ maxTombstones: options.maxTombstones });
-    return { files, prunedRequests, compactedTombstones };
+    const prunedCollaborationOps = this.pruneCollaborationOps({
+      maxOpsPerPage: options.maxOpsPerPage,
+      minRetentionMs: options.minOpRetentionMs,
+      hardMaxOpsPerPage: options.hardMaxOpsPerPage,
+    });
+    return { files, prunedRequests, compactedTombstones, prunedCollaborationOps };
   }
 }

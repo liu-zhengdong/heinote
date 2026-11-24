@@ -127,6 +127,7 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
       store.db.prepare("DELETE FROM members WHERE space_id=? AND role!='owner'").run(spaceId);
       store.db.prepare("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(spaceId);
       store.db.prepare("DELETE FROM shares WHERE scope=?").run(spaceId);
+      store.collaboration.notifyPermissionChange({ scope: spaceId });
     };
 
     const updatePersonalRoots = (mode: "add" | "remove", id: string) => {
@@ -158,16 +159,11 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
       checkNoNestedShare(targetScope);
       const sharedRoot: Row = { ...sourceRoot, share_space_id: targetScope };
       const descendants = subtreeIds.slice(1);
-      store.collaboration.suspendDirtyTracking();
-      try {
-        store.put(personalScope, "pages", pageId, sharedRoot);
-        store.put(targetScope, "pages", pageId, sharedRoot);
-        moveRecordsBulk(personalScope, targetScope, descendants, subtreeIds);
-        deleteSharesFor(personalScope, subtreeIds);
-        store.collaboration.migrateScope(personalScope, targetScope, subtreeIds, pageId);
-      } finally {
-        store.collaboration.resumeDirtyTracking();
-      }
+      store.put(personalScope, "pages", pageId, sharedRoot);
+      store.put(targetScope, "pages", pageId, sharedRoot);
+      moveRecordsBulk(personalScope, targetScope, descendants, subtreeIds);
+      deleteSharesFor(personalScope, subtreeIds);
+      store.collaboration.migrateScope(personalScope, targetScope, subtreeIds, pageId);
       return { ok: true, pageId, sourceScope: externalScope(sourceScope), targetScope: externalScope(targetScope), movedPages: subtreeIds.length };
     }
 
@@ -185,16 +181,11 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
       if (personalPointer && typeof personalPointer.parent_id === "string") privateRoot.parent_id = personalPointer.parent_id;
       else if (personalPointer && personalPointer.parent_id === undefined) delete privateRoot.parent_id;
       const descendants = subtreeIds.slice(1);
-      store.collaboration.suspendDirtyTracking();
-      try {
-        store.put(targetScope, "pages", pageId, privateRoot);
-        moveRecordsBulk(sourceScope, targetScope, descendants, subtreeIds);
-        store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(sourceScope, pageId);
-        revokeShareSpace(sourceScope);
-        store.collaboration.migrateScope(sourceScope, targetScope, subtreeIds, pageId);
-      } finally {
-        store.collaboration.resumeDirtyTracking();
-      }
+      store.put(targetScope, "pages", pageId, privateRoot);
+      moveRecordsBulk(sourceScope, targetScope, descendants, subtreeIds);
+      store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(sourceScope, pageId);
+      revokeShareSpace(sourceScope);
+      store.collaboration.migrateScope(sourceScope, targetScope, subtreeIds, pageId);
       return { ok: true, pageId, sourceScope: externalScope(sourceScope), targetScope: externalScope(targetScope), movedPages: subtreeIds.length };
     }
 
@@ -257,25 +248,20 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
     if (targetParent?.kind === "database") movedRoot.row_order = Date.now();
 
     const descendants = subtreeIds.slice(1);
-    store.collaboration.suspendDirtyTracking();
-    try {
-      store.put(targetScope, "pages", pageId, movedRoot);
-      moveRecordsBulk(sourceScope, targetScope, descendants, subtreeIds);
-      store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(sourceScope, pageId);
-      if (leavingShareRoot) {
-        if (targetScope !== personalScope) {
-          store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(personalScope, pageId);
-        }
-        revokeShareSpace(sourceScope);
-      } else {
-        deleteSharesFor(sourceScope, subtreeIds);
+    store.put(targetScope, "pages", pageId, movedRoot);
+    moveRecordsBulk(sourceScope, targetScope, descendants, subtreeIds);
+    store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(sourceScope, pageId);
+    if (leavingShareRoot) {
+      if (targetScope !== personalScope) {
+        store.db.prepare("DELETE FROM records WHERE scope=? AND collection='pages' AND id=?").run(personalScope, pageId);
       }
-      if (sourceScope === personalScope) updatePersonalRoots("remove", pageId);
-      if (targetScope === personalScope) updatePersonalRoots(input.targetParentId === null ? "add" : "remove", pageId);
-      store.collaboration.migrateScope(sourceScope, targetScope, subtreeIds, pageId);
-    } finally {
-      store.collaboration.resumeDirtyTracking();
+      revokeShareSpace(sourceScope);
+    } else {
+      deleteSharesFor(sourceScope, subtreeIds);
     }
+    if (sourceScope === personalScope) updatePersonalRoots("remove", pageId);
+    if (targetScope === personalScope) updatePersonalRoots(input.targetParentId === null ? "add" : "remove", pageId);
+    store.collaboration.migrateScope(sourceScope, targetScope, subtreeIds, pageId);
     return { ok: true, pageId, sourceScope: externalScope(sourceScope), targetScope: externalScope(targetScope), movedPages: subtreeIds.length };
   });
 }

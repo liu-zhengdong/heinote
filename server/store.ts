@@ -19,9 +19,10 @@ import { Quotas } from "./quotas.ts";
 import { PURGE_QUEUE_DDL, PurgeManager } from "./purge.ts";
 import { MaintenanceManager } from "./maintenance.ts";
 import { LATEST_VERSION } from "./migrations/index.ts";
+import { SEMANTIC_COLLAB_DDL } from "./migrations/009-semantic-collaboration.ts";
 import { DELTA_DDL, DELTA_TRIGGERS } from "./record-delta.ts";
 import { rebuildScopeUsage, SCOPE_USAGE_DDL, SCOPE_USAGE_TRIGGERS } from "./scope-usage.ts";
-import { documentKey, pageRevision, type ExpectedPage, type TextUpdate } from "../src/collaboration/protocol.ts";
+import { documentKey, pageRevision, type PageOpCommitResult, type PageOpSubmission } from "../src/collaboration/protocol.ts";
 
 export class HttpError extends Error {
   constructor(readonly status: number, message: string, readonly code = "request_failed") { super(message); }
@@ -109,13 +110,11 @@ export class Store {
     else if (version !== LATEST_VERSION)
       throw new Error(`数据库版本 ${version} 与本应用版本 ${LATEST_VERSION} 不一致：请先通过 migrateDatabase 完成迁移。`);
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, structure TEXT NOT NULL, state BLOB NOT NULL, PRIMARY KEY(scope,page_id));
-      CREATE TABLE IF NOT EXISTS collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
-      CREATE TABLE IF NOT EXISTS collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, PRIMARY KEY(scope,page_id));
+      ${SEMANTIC_COLLAB_DDL}
       ${SCOPE_USAGE_DDL}
       ${SCOPE_USAGE_TRIGGERS}
     `);
-    if (!this.one("SELECT 1 FROM scope_usage LIMIT 1") && (this.one("SELECT 1 FROM records LIMIT 1") || this.one("SELECT 1 FROM collaboration_documents LIMIT 1"))) {
+    if (!this.one("SELECT 1 FROM scope_usage LIMIT 1") && this.one("SELECT 1 FROM records LIMIT 1")) {
       rebuildScopeUsage(this.db);
     }
     this.db.prepare("DELETE FROM sessions WHERE expires < ?").run(Date.now());
@@ -188,6 +187,12 @@ export class Store {
   }
   user(row: Row): User { return { id: String(row.id), handle: String(row.handle), displayName: String(row.display_name), avatarUrl: this.avatarUrl(String(row.id)), siteRole: row.site_role as User["siteRole"], createdAt: row.created_at == null ? null : String(row.created_at) }; }
   userById(userId: string): User | undefined { const row = this.one("SELECT * FROM users WHERE id=?", userId); return row && this.user(row); }
+  /** Uncached browser session lookup by hashed cookie token for WS revalidation (UC-60 H5). */
+  resolveSessionByHash(sessionHash: string): Actor | null {
+    if (!sessionHash) return null;
+    const row = this.one("SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.expires>? AND s.token_id IS NULL", sessionHash, Date.now());
+    return row ? { user: this.user(row) } : null;
+  }
   scope(actor: Actor, requested: string, write = false): string {
     if (write && actor.tokenAccess === "read") fail(403, "此令牌仅有读取权限。", "read_only");
     if (requested === "personal") return `user:${actor.user.id}`;
@@ -575,21 +580,31 @@ export class Store {
     const { page, scope } = this.pageProjection(actor, pageId);
     return { page, scope };
   }
-  applyOnce(actor: Actor, requestId: string, writes: Write[], textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = []): Array<Row | null> { return this.apply(actor, writes, requestId, textUpdates, expectedPages); }
-  apply(actor: Actor, requested: Write[], requestId?: string, textUpdates: TextUpdate[] = [], expectedPages: ExpectedPage[] = [], maxWrites = 10000): Array<Row | null> {
-    if ((!requested.length && !textUpdates.length) || requested.length > maxWrites || textUpdates.length > 1000) fail(400, "写入数量无效。");
+  applyOnce(actor: Actor, requestId: string, writes: Write[], pageOps: PageOpSubmission[] = []): Array<Row | null> {
+    return this.apply(actor, writes, requestId, pageOps);
+  }
+  apply(actor: Actor, requested: Write[], requestId?: string, pageOps: PageOpSubmission[] = [], maxWrites = 10000): Array<Row | null> {
+    return this.applyBatch(actor, requested, requestId, pageOps, maxWrites).writes;
+  }
+  applyBatch(
+    actor: Actor,
+    requested: Write[],
+    requestId?: string,
+    pageOps: PageOpSubmission[] = [],
+    maxWrites = 10000,
+  ): { writes: Array<Row | null>; pageResults: PageOpCommitResult[] } {
+    if ((!requested.length && !pageOps.length) || requested.length > maxWrites || pageOps.length > 1000) fail(400, "写入数量无效。");
     return this.transaction(() => {
-      // The digest exists for replay detection; bulk calls without a
-      // requestId (imports) never cache, so skip the JSON pass entirely.
-      const digest = requestId ? hash(JSON.stringify({ requested, textUpdates, expectedPages })) : "";
+      const digest = requestId ? hash(JSON.stringify({ requested, pageOps })) : "";
       if (requestId) {
         const cached = this.one("SELECT * FROM requests WHERE user_id=? AND request_id=?", actor.user.id, requestId);
         if (cached) {
           // Recheck current permissions even for retries of committed operations.
           for (const write of requested) this.scope(actor, write.scope, true);
-          for (const update of textUpdates) this.scope(actor, update.scope, true);
+          for (const submission of pageOps) this.scope(actor, submission.scope, true);
           if (cached.digest !== digest) fail(409, "请求 ID 已用于其他内容。", "request_id_conflict");
-          return JSON.parse(String(cached.result)) as Array<Row | null>;
+          const parsed = JSON.parse(String(cached.result)) as Array<Row | null> | { writes: Array<Row | null>; pageResults: PageOpCommitResult[] };
+          return Array.isArray(parsed) ? { writes: parsed, pageResults: [] } : parsed;
         }
       }
       // Capture ownership before any source record can be deleted in this batch.
@@ -626,39 +641,33 @@ export class Store {
           if (this.pageTrashState(scope, pageId).purging) fail(409, "页面正在删除中，无法修改。", "purging");
         }
       }
-      for (const update of textUpdates) {
-        const scope = this.scope(actor, update.scope, true);
-        if (this.purge.hasPendingInScope(scope) && this.pageTrashState(scope, update.pageId).purging) {
+      for (const submission of pageOps) {
+        const scope = this.scope(actor, submission.scope, true);
+        this.assertPageLocation(scope, submission.pageId, actor);
+        if (this.purge.hasPendingInScope(scope) && this.pageTrashState(scope, submission.pageId).purging) {
           fail(409, "页面正在删除中，无法修改。", "purging");
         }
       }
+
       this.collaboration.markRequest(requestId);
-      this.collaboration.checkExpected(actor, expectedPages);
-      this.collaboration.checkBarriers(actor, requested, expectedPages);
-      const approved = this.collaboration.applyUpdates(actor, textUpdates);
+      const opOutcome = this.collaboration.applyPageOps(actor, pageOps);
       const result: Array<Row | null> = [];
-      // What the batch touched on each page, for its timeline event: text
-      // updates name their fields, record writes name their records.
       const touched = new Map<string, { scope: string; pageId: string; targets: Set<string>; labels: Set<string>; deleted?: boolean }>();
       const touch = (scope: string, pageId: string, target: string, label: string) => {
         const key = `${scope}${pageId}`;
         const entry = touched.get(key) ?? touched.set(key, { scope, pageId, targets: new Set(), labels: new Set() }).get(key)!;
         entry.targets.add(target); entry.labels.add(label);
       };
-      for (const raw of approved) {
-        const [fieldScope, collection, recordId, path] = JSON.parse(raw) as [string, string, string, string[]];
-        if (collection === "pages") {
-          const { eventPage, row } = this.eventPageOf(fieldScope, recordId);
-          touch(fieldScope, eventPage, recordId, row ? "修改了行名" : path[0] === "title_content" ? "修改了标题" : "修改了页面属性");
-        } else if (collection === "blocks") {
-          const parsed = parseBlockRecordId(recordId);
-          if (parsed) touch(fieldScope, parsed.pageId, parsed.blockId, path[0] === "content" ? "编辑了正文" : path[0] === "table" ? "编辑了表格" : "编辑了段落");
+      for (const item of opOutcome.touches) {
+        const { eventPage, row } = this.eventPageOf(item.scope, item.pageId);
+        for (const target of item.targets) {
+          for (const label of item.labels) {
+            touch(item.scope, eventPage, target, row && label === "修改了标题" ? "修改了行名" : label);
+          }
         }
       }
-      const scopes = new Set<string>(textUpdates.map((update) => this.scope(actor, update.scope)));
-      // Bulk path: permission checks, conflict lookups and dirty tracking
-      // repeat per write otherwise — a whole-vault import is ~10^5 writes,
-      // which turns every cold index page into a random disk read.
+
+      const scopes = new Set<string>(opOutcome.touchedScopes);
       const scoped = new Map<string, string>();
       const scopeFor = (name: string): string => {
         if (!this.bulk) return this.scope(actor, name, true);
@@ -683,17 +692,20 @@ export class Store {
         return entry;
       };
       const touchedVersionPages = new Map<string, Set<string>>();
-      // Pages that the transaction itself dirtied: bulk commits suspend the
-      // per-write trigger and mark them in one indexed insert at the end.
-      const dirtyPages = new Set<string>();
-      if (this.bulk) this.collaboration.suspendDirtyTracking();
-      try {
-      for (const original of requested) {
-        const scope = scopeFor(original.scope);
-        const write = this.collaboration.stripProjected(original, scope, approved);
+      // Track raw page/block writes so non-OT mutations broadcast reset/removed (UC-60 H2).
+      const rawPages = new Map<string, { scope: string; pageId: string; action: "created" | "updated" | "deleted" }>();
+      const markRawPage = (scope: string, pageId: string, action: "created" | "updated" | "deleted") => {
+        if (!pageId) return;
+        const key = documentKey({ scope, pageId });
+        const prev = rawPages.get(key);
+        if (!prev) { rawPages.set(key, { scope, pageId, action }); return; }
+        if (action === "deleted") { prev.action = "deleted"; return; }
+        if (prev.action !== "created" || action === "updated") prev.action = "updated";
+      };
+
+      for (const write of requested) {
+        const scope = scopeFor(write.scope);
         if (scope !== `user:${actor.user.id}` && write.collection === "workspace_settings") fail(403, "设置仅属于个人。");
-        // Bulk fast path: a brand-new put needs no existence read. Try the
-        // insert; a primary-key hit falls back to the full conflict check.
         let current: Row | undefined;
         let fastInserted = false;
         if (this.bulk && write.action === "put" && write.value && write.base == null) {
@@ -705,15 +717,11 @@ export class Store {
           }
         }
         if (!fastInserted) current = this.record(scope, write.collection, write.id);
-        if (write.collection === "pages") dirtyPages.add(documentKey({ scope, pageId: write.id }));
-        else if (write.collection === "blocks") dirtyPages.add(documentKey({ scope, pageId: String(current?.page ?? write.value?.page ?? "") }));
         const library = this.knowledgeBases.get(scope);
         if (library && write.collection === "pages" && write.action === "delete") {
           if (write.id === library.homePageId) fail(403, "知识库首页不能删除。", "knowledge_base_home");
           if (!["owner", "admin"].includes(this.role(actor, scope))) fail(403, "永久删除需要知识库管理权限。", "forbidden");
         }
-        // The server's own stamps on blocks never make a client write
-        // stale: they compare without them and survive a rewrite.
         const comparable = (row: Row | undefined | null): Row | undefined | null => {
           if (!row || write.collection !== "blocks") return row;
           const { edited_at: _at, edited_by: _by, ...rest } = row;
@@ -744,7 +752,6 @@ export class Store {
             if (next.share_space_id) {
               if (typeof next.share_space_id !== "string") fail(400, "空间无效。");
               if (scope.startsWith("user:") && this.knowledgeBases.get(next.share_space_id)) fail(403, "团队知识库不使用个人分享指针。", "knowledge_base_boundary");
-              // Changing a tree's sharing home is the owner's operation.
               if ((!current || current.share_space_id !== next.share_space_id) && this.role(actor, next.share_space_id) !== "owner") fail(403, "只有所有者可设置分享位置。", "owner_required");
               if (scope !== `user:${actor.user.id}` && next.share_space_id !== scope) fail(400, "分享空间不一致。");
             }
@@ -752,27 +759,32 @@ export class Store {
             if (current && !library && !scope.startsWith("user:") && current.share_space_id === scope && Boolean(next.archived) !== Boolean(current.archived) && this.role(actor, scope) !== "owner") {
               fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
             }
+            markRawPage(scope, write.id, current ? "updated" : "created");
+          } else if (write.collection === "blocks") {
+            const pageId = String(current?.page ?? next.page ?? "");
+            markRawPage(scope, pageId, rawPages.get(documentKey({ scope, pageId }))?.action === "created" ? "created" : "updated");
           }
           if (!fastInserted) this.put(scope, write.collection, write.id, next);
         } else {
           this.stmt("DELETE FROM records WHERE scope=? AND collection=? AND id=?").run(scope, write.collection, write.id);
           if (write.collection === "pages" && current) {
-            // Gone for good means all of it: the record sweep below still
-            // holds this write, so paragraphs and history leave with the
-            // page or the whole batch is refused.
             this.stmt("DELETE FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=?").run(scope, write.id);
             this.stmt("DELETE FROM records WHERE scope=? AND collection='versions' AND json_extract(value,'$.page')=?").run(scope, write.id);
             this.stmt("DELETE FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=?").run(scope, write.id);
-            this.stmt("DELETE FROM collaboration_archives WHERE scope=? AND page_id=?").run(scope, write.id);
+            markRawPage(scope, write.id, "deleted");
+          } else if (write.collection === "blocks" && current) {
+            markRawPage(scope, String(current.page ?? ""), "updated");
           }
           if (write.collection === "pages" && current?.share_space_id === scope) {
             if (this.role(actor, scope) !== "owner") fail(403, "只有所有者可以结束页面分享。", "owner_required");
             this.stmt("DELETE FROM members WHERE space_id=? AND role!='owner'").run(scope);
             this.stmt("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(scope);
             this.stmt("DELETE FROM shares WHERE scope=?").run(scope);
+            this.collaboration.notifyPermissionChange({ scope });
           }
         }
         result.push(next ?? null); scopes.add(scope);
+        this.collaboration.noteScope(scope);
         const planeTouch = touchPlane(scope);
         if (write.collection === "pages") {
           if (next) {
@@ -818,8 +830,6 @@ export class Store {
             const parsed = parseBlockRecordId(write.id)!;
             touch(scope, eventPage, parsed.blockId, "删除了段落");
           } else if (write.collection === "pages" && current) {
-            // A deleted page's timeline dies with it — suppress its own
-            // entry. A row's lives on its database's, which outlives it.
             if (row) {
               touch(scope, eventPage, write.id, "删除了一行");
             } else {
@@ -830,21 +840,12 @@ export class Store {
           }
         }
       }
-      } finally {
-        if (this.bulk) this.collaboration.resumeDirtyTracking();
+
+      // Notify collaboration layer of non-OT raw writes (skipping bulk import creations).
+      for (const entry of rawPages.values()) {
+        this.collaboration.handleRawPageMutation(entry.scope, entry.pageId, entry.action);
       }
-      if (this.bulk && dirtyPages.size) {
-        // flush() reads collaboration_dirty, so the marks must exist before
-        // the transaction's commit-time projection sweep.
-        const mark = this.stmt("INSERT OR IGNORE INTO collaboration_dirty VALUES(?,?)");
-        for (const entry of dirtyPages) {
-          const [scope, pageId] = JSON.parse(entry) as [string, string];
-          mark.run(scope, pageId);
-        }
-      }
-      // Validate the complete transaction, after sharing has moved all
-      // records. A text-only batch touches no record the plane or version
-      // checks can break, so checks stay incremental on touched records.
+
       if (requested.length) {
         for (const scope of scopes) this.validatePlane(actor, scope, planeTouches.get(scope));
         for (const [scope, pageIds] of touchedVersionPages) this.pruneHistory(scope, [...pageIds]);
@@ -854,8 +855,9 @@ export class Store {
         this.recordPageEvent(actor, entry.scope, entry.pageId, [...entry.labels], [...entry.targets]);
         this.pruneEvents(entry.scope, entry.pageId);
       }
-      if (requestId) this.saveRequest(actor.user.id, requestId, digest, result);
-      return result;
+      const batchResult = { writes: result, pageResults: opOutcome.results };
+      if (requestId) this.saveRequest(actor.user.id, requestId, digest, batchResult);
+      return batchResult;
     });
   }
 
@@ -866,7 +868,7 @@ export class Store {
    *  column of its database, so its writes land on the database's timeline;
    *  an ordinary page's land on its own. A deleted page's parent has to come
    *  from the record as it was — the live read returns nothing once it's gone. */
-  private eventPageOf(scope: string, recordId: string, opts: { deleted?: boolean; prior?: Row } = {}): { eventPage: string; row: boolean } {
+  eventPageOf(scope: string, recordId: string, opts: { deleted?: boolean; prior?: Row } = {}): { eventPage: string; row: boolean } {
     const page = opts.deleted ? opts.prior : this.record(scope, "pages", recordId);
     const parentId = page?.parent_id;
     if (typeof parentId === "string") {
@@ -878,7 +880,7 @@ export class Store {
 
   /** One entry on a page's timeline — or into the latest, when the same
    *  author edits again inside the window history coalesces on. */
-  private recordPageEvent(actor: Actor, scope: string, pageId: string, labels: string[], targets: string[]): void {
+  recordPageEvent(actor: Actor, scope: string, pageId: string, labels: string[], targets: string[]): void {
     const latest = this.all(
       "SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=? ORDER BY json_extract(value,'$.created_at') DESC LIMIT 1",
       scope,
@@ -900,7 +902,7 @@ export class Store {
 
   /** A page's timeline keeps its newest 300 entries within the window —
    *  small records, so count and age bound them. */
-  private pruneEvents(scope: string, pageId: string): void {
+  pruneEvents(scope: string, pageId: string): void {
     const rows = this.all(
       "SELECT id,value FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')=?",
       scope,
@@ -1110,13 +1112,14 @@ export class Store {
     const revision = this.revision(scope, pageId);
     const collaboration = this.collaboration.snapshot(actor, scope.startsWith("user:") ? "personal" : scope, pageId);
     const trashed = this.pageTrashState(scope, pageId).archived;
-    return { id: page.id, title: page.title, text, revision, scope, page, trashed, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, revision } };
+    return { id: page.id, title: page.title, text, revision, scope, page, trashed, collaboration: { scope: collaboration.scope, pageId, generation: collaboration.generation, epoch: collaboration.epoch, seq: collaboration.seq, revision } };
   }
   savePage(scope: string, page: LoadedNotePage, who?: Actor, label = "修改了页面"): void {
     this.transaction(() => {
       this.assertPageLocation(scope, page.id, who);
       const library = this.knowledgeBases.get(scope);
       if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
+      const existed = Boolean(this.record(scope, "pages", page.id));
       if (who && !library && !scope.startsWith("user:")) {
         const existing = this.record(scope, "pages", page.id);
         if (page.share_space_id && (!existing || existing.share_space_id !== page.share_space_id) && !this.ownsScope(who, scope)) {
@@ -1137,6 +1140,10 @@ export class Store {
         this.put(scope, "blocks", recordId, value);
         putBlocks.set(recordId, value);
       }
+      // Whole-page overwrite must rotate epoch & broadcast reset so active OT
+      // editors never diverge against replaced blocks (UC-60 H2).
+      if (existed) this.collaboration.reset(scope, page.id);
+      else this.collaboration.noteScope(scope);
       // Direct writes bypass apply's touch collection; the caller says what
       // the act was and it lands on the page's own timeline.
       if (who) {

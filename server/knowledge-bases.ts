@@ -137,6 +137,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       const { role } = current(who, spaceId, input.revision); owner(role);
       store.db.prepare("UPDATE knowledge_bases SET archived=?,revision=revision+1 WHERE space_id=?").run(Number(input.archived), spaceId);
       if (input.archived) store.db.prepare("UPDATE invitations SET status='revoked' WHERE space_id=? AND status='pending'").run(spaceId);
+      store.collaboration.notifyPermissionChange({ scope: spaceId });
       return summary(who, spaceId);
     });
     res.json(result);
@@ -155,6 +156,7 @@ export function attachKnowledgeBases(app: Express, { store, actor }: { store: St
       store.db.prepare("UPDATE members SET role='owner' WHERE space_id=? AND user_id=?").run(spaceId, input.userId);
       store.db.prepare("UPDATE spaces SET owner_id=? WHERE id=?").run(input.userId, spaceId);
       store.db.prepare("UPDATE knowledge_bases SET revision=revision+1 WHERE space_id=?").run(spaceId);
+      store.collaboration.notifyPermissionChange({ scope: spaceId, userId: input.userId });
       return summary(who, spaceId);
     });
     res.json(result);
