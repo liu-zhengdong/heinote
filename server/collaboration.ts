@@ -6,9 +6,11 @@ import {
   clonePageState,
   pageStateFromRecords,
   parseFieldKey,
+  readField,
   recordsFromPageState,
   transformPageOps,
 } from "../src/collaboration/ot/page.ts";
+import { validateTextOps } from "../src/collaboration/ot/text.ts";
 import type {
   OpsSinceResponse,
   OrphanedText,
@@ -501,10 +503,15 @@ export class CollaborationStore {
       const appliedOps: PageOp[] = [];
       const orphaned: OrphanedText[] = [];
       for (const op of transformed) {
-        // Guard against cross-page field targeting.
+        // Guard against cross-page field targeting and invalid text boundaries/ranges.
         if (op.type === "text") {
           const parsed = parseFieldKey(op.field);
           if (!parsed || parsed.pageId !== sub.pageId) fail(400, "文字字段不属于目标页面。", "bad_request");
+          const currentRuns = readField(workingState, op.field);
+          if (currentRuns !== null) {
+            const invalid = validateTextOps(currentRuns, op.ops);
+            if (invalid) fail(400, invalid, "bad_request");
+          }
         }
         const outcome = applyPageOp(workingState, op, "materialize");
         if (outcome.applied) appliedOps.push(outcome.applied);

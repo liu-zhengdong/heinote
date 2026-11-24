@@ -154,3 +154,49 @@ test("未迁移的旧库构造 Store 被拒绝", () => {
   createOldDatabase(dataDir);
   assert.throws(() => new Store(dataDir), /migrateDatabase/);
 });
+
+test("UC-60 迁移 009：清理旧 Yjs 表、建立语义操作日志表并重建 records_bytes 用量", async () => {
+  const dataDir = dir();
+  createOldDatabase(dataDir);
+  // Seed legacy Yjs tables and pre-009 user_version=8 state with an existing record.
+  await migrateDatabase(dataDir);
+  const db = new DatabaseSync(dbPath(dataDir));
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS collaboration_ops;
+      DROP TABLE IF EXISTS collaboration_pages;
+      CREATE TABLE collaboration_documents(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(scope,page_id));
+      CREATE TABLE collaboration_archives(scope TEXT NOT NULL, page_id TEXT NOT NULL, generation TEXT NOT NULL, state BLOB NOT NULL, archived_at TEXT NOT NULL, PRIMARY KEY(scope,page_id,generation));
+      CREATE TABLE collaboration_dirty(scope TEXT NOT NULL, page_id TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(scope,page_id));
+      INSERT INTO records(scope,collection,id,value) VALUES('user:u1','pages','p1','{"id":"p1","kind":"document","title_content":[{"text":"Keep"}]}');
+      INSERT INTO collaboration_documents VALUES('user:u1','p1','g1',X'01020304','2026-11-20T00:00:00.000Z');
+      INSERT INTO scope_usage(scope,records_bytes,docs_bytes,archives_bytes) VALUES('user:u1',1,999,888) ON CONFLICT(scope) DO UPDATE SET docs_bytes=999, archives_bytes=888;
+      PRAGMA user_version=8;
+    `);
+  } finally {
+    db.close();
+  }
+
+  await migrateDatabase(dataDir);
+  assert.equal(versionOf(dbPath(dataDir)), LATEST_VERSION);
+  const check = new DatabaseSync(dbPath(dataDir));
+  try {
+    const tables = new Set(
+      (check.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map((r) => r.name),
+    );
+    assert.equal(tables.has("collaboration_documents"), false);
+    assert.equal(tables.has("collaboration_archives"), false);
+    assert.equal(tables.has("collaboration_dirty"), false);
+    assert.equal(tables.has("collaboration_pages"), true);
+    assert.equal(tables.has("collaboration_ops"), true);
+
+    const rec = check.prepare("SELECT value FROM records WHERE scope='user:u1' AND id='p1'").get() as { value: string };
+    assert.ok(rec.value.includes("Keep"));
+    const usage = check.prepare("SELECT records_bytes, docs_bytes, archives_bytes FROM scope_usage WHERE scope='user:u1'").get() as { records_bytes: number; docs_bytes: number; archives_bytes: number };
+    assert.equal(usage.records_bytes, rec.value.length);
+    assert.equal(usage.docs_bytes, 0);
+    assert.equal(usage.archives_bytes, 0);
+  } finally {
+    check.close();
+  }
+});

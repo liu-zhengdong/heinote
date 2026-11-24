@@ -146,12 +146,12 @@ test("UC-16: personal quota counts records and files, enforces growth beyond the
   assert.equal(before.storage.limit, 8_000);
   assert.equal(before.storage.source, "default");
 
-  await putRecord(user, scope, "pages", "p1", page("p1", "BOB", 3_000));
+  await putRecord(user, scope, "pages", "p1", page("p1", "BOB", 4_500));
   const grown = status(await user.request("/api/account/quota"), 200);
   assert.ok(grown.storage.used > before.storage.used, "records grow usage");
 
   // A write that crosses the limit is refused with the UC-16 contract shape.
-  const refused = await user.request("/api/records/batch", { method: "POST", body: { writes: [{ scope, collection: "pages", id: "p2", action: "put", value: page("p2", "BOB", 3_000) }] } });
+  const refused = await user.request("/api/records/batch", { method: "POST", body: { writes: [{ scope, collection: "pages", id: "p2", action: "put", value: page("p2", "BOB", 4_500) }] } });
   assert.equal(refused.status, 413, JSON.stringify(refused.body));
   assert.equal(refused.body.code, "quota_exceeded");
   assert.equal(refused.body.quota.subject, `user:${bob.id}`);

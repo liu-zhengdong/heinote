@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { test, type TestContext } from "node:test";
-import * as Y from "yjs";
 import { startServer } from "../server/index.ts";
 import { migrateDatabase } from "../server/migrations/index.ts";
 import { Store, type Actor } from "../server/store.ts";
@@ -133,34 +132,28 @@ test("UC-59 AC-01: O(1) scope_usage matches raw sums across rollbacks, increment
       value: blockValue(pid, "b1", `Paragraph content for page ${i}`),
     });
   }
-  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], [], 5000));
+  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], 5000));
 
-  // Verify scope_usage matches raw SQL SUM(LENGTH(...)) to the exact byte.
+  // Verify scope_usage matches raw SQL SUM(LENGTH(value)) on records to the exact byte (UC-60 single source of truth).
   const assertUsageExact = () => {
     const tracked = store.one("SELECT records_bytes, docs_bytes, archives_bytes FROM scope_usage WHERE scope=?", scope)!;
     const rawRec = Number(store.one("SELECT COALESCE(SUM(LENGTH(value)),0) AS n FROM records WHERE scope=?", scope)?.n ?? 0);
-    const rawDoc = Number(store.one("SELECT COALESCE(SUM(LENGTH(state)),0) AS n FROM collaboration_documents WHERE scope=?", scope)?.n ?? 0);
-    const rawArc = Number(store.one("SELECT COALESCE(SUM(LENGTH(state)),0) AS n FROM collaboration_archives WHERE scope=?", scope)?.n ?? 0);
     assert.equal(Number(tracked.records_bytes), rawRec);
-    assert.equal(Number(tracked.docs_bytes), rawDoc);
-    assert.equal(Number(tracked.archives_bytes), rawArc);
+    assert.equal(Number(tracked.docs_bytes), 0);
+    assert.equal(Number(tracked.archives_bytes), 0);
   };
   assertUsageExact();
 
   // Verify incremental validatePlane still rejects cycles & orphan deletes and rolls back scope_usage cleanly.
-  const basisOf = (pid: string) => {
-    const snap = store.collaboration.snapshot(actor, "personal", pid);
-    return [{ scope: "personal", pageId: pid, generation: snap.generation, revision: snap.revision }];
-  };
   assert.throws(() => {
     const rootVal = store.record(scope, "pages", "v_0")!;
-    store.apply(actor, [{ scope: "personal", collection: "pages", id: "v_0", action: "patch", patch: { parent_id: "v_10" }, base: rootVal }], undefined, [], basisOf("v_0"));
+    store.apply(actor, [{ scope: "personal", collection: "pages", id: "v_0", action: "patch", patch: { parent_id: "v_10" }, base: rootVal }]);
   }, /循环/);
   assertUsageExact();
 
   assert.throws(() => {
     const parentVal = store.record(scope, "pages", "v_1")!;
-    store.apply(actor, [{ scope: "personal", collection: "pages", id: "v_1", action: "delete", base: parentVal }], undefined, [], basisOf("v_1"));
+    store.apply(actor, [{ scope: "personal", collection: "pages", id: "v_1", action: "delete", base: parentVal }]);
   }, /父页面必须位于同一空间/);
   assertUsageExact();
 
@@ -171,7 +164,7 @@ test("UC-59 AC-01: O(1) scope_usage matches raw sums across rollbacks, increment
     store.apply(actor, [{
       scope: "personal", collection: "blocks", id: `${"v_0".length}_v_0_huge`, action: "put", base: null,
       value: blockValue("v_0", "huge", "x".repeat(500), 2048),
-    }], undefined, [], basisOf("v_0"));
+    }]);
   }, /超出存储限额/);
   store.quotas.setUserLimits(user.id, null, null);
   assertUsageExact();
@@ -181,7 +174,7 @@ test("UC-59 AC-01: O(1) scope_usage matches raw sums across rollbacks, increment
   store.apply(actor, [{
     scope: "personal", collection: "blocks", id: `${"v_1999".length}_v_1999_b2`, action: "put", base: null,
     value: blockValue("v_1999", "b2", "Fast incremental write", 2048),
-  }], undefined, [], basisOf("v_1999"));
+  }]);
   const writeMs = performance.now() - tWriteStart;
   assertUsageExact();
 
@@ -258,7 +251,7 @@ test("UC-59 AC-02: server-side POST /api/pages/:id/transfer shares, moves, and s
       value: blockValue(pid, "b1", `Move body ${i}`),
     });
   }
-  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], [], 5000));
+  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], 5000));
   store.purge.stop();
   store.maintenance.stop();
   store.db.close();
@@ -286,25 +279,24 @@ test("UC-59 AC-02: server-side POST /api/pages/:id/transfer shares, moves, and s
   const spacePages = ok(await bob.request(`/api/records/${spaceId}/pages`), 200);
   assert.equal(spacePages.length, 1200);
 
-  // Bob edits tr_0 via Yjs CRDT update in the shared room.
+  // Bob edits tr_0 via semantic OT op in the shared room.
   const sharedSnap = ok(await bob.request(`/api/collaboration/${spaceId}/tr_0`), 200);
-  const ydoc = new Y.Doc();
-  Y.applyUpdate(ydoc, Buffer.from(sharedSnap.state, "base64"));
-  const beforeVec = Y.encodeStateVector(ydoc);
-  const fields = ydoc.getMap<Y.Text>("fields");
   const bodyKey = `blocks/${"tr_0".length}_tr_0_b1/content`;
-  fields.get(bodyKey)!.insert(0, "协作者编辑:");
-  const updateB64 = Buffer.from(Y.encodeStateAsUpdate(ydoc, beforeVec)).toString("base64");
   ok(await bob.request("/api/records/batch", {
     method: "POST",
     body: {
       requestId: randomUUID(),
       writes: [],
-      textUpdates: [{ scope: spaceId, pageId: "tr_0", generation: sharedSnap.generation, update: updateB64 }],
-      expectedPages: [],
+      pageOps: [{
+        scope: spaceId,
+        pageId: "tr_0",
+        epoch: sharedSnap.epoch,
+        baseSeq: sharedSnap.seq,
+        ops: [{ type: "text", field: bodyKey, ops: [{ insert: "协作者编辑:" }] }],
+      }],
+      protocol: 2,
     },
   }), 200);
-  ydoc.destroy();
 
   // Move 50-page personal branch into the shared space under tr_0, and verify KB boundary rejection.
   assert.equal((await alice.request("/api/pages/mv_0/transfer", {
@@ -327,14 +319,12 @@ test("UC-59 AC-02: server-side POST /api/pages/:id/transfer shares, moves, and s
   const stopMs = performance.now() - tStopStart;
   assert.equal(stoppedRes.movedPages, 1250);
 
-  // Bob loses access immediately; Alice's personal collaboration snapshot retains Bob's edit with a new generation.
+  // Bob loses access immediately; Alice's personal collaboration snapshot retains Bob's edit with a new epoch.
   assert.equal((await bob.request(`/api/collaboration/${spaceId}/tr_0`)).status, 403);
   const personalSnap = ok(await alice.request("/api/collaboration/personal/tr_0"), 200);
-  assert.notEqual(personalSnap.generation, sharedSnap.generation);
-  const verifyDoc = new Y.Doc();
-  Y.applyUpdate(verifyDoc, Buffer.from(personalSnap.state, "base64"));
-  assert.equal(verifyDoc.getMap<Y.Text>("fields").get(bodyKey)!.toString(), "协作者编辑:Tree body 0");
-  verifyDoc.destroy();
+  assert.notEqual(personalSnap.epoch, sharedSnap.epoch);
+  const movedBlock = personalSnap.records.blocks.find((b: Json) => b.value.id === "b1");
+  assert.equal(movedBlock.value.content.map((r: Json) => r.text ?? "").join(""), "协作者编辑:Tree body 0");
 
   console.log(`[UC-59 benchmark] 1,200-page share=${shareMs.toFixed(2)}ms, 1,250-page stop-share=${stopMs.toFixed(2)}ms`);
   assert.ok(shareMs < 2000, `share transfer too slow: ${shareMs}ms`);
@@ -495,9 +485,23 @@ test("UC-59 AC-05 & AC-06: pruneRequests, tombstone compaction with reset:true, 
     const pid = `tomb_${i}`;
     store.apply(actor, [{ scope: "personal", collection: "pages", id: pid, action: "put", base: null, value: pageValue(pid, `Tomb ${i}`, aliceUser.id) }]);
     const rec = store.record(scope, "pages", pid)!;
-    const snap = store.collaboration.snapshot(actor, "personal", pid);
-    store.apply(actor, [{ scope: "personal", collection: "pages", id: pid, action: "delete", base: rec }], undefined, [], [{ scope: "personal", pageId: pid, generation: snap.generation, revision: snap.revision }]);
+    store.apply(actor, [{ scope: "personal", collection: "pages", id: pid, action: "delete", base: rec }]);
   }
+
+  // UC-60: verify sliding-window pruneCollaborationOps trims old ops and advances pruned_before.
+  const oldOpTime = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  store.db.prepare("INSERT OR REPLACE INTO collaboration_pages(scope,page_id,epoch,seq,pruned_before) VALUES(?,?,?,?,?)")
+    .run(scope, "prune_page", "ep-1", 30, 0);
+  for (let seq = 1; seq <= 30; seq += 1) {
+    store.db.prepare("INSERT INTO collaboration_ops(scope,page_id,seq,epoch,request_id,actor_id,ops,created_at) VALUES(?,?,?,?,?,?,?,?)")
+      .run(scope, "prune_page", seq, "ep-1", `req-${seq}`, aliceUser.id, "[]", seq <= 25 ? oldOpTime : nowIso());
+  }
+  const prunedOps = store.maintenance.pruneCollaborationOps({ maxOpsPerPage: 10, minRetentionMs: 3_600_000, hardMaxOpsPerPage: 100 });
+  assert.equal(prunedOps, 20);
+  const metaAfterPrune = store.one("SELECT seq, pruned_before FROM collaboration_pages WHERE scope=? AND page_id='prune_page'", scope)!;
+  assert.equal(Number(metaAfterPrune.pruned_before), 20);
+  const opsRemaining = Number(store.one("SELECT count(*) AS n FROM collaboration_ops WHERE scope=? AND page_id='prune_page'", scope)!.n);
+  assert.equal(opsRemaining, 10);
 
   // Backdate 2 requests to 10 days ago, keep 1 fresh.
   const tenDaysAgo = new Date(Date.now() - 10 * 86_400_000).toISOString();

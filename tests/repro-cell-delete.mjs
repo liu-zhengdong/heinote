@@ -3,7 +3,6 @@
    collaborative title cell. Debug script — run with `npx tsx`; the
    committed regression lives in tests/collaboration-browser.test.ts. */
 import { chromium } from "@playwright/test";
-import * as Y from "yjs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -375,7 +374,7 @@ try {
       const res = await fetch(`/api/collaboration/personal/${rid}`);
       return { status: res.status, body: await res.json() };
     }, rowId);
-    console.log("   peer 快照:", snap.status, "gen:", snap.body?.generation);
+    console.log("   peer 快照:", snap.status, "epoch:", snap.body?.epoch, "seq:", snap.body?.seq);
     if (snap.status === 200) {
       const blocks = snap.body.records?.blocks ?? [];
       const block = blocks[0];
@@ -387,10 +386,9 @@ try {
             { scope: "personal", collection: "pages", id: args.rid, action: "patch", base: args.pageRec, patch: { title_content: [{ text: "PEER改过" }] } },
             { scope: "personal", collection: "blocks", id: args.bid, action: "delete", base: args.blockRec },
           ],
-          expectedPages: [{ scope: "personal", pageId: args.rid, generation: args.gen, revision: args.rev }],
         }) });
         return { status: res.status, body: await res.text() };
-      }, { rid: rowId, bid: block?.id, blockRec: block?.value, pageRec, gen: snap.body.generation, rev: snap.body.revision });
+      }, { rid: rowId, bid: block?.id, blockRec: block?.value, pageRec });
       console.log("   peer 提交:", JSON.stringify(w));
     }
     // 会话重同步是异步的：等一会儿让 B 端会话换代，但赶在 prop 重渲染前按删

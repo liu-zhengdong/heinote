@@ -25,7 +25,7 @@ import {
   sliceRichText,
   splitRichText,
 } from "./text";
-import type { CommittedPageBatch, PageOp, PageState, SelectionRange } from "./types";
+import type { CommittedPageBatch, PageOp, PageState, SelectionRange, TextStep } from "./types";
 
 /** Deterministic PRNG (Mulberry32) so any discovered failure seed is 100% reproducible. */
 function mulberry32(seed: number): () => number {
@@ -58,7 +58,7 @@ interface SimServer {
 const TOKENS = ["a", "b", "中", "文", "🎉", "🚀", " ", "x", "1", "hi"];
 const MARK_KEYS = ["bold", "italic", "code", "color"] as const;
 
-function randomTextEdit(rng: () => number, current: RichText): PageOp["ops"] | null {
+function randomTextEdit(rng: () => number, current: RichText): TextStep[] | null {
   const len = richTextLength(current);
   const mode = rng();
   if (mode < 0.45 || len === 0) {

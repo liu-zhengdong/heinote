@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { RichText } from "../../platform/schema";
 import { sha256Hex } from "./sha256";
@@ -22,7 +21,7 @@ import {
 import type { TextStep } from "./types";
 
 describe("sha256", () => {
-  it("matches node:crypto sha256 across empty, short, multi-block, and UTF-8 inputs", () => {
+  it("matches Web Crypto sha256 across empty, short, multi-block, and UTF-8 inputs", async () => {
     const samples = [
       "",
       "abc",
@@ -34,7 +33,8 @@ describe("sha256", () => {
     ];
     for (const sample of samples) {
       const bytes = new TextEncoder().encode(sample);
-      const expected = createHash("sha256").update(bytes).digest("hex");
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+      const expected = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
       expect(sha256Hex(bytes)).toBe(expected);
     }
   });

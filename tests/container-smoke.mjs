@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import * as Y from "yjs";
 import WebSocket from "ws";
 
 const engine = process.env.CONTAINER_ENGINE ?? "podman";
@@ -10,7 +9,6 @@ const runId = randomUUID();
 const container = `heinote-accept-${runId}`;
 const volume = `${container}-data`;
 const run = (...args) => execFileSync(engine, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 60000 }).trim();
-const documents = new Set();
 const feeds = new Set();
 let url;
 const password = `Test-${randomUUID()}`;
@@ -39,72 +37,62 @@ function browser() {
 }
 const expectStatus = (reply, status) => { assert.equal(reply.status, status, `Unexpected status for ${reply.path}`); return reply.value; };
 const bodyKey = (recordId) => `blocks/${encodeURIComponent(recordId)}/content`;
-const expected = (value) => ({ scope: value.scope, pageId: value.pageId, generation: value.generation, revision: value.revision });
-function fork(value) {
-  const doc = new Y.Doc(); Y.applyUpdate(doc, Buffer.from(value.state, "base64")); documents.add(doc); return doc;
+function fieldRuns(value, key) {
+  const [collection, encodedId, ...path] = key.split("/");
+  const recordId = decodeURIComponent(encodedId);
+  let target = collection === "pages" && recordId === value.pageId
+    ? value.records.page
+    : value.records.blocks.find((row) => row.id === recordId)?.value;
+  for (const segment of path) target = target?.[decodeURIComponent(segment)];
+  assert.ok(Array.isArray(target), `The snapshot must include the SQL projection for ${key}`);
+  return target;
 }
-function field(doc, key) {
-  const value = doc.getMap("fields").get(key);
-  assert.ok(value instanceof Y.Text, `A persisted collaborative field must remain Y.Text: ${key}`);
-  return value;
+function text(value, key) {
+  return fieldRuns(value, key).filter((run) => typeof run.text === "string").map((run) => run.text).join("");
 }
-function update(doc, work) {
-  const before = Y.encodeStateVector(doc); doc.transact(work, "independent-container-test");
-  return Buffer.from(Y.encodeStateAsUpdate(doc, before)).toString("base64");
-}
-function text(value, key) { return field(fork(value), key).toString(); }
 function assertSnapshot(value) {
-  assert.equal(typeof value.generation, "string"); assert.ok(value.generation);
+  assert.equal(typeof value.epoch, "string"); assert.ok(value.epoch);
+  assert.equal(typeof value.seq, "number"); assert.ok(Number.isInteger(value.seq) && value.seq >= 0);
   assert.equal(typeof value.revision, "string"); assert.ok(value.revision);
-  assert.equal(typeof value.state, "string"); assert.ok(value.state);
   assert.equal(value.records?.page?.id, value.pageId);
   assert.ok(Array.isArray(value.records.blocks));
   assert.ok(value.records.blocks.every((row) => row.value.page === value.pageId));
-  for (const [key, shared] of fork(value).getMap("fields")) {
-    assert.ok(shared instanceof Y.Text);
-    const [collection, encodedId, ...path] = key.split("/"); const recordId = decodeURIComponent(encodedId);
-    assert.ok(collection === "pages" || collection === "blocks");
-    let projected = collection === "pages" && recordId === value.pageId ? value.records.page : value.records.blocks.find((row) => row.id === recordId)?.value;
-    for (const segment of path) projected = projected?.[decodeURIComponent(segment)];
-    assert.ok(Array.isArray(projected), `The snapshot must include the SQL projection for ${key}`);
-    assert.equal(projected.filter((run) => typeof run.text === "string").map((run) => run.text).join(""), shared.toString());
-    assert.equal(projected.filter((run) => run.embed !== undefined).length, shared.toDelta().filter((part) => typeof part.insert === "object").length);
-  }
 }
 async function snapshot(client, scope, pageId) {
   const value = expectStatus(await client(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`), 200);
   assert.equal(value.scope, scope); assert.equal(value.pageId, pageId); assertSnapshot(value); return value;
 }
-async function submit(client, basis, bytes, requestId = randomUUID()) {
-  return client("/api/records/batch", { method: "POST", body: { requestId, writes: [], textUpdates: [{ scope: basis.scope, pageId: basis.pageId, generation: basis.generation, update: bytes }], expectedPages: [] } });
+async function submitOps(client, basis, ops, requestId = randomUUID()) {
+  return client("/api/records/batch", {
+    method: "POST",
+    body: {
+      requestId,
+      writes: [],
+      pageOps: [{ scope: basis.scope, pageId: basis.pageId, epoch: basis.epoch, baseSeq: basis.seq, ops }],
+    },
+  });
 }
 function assertIdentity(before, after, key) {
-  assert.equal(after.generation, before.generation, "Restarting a service must retain its document generation");
+  assert.equal(after.epoch, before.epoch, "Restarting a service must retain its page epoch");
+  assert.equal(after.seq, before.seq, "Restarting a service must retain its page seq");
   assert.equal(after.revision, before.revision, "Restarting a service cannot modify the page projection");
-  const a = fork(before); const b = fork(after);
-  assert.deepEqual(Y.encodeStateVector(b), Y.encodeStateVector(a), "The stored CRDT identities must survive instead of being seeded from JSON");
-  assert.deepEqual(field(b, key).toDelta(), field(a, key).toDelta());
-  const index = Math.min(1, field(a, key).length);
-  const anchor = Y.createRelativePositionFromTypeIndex(field(a, key), index);
-  const restored = Y.createAbsolutePositionFromRelativePosition(anchor, b);
-  assert.ok(restored, "A relative position must resolve after restarting from the persistent volume");
-  assert.equal(restored.index, index); assert.equal(restored.type, field(b, key));
+  assert.deepEqual(fieldRuns(after, key), fieldRuns(before, key));
 }
-function assertDurableSnapshot(value) {
+function assertDurableState(value) {
   // A separate container process reads SQLite after receiving the WebSocket event.
   const script = `import { DatabaseSync } from 'node:sqlite';
     const db = new DatabaseSync('/app/data/notes.sqlite', {readOnly:true});
     try {
       const [scope,pageId] = process.argv.slice(1);
-      const doc = db.prepare('SELECT generation,state FROM collaboration_documents WHERE scope=? AND page_id=?').get(scope,pageId);
+      const meta = db.prepare('SELECT epoch,seq FROM collaboration_pages WHERE scope=? AND page_id=?').get(scope,pageId);
       const page = db.prepare("SELECT value FROM records WHERE scope=? AND collection='pages' AND id=?").get(scope,pageId);
       const blocks = db.prepare("SELECT id,value FROM records WHERE scope=? AND collection='blocks' AND json_extract(value,'$.page')=? ORDER BY id").all(scope,pageId).map(row=>({id:row.id,value:JSON.parse(row.value)}));
-      console.log(JSON.stringify({generation:doc?.generation,state:doc?Buffer.from(doc.state).toString('base64'):null,records:{page:page?JSON.parse(page.value):null,blocks}}));
+      console.log(JSON.stringify({epoch:meta?.epoch,seq:meta?.seq,records:{page:page?JSON.parse(page.value):null,blocks}}));
     } finally { db.close(); }`;
   const persisted = JSON.parse(run("exec", container, "node", "--input-type=module", "-e", script, value.scope, value.pageId));
-  assert.equal(persisted.generation, value.generation);
-  assert.equal(persisted.state, value.state, "A WebSocket snapshot must already exist in the committed binary database");
-  assert.deepEqual(persisted.records, value.records, "The event binary and SQL projection must belong to the same committed transaction");
+  assert.equal(persisted.epoch, value.epoch);
+  assert.equal(persisted.seq, value.seq, "A WebSocket op commit must already exist in SQLite");
+  assert.deepEqual(persisted.records, value.records, "The committed records must match the latest snapshot");
 }
 class Feed {
   messages = [];
@@ -139,18 +127,15 @@ class Feed {
   async subscribe(scope, pageId) {
     await this.wait(() => this.socket.readyState === WebSocket.OPEN);
     this.socket.send(JSON.stringify({ type: "subscribe", scope, pageId }));
-    return this.snapshot((value) => value.scope === scope && value.pageId === pageId);
+    await this.wait(() => this.messages.some((m) => m.type === "document" && m.snapshot?.scope === scope && m.snapshot?.pageId === pageId));
+    const snap = this.messages.find((m) => m.type === "document" && m.snapshot?.scope === scope && m.snapshot?.pageId === pageId).snapshot;
+    assertSnapshot(snap);
+    return snap;
   }
-  async snapshot(predicate, after = 0, commitOnly = false) {
-    const events = () => this.messages.slice(after).flatMap((message) => {
-      if (message.type !== "commit") return commitOnly ? [] : [message];
-      assert.ok(Array.isArray(message.documents));
-      assert.ok(message.documents.every((event) => ["document", "reset"].includes(event.type) && event.snapshot));
-      return message.documents;
-    });
-    await this.wait(() => events().some((event) => event.snapshot && predicate(event.snapshot)));
-    const value = events().find((event) => event.snapshot && predicate(event.snapshot)).snapshot;
-    assertSnapshot(value); return value;
+  async waitOp(predicate, after = 0) {
+    const events = () => this.messages.slice(after).filter((m) => m.type === "op" || m.type === "reset");
+    await this.wait(() => events().some(predicate));
+    return events().find(predicate);
   }
   async close() {
     if (this.socket.readyState === WebSocket.CLOSED) return;
@@ -188,14 +173,12 @@ try {
   expectStatus(await alice(`/api/v1/pages/${page.id}`, { method: "PATCH", token: writer.token, body: { text: "临时修改", baseRevision: page.revision } }), 200);
   const beforeRestore = await snapshot(alice, "personal", page.id);
   const oldBlock = beforeRestore.records.blocks[0]; assert.ok(oldBlock);
-  const oldDoc = fork(beforeRestore);
-  const oldBytes = update(oldDoc, () => field(oldDoc, bodyKey(oldBlock.id)).insert(0, "恢复后不得复活"));
   const restored = expectStatus(await alice(`/api/v1/pages/${page.id}/restore`, { method: "POST", token: writer.token, body: { versionId: version.id, baseRevision: beforeRestore.revision } }), 200);
   assert.equal(restored.text, "恢复前的正文");
   const afterRestore = await snapshot(alice, "personal", page.id);
-  assert.notEqual(afterRestore.generation, beforeRestore.generation);
-  expectStatus(await submit(alice, beforeRestore, oldBytes), 409);
-  assert.equal((await snapshot(alice, "personal", page.id)).state, afterRestore.state, "An old-generation update cannot revive text after a restore");
+  assert.notEqual(afterRestore.epoch, beforeRestore.epoch);
+  expectStatus(await submitOps(alice, beforeRestore, [{ type: "text", field: bodyKey(oldBlock.id), ops: [{ insert: "恢复后不得复活" }] }]), 409);
+  assert.equal(text(await snapshot(alice, "personal", page.id), bodyKey(oldBlock.id)), "恢复前的正文", "An old-epoch op cannot revive text after a restore");
   const share = expectStatus(await alice("/api/shares", { method: "POST", body: { pageId: page.id } }), 201);
   const shareToken = share.url.split("/").at(-1);
   assert.equal(expectStatus(await guest(`/api/public/${shareToken}`), 200).pages[0].title, page.title);
@@ -221,60 +204,51 @@ try {
   const key = bodyKey(body.id);
   const feed = new Feed(bob);
   const initialFeed = await feed.subscribe(space.spaceId, shared.id);
-  assert.equal(initialFeed.state, baseline.state);
-  const forkA = fork(baseline); const forkB = fork(baseline);
-  // Both independent edits exist before either HTTP request is submitted.
-  const bytesA = update(forkA, () => field(forkA, key).insert(0, "甲😀"));
-  const bytesB = update(forkB, () => field(forkB, key).insert(0, "乙"));
+  assert.equal(initialFeed.epoch, baseline.epoch);
+  assert.equal(initialFeed.seq, baseline.seq);
+
+  // Both independent edits are based on `baseline.seq` before either HTTP request is submitted.
   let mark = feed.messages.length;
-  expectStatus(await submit(bob, baseline, bytesB), 200);
+  expectStatus(await submitOps(bob, baseline, [{ type: "text", field: key, ops: [{ insert: "乙" }] }]), 200);
   const middle = await snapshot(bob, space.spaceId, shared.id);
-  const committedB = await feed.snapshot((value) => value.revision === middle.revision, mark, true);
-  assertDurableSnapshot(committedB);
-  assert.equal(text(committedB, key), "乙协作者保存");
+  await feed.waitOp((m) => m.type === "op" && m.seq === middle.seq, mark);
+  assertDurableState(middle);
+  assert.equal(text(middle, key), "乙协作者保存");
+
   mark = feed.messages.length;
   const replayId = randomUUID();
-  expectStatus(await submit(alice, baseline, bytesA, replayId), 200);
+  expectStatus(await submitOps(alice, baseline, [{ type: "text", field: key, ops: [{ insert: "甲😀" }] }], replayId), 200);
   const merged = await snapshot(alice, space.spaceId, shared.id);
-  const committedA = await feed.snapshot((value) => value.revision === merged.revision, mark, true);
-  assertDurableSnapshot(committedA);
-  assert.equal(merged.generation, baseline.generation);
-  Y.applyUpdate(forkA, Buffer.from(bytesB, "base64")); Y.applyUpdate(forkB, Buffer.from(bytesA, "base64"));
-  const mergedDoc = fork(merged);
-  assert.deepEqual(field(mergedDoc, key).toDelta(), field(forkA, key).toDelta());
-  assert.deepEqual(field(forkA, key).toDelta(), field(forkB, key).toDelta());
+  await feed.waitOp((m) => m.type === "op" && m.seq === merged.seq, mark);
+  assertDurableState(merged);
+  assert.equal(merged.epoch, baseline.epoch);
   assert.equal(text(merged, key).length, "甲😀乙协作者保存".length);
   assert.ok(text(merged, key).includes("甲😀") && text(merged, key).includes("乙") && text(merged, key).includes("协作者保存"));
-  expectStatus(await submit(alice, baseline, bytesA, replayId), 200);
-  assert.equal((await snapshot(bob, space.spaceId, shared.id)).state, merged.state, "A retried binary update cannot insert text twice");
+  expectStatus(await submitOps(alice, baseline, [{ type: "text", field: key, ops: [{ insert: "甲😀" }] }], replayId), 200);
+  assert.equal(text(await snapshot(bob, space.spaceId, shared.id), key), text(merged, key), "A retried op cannot insert text twice");
 
-  const movedRow = merged.records.blocks.find((row) => row.id === body.id); assert.ok(movedRow);
-  const move = { scope: space.spaceId, collection: "blocks", id: body.id, action: "patch", patch: { order: 4096 }, base: movedRow.value };
-  expectStatus(await alice("/api/records/batch", { method: "POST", body: { requestId: randomUUID(), writes: [move] } }), 409);
-  expectStatus(await alice("/api/records/batch", { method: "POST", body: { requestId: randomUUID(), writes: [move], expectedPages: [expected(baseline)] } }), 409);
-  assert.equal((await snapshot(alice, space.spaceId, shared.id)).state, merged.state);
-  expectStatus(await alice("/api/records/batch", { method: "POST", body: { requestId: randomUUID(), writes: [move], expectedPages: [expected(merged)] } }), 200);
+  // Semantic reorder via move_blocks succeeds without conflict.
+  expectStatus(await submitOps(alice, merged, [{ type: "move_blocks", blockIds: [body.value.id], parentId: null }]), 200);
   const moved = await snapshot(alice, space.spaceId, shared.id);
-  assert.equal(moved.records.blocks.find((row) => row.id === body.id).value.order, 4096);
   assert.equal(text(moved, key), text(merged, key));
 
   const agentView = expectStatus(await alice(`/api/v1/pages/${shared.id}`, { token: writer.token }), 200);
-  assert.ok(agentView.collaboration?.generation, "An Agent must obtain its generation without a browser session");
-  const append = { requestId: randomUUID(), generation: agentView.collaboration.generation, operations: [{ type: "insert_text", blockId: body.value.id, index: "end", text: "Agent结构化追加" }] };
+  assert.ok(agentView.collaboration?.epoch, "An Agent must obtain its epoch without a browser session");
+  const append = { requestId: randomUUID(), epoch: agentView.collaboration.epoch, operations: [{ type: "insert_text", blockId: body.value.id, index: "end", text: "Agent结构化追加" }] };
   expectStatus(await alice(`/api/v1/pages/${shared.id}/operations`, { method: "POST", token: writer.token, body: append }), 200);
   expectStatus(await alice(`/api/v1/pages/${shared.id}/operations`, { method: "POST", token: writer.token, body: append }), 200);
   const appended = await snapshot(alice, space.spaceId, shared.id);
   assert.equal(text(appended, key), text(merged, key) + "Agent结构化追加");
   const inserted = expectStatus(await alice(`/api/v1/pages/${shared.id}/operations`, { method: "POST", token: writer.token, body: {
-    requestId: randomUUID(), generation: appended.generation, baseRevision: appended.revision,
+    requestId: randomUUID(), epoch: appended.epoch, baseRevision: appended.revision,
     operations: [{ type: "insert_block", afterId: body.value.id, kind: "text", text: "Agent新增段落" }],
   } }), 200);
   const insertedSnapshot = await snapshot(alice, space.spaceId, shared.id);
   assert.equal(Object.values(inserted.page.block_tree.by_id).filter((block) => block.content.map((run) => run.text ?? "").join("") === "Agent新增段落").length, 1);
-  const suggestion = { requestId: randomUUID(), generation: insertedSnapshot.generation, baseRevision: insertedSnapshot.revision, mode: "suggest", operations: [{ type: "insert_text", blockId: body.value.id, index: "end", text: "审核通过" }] };
+  const suggestion = { requestId: randomUUID(), epoch: insertedSnapshot.epoch, baseRevision: insertedSnapshot.revision, mode: "suggest", operations: [{ type: "insert_text", blockId: body.value.id, index: "end", text: "审核通过" }] };
   const proposal = expectStatus(await alice(`/api/v1/pages/${shared.id}/operations`, { method: "POST", token: writer.token, body: suggestion }), 201);
   assert.equal(proposal.status, "pending"); assert.equal(proposal.author.id, a.id);
-  assert.equal((await snapshot(bob, space.spaceId, shared.id)).state, insertedSnapshot.state, "An unapproved suggestion must not modify the live document");
+  assert.equal(text(await snapshot(bob, space.spaceId, shared.id), key), text(insertedSnapshot, key), "An unapproved suggestion must not modify the live document");
   const proposals = expectStatus(await bob(`/api/proposals?scope=${encodeURIComponent(space.spaceId)}&pageId=${encodeURIComponent(shared.id)}`), 200);
   assert.equal(proposals.find((item) => item.id === proposal.id)?.status, "pending");
   expectStatus(await bob(`/api/proposals/${proposal.id}/apply`, { method: "POST", body: { baseRevision: proposal.baseRevision } }), 200);
@@ -283,15 +257,13 @@ try {
   assert.equal(expectStatus(await bob(`/api/proposals?scope=${encodeURIComponent(space.spaceId)}&pageId=${encodeURIComponent(shared.id)}`), 200).find((item) => item.id === proposal.id).status, "applied");
   await feed.close();
 
-  const offline = fork(approved);
-  const offlineBytes = update(offline, () => field(offline, key).insert(field(offline, key).length, "重启前草稿"));
   const privateBeforeRestart = await snapshot(alice, "personal", page.id);
   const privateKey = bodyKey(privateBeforeRestart.records.blocks[0].id);
   run("restart", container); await waitForServer();
   const restarted = await snapshot(alice, space.spaceId, shared.id);
   assertIdentity(approved, restarted, key);
   assertIdentity(privateBeforeRestart, await snapshot(alice, "personal", page.id), privateKey);
-  expectStatus(await submit(alice, approved, offlineBytes), 200);
+  expectStatus(await submitOps(alice, approved, [{ type: "text", field: key, ops: [{ retain: text(approved, key).length }, { insert: "重启前草稿" }] }]), 200);
   const beforeRecreate = await snapshot(alice, space.spaceId, shared.id);
   assert.equal(text(beforeRecreate, key), text(approved, key) + "重启前草稿");
   const sharedText = expectStatus(await alice(`/api/v1/pages/${shared.id}`, { token: writer.token }), 200).text;
@@ -316,10 +288,9 @@ try {
   const html = await shell.text(); const asset = /src="([^"]+\.js)"/.exec(html)?.[1];
   assert.ok(asset); assert.equal((await fetch(new URL(asset, url))).status, 200);
   run("healthcheck", "run", container);
-  console.log("Container acceptance passed: register, two admins, isolation, Agent, versions, publish/revoke, invite/edit, files, independent CRDT merge, durable WebSocket snapshots, structure CAS, Agent operations/proposal review, generation barriers, binary identity through restart/recreation, offline continuation, backup, assets, healthcheck.");
+  console.log("Container acceptance passed: register, two admins, isolation, Agent, versions, publish/revoke, invite/edit, files, semantic OT merge, durable WebSocket commits, Agent operations/proposal review, epoch barriers, persistence through restart/recreation, offline continuation, backup, assets, healthcheck.");
 } finally {
   await Promise.all([...feeds].map((feed) => feed.close()));
-  for (const doc of documents) doc.destroy();
   // Remove only the exact temporary resources created by this test run.
   if (createdContainer) { assertOwnContainer(); run("rm", "-f", container); }
   if (createdVolume) {

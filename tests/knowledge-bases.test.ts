@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
-import * as Y from "yjs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -618,23 +617,26 @@ class Feed {
   }
 }
 async function snapshot(browser: Browser, scope: string, pageId: string) { return ok(await browser.request(`/api/collaboration/${scope}/${pageId}`)); }
-function textUpdate(value: Json, key: string, text: string) {
-  const doc = new Y.Doc(); Y.applyUpdate(doc, Buffer.from(value.state, "base64"));
-  try {
-    const field = doc.getMap<Y.Text>("fields").get(key); assert.ok(field instanceof Y.Text);
-    const before = Y.encodeStateVector(doc); field.insert(0, text);
-    return Buffer.from(Y.encodeStateAsUpdate(doc, before)).toString("base64");
-  } finally { doc.destroy(); }
+function textOp(key: string, text: string) {
+  return [{ type: "text", field: key, ops: [{ insert: text }] }];
 }
-function submitText(browser: Browser, base: Json, update: string) {
-  return browser.request("/api/records/batch", { method: "POST", body: { requestId: randomUUID(), writes: [], textUpdates: [{ scope: base.scope, pageId: base.pageId, generation: base.generation, update }] } });
+function submitText(browser: Browser, base: Json, ops: unknown[]) {
+  return browser.request("/api/records/batch", {
+    method: "POST",
+    body: {
+      requestId: randomUUID(),
+      writes: [],
+      pageOps: [{ scope: base.scope, pageId: base.pageId, epoch: base.epoch ?? base.generation, baseSeq: base.seq ?? 0, ops }],
+      protocol: 2,
+    },
+  });
 }
 
 test("UC-13: concurrent team edits merge and removed WebSocket subscribers receive no later content", { timeout: 15000 }, async (t) => {
   const f = await fixture(t); const owner = f.browser(); const editor = f.browser(); const outsider = f.browser();
   await register(owner, "owner"); const member = await register(editor, "editor"); await register(outsider, "outsider");
   const kb = await create(owner); await joinMember(owner, editor, kb.spaceId, "editor");
-  const token = await makeToken(owner); const page = await agentPage(owner, token, kb.spaceId, "Shared CRDT");
+  const token = await makeToken(owner); const page = await agentPage(owner, token, kb.spaceId, "Shared OT");
   const feeds = [new Feed(f.url(), owner.cookie), new Feed(f.url(), editor.cookie), new Feed(f.url(), outsider.cookie)];
   t.after(() => { for (const feed of feeds) feed.socket.terminate(); });
   await Promise.all(feeds.map((feed) => feed.open()));
@@ -646,35 +648,35 @@ test("UC-13: concurrent team edits merge and removed WebSocket subscribers recei
   assert.equal(outsiderFeed.events().some((message) => message.snapshot), false);
   const base = await snapshot(owner, kb.spaceId, page.id); const block = base.records.blocks[0];
   const key = `blocks/${block.id}/content`;
-  const left = textUpdate(base, key, "Owner edit "); const right = textUpdate(base, key, "Member edit ");
+  const left = textOp(key, "Owner edit "); const right = textOp(key, "Member edit ");
   for (const reply of await Promise.all([submitText(owner, base, left), submitText(editor, base, right)])) ok(reply);
   const merged = ok(await readAgent(owner, token, page.id));
   assert.match(merged.text, /Owner edit /); assert.match(merged.text, /Member edit /);
-  const stale = await snapshot(editor, kb.spaceId, page.id); const forbidden = textUpdate(stale, key, "Forbidden after removal ");
+  const stale = await snapshot(editor, kb.spaceId, page.id); const forbidden = textOp(key, "Forbidden after removal ");
   const mark = memberFeed.messages.length;
   ok(await owner.request(`/api/spaces/${kb.spaceId}/members/${member.id}`, { method: "DELETE" }));
   await memberFeed.wait((message) => message.type === "revoked", mark);
   denied(await submitText(editor, stale, forbidden));
   const current = await snapshot(owner, kb.spaceId, page.id); const ownerMark = ownerFeed.messages.length;
-  ok(await submitText(owner, current, textUpdate(current, key, "Secret after removal ")));
-  await ownerFeed.wait((message) => message.pageId === page.id && typeof message.update === "string", ownerMark);
+  ok(await submitText(owner, current, textOp(key, "Secret after removal ")));
+  await ownerFeed.wait((message) => message.pageId === page.id && message.type === "op", ownerMark);
   await memberFeed.barrier();
-  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.update || message.revision), false, "Removed subscriber must not receive content nested in commit events");
+  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.ops || message.revision), false, "Removed subscriber must not receive content nested in commit events");
   memberFeed.subscribe(kb.spaceId, page.id);
   await memberFeed.wait((message) => message.type === "error", mark);
-  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.update || message.revision), false);
+  assert.equal(memberFeed.events(mark).some((message) => message.snapshot || message.ops || message.revision), false);
 });
 
-test("UC-13: archival and viewer downgrade reject already-prepared CRDT updates", async (t) => {
+test("UC-13: archival and viewer downgrade reject already-prepared collaborative updates", async (t) => {
   const f = await fixture(t); const owner = f.browser(); const editor = f.browser();
   await register(owner, "owner"); const user = await register(editor, "editor");
   const kb = await create(owner); await joinMember(owner, editor, kb.spaceId, "editor");
-  const token = await makeToken(owner); const page = await agentPage(owner, token, kb.spaceId, "Frozen CRDT");
+  const token = await makeToken(owner); const page = await agentPage(owner, token, kb.spaceId, "Frozen OT");
   const base = await snapshot(editor, kb.spaceId, page.id); const key = `blocks/${base.records.blocks[0].id}/content`;
-  const update = textUpdate(base, key, "Must not be saved ");
+  const ops = textOp(key, "Must not be saved ");
   ok(await owner.request(`/api/spaces/${kb.spaceId}/members/${user.id}`, { method: "PATCH", body: { role: "viewer" } }));
-  denied(await submitText(editor, base, update));
+  denied(await submitText(editor, base, ops));
   ok(await archive(owner, await summary(owner, kb.spaceId)));
-  rejected(await submitText(owner, base, update));
-  assert.equal(ok(await readAgent(owner, token, page.id)).text, "正文 Frozen CRDT");
+  rejected(await submitText(owner, base, ops));
+  assert.equal(ok(await readAgent(owner, token, page.id)).text, "正文 Frozen OT");
 });

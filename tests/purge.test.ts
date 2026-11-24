@@ -290,10 +290,10 @@ test("UC-57 AC-03 & AC-04: 2,000-page subtree purges bottom-up without blocking 
   }
 
   store.bulkTransaction(() => {
-    store.apply(actor, writes, undefined, [], [], 20_000);
+    store.apply(actor, writes, undefined, [], 20_000);
   });
 
-  // Add page_events and synthetic pre-existing collaboration_archives across the subtree to verify full cleanup.
+  // Add page_events and synthetic collaboration_pages/collaboration_ops rows across the subtree to verify full cleanup.
   const now = new Date().toISOString();
   store.db.exec("BEGIN IMMEDIATE");
   for (let i = 0; i < totalSubtree; i += 1) {
@@ -310,8 +310,10 @@ test("UC-57 AC-03 & AC-04: 2,000-page subtree purges bottom-up without blocking 
         targets: [pageId],
         merged: 1,
       });
-      store.db.prepare("INSERT OR IGNORE INTO collaboration_archives VALUES(?,?,?,?,?)")
-        .run(scope, pageId, `gen-${i}`, Buffer.from([1, 2, 3, 4]), now);
+      store.db.prepare("INSERT OR IGNORE INTO collaboration_pages(scope,page_id,epoch,seq,pruned_before) VALUES(?,?,?,?,?)")
+        .run(scope, pageId, `ep-${i}`, 1, 0);
+      store.db.prepare("INSERT OR IGNORE INTO collaboration_ops(scope,page_id,seq,epoch,request_id,actor_id,ops,created_at) VALUES(?,?,?,?,?,?,?,?)")
+        .run(scope, pageId, 1, `ep-${i}`, `req-${i}`, "u1", "[]", now);
     }
   }
   store.db.exec("COMMIT");
@@ -404,8 +406,8 @@ test("UC-57 AC-03 & AC-04: 2,000-page subtree purges bottom-up without blocking 
   assert.equal(Number(store.one("SELECT count(*) AS n FROM records WHERE scope=? AND collection='blocks'", scope)?.n), 0);
   assert.equal(Number(store.one("SELECT count(*) AS n FROM records WHERE scope=? AND collection='versions'", scope)?.n), 0);
   assert.equal(Number(store.one("SELECT count(*) AS n FROM records WHERE scope=? AND collection='page_events' AND json_extract(value,'$.page')!=?", scope, liveId)?.n), 0);
-  assert.equal(Number(store.one("SELECT count(*) AS n FROM collaboration_documents WHERE scope=? AND page_id!=?", scope, liveId)?.n), 0);
-  assert.equal(Number(store.one("SELECT count(*) AS n FROM collaboration_archives WHERE scope=?", scope)?.n), 0);
+  assert.equal(Number(store.one("SELECT count(*) AS n FROM collaboration_pages WHERE scope=? AND page_id!=?", scope, liveId)?.n), 0);
+  assert.equal(Number(store.one("SELECT count(*) AS n FROM collaboration_ops WHERE scope=? AND page_id!=?", scope, liveId)?.n), 0);
   assert.equal(Number(store.one("SELECT count(*) AS n FROM purge_queue")?.n), 0);
   const quotaAfter = store.quotas.usage("user:u1");
   assert.ok(quotaAfter < quotaBefore / 10, `Expected quota to drop substantially: before=${quotaBefore}, after=${quotaAfter}`);
@@ -523,7 +525,7 @@ test("UC-57 AC-06 & AC-07: shared/nested trees clean up memberships & restart re
       base: null,
     });
   }
-  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], [], 1000));
+  store.bulkTransaction(() => store.apply(actor, writes, undefined, [], 1000));
   store.purge.enqueue(actor, "personal", "restart_0");
   assert.equal(store.purge.step(100), true);
   assert.equal(Number(store.one("SELECT count(*) AS n FROM records WHERE scope=? AND collection='pages' AND id LIKE 'restart_%'", scope)?.n), 150);
