@@ -248,11 +248,16 @@ export function attachCollaborationSocket(
         ops?: unknown[];
       }> = [];
 
-      for (const subscription of client.subscriptions.values()) {
+      for (const [subKey, subscription] of [...client.subscriptions]) {
         const canonical = resolveScope(who, subscription.scope);
         if (!canonical) continue;
         const event = events.find((item) => item.scope === canonical && item.pageId === subscription.pageId);
-        if (!event || event.type === "removed") continue;
+        if (!event) continue;
+        if (event.type === "removed") {
+          client.subscriptions.delete(subKey);
+          send(client, { type: "revoked", scope: subscription.scope, pageId: event.pageId });
+          continue;
+        }
         documents.push({
           type: event.type,
           scope: subscription.scope,

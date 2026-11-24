@@ -10,7 +10,7 @@ import { deleteScopeMirror, setMirrorUser } from "./mirror";
 import { blockRecordId } from "./record-ids";
 import { restoreSavedWrites, submitPageOps, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
-import { awaitCollaborativeBasis, hasEditableSession, recordLocalSemanticOps, withStructureText, type SemanticLocalOpInput } from "../collaboration/client";
+import { closeCollaborativePage, hasEditableSession, recordLocalSemanticOps, withStructureText, type SemanticLocalOpInput } from "../collaboration/client";
 import { getRecovery } from "../collaboration/recovery";
 import {
   pageOfRef,
@@ -613,16 +613,13 @@ export class WorkspaceDocument {
   async sharePageTree(pageId: string, spaceId: string): Promise<void> {
     const page = this.state.pages[pageId];
     if (!page) throw new Error("Page no longer exists");
-    /* The server refuses a structural write that cannot name the page's
-       collaborative basis. On a page just made, the session may still be
-       opening — wait for it so sharing does not die on that race. */
-    const plane = planeOfPage(this.state, pageId);
-    if (plane) await awaitCollaborativeBasis(plane, pageId);
     await this.flush();
+    const moved = [pageId, ...descendantPageIds(this.state.pages, pageId)];
     await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
       method: "POST",
       body: JSON.stringify({ action: "share", spaceId }),
     });
+    for (const id of moved) closeCollaborativePage(PERSONAL, id, { consume: false });
     await this.addSpace(spaceId);
     await Promise.all([this.refreshScope(PERSONAL), this.refreshScope(spaceId)]);
     await this.loadPages([pageId]);
@@ -635,10 +632,12 @@ export class WorkspaceDocument {
     const spaceId = this.state.pages[pageId]?.share_space_id;
     if (!spaceId) return;
     await this.flush();
+    const moved = [pageId, ...descendantPageIds(this.state.pages, pageId)];
     await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
       method: "POST",
       body: JSON.stringify({ action: "stop-share" }),
     });
+    for (const id of moved) closeCollaborativePage(spaceId, id, { consume: false });
     await this.refreshScope(PERSONAL);
     this.removeSpace(spaceId);
     await this.loadPages([pageId]);
@@ -650,10 +649,14 @@ export class WorkspaceDocument {
     const sourceScope = spaceOfPage(this.state.pages, pageId) ?? PERSONAL;
     const targetScope = targetParentId ? (spaceOfPage(this.state.pages, targetParentId) ?? PERSONAL) : PERSONAL;
     await this.flush();
+    const moved = [pageId, ...descendantPageIds(this.state.pages, pageId)];
     await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
       method: "POST",
       body: JSON.stringify({ action: "move", targetParentId }),
     });
+    if (sourceScope !== targetScope) {
+      for (const id of moved) closeCollaborativePage(sourceScope, id, { consume: false });
+    }
     const scopes = new Set([sourceScope, targetScope, PERSONAL]);
     await Promise.all([...scopes].map((scope) => this.refreshScope(scope)));
     await this.loadPages([pageId]);

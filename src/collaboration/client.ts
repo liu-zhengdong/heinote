@@ -518,12 +518,26 @@ function ingestCommittedSeq(
   },
 ): "applied" | "duplicate" | "gap" | "epoch_mismatch" {
   if (commit.epoch !== session.epoch) return "epoch_mismatch";
-  if (commit.requestId && session.appliedRequestIds.has(commit.requestId)) {
+  const alreadyApplied = Boolean(commit.requestId && session.appliedRequestIds.has(commit.requestId))
+    || commit.seq <= session.ackSeq;
+  if (alreadyApplied) {
     if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
-    return "duplicate";
-  }
-  if (commit.seq <= session.ackSeq) {
-    if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
+    // Even if a snapshot or WS frame already advanced `ackSeq` past `commit.seq` (e.g. offline journal
+    // replay racing with initial snapshot), evict the committed `requestId` from `session.pending` so
+    // its optimistic ops are never double-applied on top of `confirmed`.
+    if (commit.requestId) {
+      rememberRequestId(session, commit.requestId);
+      const beforePending = session.pending.length;
+      session.pending = session.pending.filter((entry) => entry.requestId !== commit.requestId);
+      if (session.pending.length !== beforePending) {
+        const oldOptimistic = session.optimistic;
+        const nextOptimistic = rebuildOptimistic(session);
+        bumpDivergedFields(session, oldOptimistic, nextOptimistic);
+        session.optimistic = nextOptimistic;
+        session.localVersion += 1;
+        notify(session.scope, session.pageId);
+      }
+    }
     return "duplicate";
   }
   if (commit.seq > session.ackSeq + 1) {
@@ -1138,13 +1152,14 @@ export async function refreshCollaborativePage(scope: string, pageId: string): P
   }
 }
 
-export function closeCollaborativePage(scope: string, pageId: string): void {
+export function closeCollaborativePage(scope: string, pageId: string, options: { consume?: boolean } = {}): void {
   const key = documentKey({ scope, pageId });
   const session = sessions.get(key);
   if (!session) return;
-  consumeSnapshot(snapshotFromSession(session));
+  if (options.consume !== false) consumeSnapshot(snapshotFromSession(session));
   wsSend({ type: "unsubscribe", scope, pageId });
   deleteSession(key);
+  notify(scope, pageId);
 }
 
 export async function openWhenDocument(scope: string, pageId: string, timeoutMs = 15_000): Promise<void> {

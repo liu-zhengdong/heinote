@@ -12,6 +12,7 @@ vi.mock("../collaboration/client", () => ({
   activeSessionRecords: () => null,
   awaitCollaborativeBasis: async () => {},
   bindPendingRequest: vi.fn(),
+  closeCollaborativePage: vi.fn(),
   coalescePageOps: (ops: unknown[]) => ops,
   collaborationAccount: () => hooks.account,
   collaborationVersion: () => 0,
