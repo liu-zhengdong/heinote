@@ -886,3 +886,107 @@ test("lazy history pulls (?pages=) and /api/records/locate respect space isolati
   const deltaAfterRestart = status(await alice.request("/api/records/personal/pages?after=0"), 200);
   assert.equal(deltaAfterRestart.epoch, anc.epoch);
 });
+
+test("cross-space moves are restricted to spaces owned by the actor on both transfer and record batch APIs", async (t) => {
+  const f = await fixture(t);
+  const alice = f.browser(); const bob = f.browser(); const carol = f.browser();
+  const aliceUser = await register(alice, "alice_move");
+  const bobUser = await register(bob, "bob_move");
+  const carolUser = await register(carol, "carol_move");
+
+  // Alice creates a shared tree with two children and invites bob (editor) and carol (admin).
+  const space = status(await alice.request("/api/spaces", { method: "POST", body: { name: "Alice Share" } }), 201);
+  const spaceId = space.spaceId;
+  await put(alice, "personal", "pages", "shared_root", page("shared_root", aliceUser.id));
+  await put(alice, "personal", "pages", "shared_child_a", { ...page("shared_child_a", aliceUser.id), parent_id: "shared_root" });
+  await put(alice, "personal", "pages", "shared_child_b", { ...page("shared_child_b", aliceUser.id), parent_id: "shared_root" });
+  await put(alice, "personal", "pages", "alice_private", page("alice_private", aliceUser.id));
+  status(await alice.request("/api/pages/shared_root/transfer", { method: "POST", body: { action: "share", spaceId } }), 200);
+
+  for (const [handle, role, browser] of [["bob_move", "editor", bob], ["carol_move", "admin", carol]] as const) {
+    status(await alice.request(`/api/spaces/${spaceId}/invitations`, { method: "POST", body: { handle, role } }), 200);
+    const inv = status(await browser.request("/api/invitations"), 200)[0];
+    status(await browser.request(`/api/invitations/${inv.id}`, { method: "POST", body: { accept: true } }), 200);
+  }
+
+  // Bob and Carol each have their own personal note.
+  const bobNote = page("bob_note", bobUser.id);
+  const carolNote = page("carol_note", carolUser.id);
+  await put(bob, "personal", "pages", bobNote.id, bobNote);
+  await put(carol, "personal", "pages", carolNote.id, carolNote);
+
+  // Neither editor nor admin may move their personal note into Alice's shared space.
+  const bobMoveIn = await bob.request(`/api/pages/${bobNote.id}/transfer`, { method: "POST", body: { action: "move", targetParentId: "shared_root" } });
+  assert.equal(bobMoveIn.status, 403);
+  assert.equal(bobMoveIn.body.code, "owner_required");
+  const carolMoveIn = await carol.request(`/api/pages/${carolNote.id}/transfer`, { method: "POST", body: { action: "move", targetParentId: "shared_child_a" } });
+  assert.equal(carolMoveIn.status, 403);
+  assert.equal(carolMoveIn.body.code, "owner_required");
+
+  // Neither editor nor admin may move a child page out of Alice's shared space into their personal space.
+  for (const browser of [bob, carol]) {
+    const moveOutTop = await browser.request("/api/pages/shared_child_a/transfer", { method: "POST", body: { action: "move", targetParentId: null } });
+    assert.equal(moveOutTop.status, 403);
+    assert.equal(moveOutTop.body.code, "owner_required");
+  }
+  const bobMoveOutUnder = await bob.request("/api/pages/shared_child_a/transfer", { method: "POST", body: { action: "move", targetParentId: bobNote.id } });
+  assert.equal(bobMoveOutUnder.status, 403);
+  assert.equal(bobMoveOutUnder.body.code, "owner_required");
+
+  // Raw /api/records/batch bypasses (personal -> shared, shared -> personal) are also rejected atomically.
+  const bobNoteStored = status(await bob.request("/api/records/personal/pages"), 200).find((r: Json) => r.id === bobNote.id).value;
+  const batchMoveIn = await bob.structure("/api/records/batch", {
+    method: "POST",
+    body: {
+      writes: [
+        { scope: "personal", collection: "pages", id: bobNote.id, action: "delete", base: bobNoteStored },
+        { scope: spaceId, collection: "pages", id: bobNote.id, action: "put", base: null, value: { ...bobNoteStored, parent_id: "shared_root" } },
+      ],
+    },
+  });
+  assert.equal(batchMoveIn.status, 403);
+  assert.equal(batchMoveIn.body.code, "owner_required");
+  assert.ok(status(await bob.request("/api/records/personal/pages"), 200).some((r: Json) => r.id === bobNote.id));
+
+  const childAStored = status(await carol.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_child_a").value;
+  const { parent_id: _droppedParent, ...childATop } = childAStored;
+  const batchMoveOut = await carol.structure("/api/records/batch", {
+    method: "POST",
+    body: {
+      writes: [
+        { scope: spaceId, collection: "pages", id: "shared_child_a", action: "delete", base: childAStored },
+        { scope: "personal", collection: "pages", id: "shared_child_a", action: "put", base: null, value: childATop },
+      ],
+    },
+  });
+  assert.equal(batchMoveOut.status, 403);
+  assert.equal(batchMoveOut.body.code, "owner_required");
+  assert.ok(status(await alice.request(`/api/records/${spaceId}/pages`), 200).some((r: Json) => r.id === "shared_child_a"));
+
+  // Editing the shared root in-place (which also has Alice's personal sharing pointer) still works for collaborators.
+  const rootStored = status(await bob.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_root").value;
+  status(await bob.request(`/api/records/${spaceId}/pages/shared_root`, {
+    method: "POST",
+    body: { action: "patch", patch: { icon: "📌" }, base: rootStored },
+  }), 200);
+
+  // Moving within the same shared space still works for editor and admin.
+  status(await bob.request("/api/pages/shared_child_a/transfer", { method: "POST", body: { action: "move", targetParentId: "shared_child_b" } }), 200);
+  const movedChild = status(await bob.request(`/api/records/${spaceId}/pages`), 200).find((r: Json) => r.id === "shared_child_a").value;
+  assert.equal(movedChild.parent_id, "shared_child_b");
+
+  // Copying bob's personal note into Alice's shared space works and preserves Bob's original note.
+  const copied = status(await bob.request(`/api/v1/pages/${bobNote.id}/copy`, {
+    method: "POST",
+    body: { requestId: "copy-into-share-1", spaceId, parentId: "shared_root" },
+  }), 201);
+  assert.ok(copied.id && copied.id !== bobNote.id);
+  assert.ok(status(await bob.request("/api/records/personal/pages"), 200).some((r: Json) => r.id === bobNote.id));
+
+  // Owner (Alice) can still move her own personal page into and back out of her own shared space.
+  status(await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: "shared_root" } }), 200);
+  assert.ok(status(await alice.request(`/api/records/${spaceId}/pages`), 200).some((r: Json) => r.id === "alice_private"));
+  status(await alice.request("/api/pages/alice_private/transfer", { method: "POST", body: { action: "move", targetParentId: null } }), 200);
+  assert.ok(status(await alice.request("/api/records/personal/pages"), 200).some((r: Json) => r.id === "alice_private"));
+  assert.ok(!status(await alice.request(`/api/records/${spaceId}/pages`), 200).some((r: Json) => r.id === "alice_private"));
+});

@@ -1152,9 +1152,9 @@ export function DocumentEditor({
   /** Pages the blocks can go to: any other page with a body this member can
    *  edit, but not a page among the ones named in them, nor anything inside
    *  those; every page carried along must be one this member may move there
-   *  (`canMovePage`, the rule dragging in the page list follows too); and,
-   *  from a shared page, only within it unless they have Full access: what
-   *  is carried out of a shared tree is gone for everyone else. */
+   *  (`canMovePage`, the rule dragging in the page list follows too); and
+   *  across spaces only between spaces this member owns (never into or out of
+   *  someone else's shared tree or a knowledge base). */
   const moveTargets = useCallback((ids: readonly string[]) => {
     const pages = store.getState().pages;
     const moving = movingPages(ids);
@@ -1170,13 +1170,19 @@ export function DocumentEditor({
       return true;
     };
     const here = spaceOfPage(pages, page.id);
-    const role = here ? spaces[here]?.role : undefined;
-    const fullAccess = !here || role === "owner" || role === "admin";
-    return Object.values(pages).filter((candidate) => (
-      candidate.kind === "document" && !composite.sources.has(candidate.id) && reachable(candidate) && canEdit(candidate.id)
-      && (fullAccess || spaceOfPage(pages, candidate.id) === here)
-      && moving.every((pageId) => canMovePage(pageId, candidate.id))
-    ));
+    const ownsHere = !here || spaces[here]?.role === "owner";
+    return Object.values(pages).filter((candidate) => {
+      const there = spaceOfPage(pages, candidate.id);
+      const sameSpace = there === here;
+      const ownsThere = !there || spaces[there]?.role === "owner";
+      const crossesLibrary = !sameSpace && Boolean((here && spaces[here]?.knowledgeBase) || (there && spaces[there]?.knowledgeBase));
+      return candidate.kind === "document"
+        && !composite.sources.has(candidate.id)
+        && reachable(candidate)
+        && canEdit(candidate.id)
+        && (sameSpace || (!crossesLibrary && ownsHere && ownsThere))
+        && moving.every((pageId) => canMovePage(pageId, candidate.id));
+    });
   }, [canEdit, canMovePage, composite, movingPages, page.id, spaces, store]);
 
   /** "Move to": the blocks leave for the end of another page. A block goes
@@ -1451,9 +1457,10 @@ export function DocumentEditor({
    *  link to it is shown. */
   const mountsOf = useCallback((pageId: string): BlockReference[] => (references.get(pageId) ?? []).filter((reference) => {
     if (reference.pageId === ownerOf(pageId)) return false;
+    if (!canMovePage(pageId, reference.pageId)) return false;
     const paragraph = pages[reference.pageId]?.block_tree?.by_id[reference.paragraphId];
     return Boolean(paragraph?.content.some((run) => run.mention?.kind === "page" && run.mention.page_id === pageId && run.mention.expanded));
-  }), [ownerOf, pages, references]);
+  }), [canMovePage, ownerOf, pages, references]);
 
   /** Takes a block drawn here off this page while another page shows it: it
    *  goes to live there, standing on its own row where it was shown, so no

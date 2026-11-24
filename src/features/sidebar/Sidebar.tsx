@@ -426,9 +426,9 @@ export function Sidebar() {
     else setPreference("sidebar_collapsed", false);
   };
 
-  /* Only someone with Full access carries a page out of a shared tree: for
-     everyone else in the space it is gone. A page that is itself shared stays
-     where it is shared, and a view-only page stays put. */
+  /* Cross-space moves are only allowed between spaces the member owns
+     (personal <-> their own shared space); pages shared by others stay in
+     their own tree, and content transfers across ownership via Copy to. */
 
   /** Opens a target in the list — a page, or a block — so what was dropped
    *  there can be seen. */
@@ -480,9 +480,16 @@ export function Sidebar() {
         if (!canMovePage(draggedId, targetId)) {
           const dragged = pages[draggedId];
           if (dragged && (dragged.parent_id ?? null) !== targetId && dragged.id !== targetId) {
-            toast(dragged.share_space_id
-              ? "A shared page stays where it is shared"
-              : "Only people with Full access can move a page out of a shared page", "info");
+            const fromSpace = spaceOfPage(pages, draggedId);
+            const toSpace = targetId ? spaceOfPage(pages, targetId) : undefined;
+            const message = dragged.share_space_id
+              ? "已共享的根页面不能直接移动位置"
+              : toSpace && fromSpace !== toSpace && spaces[toSpace]?.role !== "owner"
+                ? "不能将页面移入他人共享的空间，请使用「拷贝到…」"
+                : fromSpace && fromSpace !== toSpace && spaces[fromSpace]?.role !== "owner"
+                  ? "不能将他人共享空间中的页面移出，请使用「拷贝到…」"
+                  : "无法将页面移动到此处";
+            toast(message, "info");
           }
           return;
         }

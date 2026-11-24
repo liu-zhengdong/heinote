@@ -547,7 +547,7 @@ export function heinoteCommands(host: () => CommandHost | null): HeiNoteCommands
       const target = input.parent_id === undefined ? null : pageOf(h, input.parent_id).id;
       if ((page.parent_id ?? null) === target) return { page: summary(pagesOf(h), page) };
       if (!h.workspace.canMovePage(page.id, target)) {
-        refuse("bad_request", "It cannot go there: never into itself or a page inside it, a database or the trash; a shared page stays where it is shared, and a page leaves a shared tree only for someone with Full access.");
+        refuse("bad_request", "It cannot go there: never into itself or a page inside it, a database or the trash; a shared page stays where it is shared, and cross-space moves are only allowed between spaces you own.");
       }
       return change(h, () => {
         h.workspace.movePage(page.id, target);

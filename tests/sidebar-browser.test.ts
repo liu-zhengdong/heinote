@@ -797,3 +797,75 @@ test("copy to… lands a copy under the chosen page and at the top level", async
   }).toBe(2);
   expect(errors).toEqual([]);
 });
+
+test("collaborator cannot drag or move a personal page into someone else's shared page", async ({ browser }) => {
+  const aliceCtx = await browser.newContext();
+  const bobCtx = await browser.newContext();
+  const alice = await aliceCtx.newPage();
+  const bob = await bobCtx.newPage();
+  const errors: string[] = [];
+  alice.on("pageerror", (error) => errors.push(error.message));
+  bob.on("pageerror", (error) => errors.push(error.message));
+
+  try {
+    await register(alice, "share_owner_drag");
+    await register(bob, "share_editor_drag");
+
+    // Alice creates and shares a page with Bob as editor ("Can edit").
+    await createDocument(alice, "Alice shared page");
+    const alicePages = await savedPages(alice);
+    const sharedRoot = alicePages.find((row) => row.title === "Alice shared page")!;
+    const createdSpace = await (await alice.request.post(`${server.url}/api/spaces`, { data: { name: "Alice Shared" } })).json();
+    const spaceId = createdSpace.spaceId as string;
+    expect((await alice.request.post(`${server.url}/api/pages/${sharedRoot.id}/transfer`, { data: { action: "share", spaceId } })).status()).toBe(200);
+    expect((await alice.request.post(`${server.url}/api/spaces/${spaceId}/invitations`, { data: { handle: "share_editor_drag", role: "editor" } })).status()).toBe(200);
+    const invitations = await (await bob.request.get(`${server.url}/api/invitations`)).json();
+    expect((await bob.request.post(`${server.url}/api/invitations/${invitations[0].id}`, { data: { accept: true } })).status()).toBe(200);
+
+    // Bob reloads to see Alice's shared page alongside his own personal note.
+    await bob.reload();
+    await createDocument(bob, "Bob personal note");
+    const bobTree = bob.getByRole("tree", { name: "Files", exact: true });
+    const bobNoteBtn = bobTree.getByRole("button", { name: "Bob personal note", exact: true }).first();
+    const aliceSharedBtn = bobTree.getByRole("button", { name: "Alice shared page", exact: true }).first();
+    await expect(bobNoteBtn).toBeVisible();
+    await expect(aliceSharedBtn).toBeVisible();
+
+    // Dragging Bob's personal note onto Alice's shared page is blocked with a clear toast.
+    const bobPersonalBefore = await savedPages(bob);
+    const bobNote = bobPersonalBefore.find((row) => row.title === "Bob personal note")!;
+    const transfer = await bob.evaluateHandle((pageId) => {
+      const dt = new DataTransfer();
+      dt.setData("text/x-notes-page", pageId);
+      return dt;
+    }, bobNote.id);
+    const bobRow = bobNoteBtn.locator("xpath=ancestor::div[contains(@class,'tree-row')]").first();
+    const aliceRow = aliceSharedBtn.locator("xpath=ancestor::div[contains(@class,'tree-row')]").first();
+    await bobRow.dispatchEvent("dragstart", { dataTransfer: transfer });
+    await aliceRow.dispatchEvent("dragover", { dataTransfer: transfer });
+    await aliceRow.dispatchEvent("drop", { dataTransfer: transfer });
+    await bobRow.dispatchEvent("dragend", { dataTransfer: transfer });
+
+    await expect(bob.getByText("不能将页面移入他人共享的空间，请使用「拷贝到…」")).toBeVisible();
+
+    // Bob's personal note stays in his personal space and never enters Alice's space.
+    const bobPersonalAfter = await savedPages(bob);
+    expect(bobPersonalAfter.some((row) => row.id === bobNote.id && !row.parentId)).toBe(true);
+    const spaceRows = await (await bob.request.get(`${server.url}/api/records/${spaceId}/pages`)).json();
+    expect(spaceRows.some((row: { id: string }) => row.id === bobNote.id)).toBe(false);
+
+    // "Move to" on Bob's personal note also omits Alice's shared page.
+    await bobNoteBtn.click();
+    await bob.getByRole("button", { name: "More page actions", exact: true }).click();
+    await bob.getByRole("menuitem", { name: /^Move to(?! trash)/ }).click();
+    const moveDialog = bob.getByRole("dialog", { name: "Move to", exact: true });
+    await expect(moveDialog).toBeVisible();
+    await expect(moveDialog.getByRole("option", { name: /Alice shared page/ })).toHaveCount(0);
+    await bob.keyboard.press("Escape");
+
+    expect(errors).toEqual([]);
+  } finally {
+    await aliceCtx.close();
+    await bobCtx.close();
+  }
+});

@@ -235,6 +235,12 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
     if (leavingShareRoot && store.role(actor, sourceScope) !== "owner") {
       fail(403, "只有所有者可以结束页面分享。", "owner_required");
     }
+    if (!store.ownsScope(actor, sourceScope)) {
+      fail(403, "不能将他人共享空间的页面移出，请使用拷贝功能。", "owner_required");
+    }
+    if (!store.ownsScope(actor, targetScope)) {
+      fail(403, "不能将页面移入他人共享的空间，请使用拷贝功能。", "owner_required");
+    }
     checkNoNestedShare(targetScope);
 
     const movedRoot: Row = { ...sourceRoot };

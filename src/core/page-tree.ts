@@ -118,9 +118,10 @@ export function withoutUnhomed(state: WorkspaceState): WorkspaceState {
  *  level; left out: anywhere at all). One rule for dragging a page in the
  *  list and for "Move to", so the two cannot disagree. Never into itself,
  *  its own branch, a database or the trash; never a shared page itself,
- *  which stays where it is shared; nothing a viewer can only read; and out of
- *  a shared tree only with Full access — a page carried out is gone for
- *  everyone else in it. */
+ *  which stays where it is shared; nothing a viewer can only read; and across
+ *  spaces only when the member owns both sides (personal or a shared space
+ *  they own) — never into or out of someone else's shared space or a team
+ *  knowledge base (use "Copy to" to transfer content across ownership). */
 export function canMovePage(
   pages: Record<string, NotePage>,
   spaces: Record<string, PermissionSpace>,
@@ -143,10 +144,9 @@ export function canMovePage(
   }
   const from = spaceOfPage(pages, pageId);
   const to = targetId ? spaceOfPage(pages, targetId) : undefined;
-  if (from !== to && ((from && spaces[from]?.knowledgeBase) || (to && spaces[to]?.knowledgeBase))) return false;
-  if (from && from !== to) {
-    const role = spaces[from]?.role;
-    return role === "owner" || role === "admin";
+  if (from !== to) {
+    if ((from && spaces[from]?.knowledgeBase) || (to && spaces[to]?.knowledgeBase)) return false;
+    if ((from && spaces[from]?.role !== "owner") || (to && spaces[to]?.role !== "owner")) return false;
   }
   return true;
 }

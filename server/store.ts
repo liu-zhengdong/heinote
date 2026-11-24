@@ -196,11 +196,28 @@ export class Store {
     if (write && this.knowledgeBases.get(requested)?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
     return requested;
   }
-  private assertPageLocation(scope: string, pageId: string): void {
+  ownsScope(actor: Actor, scope: string): boolean {
+    if (scope === `user:${actor.user.id}`) return true;
+    if (scope.startsWith("user:")) return false;
+    const member = this.one("SELECT role FROM members WHERE space_id=? AND user_id=?", scope, actor.user.id);
+    return member?.role === "owner";
+  }
+  private assertPageLocation(scope: string, pageId: string, actor?: Actor): void {
     const targetIsLibrary = Boolean(this.knowledgeBases.get(scope));
     const existing = this.all("SELECT r.scope,k.space_id FROM records r LEFT JOIN knowledge_bases k ON k.space_id=r.scope WHERE r.collection='pages' AND r.id=?", pageId);
     if (existing.some((row) => row.scope !== scope && (targetIsLibrary || row.space_id !== null))) {
       fail(403, "页面不能迁入或迁出团队知识库。", "knowledge_base_boundary");
+    }
+    if (!actor || !existing.length || existing.some((row) => row.scope === scope)) return;
+    const visible = existing.filter((row) => {
+      const existingScope = String(row.scope);
+      if (existingScope === `user:${actor.user.id}`) return true;
+      if (existingScope.startsWith("user:")) return false;
+      return Boolean(this.one("SELECT 1 FROM members WHERE space_id=? AND user_id=?", existingScope, actor.user.id));
+    });
+    if (!visible.length) return;
+    if (!this.ownsScope(actor, scope) || visible.some((row) => !this.ownsScope(actor, String(row.scope)))) {
+      fail(403, "只有空间所有者可以跨空间移动页面。", "owner_required");
     }
   }
   role(actor: Actor, spaceId: string): SpaceRole {
@@ -579,7 +596,7 @@ export class Store {
       for (const write of requested) {
         const scope = this.scope(actor, write.scope, true);
         const pageId = write.collection === "pages" ? write.id : write.collection === "blocks" ? parseBlockRecordId(write.id)?.pageId : write.collection === "versions" ? parseHistoryId(write.id)?.pageId : undefined;
-        if (pageId) this.assertPageLocation(scope, pageId);
+        if (pageId) this.assertPageLocation(scope, pageId, actor);
         if (write.collection === "pages") {
           if (write.action === "patch" && write.patch && "purging" in write.patch) fail(403, "不能直接修改删除状态。", "forbidden");
           if (write.action === "put" && write.value?.purging !== undefined) {
@@ -1082,7 +1099,7 @@ export class Store {
   }
   savePage(scope: string, page: LoadedNotePage, who?: Actor, label = "修改了页面"): void {
     this.transaction(() => {
-      this.assertPageLocation(scope, page.id);
+      this.assertPageLocation(scope, page.id, who);
       const library = this.knowledgeBases.get(scope);
       if (library?.archived) fail(403, "知识库已归档，仅可查看。", "archived");
       const { block_tree, title, title_content, parent_id, ...fields } = page;

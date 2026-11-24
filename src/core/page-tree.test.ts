@@ -79,6 +79,47 @@ describe("where a page may be moved", () => {
     expect(canMovePage(pages, admin, "readOnlyChild", null)).toBe(false);
     expect(canMovePage(pages, admin, "note", "readOnly")).toBe(false);
   });
+
+  it("allows cross-space moves only between spaces the member owns, while permitting intra-space moves", () => {
+    const withSpaces = {
+      ...pages,
+      shared2: page("shared2", { share_space_id: "space_b" }),
+      kbHome: page("kbHome", { share_space_id: "space_kb" }),
+      kbChild: page("kbChild", { parent_id: "kbHome" }),
+    };
+    const owner = {
+      space_a: { role: "owner" },
+      space_b: { role: "owner" },
+      space_kb: { role: "owner", knowledgeBase: { homePageId: "kbHome", archived: false } },
+    };
+    const adminMap = { space_a: { role: "admin" }, space_b: { role: "owner" } };
+    const editorMap = { space_a: { role: "editor" }, space_b: { role: "owner" } };
+
+    // Non-owners (both editor and admin) cannot move personal pages into someone else's shared space
+    // or carry child pages out of someone else's shared space.
+    for (const spaces of [editorMap, adminMap]) {
+      expect(canMovePage(withSpaces, spaces, "mine", "shared")).toBe(false);
+      expect(canMovePage(withSpaces, spaces, "note", "child")).toBe(false);
+      expect(canMovePage(withSpaces, spaces, "child", null)).toBe(false);
+      expect(canMovePage(withSpaces, spaces, "child", "mine")).toBe(false);
+      expect(canMovePage(withSpaces, spaces, "child", "shared2")).toBe(false);
+      // Reorganizing within the same shared space remains allowed.
+      expect(canMovePage(withSpaces, spaces, "child", "sibling")).toBe(true);
+    }
+
+    // Owners can move freely between their personal space and shared spaces they own.
+    expect(canMovePage(withSpaces, owner, "mine", "shared")).toBe(true);
+    expect(canMovePage(withSpaces, owner, "note", "child")).toBe(true);
+    expect(canMovePage(withSpaces, owner, "child", null)).toBe(true);
+    expect(canMovePage(withSpaces, owner, "child", "mine")).toBe(true);
+    expect(canMovePage(withSpaces, owner, "child", "shared2")).toBe(true);
+    expect(canMovePage(withSpaces, owner, "child", "sibling")).toBe(true);
+
+    // Knowledge base boundary still blocks moves even for its owner.
+    expect(canMovePage(withSpaces, owner, "mine", "kbHome")).toBe(false);
+    expect(canMovePage(withSpaces, owner, "kbChild", null)).toBe(false);
+    expect(canMovePage(withSpaces, owner, "kbChild", "shared")).toBe(false);
+  });
 });
 
 describe("UC-57: multi-level trash, purging state, and descendant counts", () => {
