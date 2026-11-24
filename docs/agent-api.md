@@ -82,7 +82,9 @@ Authorization: Bearer notes_...
   "collaboration": {
     "scope": "personal 或共享空间 ID",
     "pageId": "页面 ID",
-    "generation": "服务端返回的不透明代次",
+    "generation": "服务端返回的不透明代次（与 epoch 相同）",
+    "epoch": "当前语义协作纪元",
+    "seq": 0,
     "revision": "与顶层 revision 相同"
   },
   "page": {
@@ -382,7 +384,7 @@ Content-Type: application/json
 }
 ```
 
-`index: "start"` 和 `index: "end"` 使用提交时的当前位置。它们可以省略 `baseRevision`。同代次的普通输入通过同一 Yjs 文档合并。
+`index: "start"` 和 `index: "end"` 使用提交时的当前位置。它们可以省略 `baseRevision`。同代次的普通输入通过服务端语义协作引擎合并；需要基于精确操作序号提交时可附带 `baseSeq`（省略时按 `baseRevision` 或最新序号合并）。
 
 数值范围和结构操作必须携带 `baseRevision`：
 

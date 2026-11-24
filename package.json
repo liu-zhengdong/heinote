@@ -22,10 +22,8 @@
   },
   "dependencies": {
     "compression": "^1.8.2",
-    "diff": "^9.0.0",
     "express": "^5.1.0",
     "highlight.js": "11.12.0",
-    "lib0": "^0.2.119",
     "lucide-react": "1.31.0",
     "pele": "1.13.0",
     "react": "19.2.8",
@@ -33,7 +31,6 @@
     "sharp": "^0.35.5",
     "tsx": "^4.20.0",
     "ws": "^8.22.1",
-    "yjs": "^13.6.33",
     "zod": "^4.1.0"
   },
   "devDependencies": {

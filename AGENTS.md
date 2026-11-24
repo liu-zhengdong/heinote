@@ -12,9 +12,9 @@
 - 部署方式见 `README.md`。Agent 接口见 `docs/agent-api.md`；HTTP 接入技能在 `skills/heinote/SKILL.md`。
 - 提交代码改动前必须检查对外面是否仍然准确：`docs/agent-api.md`（API 契约）、`skills/heinote/SKILL.md` 及其助手脚本、导览模板（`scripts/gen-agent-onboarding.mjs` 中的 `llmsTxt`）。改动了行为或接口就要同步更新对应文档；改动 `SKILL.md`、`heinote` 脚本、`docs/agent-api.md` 或导览模板后必须运行 `node scripts/gen-agent-onboarding.mjs` 重新生成嵌入内容并一并提交，`--check` 会校验同步。
 - 系统说明以代码与测试为准；历史 Atlas 文档已归档至 Obsidian `设计/atlas 归档/`，不再在仓库内维护。
-- 共编架构见 [ADR-002](docs/adr/0002-realtime-collaboration.md)。富文本二进制、SQL 投影与权限必须在同一事务提交。
-- 普通文字只走一套历史。新字段未建立 Y.Text 时使用受控记录历史；结构补偿不得部分执行。
-- 永久拒绝按批次保留账号分区草稿，不暂停整个空间。可重放冲突按最新快照重放：记录写入重定基线，旧代次文字按字段搬运后对新向量重编码，不裸重发旧增量。
+- 共编架构见 [ADR-004](docs/adr/0004-semantic-collaboration.md)（替代 ADR-002）。`records` 是唯一永久事实源；`collaboration_ops` 保存有界滑动窗口语义操作，由维护任务按页裁剪；语义变换、投影与权限在同一 SQLite 事务内提交。
+- 协作引擎位于 `src/collaboration/ot/`，零外部协作/差分依赖（不引入 `yjs`、`lib0`、`diff`）。单页文字与语义结构操作（分段、合段、移动、创建、删除、字段）共用同一套个人选择性撤销栈；跨页组合操作走原子记录写入并轮转 `epoch`。
+- 永久拒绝按批次保留账号分区草稿，不暂停整个空间。可重放冲突（含 `epoch_conflict`、`seq_pruned`）按最新快照重放：纯文字经 `fallbackFields` 三路 OT 合并，被删段落或单元格的孤儿文字保留为非模态恢复草稿。
 - 长期 UC 总览：Obsidian `正在干什么/小黑笔记/小黑笔记.md`。UC 卡在 `UC/`，问题卡在 `问题/`，设计笔记与早期交付记录在 `设计/`。
 - 团队知识库：Obsidian `正在干什么/小黑笔记/UC/UC-13-维护与查用团队知识库.md`。
 - 工作入口：Obsidian UC 卡与问题卡，按卡片状态推进。
