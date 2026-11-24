@@ -1,6 +1,8 @@
 import { Globe, Menu } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { BottomSheet } from "../../components/BottomSheet";
+import { PageOutline } from "../../components/PageOutline";
+import { extractOutline } from "../../core/outline";
 import { useFold } from "../../hooks/useFold";
 import type { NotePage } from "../../core/types";
 import { pageIcon } from "../editor/page-decoration";
@@ -67,6 +69,8 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const [revision, setRevision] = useState(0);
   const [pageId, setPageId] = useState(selectedPage);
   const [navOpen, setNavOpen] = useState(false);
+  const [readerEl, setReaderEl] = useState<HTMLElement | null>(null);
+  const [documentEl, setDocumentEl] = useState<HTMLElement | null>(null);
   const mobile = useFold();
   useEffect(() => {
     const changed = () => {
@@ -125,8 +129,19 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
 
   const isApp = Boolean(active && active.kind === "app");
   const isDatabase = Boolean(active && active.kind === "database");
+  const outlineItems = useMemo(
+    () => (active && !isApp && !isDatabase ? extractOutline(active.block_tree, (mention) => {
+      if (mention.kind === "date") return { label: mention.date };
+      if (mention.kind === "page") {
+        const linked = context.pages.get(mention.page_id);
+        return { label: linked ? titleOf(linked) : context.unresolvedPageLabel };
+      }
+      return { label: "" };
+    }) : []),
+    [active, context, isApp, isDatabase],
+  );
 
-  return <main className={`public-reader${isApp ? " public-reader--app" : ""}${isDatabase ? " public-reader--db" : ""}`}>
+  return <main ref={setReaderEl} className={`public-reader${isApp ? " public-reader--app" : ""}${isDatabase ? " public-reader--db" : ""}`}>
     <header className="public-reader__head">
       <a href="/" className="public-reader__brand">HeiNote</a>
       {isApp && active ? (
@@ -152,7 +167,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               : <p className="public-reader__app-empty account-muted">小应用尚未启用。</p>}
           </article>
         ) : (
-          <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${isDatabase ? " public-reader__document--db" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
+          <article ref={setDocumentEl} key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${isDatabase ? " public-reader__document--db" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
             {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
             <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
               {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}
@@ -167,6 +182,15 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               {document && active.kind !== "database" ? <nav className="public-reader__children" aria-label="子页面">{document.pages.filter((page) => page.parent_id === active.id).map((page) =>
                 <a key={page.id} href={pageHref(page.id)}><ReaderPageIcon page={page} context={context} size={16} />{titleOf(page)}</a>)}</nav> : null}
             </div>
+            {outlineItems.length > 0 ? (
+              <PageOutline
+                items={outlineItems}
+                contentRoot={documentEl}
+                scrollContainer={readerEl}
+                topOffset={12}
+                pinnedTopOffset={72}
+              />
+            ) : null}
           </article>
         )}
         {mobile && tree && listedCount > 1 ? (

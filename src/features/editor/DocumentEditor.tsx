@@ -20,6 +20,8 @@ import {
   type RefObject,
 } from "react";
 import { Popover } from "../../components/Popover";
+import { PageOutline } from "../../components/PageOutline";
+import { extractOutline } from "../../core/outline";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
 import { clearEditSurface, registerEditSurface } from "../../app/edit-surface";
@@ -382,6 +384,11 @@ export function DocumentEditor({
   const pointerDown = useRef(false);
   const titleRef = useRef<HTMLElement | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
+  const [articleEl, setArticleEl] = useState<HTMLElement | null>(null);
+  const setArticleRef = useCallback((element: HTMLElement | null) => {
+    articleRef.current = element;
+    setArticleEl(element);
+  }, []);
   const caretX = useRef(0);
 
   const { rows, items } = useMemo(() => layout(tree), [tree]);
@@ -2898,9 +2905,15 @@ export function DocumentEditor({
     );
   }
 
+  const showOutline = !embed && surfaceContainer === "main";
+  const outlineItems = useMemo(
+    () => (showOutline ? extractOutline(tree, describeMention) : []),
+    [describeMention, showOutline, tree],
+  );
+
   return (
     <article
-      ref={articleRef}
+      ref={setArticleRef}
       className={`doc ${cover ? "doc--covered" : ""} ${icon ? "doc--iconed" : ""} ${page.full_width ? "doc--full" : ""} ${font === "default" ? "" : `doc--font-${font}`}`}
       data-page-id={page.id}
       onPointerDownCapture={claimCaret}
@@ -3059,6 +3072,10 @@ export function DocumentEditor({
 
       {marquee ? (
         <div className="marquee" style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }} aria-hidden="true" />
+      ) : null}
+
+      {showOutline && outlineItems.length > 0 ? (
+        <PageOutline items={outlineItems} contentRoot={articleEl} topOffset={44} pinnedTopOffset={68} />
       ) : null}
 
       {overlays}

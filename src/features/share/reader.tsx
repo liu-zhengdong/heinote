@@ -156,7 +156,7 @@ export function ReaderBlocks({ tree, parentId = null, context, ancestors = new S
       index--;
       children.push(kind === "bullet" ? <ul key={block.id}>{list}</ul> : <ol key={block.id}>{list}</ol>);
     } else {
-      children.push(<div key={block.id} className={`public-reader__block public-reader__block--${block.kind}`}
+      children.push(<div key={block.id} data-block-id={block.id} className={`public-reader__block public-reader__block--${block.kind}`}
         style={{ ...contentStyle(block.color), textAlign: block.align }}>
         <BlockBody block={block} context={context} />
         <div className="public-reader__nested"><ReaderBlocks tree={tree} parentId={block.id} context={context} ancestors={new Set([...ancestors, block.id])} /></div>

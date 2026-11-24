@@ -1,0 +1,297 @@
+/* ============================================================================
+   Page Outline (shared by DocumentEditor and PublicShare)
+
+   At rest: a quiet Notion-style hierarchical tick rail tucked against the
+   right edge of the scroll container (zero layout width).
+   On hover / click / focus: opens an elevated floating outline card.
+   When pinned on wide viewports: docks cleanly on the right and reserves margin
+   via `:has(.page-outline--pinned)` so text never collides with the outline.
+   ========================================================================== */
+
+.page-outline {
+  --outline-w: 224px;
+  position: fixed;
+  z-index: 20;
+  top: 50%;
+  right: var(--outline-right, 16px);
+  transform: translateY(-50%);
+  user-select: none;
+}
+
+.page-outline--open {
+  z-index: 28;
+}
+
+.page-outline--pinned {
+  top: var(--outline-top, 72px);
+  transform: none;
+}
+
+/* ── Resting tick rail ─────────────────────────────────────────────────── */
+
+.page-outline__rail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  max-height: min(56dvh, 420px);
+  padding: 12px 6px 12px 14px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--r-md);
+  background: transparent;
+  cursor: pointer;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.page-outline__rail--dense {
+  gap: 6px;
+}
+
+.page-outline--open .page-outline__rail {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.page-outline__rail:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.page-outline__tick {
+  display: block;
+  height: 2px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--ink-4);
+  transition: background var(--t-fast) var(--e-out), width var(--t-fast) var(--e-out), height var(--t-fast) var(--e-out);
+}
+
+.page-outline__tick--d0 { width: 16px; }
+.page-outline__tick--d1 { width: 11px; }
+.page-outline__tick--d2 { width: 7px; }
+
+.page-outline__tick.is-active {
+  height: 2.5px;
+  background: var(--ink);
+}
+
+.page-outline__rail:hover .page-outline__tick {
+  background: var(--ink-3);
+}
+
+.page-outline__rail:hover .page-outline__tick.is-active {
+  background: var(--ink);
+}
+
+/* ── Floating popover & pinned sidebar card ────────────────────────────── */
+
+.page-outline__card {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: flex;
+  width: var(--outline-w);
+  max-height: min(62dvh, 520px);
+  flex-direction: column;
+  padding: 8px 6px;
+  border-radius: var(--r-lg);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  transform: translateY(-50%);
+  animation: page-outline-in var(--t-fast) var(--e-pop);
+}
+
+.page-outline__card--pinned {
+  position: static;
+  max-height: calc(100dvh - var(--outline-top, 72px) - 28px);
+  padding: 4px 4px 8px;
+  border-left: 1px solid var(--hairline);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: none;
+  transform: none;
+  animation: none;
+}
+
+@keyframes page-outline-in {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0) scale(1);
+  }
+}
+
+.page-outline__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 6px 6px 10px;
+}
+
+.page-outline__title {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 550;
+  letter-spacing: 0.02em;
+}
+
+.page-outline__pin {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.page-outline__pin:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.page-outline__pin.is-pinned {
+  color: var(--blue);
+}
+
+.page-outline__pin:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -1px;
+}
+
+/* Scrollspy list: uses native CSS scroll-target-group when available alongside
+   JS-synced `.is-active` + `aria-current="location"` for cross-browser parity
+   and screen reader support. */
+.page-outline__list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-target-group: auto;
+  scrollbar-width: thin;
+}
+
+.page-outline__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 420;
+  line-height: 1.4;
+  text-decoration: none;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.page-outline__item--d0 { padding-left: 10px; }
+.page-outline__item--d1 { padding-left: 22px; font-size: 12.5px; }
+.page-outline__item--d2 { padding-left: 34px; font-size: 12.5px; }
+
+.page-outline__item:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.page-outline__item:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+}
+
+/* Active item combines weight, ink contrast, subtle background, and a left
+   indicator bar so active state never relies on colour alone. */
+.page-outline__item.is-active,
+.page-outline__item[aria-current="location"] {
+  background: var(--fill);
+  color: var(--ink);
+  font-weight: 560;
+}
+
+.page-outline__item.is-active::before,
+.page-outline__item[aria-current="location"]::before {
+  content: "";
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 3px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.page-outline__item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Landing flash & scroll-margin on heading blocks ───────────────────── */
+
+.doc .block:is(.block--heading1, .block--heading2, .block--heading3) {
+  scroll-margin-top: calc(var(--topbar-h) + 16px);
+}
+
+.public-reader__block:is(.public-reader__block--heading1, .public-reader__block--heading2, .public-reader__block--heading3) {
+  scroll-margin-top: 24px;
+}
+
+.outline-flash {
+  border-radius: var(--r-sm);
+  animation: outline-flash 1.4s var(--e-out);
+}
+
+@keyframes outline-flash {
+  0% { background: var(--blue-tint); }
+  55% { background: var(--blue-tint); }
+  100% { background: transparent; }
+}
+
+/* ── Reserve right gutter only when pinned on wide screens ─────────────── */
+
+.doc:has(.page-outline--pinned) {
+  padding-right: max(var(--gutter-end), 256px);
+}
+
+.doc:has(.page-outline--pinned) .doc__cover {
+  margin-right: calc(-1 * max(var(--gutter-end), 256px));
+}
+
+.public-reader__document:has(.page-outline--pinned) {
+  --public-outline-pad: clamp(0px, calc(248px - max(0px, (100vw - 1120px) / 2)), 248px);
+  padding-right: var(--public-outline-pad);
+}
+
+.public-reader__document:has(.page-outline--pinned) .public-reader__cover {
+  width: calc(100% + var(--public-outline-pad));
+  max-width: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-outline__card,
+  .outline-flash {
+    animation: none;
+  }
+  .page-outline__tick,
+  .page-outline__item,
+  .page-outline__pin,
+  .page-outline__rail {
+    transition: none;
+  }
+}
