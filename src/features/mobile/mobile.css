@@ -158,6 +158,7 @@
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
+  scroll-snap-type: x proximity;
 }
 
 .mobile-edit-bar__strip::-webkit-scrollbar {

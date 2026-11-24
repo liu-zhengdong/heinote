@@ -1,11 +1,11 @@
-import { CalendarDays, Columns3, Database, LayoutGrid, LayoutList } from "lucide-react";
+import { CalendarDays, Columns3, Database, Image as ImageIcon, LayoutGrid, LayoutList, Paperclip } from "lucide-react";
 import type { ComponentType } from "react";
 import type { BlockKind, DatabaseViewKind } from "../../core/types";
 import { BLOCK_DEFINITIONS, DatabaseIcon, PageIcon } from "./block-registry";
 
-/** The menu's two sections: what a line can become, and the pages and
- *  databases it can make. */
-type CommandGroup = "Basic" | "Database";
+/** The menu's sections: basic blocks, media uploads, and the pages and
+ *  databases a line can make. */
+type CommandGroup = "Basic" | "Media" | "Database";
 
 export interface Command {
   id: string;
@@ -18,8 +18,9 @@ export interface Command {
   kind?: BlockKind;
   /** `page` leaves a child page; `database-inline` draws a new database right
    *  here, opening on `view`; `database-page` makes a full-page database and
-   *  leaves a link to it, which is what `/database` used to do. */
-  action?: "page" | "database-inline" | "database-page" | "database-linked";
+   *  leaves a link to it, which is what `/database` used to do; `image` and
+   *  `file` open the native picker for images or attachments. */
+  action?: "page" | "database-inline" | "database-page" | "database-linked" | "image" | "file";
   view?: DatabaseViewKind;
 }
 
@@ -33,6 +34,18 @@ const COMMANDS: Command[] = [
     kind: definition.kind,
     ...(definition.shortcuts[0] ? { hint: definition.shortcuts[0] } : {}),
   }] : [])),
+  {
+    id: "image", label: "Image",
+    icon: ImageIcon, group: "Media",
+    aliases: ["picture", "photo", "pic", "img", "media", "图片", "照片"],
+    action: "image",
+  },
+  {
+    id: "file", label: "File",
+    icon: Paperclip, group: "Media",
+    aliases: ["attachment", "upload", "pdf", "document", "media", "文件", "附件"],
+    action: "file",
+  },
   {
     id: "sub-page", label: "Page",
     icon: PageIcon, group: "Database", aliases: ["subpage", "child", "doc"], action: "page",
@@ -102,7 +115,7 @@ export function slashCommands(query: string): Command[] {
     .map((entry) => entry.command);
 }
 
-const GROUP_ORDER: CommandGroup[] = ["Basic", "Database"];
+const GROUP_ORDER: CommandGroup[] = ["Basic", "Media", "Database"];
 
 export function SlashMenu({
   commands,

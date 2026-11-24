@@ -1,15 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { BLOCK_ORDER_STEP, createBlock, orderedBlocks } from "../../core/block-tree";
 import { normalizeStoredFile } from "../../core/files";
 import { inlinePlainText, insertToken, MENTION_CHAR } from "../../core/inline-content";
 import { updateBlockContent } from "./editor-commands";
 import { createId } from "../../core/ids";
-import type { Block, BlockKind, BlockMutation, StoredFile } from "../../core/types";
+import type { Block, BlockKind, BlockMutation, InlineContent, StoredFile } from "../../core/types";
+import { blockDefinition } from "./block-registry";
 import { composeTree } from "./composite";
 import { homeFile, isImageType, refuseFiles, stageFile, type StagedFile } from "./file-store";
 import type { UploadState } from "./MediaBlocks";
 import { spaceOfPage } from "../../core/page-tree";
 import type { Editor } from "./editor-state";
+
+export type MediaInsertKind = "image" | "file";
 
 /** Where files land: among a line's words, in place of `start` to `end`; or
  *  lines of their own, before or after a line, or in place of an empty one
@@ -17,6 +20,29 @@ import type { Editor } from "./editor-state";
 export type Landing =
   | { kind: "words"; blockId: string; start: number; end: number }
   | { kind: "line"; blockId: string; edge: "before" | "after" | "fill"; inside?: boolean };
+
+/** Where newly picked images or files land relative to `block`:
+ *  - an empty text/list/heading/quote/callout/file block is filled in place;
+ *  - images picked inside a non-empty editable line go inline at the caret;
+ *  - files (or images from a code/file/non-editable block) go on a new line after. */
+export function mediaLanding(
+  block: Block,
+  kind: MediaInsertKind,
+  content: InlineContent = block.content,
+  range?: { start: number; end: number } | null,
+): Landing {
+  const text = inlinePlainText(content);
+  const editable = blockDefinition(block.kind).editable;
+  const canFill = !text && (block.kind === "file" ? !block.file : block.kind !== "code" && editable);
+  if (canFill) return { kind: "line", blockId: block.id, edge: "fill" };
+  if (kind === "image" && block.kind !== "code" && block.kind !== "file" && editable) {
+    const length = text.length;
+    const start = range ? Math.min(Math.max(0, range.start), length) : length;
+    const end = range ? Math.min(Math.max(start, range.end), length) : start;
+    return { kind: "words", blockId: block.id, start, end };
+  }
+  return { kind: "line", blockId: block.id, edge: "after" };
+}
 
 /** Images and files in a page: dropped, pasted or picked in, drawn at once
  *  from the bytes in hand and saved behind them — each upload's state, a
@@ -33,7 +59,7 @@ export function useMedia(editor: Editor) {
   const retries = useRef(new Map<string, () => void>());
   const [viewing, setViewing] = useState<StoredFile | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
-  const pickTarget = useRef<string | null>(null);
+  const pickLanding = useRef<Landing | null>(null);
 
   /* ── Images and files ───────────────────────────────────────────────── */
 
@@ -203,16 +229,29 @@ export function useMedia(editor: Editor) {
     }
   }, [execute, latestTree, ownerOf, pagesRef, platform, readOnly, selectBlocks, sendPicture, toast, upload]);
 
+  /** Opens the native file picker and places whatever is chosen at `landing`. */
+  const pickMedia = useCallback((landing: Landing, options?: { accept?: string; multiple?: boolean }) => {
+    const input = fileInput.current;
+    if (!input || readOnly) return;
+    pickLanding.current = landing;
+    input.accept = options?.accept ?? "";
+    input.multiple = options?.multiple ?? true;
+    input.click();
+  }, [readOnly]);
+
   /** Opens the file picker for a file block: to fill it, or to replace what
    *  it holds. */
   const pickFile = useCallback((block: Block) => {
-    const input = fileInput.current;
-    if (!input || readOnly) return;
-    pickTarget.current = block.id;
-    input.accept = "";
-    input.multiple = !block.file;
-    input.click();
-  }, [readOnly]);
+    pickMedia({ kind: "line", blockId: block.id, edge: "fill" }, { accept: "", multiple: !block.file });
+  }, [pickMedia]);
+
+  const onFileInputChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.currentTarget.files ?? [])];
+    event.currentTarget.value = "";
+    const landing = pickLanding.current;
+    pickLanding.current = null;
+    if (landing && files.length) void placeFiles(files, landing);
+  }, [placeFiles]);
 
   /* A page shared after its pictures went in — or a block pasted in from
      another page — can hold files its readers cannot reach: written to the
@@ -247,5 +286,5 @@ export function useMedia(editor: Editor) {
     };
   }, []);
 
-  return { uploads, pictureUploads, retries, viewing, setViewing, fileInput, pickTarget, placeFiles, pickFile };
+  return { uploads, pictureUploads, retries, viewing, setViewing, fileInput, placeFiles, pickMedia, pickFile, onFileInputChange };
 }

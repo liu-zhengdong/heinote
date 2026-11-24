@@ -8,15 +8,17 @@ import {
   Baseline,
   ChevronDown,
   Combine,
+  ImagePlus,
   KeyboardOff,
   Link2,
+  Paperclip,
   Plus,
   Ungroup,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useActiveEditSurface } from "../../app/edit-surface";
 import { BottomSheet } from "../../components/BottomSheet";
-import { MenuItem, MenuList } from "../../components/Menu";
+import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import type { BlockKind } from "../../core/types";
 import { useFold } from "../../hooks/useFold";
 import { blockDefinition } from "./block-registry";
@@ -191,14 +193,14 @@ export function MobileEditBar() {
             </>
           ) : (
             <>
-              <div className="mobile-edit-bar__group">
+              <div className="mobile-edit-bar__group" role="group" aria-label="插入与转换">
                 <button
                   type="button"
                   className="mobile-edit-bar__chip"
                   aria-label="插入块"
                   onClick={() => openSheet("insert")}
                 >
-                  <Plus size={15} />
+                  <Plus size={15} aria-hidden="true" />
                   <span>块</span>
                 </button>
                 <button
@@ -208,10 +210,32 @@ export function MobileEditBar() {
                   onClick={() => openSheet("turn")}
                 >
                   <span>{currentKindLabel}</span>
-                  <ChevronDown size={13} />
+                  <ChevronDown size={13} aria-hidden="true" />
                 </button>
               </div>
-              <div className="mobile-edit-bar__group">
+              {surface.insertMedia ? (
+                <div className="mobile-edit-bar__group" role="group" aria-label="插入媒体">
+                  <button
+                    type="button"
+                    className="mobile-edit-bar__btn"
+                    aria-label="插入图片"
+                    title="插入图片"
+                    onClick={() => surface.insertMedia?.("image")}
+                  >
+                    <ImagePlus size={17} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="mobile-edit-bar__btn"
+                    aria-label="插入文件"
+                    title="插入文件"
+                    onClick={() => surface.insertMedia?.("file")}
+                  >
+                    <Paperclip size={17} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : null}
+              <div className="mobile-edit-bar__group" role="group" aria-label="文字格式">
                 {QUICK_MARKS.map(({ mark, label, icon: Icon }) => {
                   const pressed = Boolean(surface.marks?.[mark]);
                   return (
@@ -266,6 +290,27 @@ export function MobileEditBar() {
         onClose={closeSheet}
       >
         <MenuList label="插入块">
+          {surface.insertMedia ? (
+            <>
+              <MenuItem
+                icon={<ImagePlus size={16} aria-hidden="true" />}
+                label="Image"
+                onSelect={() => {
+                  setSheet(null);
+                  surface.insertMedia?.("image");
+                }}
+              />
+              <MenuItem
+                icon={<Paperclip size={16} aria-hidden="true" />}
+                label="File"
+                onSelect={() => {
+                  setSheet(null);
+                  surface.insertMedia?.("file");
+                }}
+              />
+              <MenuDivider />
+            </>
+          ) : null}
           {INSERT_KINDS.map((kind) => {
             const def = blockDefinition(kind);
             const Icon = def.icon;

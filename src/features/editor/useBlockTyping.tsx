@@ -38,7 +38,7 @@ import { newSimpleTable } from "../../core/simple-table";
 import { markFreshTable, tableEntryCell } from "./SimpleTable";
 import { markFresh } from "../database/fresh";
 import type { Editor, PendingFocus } from "./editor-state";
-import type { useMedia } from "./useMedia";
+import { mediaLanding, type useMedia } from "./useMedia";
 
 /* The content with an arrow in place of the "->" or "<-" just typed before
    the caret, or null. Not inside inline code. */
@@ -58,11 +58,11 @@ function caretAt(pageId: string, blockId: string, offset: number): HistoryFocus 
  *  that writes a heading or a list, "/" and "@" and "[[" opening their
  *  menus, an arrow for "->" — what is pasted into it, the slash commands,
  *  and the caret going on past a line into the next. */
-export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "placeFiles">) {
+export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "placeFiles" | "pickMedia">) {
   const {
     page, tree, rows, embed, blocksRef, pagesRef, caretX, slash, setSlash, setSlashIndex, slashDismissed, mention,
     setMention, setMentionIndex, mentionDismissed, setFormat, resume, pendingTextSelection, ownerOf, createPage,
-    checkpointHistory, annotateHistory, execute, runReplace, replaceSelection, applyMarkToBlocks, placeFiles,
+    checkpointHistory, annotateHistory, execute, runReplace, replaceSelection, applyMarkToBlocks, placeFiles, pickMedia,
     pastedBlocks, adoptCutPages, offerCard, pickLinkedView,
   } = editor;
 
@@ -402,6 +402,15 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     if (!slash) return;
     const stripped = replaceRange(block.content, slash.from, slash.from + 1 + slash.query.length, "");
     setSlash(null);
+
+    if (command.action === "image" || command.action === "file") {
+      execute(updateBlockContent(tree, block.id, stripped), { id: block.id, start: slash.from, force: true });
+      pickMedia(
+        mediaLanding(block, command.action, stripped, { start: slash.from, end: slash.from }),
+        { accept: command.action === "image" ? "image/*" : "", multiple: true },
+      );
+      return;
+    }
 
     if (command.action === "database-linked") {
       // A linked view names a database's view before it is written: the

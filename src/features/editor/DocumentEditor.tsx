@@ -161,6 +161,7 @@ import {
   rowsWithin,
   selectBetweenPoints,
   selectedBlockRanges,
+  selectionOffsets,
   selectionPoints,
   selectRanges,
   type BlockTextRange,
@@ -172,7 +173,7 @@ import { LinkViewMenu } from "./LinkViewMenu";
 import { InlineDatabase } from "../database/InlineDatabase";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePages, useWorkspaceStore } from "../../app/workspace-store";
-import { useMedia } from "./useMedia";
+import { mediaLanding, useMedia, type MediaInsertKind } from "./useMedia";
 import { useFormatToolbar } from "./useFormatToolbar";
 import { useMarquee } from "./useMarquee";
 import { usePictures } from "./pictures";
@@ -369,6 +370,7 @@ export function DocumentEditor({
   const [caretMarks, setCaretMarks] = useState<Partial<Record<ToggleableMark, boolean>>>({});
   const subOverlayOpenRef = useRef(false);
   const savedBlockIdRef = useRef<string | null>(null);
+  const savedCaretRef = useRef<{ blockId: string; start: number; end: number } | null>(null);
   const savedFormatRef = useRef<FormatState | null>(null);
   const mountDocRef = useRef<HTMLDivElement | null>(null);
   const [dragIds, setDragIds] = useState<string[] | null>(null);
@@ -548,6 +550,7 @@ export function DocumentEditor({
     setCaretMarks({});
     subOverlayOpenRef.current = false;
     savedBlockIdRef.current = null;
+    savedCaretRef.current = null;
     savedFormatRef.current = null;
     clearEditSurface(surfaceId);
   }, [page.id, surfaceId]);
@@ -706,6 +709,7 @@ export function DocumentEditor({
     toggleMark: (_mark: ToggleableMark) => {},
     turnInto: (_kind: BlockKind) => {},
     insertBlock: (_kind: BlockKind) => {},
+    insertMedia: (_kind: MediaInsertKind) => {},
     setLink: (_href: string | undefined) => {},
     setColor: (_color: ContentColor | undefined) => {},
     setSubOverlayOpen: (_open: boolean) => {},
@@ -714,6 +718,7 @@ export function DocumentEditor({
     done: () => {
       subOverlayOpenRef.current = false;
       savedBlockIdRef.current = null;
+      savedCaretRef.current = null;
       savedFormatRef.current = null;
       const root = embed ? mountDocRef.current : articleRef.current;
       const active = document.activeElement;
@@ -811,6 +816,29 @@ export function DocumentEditor({
       setFocusedBlockId(nextId);
       setEditingMode("block");
     },
+    insertMedia: (kind) => {
+      const currentTree = latestTree.current;
+      const targetId = (subOverlayOpenRef.current ? savedBlockIdRef.current : null)
+        ?? focusedBlockId
+        ?? savedBlockIdRef.current
+        ?? rows.at(-1)?.block.id;
+      if (!targetId) return;
+      const block = currentTree.by_id[targetId];
+      if (!block) return;
+      const element = editableWithin(blocksRef.current, targetId);
+      let range: { start: number; end: number } | null = null;
+      if (element && element.contains(document.activeElement)) {
+        const caret = caretOffset(element);
+        range = selectionOffsets(element) ?? { start: caret, end: caret };
+      } else if (savedCaretRef.current?.blockId === targetId) {
+        range = { start: savedCaretRef.current.start, end: savedCaretRef.current.end };
+      }
+      subOverlayOpenRef.current = false;
+      pickMedia(
+        mediaLanding(block, kind, block.content, range),
+        { accept: kind === "image" ? "image/*" : "", multiple: true },
+      );
+    },
     setLink: (href) => {
       const activeFormat = format ?? savedFormatRef.current;
       if (activeFormat?.ranges.length) applyMarkToBlocks(activeFormat.ranges, "link", href);
@@ -828,6 +856,14 @@ export function DocumentEditor({
       if (open) {
         savedBlockIdRef.current = focusedBlockId;
         savedFormatRef.current = format;
+        const element = focusedBlockId ? editableWithin(blocksRef.current, focusedBlockId) : null;
+        if (focusedBlockId && element && element.contains(document.activeElement)) {
+          const caret = caretOffset(element);
+          const range = selectionOffsets(element) ?? { start: caret, end: caret };
+          savedCaretRef.current = { blockId: focusedBlockId, start: range.start, end: range.end };
+        } else {
+          savedCaretRef.current = null;
+        }
         subOverlayOpenRef.current = true;
         return;
       }
@@ -875,6 +911,7 @@ export function DocumentEditor({
       toggleMark: (mark) => mobileSurfaceActions.current.toggleMark(mark),
       turnInto: (kind) => mobileSurfaceActions.current.turnInto(kind),
       insertBlock: (kind) => mobileSurfaceActions.current.insertBlock(kind),
+      insertMedia: isBlock ? (kind) => mobileSurfaceActions.current.insertMedia(kind) : undefined,
       setLink: (href) => mobileSurfaceActions.current.setLink(href),
       setColor: (color) => mobileSurfaceActions.current.setColor(color),
       setSubOverlayOpen: (open) => mobileSurfaceActions.current.setSubOverlayOpen(open),
@@ -1409,8 +1446,8 @@ export function DocumentEditor({
       if (anchor) setLinkedPick({ blockId, stripped, pick, anchor });
     },
   };
-  const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, pickTarget, placeFiles, pickFile } = useMedia(editor);
-  const typing = blockTyping({ ...editor, placeFiles });
+  const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, placeFiles, pickMedia, pickFile, onFileInputChange } = useMedia(editor);
+  const typing = blockTyping({ ...editor, placeFiles, pickMedia });
   const { onBlockChange, chooseMention, onBlockPaste, nextEditable, runCommand } = typing;
   const { onBlockKeyDown, onBlockBeforeInput } = blockKeys({ ...editor, ...typing, latestTree });
   useSelectedBlockKeys(editor);
@@ -2971,13 +3008,7 @@ export function DocumentEditor({
         ref={fileInput}
         type="file"
         hidden
-        onChange={(event) => {
-          const files = [...(event.currentTarget.files ?? [])];
-          event.currentTarget.value = "";
-          const target = pickTarget.current;
-          pickTarget.current = null;
-          if (target && files.length) void placeFiles(files, { kind: "line", blockId: target, edge: "fill" });
-        }}
+        onChange={onFileInputChange}
       />
 
       {pictureHover?.isConnected ? (() => {

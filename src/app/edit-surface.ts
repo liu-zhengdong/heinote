@@ -27,6 +27,7 @@ export interface ActiveEditSurface {
   toggleMark?: (mark: ToggleableMark) => void;
   turnInto?: (kind: BlockKind) => void;
   insertBlock?: (kind: BlockKind) => void;
+  insertMedia?: (kind: "image" | "file") => void;
   openLink?: () => void;
   setLink?: (href: string | undefined) => void;
   setColor?: (color: ContentColor | undefined, where?: "text" | "background") => void;
