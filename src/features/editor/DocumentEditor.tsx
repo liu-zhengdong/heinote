@@ -33,7 +33,9 @@ import { createId } from "../../core/ids";
 import { copyText } from "../../core/clipboard";
 import { pageTitleContent, titleFields } from "../../core/title";
 import { stopTextHistory } from "../../collaboration/client";
-import { titleField } from "../../collaboration/protocol";
+import { transformSelection } from "../../collaboration/ot/page";
+import { titleField, type PageOp } from "../../collaboration/protocol";
+import { storedTable } from "../../platform/records";
 import {
   blockOrderBetween,
   createBlock,
@@ -143,7 +145,7 @@ import {
   type BlockReference,
 } from "./mentions";
 import { BlockBacklinks } from "./BlockBacklinks";
-import { composeTree, duplicateSelection, routeTransaction, storedFragment } from "./composite";
+import { composeTree, duplicateSelection, extractSinglePageOps, routeTransaction, storedFragment } from "./composite";
 import { coverId, pageCover, pageFont, pageIcon, randomCoverId, randomEmoji } from "./page-decoration";
 import { loadPageFonts } from "../../platform/fonts";
 import {
@@ -159,6 +161,7 @@ import {
   rowsWithin,
   selectBetweenPoints,
   selectedBlockRanges,
+  selectionPoints,
   selectRanges,
   type BlockTextRange,
   type DomCaretPoint,
@@ -289,6 +292,7 @@ export function DocumentEditor({
     archivePage,
     checkpointHistory,
     checkpointPage,
+    commitPageOps,
     commitWrites,
     createPage,
     document: workspace,
@@ -594,6 +598,7 @@ export function DocumentEditor({
   const write = useCallback((change: EditorTransaction, options: {
     cut?: readonly string[];
     record?: boolean;
+    fold?: boolean;
     /** Writes that go with the change, in the same step — pages it makes. */
     extra?: readonly WorkspaceMutation[];
   } = {}): EditorTransaction | null => {
@@ -601,6 +606,12 @@ export function DocumentEditor({
     const live = workspace?.state.pages ?? pages;
     const current = composeTree(live, live[page.id] ?? page, showInPlace);
     const transaction = withoutEmptyPages(current.tree, change, () => createId("block"));
+    if (!options.extra?.length) {
+      const semantic = extractSinglePageOps(current, transaction, options.cut);
+      if (semantic && commitPageOps(semantic.pageId, semantic.ops, { record: options.record ?? true, fold: options.fold })) {
+        return transaction;
+      }
+    }
     commitWrites([...(options.extra ?? []), ...routeTransaction(current, live, transaction, {
       author: platform.bootstrap.user.displayName,
       now: new Date().toISOString(),
@@ -608,18 +619,40 @@ export function DocumentEditor({
       cut: options.cut,
     })], options.record ?? true);
     return transaction;
-  }, [commitWrites, page, pages, platform, showInPlace, workspace]);
+  }, [commitPageOps, commitWrites, page, pages, platform, showInPlace, workspace]);
 
-  const execute = useCallback((change: EditorTransaction | null, focus?: PendingFocus, options: { cut?: readonly string[] } = {}) => {
+  const execute = useCallback((change: EditorTransaction | null, focus?: PendingFocus, options: { cut?: readonly string[]; fold?: boolean } = {}) => {
     if (!change) return;
-    /* A transaction is its own undo step: without this the undo manager's
-     *  capture window folds a mark or a menu write into the keystrokes
-     *  still merging before it, and one ⌘Z takes the typing back too. */
-    stopTextHistory();
+    /* A non-typing transaction is its own undo step: without this the capture
+     *  window folds a mark or a menu write into keystrokes before it. */
+    if (!options.fold) stopTextHistory();
     if (focus) pendingFocus.current = focus;
     else if (change.focus) pendingFocus.current = { id: change.focus.id, start: change.focus.offset };
     write(change, options);
   }, [write]);
+
+  /* If a collaborator splits or merges the block holding our live caret,
+     transform the caret cleanly into the target block and offset. */
+  useEffect(() => {
+    const onCaretShift = (event: Event) => {
+      const detail = (event as CustomEvent<{ pageId?: string; ops?: PageOp[] }>).detail;
+      if (!detail?.ops?.length || !blocksRef.current) return;
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !blocksRef.current.contains(active)) return;
+      const currentSel = selectionPoints();
+      if (!currentSel) return;
+      const shifted = transformSelection(currentSel, detail.ops);
+      if (shifted.focus.blockId !== currentSel.focus.blockId) {
+        pendingFocus.current = { id: shifted.focus.blockId, start: shifted.focus.offset, end: shifted.focus.offset };
+        requestAnimationFrame(() => {
+          const el = editableWithin(blocksRef.current, shifted.focus.blockId);
+          if (el) focusRange(el, shifted.focus.offset, shifted.focus.offset);
+        });
+      }
+    };
+    window.addEventListener("notes:collaboration-caret-shift", onCaretShift);
+    return () => window.removeEventListener("notes:collaboration-caret-shift", onCaretShift);
+  }, []);
 
   const closeMenus = useCallback(() => {
     setSlash(null);
@@ -1968,10 +2001,29 @@ export function DocumentEditor({
     const stored = live[owner]?.block_tree?.by_id[block.id];
     if (stored?.kind !== "table") return false;
     const before = stored.table ?? normalizeSimpleTable(undefined);
-    const size = tableBytes(applyTableWrites(before, writes));
+    const afterTable = applyTableWrites(before, writes);
+    const size = tableBytes(afterTable);
     if (size > TABLE_BYTE_BUDGET && size > tableBytes(before)) {
       toast("This table is full — turn it into a database to keep adding to it.", "error");
       return false;
+    }
+    const removedTableRows = writes
+      .filter((item): item is Extract<TableWrite, { kind: "row" }> => item.kind === "row" && !item.row)
+      .map((item) => item.rowId);
+    const afterColIds = new Set(afterTable.columns.map((col) => col.id));
+    const removedTableColumns = before.columns
+      .map((col) => col.id)
+      .filter((colId) => !afterColIds.has(colId));
+    if ((removedTableRows.length || removedTableColumns.length) && commitPageOps(owner, [{
+      op: {
+        type: "set_block_fields",
+        blockId: block.id,
+        patch: { table: storedTable(afterTable) },
+        ...(removedTableRows.length ? { removedTableRows } : {}),
+        ...(removedTableColumns.length ? { removedTableColumns } : {}),
+      },
+    }])) {
+      return true;
     }
     const base = ["pages", owner, "block_tree", "by_id", block.id, "table"];
     const mutations: WorkspaceMutation[] = writes.map((item): WorkspaceMutation => {
@@ -1990,7 +2042,7 @@ export function DocumentEditor({
       { type: "set", path: ["pages", owner, "updated_by"], value: platform.bootstrap.user.displayName },
     ]);
     return true;
-  }, [commitWrites, ownerOf, pages, platform, readOnly, toast, workspace]);
+  }, [commitPageOps, commitWrites, ownerOf, pages, platform, readOnly, toast, workspace]);
 
   const rowHandlers = useRef<Omit<BlockActions, "describeMention"> | null>(null);
   useLayoutEffect(() => {

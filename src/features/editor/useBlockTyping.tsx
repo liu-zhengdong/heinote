@@ -138,7 +138,7 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
       return;
     }
 
-    execute(updateBlockContent(tree, block.id, content), redraw);
+    execute(updateBlockContent(tree, block.id, content), redraw, { fold: !redraw });
     const query = block.kind === "code" || block.kind === "file" ? null : slashQueryAt(text, caret);
     const dismissed = slashDismissed.current;
     let slashOpen = false;

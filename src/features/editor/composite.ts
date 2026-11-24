@@ -1,7 +1,12 @@
 import { bodyPath, trashWrites } from "../../app/page-rows";
 import { createBlock, descendantsOf, lineLink, pageLine } from "../../core/block-tree";
 import { isPurging } from "../../core/page-tree";
-import type { Block, BlockTree, NotePage } from "../../core/types";
+import { storedRuns } from "../../core/stored-runs";
+import type { Block, BlockTree, NotePage, SimpleTable } from "../../core/types";
+import { blockFieldKey } from "../../collaboration/ot/page";
+import type { SemanticLocalOpInput } from "../../collaboration/client";
+import type { JsonRecord, PageOp } from "../../collaboration/protocol";
+import { storedBlock, storedTable } from "../../platform/records";
 import type { WorkspaceMutation } from "../../platform/workspace-document";
 import { applyEditorTransaction, duplicateBlocks, topLevelBlocks, type EditorTransaction } from "./editor-commands";
 
@@ -118,6 +123,183 @@ export interface RouteOptions {
    *  way elsewhere — a page among them keeps its record, to be pasted — not
    *  to the trash. */
   cut?: readonly string[];
+}
+
+/**
+ * Translate a single-page `EditorTransaction` carrying `semantic` intent into
+ * `PageOp` inputs for semantic OT. Returns `null` whenever the transaction touches
+ * inline expanded sub-pages, crosses page boundaries, or is a cut operation —
+ * in which case `routeTransaction` handles it via atomic record writes.
+ */
+export function extractSinglePageOps(
+  composite: Composite,
+  transaction: EditorTransaction,
+  cut?: readonly string[],
+): { pageId: string; ops: SemanticLocalOpInput[] } | null {
+  if (!transaction.semantic?.length || cut?.length) return null;
+  let owner: string | null = null;
+
+  const claimBlock = (blockId: string): boolean => {
+    if (composite.rows.has(blockId) || composite.tree.by_id[blockId]?.kind === "page") return false;
+    const holder = composite.owner.get(blockId) ?? composite.pageId;
+    if (owner === null) owner = holder;
+    return owner === holder;
+  };
+
+  const resolveParent = (parentId: string | null): { ok: true; value: string | null } | { ok: false } => {
+    if (parentId === null) {
+      if (owner !== null && owner !== composite.pageId) return { ok: false };
+      if (owner === null) owner = composite.pageId;
+      return { ok: true, value: null };
+    }
+    if (composite.rows.has(parentId)) {
+      // Top-level inside an expanded inline sub-page: stored parent_id is null inside that sub-page.
+      if (owner === null) owner = parentId;
+      if (owner !== parentId) return { ok: false };
+      return { ok: true, value: null };
+    }
+    const holder = composite.owner.get(parentId) ?? composite.pageId;
+    if (owner === null) owner = holder;
+    if (owner !== holder) return { ok: false };
+    return { ok: true, value: parentId };
+  };
+
+  const resolveSibling = (siblingId: string | null): { ok: true; value: string | null } | { ok: false } => {
+    if (siblingId === null) return { ok: true, value: null };
+    if (composite.rows.has(siblingId)) {
+      const rowId = composite.rows.get(siblingId)!;
+      const holder = composite.owner.get(siblingId);
+      if (!holder || (owner !== null && owner !== holder)) return { ok: false };
+      owner = holder;
+      return { ok: true, value: rowId };
+    }
+    const holder = composite.owner.get(siblingId) ?? composite.pageId;
+    if (owner === null) owner = holder;
+    if (owner !== holder) return { ok: false };
+    return { ok: true, value: siblingId };
+  };
+
+  const out: SemanticLocalOpInput[] = [];
+  for (const item of transaction.semantic) {
+    if (item.type === "text") {
+      if (!claimBlock(item.blockId)) return null;
+      out.push({
+        textTarget: {
+          field: blockFieldKey(owner!, item.blockId),
+          content: storedRuns(item.content),
+        },
+      });
+      continue;
+    }
+
+    if (item.type === "split_block") {
+      if (!claimBlock(item.blockId) || item.newKind === "page") return null;
+      const op: PageOp = {
+        type: "split_block",
+        blockId: item.blockId,
+        offset: item.offset,
+        newBlockId: item.newBlockId,
+        newKind: item.newKind,
+        ...(item.newProps ? { newProps: item.newProps as JsonRecord } : {}),
+      };
+      out.push({ op });
+      continue;
+    }
+
+    if (item.type === "merge_block") {
+      if (!claimBlock(item.intoBlockId) || !claimBlock(item.fromBlockId)) return null;
+      out.push({
+        op: {
+          type: "merge_block",
+          intoBlockId: item.intoBlockId,
+          fromBlockId: item.fromBlockId,
+        },
+      });
+      continue;
+    }
+
+    if (item.type === "create_block") {
+      if (item.block.kind === "page") return null;
+      const parent = resolveParent(item.parentId);
+      const after = resolveSibling(item.afterId);
+      const before = resolveSibling(item.beforeId);
+      if (!parent.ok || !after.ok || !before.ok || !owner) return null;
+      const stored = {
+        ...storedBlock({ ...item.block, parent_id: parent.value }),
+        page: owner,
+      } as JsonRecord;
+      out.push({
+        op: {
+          type: "create_block",
+          block: stored,
+          parentId: parent.value,
+          ...(after.value !== null ? { afterId: after.value } : {}),
+          ...(before.value !== null ? { beforeId: before.value } : {}),
+        },
+      });
+      continue;
+    }
+
+    if (item.type === "delete_blocks") {
+      if (!item.blockIds.length || item.blockIds.some((id) => !claimBlock(id))) return null;
+      let fallbackBlock: JsonRecord | undefined;
+      if (item.fallbackBlock) {
+        if (item.fallbackBlock.kind === "page") return null;
+        const p = resolveParent(item.fallbackBlock.parent_id);
+        if (!p.ok) return null;
+        fallbackBlock = {
+          ...storedBlock({ ...item.fallbackBlock, parent_id: p.value }),
+          page: owner!,
+        } as JsonRecord;
+      }
+      out.push({
+        op: {
+          type: "delete_blocks",
+          blockIds: item.blockIds,
+          ...(fallbackBlock ? { fallbackBlock } : {}),
+        },
+      });
+      continue;
+    }
+
+    if (item.type === "move_blocks") {
+      if (!item.blockIds.length || item.blockIds.some((id) => !claimBlock(id))) return null;
+      const parent = resolveParent(item.parentId);
+      const after = resolveSibling(item.afterId);
+      const before = resolveSibling(item.beforeId);
+      if (!parent.ok || !after.ok || !before.ok || !owner) return null;
+      out.push({
+        op: {
+          type: "move_blocks",
+          blockIds: item.blockIds,
+          parentId: parent.value,
+          ...(after.value !== null ? { afterId: after.value } : {}),
+          ...(before.value !== null ? { beforeId: before.value } : {}),
+        },
+      });
+      continue;
+    }
+
+    if (item.type === "set_block_fields") {
+      if (!claimBlock(item.blockId)) return null;
+      const patch: JsonRecord = {};
+      for (const [k, v] of Object.entries(item.patch)) {
+        if (k === "kind" && v === "page") return null;
+        patch[k] = k === "table" && v && typeof v === "object" ? storedTable(v as SimpleTable) : v;
+      }
+      out.push({
+        op: {
+          type: "set_block_fields",
+          blockId: item.blockId,
+          patch,
+          ...(item.removedTableRows?.length ? { removedTableRows: item.removedTableRows } : {}),
+          ...(item.removedTableColumns?.length ? { removedTableColumns: item.removedTableColumns } : {}),
+        },
+      });
+    }
+  }
+
+  return owner && out.length ? { pageId: owner, ops: out } : null;
 }
 
 /** What the editor did to the composed tree, as writes to the pages holding

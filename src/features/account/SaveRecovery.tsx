@@ -18,13 +18,56 @@ function runText(value: unknown): string {
     return typeof run.text === "string" ? run.text : "";
   }).join("");
 }
+function fieldLabel(key: string): string {
+  return key.endsWith("/title_content") ? "页名" : key.includes("/cells/") ? "表格单元格" : "正文";
+}
+function opInsertedText(ops: unknown): string {
+  if (!Array.isArray(ops)) return "";
+  return ops.map((step) => {
+    if (!object(step) || step.insert === undefined) return "";
+    if (typeof step.insert === "string") return step.insert;
+    if (object(step.insert) && object(step.insert.embed) && object(step.insert.embed.mention)) {
+      const m = step.insert.embed.mention;
+      return m.kind === "date" ? String(m.date ?? "[日期]") : m.kind === "image" ? "[图片]" : `[页面：${String(m.page_id ?? "提及")}]`;
+    }
+    return "";
+  }).join("");
+}
 function previewOf(entries: RecoveryEntry[]): Preview[] {
   const items: Preview[] = [];
   const add = (label: string, text: string) => { if (text) items.push({ label, text }); };
   const walk = (value: unknown) => {
     if (Array.isArray(value)) { value.forEach(walk); return; }
     if (!object(value)) return;
+    // Extract semantic `pageOps` submissions cleanly (H7).
+    if (Array.isArray(value.pageOps)) {
+      for (const sub of value.pageOps) {
+        if (!object(sub)) continue;
+        const shownFields = new Set<string>();
+        if (object(sub.fallbackFields)) {
+          for (const [key, intent] of Object.entries(sub.fallbackFields)) {
+            if (object(intent) && Array.isArray(intent.next)) {
+              add(fieldLabel(key), runText(intent.next));
+              shownFields.add(key);
+            }
+          }
+        }
+        if (Array.isArray(sub.ops)) {
+          for (const op of sub.ops) {
+            if (!object(op)) continue;
+            if (op.type === "text" && typeof op.field === "string" && !shownFields.has(op.field)) {
+              add(fieldLabel(op.field), opInsertedText(op.ops));
+            } else if (op.type === "create_block" && object(op.block) && Array.isArray(op.block.content)) {
+              add("正文", runText(op.block.content));
+            } else if (op.type === "set_block_fields" && object(op.patch)) {
+              walk(op.patch);
+            }
+          }
+        }
+      }
+    }
     for (const [key, item] of Object.entries(value)) {
+      if (key === "pageOps") continue;
       if (key === "content" || key === "title_content") add(key === "content" ? "正文" : "页名", runText(item));
       else if ((key === "title" || key === "text") && typeof item === "string") add(key === "title" ? "页名" : "文字", item);
       else if (item && typeof item === "object") walk(item);
@@ -34,7 +77,7 @@ function previewOf(entries: RecoveryEntry[]): Preview[] {
     for (const document of entry.documents ?? []) {
       if (!object(document) || !object(document.fields)) continue;
       for (const [key, runs] of Object.entries(document.fields)) {
-        add(key.endsWith("/title_content") ? "页名" : key.includes("/cells/") ? "表格单元格" : "正文", runText(runs));
+        add(fieldLabel(key), runText(runs));
       }
     }
     walk(entry.writes ?? []); walk(entry.batches ?? []);

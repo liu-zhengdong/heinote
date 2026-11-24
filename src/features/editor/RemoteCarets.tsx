@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject }
 import { colorOf } from "../../components/Avatar";
 import { personName } from "../../components/ProfileAvatar";
 import { useActivity, useWorkspace } from "../../app/workspace-context";
+import { projectRemotePresence, subscribeCollaboration } from "../../collaboration/client";
 import { pointRect, rangeRects } from "./selection";
 
 interface Drawn {
@@ -21,11 +22,12 @@ interface Drawn {
  * blocks change under it, as they are laid out again and as presence moves.
  */
 export function RemoteCarets({ root }: { root: RefObject<HTMLElement | null> }) {
-  const { platform, rosters } = useWorkspace();
+  const { platform, rosters, selectedPageId, spaceOf } = useWorkspace();
   const { presence } = useActivity();
   const [drawn, setDrawn] = useState<Drawn[]>([]);
   const layer = useRef<HTMLDivElement | null>(null);
   const me = platform?.bootstrap.user.id;
+  const scope = selectedPageId ? spaceOf(selectedPageId) : undefined;
 
   useLayoutEffect(() => {
     const blocks = root.current;
@@ -37,8 +39,9 @@ export function RemoteCarets({ root }: { root: RefObject<HTMLElement | null> }) 
     const draw = () => {
       const origin = blocks.getBoundingClientRect();
       const at = (rect: DOMRect) => ({ left: rect.left - origin.left, top: rect.top - origin.top, width: rect.width, height: rect.height });
+      const projected = projectRemotePresence(scope, selectedPageId, presence);
       const next: Drawn[] = [];
-      for (const item of presence) {
+      for (const item of projected) {
         const selection = item.state?.selection;
         if (!item.online || item.userId === me || !selection) continue;
         const caret = pointRect(blocks, selection.focus);
@@ -62,6 +65,7 @@ export function RemoteCarets({ root }: { root: RefObject<HTMLElement | null> }) 
         draw();
       });
     };
+    const stopCollab = selectedPageId ? subscribeCollaboration(soon, selectedPageId) : () => {};
     const changes = new MutationObserver((records) => {
       if (records.some((record) => !layer.current?.contains(record.target))) soon();
     });
@@ -69,11 +73,12 @@ export function RemoteCarets({ root }: { root: RefObject<HTMLElement | null> }) 
     const sizes = new ResizeObserver(soon);
     sizes.observe(blocks);
     return () => {
+      stopCollab();
       changes.disconnect();
       sizes.disconnect();
       cancelAnimationFrame(frame);
     };
-  }, [root, presence, rosters, me]);
+  }, [root, presence, rosters, me, scope, selectedPageId]);
 
   if (!drawn.length) return null;
   return (

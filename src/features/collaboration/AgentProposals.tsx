@@ -1,6 +1,6 @@
 import { Check, ChevronDown, GitPullRequest, RefreshCw, X } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import { diffChars } from "diff";
+import { diffPlainChars } from "../../collaboration/ot/text";
 import { pageBasis } from "../../collaboration/client";
 import { textPreviews, type Operation, type TextPreview } from "./proposal-preview";
 import { useWorkspace } from "../../app/workspace-context";
@@ -25,7 +25,7 @@ const statusLabels = { pending: "待处理", applied: "已应用", rejected: "�
 const readable = (text: string) => text.replaceAll("\u2063", "[提及]");
 const TextDifference = memo(function TextDifference({ before, after }: TextPreview) {
   const [expanded, setExpanded] = useState(false);
-  const changes = useMemo(() => diffChars(before, after, { timeout: 30 }) ?? [{ value: before, added: false, removed: true }, { value: after, added: true, removed: false }], [before, after]);
+  const changes = useMemo(() => diffPlainChars(before, after), [before, after]);
   const abbreviated = changes.some((part) => !part.added && !part.removed && Array.from(part.value).length > 96);
   return <div className="proposal-diff">
     <p className="proposal-diff__text">{changes.map((part, index) => {

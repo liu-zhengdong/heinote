@@ -2,7 +2,13 @@ import type { AppBootstrap, CollaboratorPresence, Person, PresenceState, Sidebar
 import type { FileUrl } from "./schema";
 import { uuid } from "../core/ids";
 import { ApiError, poll, request } from "./http";
-import { configureCollaboration } from "../collaboration/client";
+import {
+  configureCollaboration,
+  isCollaborationConnected,
+  onCollaborationConnection,
+  sendSpacePresence,
+  subscribeSpacePresence,
+} from "../collaboration/client";
 
 export const SHARED_FILES_BUCKET = "page_files";
 export interface KnowledgeBaseClient {
@@ -42,41 +48,75 @@ export interface PlatformClient {
 }
 
 export async function createPlatformClient(knownUser?: Person | null): Promise<PlatformClient> {
-  // The AuthGate already answered /api/session for this load; reuse it
-  // rather than spend another round-trip asking the same question.
   const user = knownUser ?? (await request<{ user: Person | null }>("/api/session")).user;
   if (!user) throw new Error("请先登录小黑笔记。");
   configureCollaboration(user.id);
   const stops = new Set<() => void>();
   const watch = <T,>(read: () => Promise<T>, listener: (value: T) => void, options: { initial?: T } = {}) => {
-    const stop = poll(read, listener, undefined, options); stops.add(stop);
+    const stop = poll(read, listener, undefined, options);
+    stops.add(stop);
     return () => { stop(); stops.delete(stop); };
   };
-  const json = (method: string, body?: unknown): RequestInit => ({ method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  const json = (method: string, body?: unknown): RequestInit => ({
+    method,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
   const filePath = (path: string, spaceId?: string) => `/api/files/${encodeURIComponent(spaceId ?? "personal")}?path=${encodeURIComponent(path)}`;
   const readFile = async (path: string, spaceId?: string): Promise<Blob> => {
     const response = await fetch(filePath(path, spaceId), { credentials: "same-origin" });
     if (!response.ok) throw Object.assign(new Error("无法读取附件。"), { status: response.status, code: response.status === 404 ? "not_found" : "forbidden" });
     return response.blob();
   };
+
   const presenceId = uuid();
   const presenceStates = new Map<string, PresenceState>();
+
+  // Re-publish active presence immediately whenever WebSocket reconnects.
+  const stopConn = onCollaborationConnection((connected) => {
+    if (!connected) return;
+    for (const [spaceId, state] of presenceStates) {
+      sendSpacePresence(spaceId, presenceId, state);
+    }
+  });
+  stops.add(stopConn);
+
+  // Heartbeat refreshes presence TTL over WS (or HTTP fallback only if WS is disconnected).
   const heartbeat = setInterval(() => {
-    for (const [spaceId, state] of presenceStates) void request(`/api/spaces/${spaceId}/presence`, json("POST", { state, clientId: presenceId })).catch(() => undefined);
-  }, 15000);
+    for (const [spaceId, state] of presenceStates) {
+      if (!sendSpacePresence(spaceId, presenceId, state)) {
+        void request(`/api/spaces/${encodeURIComponent(spaceId)}/presence`, json("POST", { state, clientId: presenceId })).catch(() => undefined);
+      }
+    }
+  }, 15_000);
+
   return {
     bootstrap: { appId: "notes", installationId: "standalone", appName: "HeiNote", user },
     presence: {
       async set(state, spaceId) {
         if (!spaceId) return;
-        if (state) presenceStates.set(spaceId, state); else presenceStates.delete(spaceId);
-        await request(`/api/spaces/${spaceId}/presence`, json("POST", { state, clientId: presenceId }));
+        if (state) presenceStates.set(spaceId, state);
+        else presenceStates.delete(spaceId);
+        if (sendSpacePresence(spaceId, presenceId, state)) return;
+        await request(`/api/spaces/${encodeURIComponent(spaceId)}/presence`, json("POST", { state, clientId: presenceId }));
       },
       async watch(listener, spaceId) {
         if (!spaceId) { listener([]); return () => {}; }
-        return watch(() => request<CollaboratorPresence[]>(`/api/spaces/${spaceId}/presence`), listener);
+        // Real-time WebSocket presence push replaces 1.5s HTTP polling.
+        const stopWs = subscribeSpacePresence(spaceId, listener);
+        // One initial HTTP seed only if WebSocket isn't connected yet.
+        if (!isCollaborationConnected()) {
+          void request<CollaboratorPresence[]>(`/api/spaces/${encodeURIComponent(spaceId)}/presence`)
+            .then((list) => listener(list))
+            .catch(() => undefined);
+        }
+        stops.add(stopWs);
+        return () => { stopWs(); stops.delete(stopWs); };
       },
-      async release(spaceId) { presenceStates.delete(spaceId); await request(`/api/spaces/${spaceId}/presence`, json("POST", { state: null, clientId: presenceId })).catch(() => undefined); },
+      async release(spaceId) {
+        presenceStates.delete(spaceId);
+        if (sendSpacePresence(spaceId, presenceId, null)) return;
+        await request(`/api/spaces/${encodeURIComponent(spaceId)}/presence`, json("POST", { state: null, clientId: presenceId })).catch(() => undefined);
+      },
     },
     users: { search: (query) => request(`/api/users?query=${encodeURIComponent(query)}`) },
     files: {
@@ -89,7 +129,9 @@ export async function createPlatformClient(knownUser?: Person | null): Promise<P
         let url: string | null = null;
         let released = false;
         const ready = readFile(path, spaceId).then((blob) => {
-          url = URL.createObjectURL(blob); if (released) URL.revokeObjectURL(url); return url;
+          url = URL.createObjectURL(blob);
+          if (released) URL.revokeObjectURL(url);
+          return url;
         });
         ready.catch(() => undefined);
         return { get url() { return url; }, ready, release() { released = true; if (url) URL.revokeObjectURL(url); } };
@@ -117,6 +159,11 @@ export async function createPlatformClient(knownUser?: Person | null): Promise<P
       revokeInvitation: (id, invitationId) => request(`/api/spaces/${encodeURIComponent(id)}/invitations/${encodeURIComponent(invitationId)}`, json("DELETE")),
       leave: (id) => request(`/api/spaces/${id}/leave`, json("POST")),
     },
-    async close() { clearInterval(heartbeat); presenceStates.clear(); stops.forEach((stop) => stop()); stops.clear(); },
+    async close() {
+      clearInterval(heartbeat);
+      presenceStates.clear();
+      stops.forEach((stop) => stop());
+      stops.clear();
+    },
   };
 }

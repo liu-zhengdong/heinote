@@ -1,72 +1,165 @@
-import * as Y from "yjs";
-import { ApiError, request } from "../platform/http";
-import type { RichText } from "../platform/schema";
-import { parseBlockRecordId } from "../platform/record-ids";
-import { editLiveField, editObservedField, installTextLookup, observedText, type RegisteredField } from "./binding";
-import { basisText, captureText, editText, mergeShownText, readFields, readText, rebaseText } from "./text";
-import { publishRecovery } from "./recovery";
+import type { CollaboratorPresence, PresenceState } from "../core/types";
 import { nextHistoryOrder } from "../core/history-clock";
-import { base64ToBytes, bytesToBase64, documentKey, fieldAddress, fieldsInPage, pageRevision, setAt, valueAt, type CommitEvent, type DocumentAddress, type DocumentSnapshot, type ExpectedPage, type JsonRecord, type TextUpdate } from "./protocol";
+import { ApiError, request } from "../platform/http";
+import { blockRecordId, parseBlockRecordId } from "../platform/record-ids";
+import type { RichText } from "../platform/schema";
+import { installTextLookup, observedText, preserveTextDraft, setObservedShown, type RegisteredField } from "./binding";
+import {
+  applyPageOp,
+  advanceCommittedAcrossIncoming,
+  blockFieldKey,
+  clonePageState,
+  invertPageOp,
+  pageStateFromRecords,
+  parseFieldKey,
+  readField,
+  recordsFromPageState,
+  transformPageOps,
+  transformSelection,
+} from "./ot/page";
+import {
+  composeTextOps,
+  deepEqual,
+  diffRichText,
+  isNoopTextOps,
+  normalizeRichText,
+  richTextPlain,
+  transformTextPair,
+} from "./ot/text";
+import {
+  documentKey,
+  fieldAddress,
+  fieldsInPage,
+  pageRevision,
+  valueAt,
+  type CommitEvent,
+  type DocumentAddress,
+  type DocumentSnapshot,
+  type ExpectedPage,
+  type JsonRecord,
+  type OpsSinceResponse,
+  type OrphanedText,
+  type PageOp,
+  type PageOpCommitResult,
+  type PageOpSubmission,
+  type SelectionRange,
+  type TextStep,
+} from "./protocol";
+import { publishRecovery } from "./recovery";
 
-export const LOCAL_TEXT_ORIGIN = Symbol("this window text input");
-const REMOTE = Symbol("committed remote document");
-const STRUCTURAL = Symbol("text inside a structural action");
+const MAX_SESSIONS = 24;
+const MAX_RECENT_COMMITTED = 128;
+const MAX_APPLIED_REQUEST_IDS = 256;
+
 let structureDepth = 0;
 let historyView = "";
-export function withStructureText(action: () => void): void { stopTextHistory(); structureDepth += 1; try { action(); } finally { structureDepth -= 1; stopTextHistory(); } }
-export function setTextHistoryView(view: string): void { historyView = view; }
-interface Session {
-  snapshot: DocumentSnapshot; doc: Y.Doc; lastField: string; lastKind: string; stepAt: number; foldStop: boolean;
-  /** Uncommitted local text changes, one entry per pending submission. */
-  pendingText: Array<{ keys: string[]; change?: LocalTextChange; update: TextUpdate; external?: boolean; fields: Record<string, { base: RichText; next: RichText }> }>;
-  /* The last settled text each field was written to — kept so a late echo
-   *  of that write, arriving after the entry left `pendingText`, still
-   *  reads as ours instead of a phantom remote edit. */
-  recentEcho: Map<string, RichText[]>;
-  fieldsByRecord: Map<string, Array<{ key: string; path: string[]; value: RichText }>> | null;
-  projections: Map<string, { input: JsonRecord; output: JsonRecord }>;
-  /** Per-field count of remote deltas applied to the document. A field's
-   *  projection is only authoritative when it carries a remote edit the
-   *  record could not have; the number tells them apart. */
-  fieldRevs: Map<string, number>;
-  /** Field keys the local writer touched at the remote revision then held.
-   *  A mismatched field with no later remote delta is a lagging seed of the
-   *  writer's own text, not an edit — the record's word stands. */
-  revAtWrite: Map<string, number>;
-  /** Identity across resyncs: a new session must not look like "same tick". */
-  serial: number;
-  /** Bumped whenever the write chain mutates — pushes, settles, resync
-   *  migrations — so bound elements resync even when fieldRevs stands. */
-  pendingRev: number;
-  /** Text undo/redo as replayable intents: the document the old undo
-   *  manager observed dies on every generation swap, and these do not. */
-  shadowUndo: TextStep[];
-  shadowRedo: TextStep[];
-  /** Cached page revision keyed by the record arrays/objects that produced it,
-   *  avoiding O(N²) full-page SHA-256 hashing while rendering N blocks. */
-  basisCache: {
-    pagesRef: Array<{ id: string; value: JsonRecord }>;
-    blocksRef: Array<{ id: string; value: JsonRecord }>;
-    page: JsonRecord | undefined;
-    blocks: Array<{ id: string; value: JsonRecord }>;
-    revision: string;
-  } | null;
+
+export function withStructureText(action: () => void): void {
+  stopTextHistory();
+  structureDepth += 1;
+  try {
+    action();
+  } finally {
+    structureDepth -= 1;
+    stopTextHistory();
+  }
 }
-interface TextStep { keys: string[]; fields: Record<string, { base: RichText; next: RichText }>; time: number; view: string }
-export interface LocalTextChange { update: TextUpdate; sessionKey: string; keys?: string[] }
-const sessions = new Map<string, Session>();
-const sessionsByPage = new Map<string, Session>();
+
+export function setTextHistoryView(view: string): void {
+  historyView = view;
+}
+
+export interface LocalPageChange {
+  token: symbol;
+  scope: string;
+  pageId: string;
+  epoch: string;
+  baseSeq: number;
+  ops: PageOp[];
+  fallbackFields: Record<string, { base: RichText; next: RichText }>;
+  external?: boolean;
+  /** True when any op is non-text (split, merge, move, create, delete, block/page fields). */
+  hasStructural: boolean;
+}
+
+interface PendingOpEntry {
+  token: symbol;
+  requestId?: string;
+  ops: PageOp[];
+  fallbackFields: Record<string, { base: RichText; next: RichText }>;
+  external?: boolean;
+  settled: boolean;
+}
+
+interface HistoryEntry {
+  ops: PageOp[];
+  time: number;
+  view: string;
+  foldField?: string;
+  foldKind?: "typing" | "format";
+  stepAt: number;
+}
+
+interface RecentCommit {
+  seq: number;
+  ops: PageOp[];
+}
+
+interface PageSession {
+  scope: string;
+  pageId: string;
+  epoch: string;
+  ackSeq: number;
+  prunedBefore: number;
+  canEdit: boolean;
+  revision: string;
+  serial: number;
+
+  confirmed: ReturnType<typeof pageStateFromRecords>;
+  pending: PendingOpEntry[];
+  optimistic: ReturnType<typeof pageStateFromRecords>;
+
+  recentCommitted: RecentCommit[];
+  externalFieldTick: Map<string, number>;
+  pendingCaretOps: Map<string, TextStep[]>;
+  sessionTick: number;
+
+  undoStack: HistoryEntry[];
+  redoStack: HistoryEntry[];
+  foldStop: boolean;
+
+  localVersion: number;
+  basisCache: { version: number; revision: string } | null;
+  appliedRequestIds: Set<string>;
+  syncTail: Promise<void> | null;
+  lastUsedAt: number;
+}
+
+const sessions = new Map<string, PageSession>();
+const sessionsByPage = new Map<string, PageSession>();
 const opening = new Map<string, Promise<void>>();
-const resyncTails = new Map<string, Promise<unknown>>();
 const pageLifecycles = new Map<string, number>();
-const pendingCommits = new Map<string, () => void>();
-const settledChanges = new WeakSet<LocalTextChange>();
 const scopeListeners = new Map<string, Set<() => void>>();
+const versionListeners = new Set<() => void>();
+const pageListeners = new Map<string, Set<() => void>>();
+
+// Single-channel WebSocket subscriptions for spaces (delta + presence) and UC-41 auth requests.
+const spaceDeltaListeners = new Map<string, Set<() => void>>();
+const spacePresenceListeners = new Map<string, Set<(list: CollaboratorPresence[]) => void>>();
+const latestSpacePresence = new Map<string, CollaboratorPresence[]>();
+const subscribedSpaces = new Set<string>();
+const authRequestListeners = new Set<(pending: unknown[]) => void>();
+const socketStateListeners = new Set<(connected: boolean) => void>();
+
 let readRecords: (scope: string, collection: string) => Array<{ id: string; value: JsonRecord }> = () => [];
-let submitUndo: (update: TextUpdate) => Promise<unknown> = async () => { throw new Error("Text transport is not installed"); };
+let submitUndo: (change: LocalPageChange) => Promise<unknown> = async () => {
+  throw new Error("Page op transport is not installed");
+};
 let consumeSnapshot: (snapshot: DocumentSnapshot) => void = () => {};
 let refreshScopeRecords: (scope: string) => void = () => {};
+
 let socket: WebSocket | null = null;
+let socketConnected = false;
 let reconnect: ReturnType<typeof setTimeout> | undefined;
 let reconnectDelay = 250;
 let accountId = "";
@@ -74,23 +167,79 @@ let lifecycle = 0;
 let suspended = false;
 let notifying = false;
 let collabVersion = 0;
+let sessionSerial = 0;
 const changedScopes = new Set<string>();
-const versionListeners = new Set<() => void>();
-const pageListeners = new Map<string, Set<() => void>>();
 
-function setSession(key: string, session: Session): void {
-  sessions.set(key, session);
-  sessionsByPage.set(session.snapshot.pageId, session);
-  collabVersion += 1;
+function isOffline(): boolean {
+  return globalThis.navigator?.onLine === false;
 }
+
+export function isCollaborationConnected(): boolean {
+  return socketConnected;
+}
+
+export function onCollaborationConnection(listener: (connected: boolean) => void): () => void {
+  socketStateListeners.add(listener);
+  return () => { socketStateListeners.delete(listener); };
+}
+
+function setSocketConnected(connected: boolean): void {
+  if (socketConnected === connected) return;
+  socketConnected = connected;
+  for (const listener of [...socketStateListeners]) listener(connected);
+}
+
+function wsSend(payload: unknown): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasAnySocketInterest(): boolean {
+  return sessions.size > 0 || subscribedSpaces.size > 0 || authRequestListeners.size > 0;
+}
+
+function syncSpaceSubscriptions(): void {
+  const desired = new Set<string>([
+    ...spaceDeltaListeners.keys(),
+    ...spacePresenceListeners.keys(),
+  ]);
+  for (const scope of desired) {
+    if (!subscribedSpaces.has(scope)) {
+      subscribedSpaces.add(scope);
+      wsSend({ type: "subscribe_space", scope });
+    }
+  }
+  for (const scope of [...subscribedSpaces]) {
+    if (!desired.has(scope)) {
+      subscribedSpaces.delete(scope);
+      latestSpacePresence.delete(scope);
+      wsSend({ type: "unsubscribe_space", scope });
+    }
+  }
+  if (desired.size > 0 && accountId && !suspended) connect();
+}
+
+function setSession(key: string, session: PageSession): void {
+  sessions.set(key, session);
+  sessionsByPage.set(session.pageId, session);
+  session.lastUsedAt = Date.now();
+  collabVersion += 1;
+  evictIdleSessions(key);
+}
+
 function deleteSession(key: string): void {
   const existing = sessions.get(key);
   sessions.delete(key);
-  if (existing && sessionsByPage.get(existing.snapshot.pageId) === existing) {
-    sessionsByPage.delete(existing.snapshot.pageId);
+  if (existing && sessionsByPage.get(existing.pageId) === existing) {
+    sessionsByPage.delete(existing.pageId);
     for (const other of sessions.values()) {
-      if (other.snapshot.pageId === existing.snapshot.pageId) {
-        sessionsByPage.set(other.snapshot.pageId, other);
+      if (other.pageId === existing.pageId) {
+        sessionsByPage.set(other.pageId, other);
         break;
       }
     }
@@ -98,9 +247,38 @@ function deleteSession(key: string): void {
   collabVersion += 1;
 }
 
-/** Monotonic version incremented synchronously on any collaboration state change,
- *  so record caches stay exact even before queued scope microtasks flush. */
-export function collaborationVersion(): number { return collabVersion; }
+function evictIdleSessions(keepKey: string): void {
+  if (sessions.size <= MAX_SESSIONS) return;
+  const candidates = [...sessions.entries()]
+    .filter(([key, session]) => key !== keepKey && session.pending.length === 0)
+    .sort(([, a], [, b]) => a.lastUsedAt - b.lastUsedAt);
+  while (sessions.size > MAX_SESSIONS && candidates.length) {
+    const [key, victim] = candidates.shift()!;
+    // Seed confirmed state into LiveCollection before evicting so closing never flashes stale data.
+    consumeSnapshot(snapshotFromSession(victim));
+    wsSend({ type: "unsubscribe", scope: victim.scope, pageId: victim.pageId });
+    deleteSession(key);
+  }
+}
+
+function snapshotFromSession(session: PageSession): DocumentSnapshot {
+  return {
+    scope: session.scope,
+    pageId: session.pageId,
+    epoch: session.epoch,
+    generation: session.epoch,
+    seq: session.ackSeq,
+    prunedBefore: session.prunedBefore,
+    revision: session.revision,
+    canEdit: session.canEdit,
+    records: recordsFromPageState(session.confirmed),
+  };
+}
+
+/** Monotonic version incremented synchronously on any collaboration state change. */
+export function collaborationVersion(): number {
+  return collabVersion;
+}
 
 function notify(scope: string, pageId?: string): void {
   collabVersion += 1;
@@ -110,29 +288,26 @@ function notify(scope: string, pageId?: string): void {
     for (const listener of [...(pageListeners.get(pageId) ?? [])]) listener();
   } else {
     for (const session of sessions.values()) {
-      if (session.snapshot.scope !== scope) continue;
-      for (const listener of [...(pageListeners.get(session.snapshot.pageId) ?? [])]) listener();
+      if (session.scope !== scope) continue;
+      for (const listener of [...(pageListeners.get(session.pageId) ?? [])]) listener();
     }
   }
   if (notifying) return;
   notifying = true;
   queueMicrotask(() => {
-    notifying = false; const changed = [...changedScopes]; changedScopes.clear();
-    for (const item of changed) for (const listener of scopeListeners.get(item) ?? []) listener();
+    notifying = false;
+    const changed = [...changedScopes];
+    changedScopes.clear();
+    for (const item of changed) {
+      for (const listener of [...(scopeListeners.get(item) ?? [])]) listener();
+    }
   });
 }
 
-let sessionSerial = 0;
-/* A bound element whose record prop did not change still must resync when
- *  its field moved — the bound Y.Text lives outside the record prop. The
- *  tick carries the session's serial, this field's remote revision, and a
- *  counter bumped whenever the write chain mutates, so each of those alone
- *  resubscribes the element. Passing `pageId` scopes notifications to that
- *  page so edits on one page never wake cached/other pages' editors. */
 export function subscribeCollaboration(listener: () => void, pageId?: string): () => void {
   if (!pageId) {
     versionListeners.add(listener);
-    return () => versionListeners.delete(listener);
+    return () => { versionListeners.delete(listener); };
   }
   let group = pageListeners.get(pageId);
   if (!group) pageListeners.set(pageId, group = new Set());
@@ -142,387 +317,823 @@ export function subscribeCollaboration(listener: () => void, pageId?: string): (
     if (!group.size) pageListeners.delete(pageId);
   };
 }
+
+/**
+ * Per-field tick bumped ONLY when the field changes from outside the focused DOM's
+ * own typing (remote op, undo/redo, reset, diverged ACK, IME merge).
+ */
 export function collaborationFieldTick(pageId: string, key: string): string {
   const session = sessionsByPage.get(pageId);
   if (!session) return "none";
-  return `${session.serial}:${session.fieldRevs.get(key) ?? 0}:${session.pendingRev}`;
+  return `${session.serial}:${session.sessionTick}:${session.externalFieldTick.get(key) ?? 0}`;
 }
-function sessionFor(scope: string, pageId: string): Session | undefined { return sessions.get(documentKey({ scope, pageId })); }
-function newSession(snapshot: DocumentSnapshot): Session {
-  const doc = new Y.Doc(); Y.applyUpdate(doc, base64ToBytes(snapshot.state), REMOTE);
-  const session: Session = { snapshot, doc, lastField: "", lastKind: "", stepAt: 0, foldStop: false, pendingText: [], fieldsByRecord: null, projections: new Map(), fieldRevs: new Map(), revAtWrite: new Map(), recentEcho: new Map(), serial: ++sessionSerial, pendingRev: 0, shadowUndo: [], shadowRedo: [], basisCache: null };
-  doc.on("update", (_update: Uint8Array, origin: unknown, _doc: Y.Doc, transaction: Y.Transaction) => {
-    session.fieldsByRecord = null; session.projections.clear(); session.basisCache = null;
-    if (origin === REMOTE)
-      for (const [type] of transaction.changed) if (type instanceof Y.Text)
-        for (const [key, text] of session.doc.getMap<Y.Text>("fields")) if (text === type) { session.fieldRevs.set(key, (session.fieldRevs.get(key) ?? 0) + 1); break; }
+
+export function consumePendingCaretOps(pageId: string, key: string): TextStep[] {
+  const session = sessionsByPage.get(pageId);
+  if (!session) return [];
+  const ops = session.pendingCaretOps.get(key);
+  if (!ops?.length) return [];
+  session.pendingCaretOps.delete(key);
+  return ops;
+}
+
+export function readSessionField(pageId: string, key: string): RichText | null {
+  const session = sessionsByPage.get(pageId);
+  if (!session) return null;
+  return readField(session.optimistic, key);
+}
+
+function bumpFieldTick(session: PageSession, fieldKey: string): void {
+  session.externalFieldTick.set(fieldKey, (session.externalFieldTick.get(fieldKey) ?? 0) + 1);
+}
+
+function queueCaretSteps(session: PageSession, fieldKey: string, steps: readonly TextStep[]): void {
+  if (!steps.length || isNoopTextOps(steps)) return;
+  const existing = session.pendingCaretOps.get(fieldKey);
+  if (existing) {
+    try {
+      session.pendingCaretOps.set(fieldKey, composeTextOps(existing, steps));
+    } catch {
+      session.pendingCaretOps.set(fieldKey, [...existing, ...steps]);
+    }
+  } else {
+    session.pendingCaretOps.set(fieldKey, steps.map((s) => structuredClone(s)));
+  }
+}
+
+function touchedFieldsOfOp(pageId: string, op: PageOp): string[] {
+  if (op.type === "text") return [op.field];
+  if (op.type === "split_block") return [blockFieldKey(pageId, op.blockId), blockFieldKey(pageId, op.newBlockId)];
+  if (op.type === "merge_block") return [blockFieldKey(pageId, op.intoBlockId), blockFieldKey(pageId, op.fromBlockId)];
+  if (op.type === "set_block_fields") return [blockFieldKey(pageId, op.blockId)];
+  if (op.type === "set_page_fields") return [`pages/${encodeURIComponent(pageId)}/title_content`];
+  return [];
+}
+
+function computeOptimisticRevision(session: PageSession): string {
+  if (session.basisCache && session.basisCache.version === session.localVersion) {
+    return session.basisCache.revision;
+  }
+  const { page, blocks } = recordsFromPageState(session.optimistic);
+  const revision = pageRevision(page, blocks);
+  session.basisCache = { version: session.localVersion, revision };
+  return revision;
+}
+
+function sessionFor(scope: string, pageId: string): PageSession | undefined {
+  return sessions.get(documentKey({ scope, pageId }));
+}
+
+function sessionForPage(pageId: string): PageSession | undefined {
+  return sessionsByPage.get(pageId);
+}
+
+function newSession(snapshot: DocumentSnapshot): PageSession {
+  const confirmed = pageStateFromRecords(snapshot.pageId, snapshot.records.page, snapshot.records.blocks);
+  const epoch = snapshot.epoch || snapshot.generation;
+  return {
+    scope: snapshot.scope,
+    pageId: snapshot.pageId,
+    epoch,
+    ackSeq: snapshot.seq ?? 0,
+    prunedBefore: snapshot.prunedBefore ?? 0,
+    canEdit: snapshot.canEdit,
+    revision: snapshot.revision,
+    serial: ++sessionSerial,
+    confirmed,
+    pending: [],
+    optimistic: clonePageState(confirmed),
+    recentCommitted: [],
+    externalFieldTick: new Map(),
+    pendingCaretOps: new Map(),
+    sessionTick: 0,
+    undoStack: [],
+    redoStack: [],
+    foldStop: false,
+    localVersion: 1,
+    basisCache: null,
+    appliedRequestIds: new Set(),
+    syncTail: null,
+    lastUsedAt: Date.now(),
+  };
+}
+
+function rebuildOptimistic(session: PageSession): ReturnType<typeof pageStateFromRecords> {
+  const next = clonePageState(session.confirmed);
+  for (const entry of session.pending) {
+    for (const op of entry.ops) {
+      applyPageOp(next, op, "materialize");
+    }
+  }
+  return next;
+}
+
+function bumpDivergedFields(
+  session: PageSession,
+  before: ReturnType<typeof pageStateFromRecords>,
+  after: ReturnType<typeof pageStateFromRecords>,
+): boolean {
+  let changed = false;
+  const beforeRecs = recordsFromPageState(before);
+  const afterRecs = recordsFromPageState(after);
+  const beforeFields = fieldsInPage(session.pageId, beforeRecs.page, beforeRecs.blocks);
+  const afterFields = fieldsInPage(session.pageId, afterRecs.page, afterRecs.blocks);
+  const allKeys = new Set([...Object.keys(beforeFields), ...Object.keys(afterFields)]);
+  for (const key of allKeys) {
+    if (!deepEqual(beforeFields[key], afterFields[key])) {
+      bumpFieldTick(session, key);
+      changed = true;
+    }
+  }
+  if (!changed && !deepEqual(beforeRecs, afterRecs)) changed = true;
+  return changed;
+}
+
+function transformHistoryStack(stack: HistoryEntry[], remoteOps: readonly PageOp[]): void {
+  if (!stack.length || !remoteOps.length) return;
+  let advancing = remoteOps.map((op) => structuredClone(op));
+  // Walk from top of stack down so each entry's ops stay aligned with the state
+  // that will exist when all entries above it have been undone/redone.
+  for (let i = stack.length - 1; i >= 0; i -= 1) {
+    const entry = stack[i];
+    const transformed = transformPageOps(entry.ops, advancing);
+    let nextAdvancing = advancing;
+    for (const op of entry.ops) {
+      nextAdvancing = nextAdvancing.flatMap((r) => advanceCommittedAcrossIncoming(r, op));
+    }
+    entry.ops = transformed;
+    advancing = nextAdvancing;
+  }
+}
+
+function publishOrphans(scope: string, pageId: string, epoch: string, orphaned: readonly OrphanedText[]): void {
+  if (!orphaned.length) return;
+  const fields: Record<string, RichText> = {};
+  for (const item of orphaned) fields[item.field] = item.content;
+  publishRecovery(accountId, {
+    message: "页面结构已变化。被移除段落或单元格中的未保存文字已保留为草稿。",
+    writes: [],
+    documents: [{ scope, pageId, generation: epoch, fields }],
+  });
+}
+
+function recordRecentCommit(session: PageSession, seq: number, ops: readonly PageOp[]): void {
+  session.recentCommitted.push({ seq, ops: ops.map((op) => structuredClone(op)) });
+  if (session.recentCommitted.length > MAX_RECENT_COMMITTED) {
+    session.recentCommitted.splice(0, session.recentCommitted.length - MAX_RECENT_COMMITTED);
+  }
+}
+
+function rememberRequestId(session: PageSession, requestId: string): void {
+  session.appliedRequestIds.add(requestId);
+  if (session.appliedRequestIds.size > MAX_APPLIED_REQUEST_IDS) {
+    const first = session.appliedRequestIds.values().next().value;
+    if (first !== undefined) session.appliedRequestIds.delete(first);
+  }
+}
+
+function dispatchRemoteCaretShift(session: PageSession, ops: readonly PageOp[]): void {
+  if (typeof window === "undefined") return;
+  if (!ops.some((op) => op.type === "split_block" || op.type === "merge_block")) return;
+  window.dispatchEvent(new CustomEvent("notes:collaboration-caret-shift", {
+    detail: { scope: session.scope, pageId: session.pageId, ops },
+  }));
+}
+
+/**
+ * Unified idempotent commit ingestion used by BOTH WebSocket `commit` frames
+ * AND HTTP `/api/records/batch` `pageResults` ACKs (whichever arrives first).
+ * Returns `"gap"` when `seq > ackSeq + 1` and caller should run `syncPageGap`.
+ */
+function ingestCommittedSeq(
+  session: PageSession,
+  commit: {
+    epoch: string;
+    seq: number;
+    revision?: string;
+    requestId?: string;
+    ops: PageOp[];
+    orphaned?: OrphanedText[];
+  },
+): "applied" | "duplicate" | "gap" | "epoch_mismatch" {
+  if (commit.epoch !== session.epoch) return "epoch_mismatch";
+  if (commit.requestId && session.appliedRequestIds.has(commit.requestId)) {
+    if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
+    return "duplicate";
+  }
+  if (commit.seq <= session.ackSeq) {
+    if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
+    return "duplicate";
+  }
+  if (commit.seq > session.ackSeq + 1) {
+    if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
+    return "gap";
+  }
+
+  // Exact next sequential commit: `commit.seq === session.ackSeq + 1`.
+  const isOwnAck = Boolean(
+    commit.requestId && session.pending.some((entry) => entry.requestId === commit.requestId),
+  );
+
+  if (commit.requestId) rememberRequestId(session, commit.requestId);
+  const oldOptimistic = session.optimistic;
+
+  if (isOwnAck) {
+    const confirmedAfter = clonePageState(session.confirmed);
+    for (const op of commit.ops) applyPageOp(confirmedAfter, op, "replay");
+    session.confirmed = confirmedAfter;
+    session.ackSeq = commit.seq;
+    if (commit.revision) session.revision = commit.revision;
+    recordRecentCommit(session, commit.seq, commit.ops);
+
+    for (const entry of session.pending) {
+      if (entry.requestId === commit.requestId) entry.settled = true;
+    }
+    session.pending = session.pending.filter((entry) => entry.requestId !== commit.requestId);
+    const nextOptimistic = rebuildOptimistic(session);
+    const diverged = bumpDivergedFields(session, oldOptimistic, nextOptimistic);
+    session.optimistic = nextOptimistic;
+    session.localVersion += 1;
+    if (commit.orphaned?.length) publishOrphans(session.scope, session.pageId, session.epoch, commit.orphaned);
+    if (diverged) notify(session.scope, session.pageId);
+    else {
+      // Even when optimistic text/structure is identical, refresh presence projection listeners cleanly.
+      collabVersion += 1;
+    }
+    return "applied";
+  }
+
+  // Remote commit: transform every pending local batch across the incoming server-committed ops.
+  const confirmedAfter = clonePageState(session.confirmed);
+  for (const op of commit.ops) applyPageOp(confirmedAfter, op, "replay");
+
+  let advancingRemote = commit.ops.map((op) => structuredClone(op));
+  for (const entry of session.pending) {
+    const transformed = transformPageOps(entry.ops, advancingRemote);
+    let nextRemote = advancingRemote;
+    for (const localOp of entry.ops) {
+      nextRemote = nextRemote.flatMap((r) => advanceCommittedAcrossIncoming(r, localOp));
+    }
+    entry.ops = transformed;
+    advancingRemote = nextRemote;
+  }
+
+  const remoteForSelection = advancingRemote;
+  session.confirmed = confirmedAfter;
+  session.ackSeq = commit.seq;
+  if (commit.revision) session.revision = commit.revision;
+  recordRecentCommit(session, commit.seq, commit.ops);
+
+  session.optimistic = rebuildOptimistic(session);
+  session.localVersion += 1;
+
+  // Keep personal selective undo/redo aligned across remote edits.
+  transformHistoryStack(session.undoStack, remoteForSelection);
+  transformHistoryStack(session.redoStack, remoteForSelection);
+
+  for (const op of remoteForSelection) {
+    if (op.type === "text") {
+      queueCaretSteps(session, op.field, op.ops);
+      bumpFieldTick(session, op.field);
+    } else {
+      for (const fieldKey of touchedFieldsOfOp(session.pageId, op)) {
+        bumpFieldTick(session, fieldKey);
+      }
+    }
+  }
+  // Ensure any field whose value changed due to structural side effects also bumps.
+  bumpDivergedFields(session, oldOptimistic, session.optimistic);
+  dispatchRemoteCaretShift(session, remoteForSelection);
+  notify(session.scope, session.pageId);
+  return "applied";
+}
+
+/**
+ * Re-apply a server snapshot onto an existing (or new) PageSession.
+ * Handles same-epoch catch-up and cross-epoch reset (3-way merging pending text
+ * fields via `fallbackFields` and preserving deleted-block text as recovery drafts).
+ */
+function receiveSnapshot(snapshot: DocumentSnapshot, isReset = false): void {
+  const key = documentKey(snapshot);
+  const current = sessions.get(key);
+  const nextEpoch = snapshot.epoch || snapshot.generation;
+
+  if (!current) {
+    const created = newSession(snapshot);
+    setSession(key, created);
+    consumeSnapshot(snapshot);
     notify(snapshot.scope, snapshot.pageId);
-  });
-  return session;
-}
-function destroySession(session: Session): void { session.doc.destroy(); }
-export interface SessionResync { snapshot: DocumentSnapshot; session: Session; update: TextUpdate | null; orphanFields: Record<string, RichText> }
-/** Carry local intents into new field identities, keeping each pending
- * submission's delta separate so a later structural action cannot leak
- * into an earlier batch. The queue submits only its own change references. */
-export async function resyncSession(scope: string, pageId: string, snapshot?: DocumentSnapshot): Promise<SessionResync | null> {
-  const key = documentKey({ scope, pageId }); const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
-  const previous = resyncTails.get(key) ?? Promise.resolve();
-  const task = previous.catch(() => undefined).then(async (): Promise<SessionResync | null> => {
-    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return null;
-    const current = sessions.get(key);
-    const next = snapshot ?? await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`);
-    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key) || sessions.get(key) !== current) return null;
-    if (current?.snapshot.generation === next.generation) {
-      const remote = new Y.Doc();
-      let vector: Uint8Array;
-      try { Y.applyUpdate(remote, base64ToBytes(next.state)); vector = Y.encodeStateVector(remote); }
-      finally { remote.destroy(); }
-      Y.applyUpdate(current.doc, base64ToBytes(next.state), REMOTE);
-      current.snapshot = next;
-      const delta = current.pendingText.length ? Y.encodeStateAsUpdate(current.doc, vector) : null;
-      return { snapshot: next, session: current, update: delta && delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null, orphanFields: {} };
-    }
-    const session = newSession(next);
-    const orphanFields: Record<string, RichText> = {};
-    if (current) {
-      /* fieldRevs counts remote deltas a session observed; a generation
-       *  swap carries remote text in the snapshot itself. Fields whose
-       *  text differs from the old document's are remote edits: seeding
-       *  their revision keeps pinned revAtWrite from reading a genuine
-       *  peer write as a lagging echo forever. */
-      const oldFields = readFields(current.doc);
-      for (const [fieldKey, value] of Object.entries(readFields(session.doc))) {
-        if (JSON.stringify(oldFields[fieldKey]) !== JSON.stringify(value)) session.fieldRevs.set(fieldKey, 1);
-      }
-      const vector = Y.encodeStateVector(session.doc);
-      const fields = session.doc.getMap<Y.Text>("fields");
-      // Prepare every intent before mutating its original pending update.
-      const migrated: Array<{ entry: Session["pendingText"][number]; update: string; fields: Session["pendingText"][number]["fields"] }> = [];
-      try {
-        for (const entry of current.pendingText) {
-          const before = Y.encodeStateVector(session.doc);
-          const moved: Session["pendingText"][number]["fields"] = {};
-          session.doc.transact(() => {
-            for (const key of entry.keys) {
-              const intent = entry.fields[key];
-              if (!intent) throw new Error("待保存文字缺少可重放的基线。");
-              const text = fields.get(key);
-              if (!(text instanceof Y.Text)) { orphanFields[key] = intent.next; continue; }
-              const base = readText(text);
-              /* A record write's text is already projected into the new
-               *  field: replaying the intent on top of itself would insert
-               *  its atoms twice. The intent is kept, so undo can still
-               *  unwind it — and its "base" stays the record's view. */
-              if (JSON.stringify(intent.next) !== JSON.stringify(base))
-                editText(text, captureText(text), rebaseText(intent.base, intent.next, base));
-              moved[key] = { base, next: readText(text) };
-            }
-          }, REMOTE);
-          migrated.push({ entry, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, before)), fields: moved });
-        }
-      } catch (error) { destroySession(session); throw error; }
-      for (const { entry, update, fields } of migrated) {
-        Object.assign(entry.update, { generation: next.generation, update });
-        entry.fields = fields; entry.keys = Object.keys(fields);
-      }
-      session.pendingText = current.pendingText;
-      /* A generation swap drops the old document but not the person's
-       *  undo history: each recorded step is rebased the way pending
-       *  intents are — its "next" onto the new live text, its "base"
-       *  through the same transform inverted — so an undo still rewinds
-       *  exactly the step it made. */
-      const migrateStep = (step: TextStep): TextStep => {
-        const fields: TextStep["fields"] = {};
-        for (const [fieldKey, intent] of Object.entries(step.fields)) {
-          const text = session.doc.getMap<Y.Text>("fields").get(fieldKey);
-          if (!(text instanceof Y.Text)) continue;
-          const live = readText(text);
-          fields[fieldKey] = { base: rebaseText(intent.next, intent.base, live), next: live };
-        }
-        return { ...step, keys: Object.keys(fields), fields };
-      };
-      session.shadowUndo = current.shadowUndo.map(migrateStep);
-      session.shadowRedo = current.shadowRedo.map(migrateStep);
-      session.pendingRev += 1;
-      destroySession(current); setSession(key, session);
-      const delta = Y.encodeStateAsUpdate(session.doc, vector);
-      return { snapshot: next, session, update: delta.length > 2 ? { scope, pageId, generation: next.generation, update: bytesToBase64(delta) } : null, orphanFields };
-    }
-    setSession(key, session);
-    return { snapshot: next, session, update: null, orphanFields };
-  });
-  resyncTails.set(key, task);
-  const cleanup = () => { if (resyncTails.get(key) === task) resyncTails.delete(key); };
-  void task.then(cleanup, cleanup);
-  return task;
-}
-function refused(session: Session, message: string): void {
-  if (!session.pendingText.length) return;
-  publishRecovery(accountId, { message, writes: [], documents: [{ ...session.snapshot, state: bytesToBase64(Y.encodeStateAsUpdate(session.doc)), fields: readFields(session.doc) }] });
-}
-function receive(snapshot: DocumentSnapshot, reset = false): void {
-  const key = documentKey(snapshot); const current = sessions.get(key); const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
-  if (!current) { setSession(key, newSession(snapshot)); consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId); return; }
-  if (current.snapshot.generation !== snapshot.generation) {
-    void resyncSession(snapshot.scope, snapshot.pageId, snapshot).then((result) => {
-      if (!result || epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
-      if (Object.keys(result.orphanFields).length)
-        publishRecovery(accountId, { message: "页面结构已变化。被移除段落的未保存文字已保留为草稿。", writes: [], documents: [{ scope: snapshot.scope, pageId: snapshot.pageId, generation: snapshot.generation, fields: result.orphanFields }] });
-      consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
-    }).catch(() => {
-      if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key) || sessions.get(key) !== current) return;
-      refused(current, "页面结构或版本已变化。未保存的文字已保留为草稿。");
-      destroySession(current); setSession(key, newSession(snapshot));
-      consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
-    });
-    window.dispatchEvent(new CustomEvent("notes:collaboration-reset", { detail: { scope: snapshot.scope, pageId: snapshot.pageId } }));
     return;
   }
-  current.snapshot = snapshot;
-  Y.applyUpdate(current.doc, base64ToBytes(snapshot.state), REMOTE);
-  if (reset) current.foldStop = true;
-  consumeSnapshot(snapshot); notify(snapshot.scope, snapshot.pageId);
+
+  current.canEdit = snapshot.canEdit;
+  current.prunedBefore = snapshot.prunedBefore ?? current.prunedBefore;
+
+  if (current.epoch === nextEpoch) {
+    if ((snapshot.seq ?? 0) < current.ackSeq) {
+      // Stale snapshot (older than what we already applied over WS): keep newer state, only adopt canEdit.
+      notify(snapshot.scope, snapshot.pageId);
+      return;
+    }
+    if ((snapshot.seq ?? 0) === current.ackSeq) {
+      // Already at this exact seq; ensure permission/revision updated without disturbing pending ops.
+      current.revision = snapshot.revision;
+      consumeSnapshot(snapshot);
+      if (isReset) current.foldStop = true;
+      notify(snapshot.scope, snapshot.pageId);
+      return;
+    }
+    // Snapshot is ahead of our ackSeq in the same epoch: replace confirmed and rebase pending ops via 3-way fallback where needed.
+    const oldOptimistic = current.optimistic;
+    const nextConfirmed = pageStateFromRecords(snapshot.pageId, snapshot.records.page, snapshot.records.blocks);
+    current.confirmed = nextConfirmed;
+    current.ackSeq = snapshot.seq ?? 0;
+    current.revision = snapshot.revision;
+    current.recentCommitted = [];
+
+    const orphaned: OrphanedText[] = [];
+    rebasePendingEntriesOnSnapshot(current, orphaned);
+    current.optimistic = rebuildOptimistic(current);
+    current.localVersion += 1;
+    current.sessionTick += 1;
+    bumpDivergedFields(current, oldOptimistic, current.optimistic);
+    if (orphaned.length) publishOrphans(current.scope, current.pageId, current.epoch, orphaned);
+    if (isReset) current.foldStop = true;
+    consumeSnapshot(snapshot);
+    notify(snapshot.scope, snapshot.pageId);
+    return;
+  }
+
+  // Epoch changed (version restore, raw batch reset, etc.): rebuild session and migrate pending text intents.
+  const next = newSession(snapshot);
+  const orphaned: OrphanedText[] = [];
+  next.pending = current.pending.map((entry) => ({
+    ...entry,
+    ops: entry.ops.map((op) => structuredClone(op)),
+    fallbackFields: structuredClone(entry.fallbackFields),
+  }));
+  rebasePendingEntriesOnSnapshot(next, orphaned);
+  next.optimistic = rebuildOptimistic(next);
+  next.localVersion += 1;
+  next.sessionTick += 1;
+  bumpDivergedFields(next, current.optimistic, next.optimistic);
+  setSession(key, next);
+  if (orphaned.length) publishOrphans(snapshot.scope, snapshot.pageId, nextEpoch, orphaned);
+  consumeSnapshot(snapshot);
+  notify(snapshot.scope, snapshot.pageId);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("notes:collaboration-reset", { detail: { scope: snapshot.scope, pageId: snapshot.pageId } }));
+  }
 }
-/** A committed push carries the delta and the new sequence instead of a
- *  rebuilt snapshot. Reset events and skipped sequences pull instead —
- *  deltas cannot describe a new document identity or a missed commit. */
-function receiveCommit(item: CommitEvent): void {
-  const key = documentKey(item); const current = sessions.get(key);
-  if (!current || item.type === "reset" || !item.seq || item.seq !== (current.snapshot.seq ?? 0) + 1) {
-    /* Pull a full snapshot: reset events carry a new generation, a skipped
-     *  seq a missed commit, and seq<=1 a restarted server's stream. */
-    const pull = current ? refreshCollaborativePage(item.scope, item.pageId) : openCollaborativePage(item.scope, item.pageId);
-    void pull.catch(() => undefined);
+
+function rebasePendingEntriesOnSnapshot(session: PageSession, orphaned: OrphanedText[]): void {
+  const sim = clonePageState(session.confirmed);
+  for (const entry of session.pending) {
+    const hasNonText = entry.ops.some((op) => op.type !== "text");
+    if (!hasNonText && Object.keys(entry.fallbackFields).length > 0) {
+      const rebuiltOps: PageOp[] = [];
+      const nextFallback: Record<string, { base: RichText; next: RichText }> = {};
+      for (const [fieldKey, intent] of Object.entries(entry.fallbackFields)) {
+        const live = readField(sim, fieldKey);
+        if (live === null) {
+          orphaned.push({ field: fieldKey, content: intent.next });
+          continue;
+        }
+        const localSteps = diffRichText(intent.base, intent.next);
+        const remoteSteps = diffRichText(intent.base, live);
+        const [, rebased] = transformTextPair(remoteSteps, localSteps);
+        if (!isNoopTextOps(rebased)) {
+          const op: PageOp = { type: "text", field: fieldKey, ops: rebased };
+          applyPageOp(sim, op, "materialize");
+          rebuiltOps.push(op);
+          nextFallback[fieldKey] = { base: live, next: readField(sim, fieldKey) ?? live };
+        }
+      }
+      entry.ops = rebuiltOps;
+      entry.fallbackFields = nextFallback;
+    } else {
+      for (const op of entry.ops) {
+        const res = applyPageOp(sim, op, "materialize");
+        if (res.orphaned.length) orphaned.push(...res.orphaned);
+      }
+    }
+  }
+  session.pending = session.pending.filter((entry) => entry.ops.length > 0);
+}
+
+/**
+ * Fill any sequence gap (`seq > ackSeq + 1` or post-reconnect catchup) via
+ * `GET /api/collaboration/:scope/:pageId/ops`, falling back to full snapshot on reset/pruned.
+ */
+export function syncPageGap(scope: string, pageId: string): Promise<void> {
+  const key = documentKey({ scope, pageId });
+  const session = sessions.get(key);
+  if (!session) return openCollaborativePage(scope, pageId);
+  if (session.syncTail) return session.syncTail;
+  const runEpoch = lifecycle;
+  const pageEpoch = pageLifecycles.get(key);
+
+  const task = (async () => {
+    const current = sessions.get(key);
+    if (!current || runEpoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+    try {
+      const url = `/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}/ops?after=${current.ackSeq}&epoch=${encodeURIComponent(current.epoch)}`;
+      const res = await request<OpsSinceResponse>(url);
+      if (runEpoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+      const live = sessions.get(key);
+      if (!live) return;
+      if (res.reset || res.epoch !== live.epoch) {
+        await refreshCollaborativePage(scope, pageId);
+        return;
+      }
+      live.prunedBefore = res.prunedBefore;
+      for (const item of res.ops) {
+        const outcome = ingestCommittedSeq(live, {
+          epoch: item.epoch,
+          seq: item.seq,
+          requestId: item.requestId,
+          ops: item.ops,
+        });
+        if (outcome === "epoch_mismatch" || outcome === "gap") {
+          await refreshCollaborativePage(scope, pageId);
+          return;
+        }
+      }
+    } catch (error) {
+      if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+        const live = sessions.get(key);
+        if (live) live.canEdit = false;
+        return;
+      }
+      await refreshCollaborativePage(scope, pageId).catch(() => undefined);
+    }
+  })().finally(() => {
+    const live = sessions.get(key);
+    if (live && live.syncTail === task) live.syncTail = null;
+  });
+
+  session.syncTail = task;
+  return task;
+}
+
+function receiveCommit(item: CommitEvent, requestId?: string): void {
+  const key = documentKey(item);
+  const current = sessions.get(key);
+  if (!current) {
+    void openCollaborativePage(item.scope, item.pageId).catch(() => undefined);
+    return;
+  }
+  if (item.type === "reset") {
+    void refreshCollaborativePage(item.scope, item.pageId).catch(() => undefined);
     refreshScopeRecords(item.scope);
     return;
   }
-  current.snapshot = { ...current.snapshot, seq: item.seq, generation: item.generation ?? current.snapshot.generation, revision: item.revision ?? current.snapshot.revision };
-  if (item.update) Y.applyUpdate(current.doc, base64ToBytes(item.update), REMOTE);
-  refreshScopeRecords(item.scope);
+  const outcome = ingestCommittedSeq(current, {
+    epoch: item.epoch || item.generation,
+    seq: item.seq,
+    revision: item.revision,
+    requestId,
+    ops: item.ops ?? [],
+  });
+  if (outcome === "gap") {
+    void syncPageGap(item.scope, item.pageId);
+  } else if (outcome === "epoch_mismatch") {
+    void refreshCollaborativePage(item.scope, item.pageId).catch(() => undefined);
+  }
 }
-function subscribe(address: DocumentAddress): void {
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "subscribe", ...address }));
+
+function subscribePageOnSocket(address: DocumentAddress): void {
+  wsSend({ type: "subscribe", scope: address.scope, pageId: address.pageId });
 }
+
 function connect(): void {
-  if (suspended || !accountId || socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+  if (suspended || !accountId) return;
+  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
   clearTimeout(reconnect);
+  const wasDisconnected = !socketConnected;
   const link = socket = new WebSocket(`${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/collaboration`);
-  socket.onopen = () => { if (socket !== link) return; reconnectDelay = 250; for (const session of sessions.values()) subscribe(session.snapshot); };
+  socket.onopen = () => {
+    if (socket !== link) return;
+    reconnectDelay = 250;
+    setSocketConnected(true);
+    for (const session of sessions.values()) {
+      subscribePageOnSocket(session);
+      if (wasDisconnected && session.ackSeq > 0) void syncPageGap(session.scope, session.pageId);
+    }
+    for (const scope of subscribedSpaces) {
+      wsSend({ type: "subscribe_space", scope });
+    }
+    if (authRequestListeners.size > 0) {
+      wsSend({ type: "subscribe_auth_requests" });
+    }
+  };
   socket.onmessage = (event) => {
     if (socket !== link) return;
-    let message: { type: string; requestId?: string; snapshot?: DocumentSnapshot; documents?: CommitEvent[]; scope?: string; pageId?: string };
-    try { message = JSON.parse(String(event.data)); } catch { return; }
-    if (message.type === "commit") {
-      if (message.requestId) { pendingCommits.get(message.requestId)?.(); pendingCommits.delete(message.requestId); }
-      for (const item of message.documents ?? []) receiveCommit(item);
+    let message: {
+      type: string;
+      requestId?: string;
+      snapshot?: DocumentSnapshot;
+      documents?: CommitEvent[];
+      scopes?: string[];
+      scope?: string;
+      pageId?: string;
+      spaceId?: string;
+      list?: CollaboratorPresence[];
+      pending?: unknown[];
+    };
+    try {
+      message = JSON.parse(String(event.data));
+    } catch {
+      return;
     }
-    else if (message.snapshot) receive(message.snapshot, message.type === "reset");
-    else if (message.type === "revoked" && message.scope && message.pageId) {
-      const key = documentKey({ scope: message.scope, pageId: message.pageId }); const session = sessions.get(key);
+
+    if (message.type === "commit") {
+      for (const item of message.documents ?? []) receiveCommit(item, message.requestId);
+      // Wake non-active views only when commit included non-op resets or scopes without active sessions.
+      const hadReset = (message.documents ?? []).some((d) => d.type === "reset");
+      if (hadReset) {
+        for (const s of message.scopes ?? []) refreshScopeRecords(s);
+      }
+      return;
+    }
+
+    if (message.type === "space_delta") {
+      for (const s of message.scopes ?? []) {
+        for (const listener of [...(spaceDeltaListeners.get(s) ?? [])]) listener();
+        refreshScopeRecords(s);
+      }
+      return;
+    }
+
+    if (message.type === "presence" && message.spaceId && Array.isArray(message.list)) {
+      latestSpacePresence.set(message.spaceId, message.list);
+      for (const listener of [...(spacePresenceListeners.get(message.spaceId) ?? [])]) {
+        listener(message.list);
+      }
+      return;
+    }
+
+    if (message.type === "auth_requests" && Array.isArray(message.pending)) {
+      for (const listener of [...authRequestListeners]) listener(message.pending);
+      return;
+    }
+
+    if (message.snapshot) {
+      receiveSnapshot(message.snapshot, message.type === "reset");
+      return;
+    }
+
+    if (message.type === "revoked" && message.scope && message.pageId) {
+      const key = documentKey({ scope: message.scope, pageId: message.pageId });
+      const session = sessions.get(key);
       pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
       if (session) {
-        refused(session, "访问权限已撤销。未保存的文字已保留为草稿。");
-        session.doc.destroy(); deleteSession(key); notify(message.scope, message.pageId);
+        if (session.pending.length) {
+          const recs = recordsFromPageState(session.optimistic);
+          publishRecovery(accountId, {
+            message: "访问权限已撤销。未保存的文字已保留为草稿。",
+            writes: [],
+            documents: [{
+              scope: session.scope,
+              pageId: session.pageId,
+              generation: session.epoch,
+              fields: fieldsInPage(session.pageId, recs.page, recs.blocks),
+            }],
+          });
+        }
+        deleteSession(key);
+        notify(message.scope, message.pageId);
       }
-      window.dispatchEvent(new CustomEvent("notes:collaboration-revoked", { detail: { scope: message.scope, pageId: message.pageId } }));
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("notes:collaboration-revoked", { detail: { scope: message.scope, pageId: message.pageId } }));
+      }
     }
   };
   socket.onclose = () => {
     if (socket !== link) return;
     socket = null;
-    if (suspended || !sessions.size) return;
-    reconnect = setTimeout(connect, reconnectDelay); reconnectDelay = Math.min(10000, reconnectDelay * 2);
+    setSocketConnected(false);
+    if (suspended || !hasAnySocketInterest()) return;
+    reconnect = setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(10_000, reconnectDelay * 2);
   };
   socket.onerror = () => link.close();
 }
+
 export function configureCollaboration(userId: string): void {
   if (accountId && accountId !== userId) closeCollaboration();
-  accountId = userId; suspended = false; connect();
+  accountId = userId;
+  suspended = false;
+  connect();
 }
-export function collaborationAccount(): string { return accountId; }
-export function registerPendingCommit(requestId: string, acknowledge: () => void): void { pendingCommits.set(requestId, acknowledge); }
-export function releasePendingCommit(requestId: string): void { pendingCommits.delete(requestId); }
-export function installRecordReader(reader: typeof readRecords): void { readRecords = reader; }
-export function installUndoSubmitter(submitter: typeof submitUndo): void { submitUndo = submitter; }
-export function installSnapshotConsumer(consumer: typeof consumeSnapshot): void { consumeSnapshot = consumer; }
-export function installRecordRefresh(refresh: typeof refreshScopeRecords): void { refreshScopeRecords = refresh; }
+
+export function collaborationAccount(): string {
+  return accountId;
+}
+
+export function installRecordReader(reader: typeof readRecords): void {
+  readRecords = reader;
+}
+
+export function installUndoSubmitter(submitter: typeof submitUndo): void {
+  submitUndo = submitter;
+}
+
+export function installSnapshotConsumer(consumer: typeof consumeSnapshot): void {
+  consumeSnapshot = consumer;
+}
+
+export function installRecordRefresh(refresh: typeof refreshScopeRecords): void {
+  refreshScopeRecords = refresh;
+}
+
 export function onScopeChange(scope: string, listener: () => void): () => void {
-  const listeners = scopeListeners.get(scope) ?? new Set(); scopeListeners.set(scope, listeners); listeners.add(listener);
-  return () => { listeners.delete(listener); if (!listeners.size) scopeListeners.delete(scope); };
+  const listeners = scopeListeners.get(scope) ?? new Set();
+  scopeListeners.set(scope, listeners);
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) scopeListeners.delete(scope);
+  };
 }
+
+/** Subscribe to server-pushed `space_delta` events for an active (non-paused) scope. */
+export function subscribeSpaceDelta(scope: string, listener: () => void): () => void {
+  let set = spaceDeltaListeners.get(scope);
+  if (!set) spaceDeltaListeners.set(scope, set = new Set());
+  set.add(listener);
+  syncSpaceSubscriptions();
+  return () => {
+    set?.delete(listener);
+    if (set && !set.size) spaceDeltaListeners.delete(scope);
+    syncSpaceSubscriptions();
+  };
+}
+
+/** Subscribe to real-time WebSocket presence updates for a shared space. */
+export function subscribeSpacePresence(
+  spaceId: string,
+  listener: (list: CollaboratorPresence[]) => void,
+): () => void {
+  let set = spacePresenceListeners.get(spaceId);
+  if (!set) spacePresenceListeners.set(spaceId, set = new Set());
+  set.add(listener);
+  syncSpaceSubscriptions();
+  const cached = latestSpacePresence.get(spaceId);
+  if (cached) listener(cached);
+  return () => {
+    set?.delete(listener);
+    if (set && !set.size) spacePresenceListeners.delete(spaceId);
+    syncSpaceSubscriptions();
+  };
+}
+
+/** Push presence state over the open WebSocket; returns false when WS is unavailable. */
+export function sendSpacePresence(
+  spaceId: string,
+  clientId: string,
+  state: PresenceState | null,
+): boolean {
+  return wsSend({ type: "presence", spaceId, clientId, state });
+}
+
+/** Subscribe to UC-41 Agent auth-request pushes over the shared WebSocket. */
+export function subscribeAuthRequests(listener: (pending: unknown[]) => void): () => void {
+  authRequestListeners.add(listener);
+  wsSend({ type: "subscribe_auth_requests" });
+  if (accountId && !suspended) connect();
+  return () => { authRequestListeners.delete(listener); };
+}
+
+/**
+ * Anchor a local DOM selection into the server-confirmed `(epoch, seq)` coordinate
+ * space (M1), preventing double-shifting when uncommitted local ops later commit.
+ */
+export function pagePresenceAnchor(
+  scope: string,
+  pageId: string,
+  selection: SelectionRange | undefined,
+): { epoch?: string; seq?: number; selection?: SelectionRange } {
+  const session = sessionFor(scope, pageId);
+  if (!session) return { selection };
+  if (!selection || session.pending.length === 0) {
+    return { epoch: session.epoch, seq: session.ackSeq, selection };
+  }
+  // Invert local pending ops back to `confirmed` coordinate space.
+  const sim = clonePageState(session.confirmed);
+  const appliedChain: Array<{ before: ReturnType<typeof pageStateFromRecords>; op: PageOp }> = [];
+  for (const entry of session.pending) {
+    for (const op of entry.ops) {
+      const before = clonePageState(sim);
+      const res = applyPageOp(sim, op, "materialize");
+      if (res.applied) appliedChain.push({ before, op: res.applied });
+    }
+  }
+  let anchored = selection;
+  for (let i = appliedChain.length - 1; i >= 0; i -= 1) {
+    const { before, op } = appliedChain[i];
+    if (op.type === "split_block") {
+      anchored = transformSelection(anchored, [{
+        type: "merge_block",
+        intoBlockId: op.blockId,
+        fromBlockId: op.newBlockId,
+        joinOffset: op.offset,
+      }]);
+    } else {
+      const inv = invertPageOp(before, op);
+      if (inv.length) anchored = transformSelection(anchored, inv);
+    }
+  }
+  return { epoch: session.epoch, seq: session.ackSeq, selection: anchored };
+}
+
+/**
+ * Project remote collaborators' presence selections from their anchored `(epoch, seq)`
+ * onto this client's current optimistic page state (M1: zero double-shift).
+ */
+export function projectRemotePresence(
+  scope: string | undefined,
+  pageId: string,
+  list: readonly CollaboratorPresence[],
+): CollaboratorPresence[] {
+  if (!scope || !pageId || !list.length) return [...list];
+  const session = sessionFor(scope, pageId);
+  if (!session) return [...list];
+  const pendingOps = session.pending.flatMap((entry) => entry.ops);
+
+  return list.map((item) => {
+    const state = item.state;
+    if (!state?.selection || state.pageId !== pageId) return item;
+    let sel: SelectionRange = state.selection;
+    if (state.epoch === session.epoch && typeof state.seq === "number") {
+      for (const committed of session.recentCommitted) {
+        if (committed.seq > state.seq) {
+          sel = transformSelection(sel, committed.ops);
+        }
+      }
+    }
+    if (pendingOps.length) {
+      sel = transformSelection(sel, pendingOps);
+    }
+    if (sel === state.selection) return item;
+    return { ...item, state: { ...state, selection: sel } };
+  });
+}
+
 export async function openCollaborativePage(scope: string, pageId: string): Promise<void> {
   const key = documentKey({ scope, pageId });
-  if (sessions.has(key)) return;
+  const existing = sessions.get(key);
+  if (existing) {
+    existing.lastUsedAt = Date.now();
+    return;
+  }
   let pending = opening.get(key);
   if (!pending) {
-    const epoch = lifecycle; const pageEpoch = pageLifecycles.get(key);
-    pending = request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`).then((snapshot) => {
-      if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
-      if (!sessions.has(key)) receive(snapshot);
-      subscribe(snapshot); connect();
-    }).finally(() => { if (opening.get(key) === pending) opening.delete(key); });
+    const runEpoch = lifecycle;
+    const pageEpoch = pageLifecycles.get(key);
+    pending = request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`)
+      .then((snapshot) => {
+        if (runEpoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+        if (!sessions.has(key)) receiveSnapshot(snapshot);
+        subscribePageOnSocket(snapshot);
+        connect();
+      })
+      .finally(() => {
+        if (opening.get(key) === pending) opening.delete(key);
+      });
     opening.set(key, pending);
   }
   return pending;
 }
+
 export async function refreshCollaborativePage(scope: string, pageId: string): Promise<void> {
-  const epoch = lifecycle; const key = documentKey({ scope, pageId }); const pageEpoch = pageLifecycles.get(key);
+  const runEpoch = lifecycle;
+  const key = documentKey({ scope, pageId });
+  const pageEpoch = pageLifecycles.get(key);
   try {
     const snapshot = await request<DocumentSnapshot>(`/api/collaboration/${encodeURIComponent(scope)}/${encodeURIComponent(pageId)}`);
-    if (epoch === lifecycle && pageEpoch === pageLifecycles.get(key)) receive(snapshot);
+    if (runEpoch === lifecycle && pageEpoch === pageLifecycles.get(key)) receiveSnapshot(snapshot);
   } catch (error) {
-    if (epoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
+    if (runEpoch !== lifecycle || pageEpoch !== pageLifecycles.get(key)) return;
     const session = sessionFor(scope, pageId);
-    if (session && error instanceof ApiError && [401, 403, 404].includes(error.status)) session.snapshot.canEdit = false;
+    if (session && error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+      session.canEdit = false;
+      notify(scope, pageId);
+    }
     throw error;
   }
 }
-/** A snapshot fetched while our write was in flight can carry a document
- *  older than records this client just committed. Treating the stale field
- *  as truth rolls state back over acknowledged text; pinning the write's
- *  revision makes the projection read it as a lagging echo instead. */
-export function protectSettledRecord(scope: string, collection: string, id: string): void {
-  const pageId = collection === "pages" ? id : collection === "blocks" ? parseBlockRecordId(id)?.pageId : undefined;
-  const session = pageId && sessionFor(scope, pageId);
+
+export function closeCollaborativePage(scope: string, pageId: string): void {
+  const key = documentKey({ scope, pageId });
+  const session = sessions.get(key);
   if (!session) return;
-  for (const [key, text] of session.doc.getMap<Y.Text>("fields")) {
-    const address = fieldAddress(key);
-    if (address?.collection !== collection || address.id !== id || !(text instanceof Y.Text)) continue;
-    session.revAtWrite.set(key, session.fieldRevs.get(key) ?? 0);
-  }
+  consumeSnapshot(snapshotFromSession(session));
+  wsSend({ type: "unsubscribe", scope, pageId });
+  deleteSession(key);
 }
-export function projectRecord(scope: string, collection: string, id: string, record: JsonRecord): JsonRecord {
-  const pageId = collection === "pages" ? id : collection === "blocks" ? parseBlockRecordId(id)?.pageId : undefined;
-  const session = pageId && sessionFor(scope, pageId);
-  if (!session) return record;
-  const recordKey = JSON.stringify([collection, id]);
-  const cached = session.projections.get(recordKey);
-  if (cached?.input === record) return cached.output;
-  if (!session.fieldsByRecord) {
-    session.fieldsByRecord = new Map();
-    for (const [key, value] of Object.entries(readFields(session.doc))) {
-      const address = fieldAddress(key); if (!address) continue;
-      const groupKey = JSON.stringify([address.collection, address.id]);
-      const fields = session.fieldsByRecord.get(groupKey) ?? []; fields.push({ key, path: address.path, value }); session.fieldsByRecord.set(groupKey, fields);
-    }
-  }
-  let projected = record;
-  for (const field of session.fieldsByRecord.get(recordKey) ?? []) {
-    const current = valueAt(record, field.path);
-    /* The document only learns a local text write when its batch commits,
-     *  so until the write's own delta echoes back the field lags the record
-     *  it should have received — an empty seed, a prefix, or a diverged
-     *  fragment alike. A mismatch without a remote delta newer than the
-     *  write is that lag, not an edit: keep the record's text. */
-    const have = Array.isArray(current) ? current : [];
-    /* A field already carrying the newest intent of an in-flight write —
-     *  undo/redo mutate the document without a record write, so they land
-     *  here as the chain head — is truth the record has not caught up to.
-     *  Project it regardless of revision bookkeeping. */
-    const onChain = session.pendingText.some((entry) => {
-      const held = entry.fields[field.key];
-      return held !== undefined && JSON.stringify(held.next) === JSON.stringify(field.value);
-    });
-    if (onChain) { projected = setAt(projected, field.path, field.value); continue; }
-    const wrote = session.revAtWrite.get(field.key);
-    const stale = wrote !== undefined && (session.fieldRevs.get(field.key) ?? 0) <= wrote;
-    if (stale ? JSON.stringify(have) !== JSON.stringify(field.value) : !field.value.length && have.length) continue;
-    projected = setAt(projected, field.path, field.value);
-  }
-  session.projections.set(recordKey, { input: record, output: projected });
-  return projected;
-}
-/** A locally-written field with no newer remote delta: its text is the
- *  writer's own, still traveling to the server and back. Anything the
- *  document shows for it meanwhile is a lagging echo, never an edit. */
-/** The field's current text sits on our own uncommitted write chain — it
- *  equals the base or the result of a pending local write. Such a value is
- *  our echo, never an outside edit, even though it arrived as a remote
- *  delta: an earlier commit's acknowledgment can bump the revision after a
- *  newer write has already left. `chain` carries the newest text the chain
- *  reaches (the tail's `next`, or the matching entry's own `next` when the
- *  field stopped mid-chain): it is what the element should show when the
- *  record prop lags behind the writes already submitted. */
-/** Whether a value is the last text we wrote this field to and saw
- *  acknowledged — the value a lagging echo can legitimately carry once
- *  the pending entry is gone. Unlike `fieldIsOurs` this never consults
- *  the in-flight chain: it answers "is this exact settled text ours". */
-/** The newest in-flight write touching this field came from outside the
- *  element's input path — an undo, a redo, or recovered pending text —
- *  so the DOM cannot know it happened. An auto-pair or a menu write goes
- *  through the record like any keystroke and stays internal: the focused
- *  element keeps its caret and the prop's next render draws it. */
-export function fieldChainExternal(pageId: string, key: string): boolean {
-  const session = sessionsByPage.get(pageId);
-  if (!session) return false;
-  let external = false;
-  for (const entry of session.pendingText) if (entry.fields[key]) external = Boolean(entry.external);
-  return external;
-}
-export function fieldIsSettledEcho(pageId: string, key: string, value: RichText): boolean {
-  const session = sessionsByPage.get(pageId);
-  if (!session) return false;
-  return (session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value));
-}
-export function fieldIsOurs(pageId: string, key: string, value: RichText, chain?: { next?: RichText }): boolean {
-  const session = sessionsByPage.get(pageId);
-  if (!session) return false;
-  let tail: RichText | undefined;
-  let hit = false;
-  for (const entry of session.pendingText) {
-    const held = entry.fields[key];
-    if (!held) continue;
-    tail = held.next;
-    if (JSON.stringify(held.base) === JSON.stringify(value) || JSON.stringify(held.next) === JSON.stringify(value)) hit = true;
-  }
-  if (chain) chain.next = tail;
-  if (!hit && !(session.recentEcho.get(key) ?? []).some((echo) => JSON.stringify(echo) === JSON.stringify(value))) return false;
-  return true;
-}
-export function fieldStale(pageId: string, key: string): boolean {
-  const session = sessionsByPage.get(pageId);
-  if (!session) return false;
-  const wrote = session.revAtWrite.get(key);
-  if (wrote === undefined) return false;
-  return (session.fieldRevs.get(key) ?? 0) <= wrote;
-}
-export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
-  const session = sessionFor(scope, pageId); if (!session) return null;
-  const pagesRef = readRecords(scope, "pages");
-  const blocksRef = readRecords(scope, "blocks");
-  const cached = session.basisCache;
-  if (cached && cached.pagesRef === pagesRef && cached.blocksRef === blocksRef) {
-    return { scope, pageId, generation: session.snapshot.generation, revision: cached.revision };
-  }
-  const page = pagesRef.find((row) => row.id === pageId)?.value;
-  const blocks = blocksRef.filter((row) => row.value.page === pageId);
-  if (
-    cached
-    && cached.page === page
-    && cached.blocks.length === blocks.length
-    && cached.blocks.every((item, index) => item.id === blocks[index].id && item.value === blocks[index].value)
-  ) {
-    cached.pagesRef = pagesRef;
-    cached.blocksRef = blocksRef;
-    return { scope, pageId, generation: session.snapshot.generation, revision: cached.revision };
-  }
-  const revision = pageRevision(page, blocks);
-  session.basisCache = { pagesRef, blocksRef, page, blocks, revision };
-  return { scope, pageId, generation: session.snapshot.generation, revision };
-}
-/** A structural write (sharing a page into a space, moving it out) is only
- *  allowed when the client can name the page's live collaborative document —
- *  the server refuses it without that basis. The session opens on its own,
- *  but a share that follows a page's creation closely can race it, so this
- *  waits briefly for the snapshot to exist rather than leave a write doomed
- *  to fail. */
-function isOffline(): boolean { return globalThis.navigator?.onLine === false; }
-/* Opening a page whose record write has not committed yet: the document
- *  initializes with that commit, so a 404 here means "not yet", not "never"
- *  — keep asking while the page exists locally. Structural writes inside a
- *  batch must not wait this long: they use awaitCollaborativeBasis. */
-export async function openWhenDocument(scope: string, pageId: string, timeoutMs = 15000): Promise<void> {
+
+export async function openWhenDocument(scope: string, pageId: string, timeoutMs = 15_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let delay = 150;
   while (Date.now() < deadline) {
@@ -535,6 +1146,7 @@ export async function openWhenDocument(scope: string, pageId: string, timeoutMs 
     delay = Math.min(500, delay * 1.5);
   }
 }
+
 export async function awaitCollaborativeBasis(scope: string, pageId: string): Promise<void> {
   if (sessionFor(scope, pageId)) return;
   if (isOffline()) return;
@@ -543,240 +1155,835 @@ export async function awaitCollaborativeBasis(scope: string, pageId: string): Pr
   while (Date.now() < deadline) {
     const error = await openCollaborativePage(scope, pageId).then(() => undefined, (reason: unknown) => reason);
     if (sessionFor(scope, pageId)) return;
-    /* A 404 with the page already held locally only means its document
-       has not initialized yet — it arrives with the next committed write.
-       The 404 of a page that truly does not exist (an agent's typo, a
-       deletion) still short-circuits: no local record, nothing to wait
-       for. */
     if (error instanceof ApiError && error.status === 404 && !readRecords(scope, "pages").some((row) => row.id === pageId)) return;
     if (isOffline()) return;
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, 800);
   }
 }
-function registeredField(session: Session, key: string): RegisteredField | null {
-  const text = session.doc.getMap<Y.Text>("fields").get(key);
-  return text instanceof Y.Text ? { userId: accountId, scope: session.snapshot.scope, pageId: session.snapshot.pageId, key, generation: session.snapshot.generation, text, canEdit: session.snapshot.canEdit, revision: pageBasis(session.snapshot.scope, session.snapshot.pageId)?.revision } : null;
+
+export function hasActiveSession(scope: string, pageId: string): boolean {
+  return Boolean(sessionFor(scope, pageId));
 }
+
+export function hasEditableSession(scope: string, pageId: string): boolean {
+  return Boolean(sessionFor(scope, pageId)?.canEdit);
+}
+
+export function activeSessionPageIds(scope: string): string[] {
+  const ids: string[] = [];
+  for (const session of sessions.values()) {
+    if (session.scope === scope) ids.push(session.pageId);
+  }
+  return ids;
+}
+
+/**
+ * Unified projection sovereignty (H1): for every page with an active PageSession
+ * in `scope`, `LiveCollection` reads its page/block records directly from
+ * `session.optimistic` so stale background polls can never overwrite live edits.
+ */
+export function activeSessionRecords(
+  scope: string,
+  collection: "pages" | "blocks",
+): { pageIds: Set<string>; records: Map<string, JsonRecord> } | null {
+  const pageIds = new Set<string>();
+  const records = new Map<string, JsonRecord>();
+  for (const session of sessions.values()) {
+    if (session.scope !== scope) continue;
+    pageIds.add(session.pageId);
+    if (collection === "pages") {
+      records.set(session.pageId, session.optimistic.page);
+    } else {
+      for (const [blockId, value] of session.optimistic.blocks) {
+        records.set(blockRecordId(session.pageId, blockId), value);
+      }
+    }
+  }
+  return pageIds.size ? { pageIds, records } : null;
+}
+
+export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
+  const session = sessionFor(scope, pageId);
+  if (!session) return null;
+  return {
+    scope,
+    pageId,
+    generation: session.epoch,
+    revision: computeOptimisticRevision(session),
+  };
+}
+
+function registeredField(session: PageSession, key: string): RegisteredField | null {
+  const runs = readField(session.optimistic, key);
+  if (runs === null) return null;
+  return {
+    userId: accountId,
+    scope: session.scope,
+    pageId: session.pageId,
+    key,
+    epoch: session.epoch,
+    generation: session.epoch,
+    canEdit: session.canEdit,
+    revision: computeOptimisticRevision(session),
+    runs,
+  };
+}
+
 installTextLookup((pageId, key) => {
   const session = sessionsByPage.get(pageId);
   return session ? registeredField(session, key) : null;
 });
-export function recordTextManaged(scope: string, collection: string, id: string, before: JsonRecord | undefined, after: JsonRecord | undefined): boolean {
+
+export function recordTextManaged(
+  scope: string,
+  collection: string,
+  id: string,
+  before: JsonRecord | undefined,
+  after: JsonRecord | undefined,
+): boolean {
   if (collection !== "pages" && collection !== "blocks") return true;
   if (!before || !after) return false;
   const pageId = collection === "pages" ? id : parseBlockRecordId(id)?.pageId;
   const session = pageId ? sessionFor(scope, pageId) : undefined;
-  if (!session?.snapshot.canEdit || !pageId) return false;
+  if (!session?.canEdit || !pageId) return false;
   const fields = collection === "pages" ? fieldsInPage(pageId, after, []) : fieldsInPage(pageId, {}, [{ id, value: after }]);
   return Object.keys(fields).every((key) => {
-    const address = fieldAddress(key); if (address?.collection !== collection || address.id !== id) return true;
-    const old = valueAt(before, address.path); const next = valueAt(after, address.path);
-    const changed = JSON.stringify(Array.isArray(old) ? old : []) !== JSON.stringify(Array.isArray(next) ? next : []);
-    /* A field the outgoing document does not have yet is still text-managed
-     *  once this write's intent is queued — the resync migrates it onto the
-     *  new document, and undoing the record half twice would replay it. */
-    return !changed || session.doc.getMap<Y.Text>("fields").get(key) instanceof Y.Text
-      || session.pendingText.some((entry) => key in entry.fields);
+    const address = fieldAddress(key);
+    if (address?.collection !== collection || address.id !== id) return true;
+    const old = valueAt(before, address.path);
+    const next = valueAt(after, address.path);
+    const changed = !deepEqual(Array.isArray(old) ? old : [], Array.isArray(next) ? next : []);
+    return !changed || readField(session.optimistic, key) !== null;
   });
 }
-export function localRecordText(scope: string, collection: string, id: string, before: JsonRecord, after: JsonRecord): LocalTextChange | null {
+
+function pushHistoryEntry(
+  session: PageSession,
+  inverseOps: PageOp[],
+  options: { fold?: boolean; foldField?: string; foldKind?: "typing" | "format"; record?: boolean },
+): void {
+  if (options.record === false || structureDepth > 0 || !inverseOps.length) return;
+  const now = Date.now();
+  const top = session.undoStack.at(-1);
+  const canFold = Boolean(
+    options.fold
+    && !session.foldStop
+    && options.foldField
+    && options.foldKind
+    && inverseOps.length === 1
+    && inverseOps[0].type === "text"
+    && inverseOps[0].field === options.foldField
+    && top
+    && now - top.stepAt <= 1000
+    && top.foldField === options.foldField
+    && top.foldKind === options.foldKind
+    && top.ops.length === 1
+    && top.ops[0].type === "text"
+    && top.ops[0].field === options.foldField,
+  );
+  if (canFold && top && top.ops[0].type === "text" && inverseOps[0].type === "text") {
+    try {
+      top.ops = [{
+        type: "text",
+        field: options.foldField!,
+        ops: composeTextOps(inverseOps[0].ops, top.ops[0].ops),
+      }];
+      top.stepAt = now;
+      top.time = nextHistoryOrder();
+      session.redoStack = [];
+      session.foldStop = false;
+      return;
+    } catch {
+      // Fall through to pushing a separate step if composition fails.
+    }
+  }
+  session.undoStack.push({
+    ops: inverseOps,
+    time: nextHistoryOrder(),
+    view: historyView,
+    ...(options.fold && options.foldField ? { foldField: options.foldField, foldKind: options.foldKind } : {}),
+    stepAt: now,
+  });
+  session.redoStack = [];
+  session.foldStop = !options.fold;
+}
+
+/**
+ * Record rich-text edits originating from a record patch (title, paragraph, table cell)
+ * directly as OT `text` `PageOp`s on the active `PageSession`.
+ */
+export function recordLocalTextEdit(
+  scope: string,
+  collection: string,
+  id: string,
+  before: JsonRecord,
+  after: JsonRecord,
+  options: { fold?: boolean; record?: boolean } = {},
+): LocalPageChange | null {
   const pageId = collection === "pages" ? id : collection === "blocks" ? parseBlockRecordId(id)?.pageId : undefined;
-  const session = pageId && sessionFor(scope, pageId);
-  if (!session || !session.snapshot.canEdit || collection !== "pages" && collection !== "blocks") {
+  const session = pageId ? sessionFor(scope, pageId) : undefined;
+  if (!session || !session.canEdit || (collection !== "pages" && collection !== "blocks")) return null;
+  session.lastUsedAt = Date.now();
+
+  const observed = observedText();
+  const fieldMap = collection === "pages"
+    ? fieldsInPage(pageId!, after, [])
+    : fieldsInPage(pageId!, {}, [{ id, value: after }]);
+
+  const ops: PageOp[] = [];
+  const fallbackFields: Record<string, { base: RichText; next: RichText }> = {};
+  const inverseOps: PageOp[] = [];
+  let singleKind: "typing" | "format" = "typing";
+
+  for (const key of Object.keys(fieldMap)) {
+    const address = fieldAddress(key);
+    if (!address || address.collection !== collection || address.id !== id) continue;
+    const live = readField(session.optimistic, key);
+    if (live === null) continue;
+    const desired = normalizeRichText(Array.isArray(valueAt(after, address.path)) ? (valueAt(after, address.path) as RichText) : []);
+    const oldVal = normalizeRichText(Array.isArray(valueAt(before, address.path)) ? (valueAt(before, address.path) as RichText) : []);
+
+    const sameObserved = observed?.field.pageId === session.pageId && observed.field.key === key;
+    if (sameObserved && observed.field.epoch !== session.epoch) {
+      preserveTextDraft(observed, desired, "页面结构或版本已变化。输入中的文字已保留为草稿。");
+      throw new Error("The rendered text belongs to an earlier document generation");
+    }
+
+    let steps: TextStep[];
+    let unseenSteps: TextStep[] | null = null;
+    if (sameObserved && !deepEqual(observed.shown, live)) {
+      // DOM showed an earlier state (e.g. remote edit arrived during IME composition).
+      // Diff DOM change against `observed.shown`, then OT-transform across unseen remote edits!
+      const domDiff = diffRichText(observed.shown, desired);
+      if (isNoopTextOps(domDiff)) continue;
+      unseenSteps = diffRichText(observed.shown, live);
+      [, steps] = transformTextPair(unseenSteps, domDiff);
+    } else {
+      if (deepEqual(live, desired) && deepEqual(oldVal, desired)) continue;
+      steps = diffRichText(live, desired);
+    }
+    if (isNoopTextOps(steps)) continue;
+
+    const beforeState = clonePageState(session.optimistic);
+    const op: PageOp = { type: "text", field: key, ops: steps };
+    const applied = applyPageOp(session.optimistic, op, "materialize");
+    if (!applied.applied) continue;
+    const afterField = readField(session.optimistic, key) ?? live;
+    ops.push(applied.applied);
+    fallbackFields[key] = { base: live, next: afterField };
+    const inv = invertPageOp(beforeState, applied.applied);
+    inverseOps.unshift(...inv);
+    singleKind = richTextPlain(live) !== richTextPlain(afterField) ? "typing" : "format";
+
+    if (sameObserved) {
+      const updatedField = registeredField(session, key);
+      if (updatedField) setObservedShown(updatedField, afterField);
+    }
+    if (unseenSteps && !isNoopTextOps(unseenSteps)) {
+      queueCaretSteps(session, key, unseenSteps);
+      bumpFieldTick(session, key);
+    }
+  }
+
+  if (!ops.length) return null;
+  session.localVersion += 1;
+
+  const entry: PendingOpEntry = {
+    token: Symbol("page-op"),
+    ops: ops.map((op) => structuredClone(op)),
+    fallbackFields: structuredClone(fallbackFields),
+    settled: false,
+  };
+  session.pending.push(entry);
+
+  pushHistoryEntry(session, inverseOps, {
+    fold: options.fold ?? true,
+    foldField: ops.length === 1 && ops[0].type === "text" ? ops[0].field : undefined,
+    foldKind: singleKind,
+    record: options.record,
+  });
+
+  collabVersion += 1;
+  return {
+    token: entry.token,
+    scope,
+    pageId: session.pageId,
+    epoch: session.epoch,
+    baseSeq: session.ackSeq,
+    ops,
+    fallbackFields,
+    hasStructural: false,
+  };
+}
+
+export interface SemanticLocalOpInput {
+  /** Either a ready PageOp, or a high-level text target to diff against live/observed field. */
+  op?: PageOp;
+  textTarget?: { field: string; content: RichText };
+}
+
+/**
+ * Record semantic page operations (split, merge, move, create, delete, block/page fields, text)
+ * directly on the active `PageSession` with immediate optimistic application & selective undo.
+ */
+export function recordLocalSemanticOps(
+  scope: string,
+  pageId: string,
+  inputs: readonly SemanticLocalOpInput[],
+  options: { fold?: boolean; record?: boolean; external?: boolean } = {},
+): LocalPageChange | null {
+  const session = sessionFor(scope, pageId);
+  if (!session || !session.canEdit || !inputs.length) return null;
+  session.lastUsedAt = Date.now();
+
+  const observed = observedText();
+  const appliedOps: PageOp[] = [];
+  const inverseOps: PageOp[] = [];
+  const fallbackFields: Record<string, { base: RichText; next: RichText }> = {};
+  let singleKind: "typing" | "format" = "typing";
+
+  for (const item of inputs) {
+    if (item.textTarget) {
+      const { field, content } = item.textTarget;
+      const live = readField(session.optimistic, field);
+      if (live === null) continue;
+      const desired = normalizeRichText(content);
+      const sameObserved = observed?.field.pageId === session.pageId && observed.field.key === field;
+      if (sameObserved && observed.field.epoch !== session.epoch) {
+        preserveTextDraft(observed, desired, "页面结构或版本已变化。输入中的文字已保留为草稿。");
+        throw new Error("The rendered text belongs to an earlier document generation");
+      }
+      let steps: TextStep[];
+      let unseenSteps: TextStep[] | null = null;
+      if (sameObserved && !deepEqual(observed.shown, live)) {
+        const domDiff = diffRichText(observed.shown, desired);
+        if (isNoopTextOps(domDiff)) continue;
+        unseenSteps = diffRichText(observed.shown, live);
+        [, steps] = transformTextPair(unseenSteps, domDiff);
+      } else {
+        if (deepEqual(live, desired)) continue;
+        steps = diffRichText(live, desired);
+      }
+      if (isNoopTextOps(steps)) continue;
+      const beforeState = clonePageState(session.optimistic);
+      const res = applyPageOp(session.optimistic, { type: "text", field, ops: steps }, "materialize");
+      if (!res.applied) continue;
+      const afterField = readField(session.optimistic, field) ?? live;
+      appliedOps.push(res.applied);
+      fallbackFields[field] = { base: live, next: afterField };
+      inverseOps.unshift(...invertPageOp(beforeState, res.applied));
+      singleKind = richTextPlain(live) !== richTextPlain(afterField) ? "typing" : "format";
+      if (sameObserved) {
+        const updatedField = registeredField(session, field);
+        if (updatedField) setObservedShown(updatedField, afterField);
+      }
+      if (unseenSteps && !isNoopTextOps(unseenSteps)) {
+        queueCaretSteps(session, field, unseenSteps);
+        bumpFieldTick(session, field);
+      } else if (options.external) {
+        queueCaretSteps(session, field, steps);
+        bumpFieldTick(session, field);
+      }
+      continue;
+    }
+
+    if (item.op) {
+      const beforeState = clonePageState(session.optimistic);
+      const res = applyPageOp(session.optimistic, item.op, "materialize");
+      const appliedOp = res.applied;
+      if (!appliedOp) continue;
+      appliedOps.push(appliedOp);
+      inverseOps.unshift(...invertPageOp(beforeState, appliedOp));
+
+      if (appliedOp.type === "text") {
+        const afterField = readField(session.optimistic, appliedOp.field);
+        const beforeField = readField(beforeState, appliedOp.field);
+        if (beforeField !== null && afterField !== null) {
+          fallbackFields[appliedOp.field] = { base: beforeField, next: afterField };
+        }
+        if (options.external) {
+          queueCaretSteps(session, appliedOp.field, appliedOp.ops);
+          bumpFieldTick(session, appliedOp.field);
+        }
+      } else {
+        // Structural ops (split/merge/set_block_fields) modify block DOM content outside native typing.
+        for (const fieldKey of touchedFieldsOfOp(pageId, appliedOp)) {
+          bumpFieldTick(session, fieldKey);
+        }
+      }
+    }
+  }
+
+  if (!appliedOps.length) return null;
+  session.localVersion += 1;
+
+  const hasStructural = appliedOps.some((op) => op.type !== "text");
+  const entry: PendingOpEntry = {
+    token: Symbol("page-op"),
+    ops: appliedOps.map((op) => structuredClone(op)),
+    fallbackFields: structuredClone(fallbackFields),
+    external: options.external,
+    settled: false,
+  };
+  session.pending.push(entry);
+
+  pushHistoryEntry(session, inverseOps, {
+    fold: Boolean(options.fold && !hasStructural),
+    foldField: !hasStructural && appliedOps.length === 1 && appliedOps[0].type === "text" ? appliedOps[0].field : undefined,
+    foldKind: singleKind,
+    record: options.record,
+  });
+
+  notify(scope, pageId);
+  return {
+    token: entry.token,
+    scope,
+    pageId,
+    epoch: session.epoch,
+    baseSeq: session.ackSeq,
+    ops: appliedOps,
+    fallbackFields,
+    external: options.external,
+    hasStructural,
+  };
+}
+
+/** Coalesce consecutive `text` ops on the same field to keep batches compact. */
+export function coalescePageOps(ops: readonly PageOp[]): PageOp[] {
+  const out: PageOp[] = [];
+  for (const op of ops) {
+    const prev = out.at(-1);
+    if (prev && prev.type === "text" && op.type === "text" && prev.field === op.field) {
+      try {
+        const merged = composeTextOps(prev.ops, op.ops);
+        if (isNoopTextOps(merged)) out.pop();
+        else out[out.length - 1] = { type: "text", field: prev.field, ops: merged };
+        continue;
+      } catch {
+        // Keep separate if composition fails for any reason.
+      }
+    }
+    out.push(structuredClone(op));
+  }
+  return out;
+}
+
+/**
+ * Snapshot the live transformed ops and current `(epoch, ackSeq)` for a batch's
+ * pending changes right before transmission (after earlier batches on the same
+ * scope have settled), so sequential dependent batches (e.g. typing in a newly
+ * split block before the split ACKs) always transmit against the updated `ackSeq`.
+ */
+export function preparePendingSubmissions(changes: readonly LocalPageChange[]): PageOpSubmission[] | null {
+  if (!changes.length) return [];
+  const tokens = new Set(changes.map((c) => c.token));
+  const grouped = new Map<string, {
+    scope: string;
+    pageId: string;
+    epoch: string;
+    baseSeq: number;
+    ops: PageOp[];
+    fallbackFields: Record<string, { base: RichText; next: RichText }>;
+  }>();
+
+  for (const change of changes) {
+    const key = documentKey(change);
+    const session = sessions.get(key);
+    if (!session) return null;
+    const entry = session.pending.find((item) => item.token === change.token);
+    if (!entry) continue;
+    let bucket = grouped.get(key);
+    if (!bucket) {
+      bucket = {
+        scope: session.scope,
+        pageId: session.pageId,
+        epoch: session.epoch,
+        baseSeq: session.ackSeq,
+        ops: [],
+        fallbackFields: {},
+      };
+      grouped.set(key, bucket);
+    }
+    bucket.ops.push(...entry.ops);
+    for (const [fieldKey, intent] of Object.entries(entry.fallbackFields)) {
+      const existing = bucket.fallbackFields[fieldKey];
+      bucket.fallbackFields[fieldKey] = existing
+        ? { base: existing.base, next: intent.next }
+        : { base: intent.base, next: intent.next };
+    }
+  }
+
+  // Keep order of tokens as they appear in each session's pending queue.
+  const result: PageOpSubmission[] = [];
+  for (const bucket of grouped.values()) {
+    const ops = coalescePageOps(bucket.ops);
+    if (!ops.length) continue;
+    result.push({
+      scope: bucket.scope,
+      pageId: bucket.pageId,
+      epoch: bucket.epoch,
+      baseSeq: bucket.baseSeq,
+      ops,
+      ...(Object.keys(bucket.fallbackFields).length ? { fallbackFields: bucket.fallbackFields } : {}),
+    });
+  }
+  void tokens;
+  return result;
+}
+
+/** Tag pending entries belonging to an outgoing HTTP `/api/records/batch` request. */
+export function bindPendingRequest(changes: readonly LocalPageChange[], requestId: string): void {
+  const byToken = new Set(changes.map((c) => c.token));
+  for (const session of sessions.values()) {
+    for (const entry of session.pending) {
+      if (byToken.has(entry.token)) entry.requestId = requestId;
+    }
+  }
+}
+
+/**
+ * Consume the HTTP 200 `pageResults` from `/api/records/batch`.
+ * Idempotent with WebSocket `commit` frames; awaits `syncPageGap` when a concurrent
+ * remote commit arrived at an earlier seq than our HTTP response.
+ */
+export async function acknowledgePageBatch(
+  requestId: string,
+  pageResults: readonly PageOpCommitResult[],
+): Promise<void> {
+  const gapSyncs: Promise<void>[] = [];
+  for (const res of pageResults) {
+    const session = sessionFor(res.scope, res.pageId);
+    if (!session) {
+      if (res.orphaned?.length) publishOrphans(res.scope, res.pageId, res.epoch, res.orphaned);
+      continue;
+    }
+    const outcome = ingestCommittedSeq(session, {
+      epoch: res.epoch,
+      seq: res.seq,
+      revision: res.revision,
+      requestId,
+      ops: res.ops,
+      orphaned: res.orphaned,
+    });
+    if (outcome === "gap") {
+      gapSyncs.push(syncPageGap(res.scope, res.pageId));
+    } else if (outcome === "epoch_mismatch") {
+      gapSyncs.push(refreshCollaborativePage(res.scope, res.pageId).catch(() => undefined));
+    }
+  }
+  if (gapSyncs.length) await Promise.all(gapSyncs);
+}
+
+/** Drop permanently refused pending entries (after their content has been saved as recovery drafts). */
+export function failPageBatch(changes: readonly LocalPageChange[]): void {
+  const tokens = new Set(changes.map((c) => c.token));
+  for (const session of sessions.values()) {
+    const beforeLen = session.pending.length;
+    if (!beforeLen) continue;
+    session.pending = session.pending.filter((entry) => !tokens.has(entry.token));
+    if (session.pending.length !== beforeLen) {
+      const oldOptimistic = session.optimistic;
+      session.optimistic = rebuildOptimistic(session);
+      session.localVersion += 1;
+      bumpDivergedFields(session, oldOptimistic, session.optimistic);
+      notify(session.scope, session.pageId);
+    }
+  }
+}
+
+/**
+ * Fetch the latest server snapshot on a 409 (`epoch_conflict` / `seq_pruned` / `seq_conflict`)
+ * and produce a rebased `PageOpSubmission`, or `null` if non-text structural ops cannot safely
+ * cross an epoch reset (in which case the caller preserves the batch as a recovery draft).
+ */
+export async function rebasePendingPageBatch(
+  submission: PageOpSubmission,
+  changes: readonly LocalPageChange[],
+): Promise<PageOpSubmission | null> {
+  const snapshot = await request<DocumentSnapshot>(
+    `/api/collaboration/${encodeURIComponent(submission.scope)}/${encodeURIComponent(submission.pageId)}`,
+  );
+  receiveSnapshot(snapshot);
+  const session = sessionFor(submission.scope, submission.pageId);
+  if (!session || !session.canEdit) return null;
+
+  const sameEpoch = submission.epoch === session.epoch;
+  const pruned = submission.baseSeq < session.prunedBefore;
+  const hasNonText = submission.ops.some((op) => op.type !== "text");
+
+  if (sameEpoch && !pruned) {
+    // Re-collect the batch's transformed ops from session.pending (if tracked) or replay submission ops directly.
+    const tokens = new Set(changes.map((c) => c.token));
+    const tracked = session.pending.filter((entry) => tokens.has(entry.token));
+    if (tracked.length) {
+      const ops = tracked.flatMap((entry) => entry.ops);
+      if (!ops.length) return null;
+      const fallbackFields: Record<string, { base: RichText; next: RichText }> = {};
+      for (const entry of tracked) Object.assign(fallbackFields, entry.fallbackFields);
+      return {
+        scope: submission.scope,
+        pageId: submission.pageId,
+        epoch: session.epoch,
+        baseSeq: session.ackSeq,
+        ops,
+        ...(Object.keys(fallbackFields).length ? { fallbackFields } : {}),
+      };
+    }
+    return {
+      ...submission,
+      epoch: session.epoch,
+      baseSeq: session.ackSeq,
+    };
+  }
+
+  // Epoch reset or pruned seq: pure text batches 3-way merge cleanly via `fallbackFields`.
+  if (hasNonText) return null;
+  const fallback = submission.fallbackFields;
+  if (!fallback || !Object.keys(fallback).length) return null;
+
+  const orphaned: OrphanedText[] = [];
+  const mergedOps: PageOp[] = [];
+  const nextFallback: Record<string, { base: RichText; next: RichText }> = {};
+  const sim = clonePageState(session.confirmed);
+
+  for (const [fieldKey, intent] of Object.entries(fallback)) {
+    const live = readField(sim, fieldKey);
+    if (live === null) {
+      orphaned.push({ field: fieldKey, content: intent.next });
+      continue;
+    }
+    const localSteps = diffRichText(intent.base, intent.next);
+    const remoteSteps = diffRichText(intent.base, live);
+    const [, rebased] = transformTextPair(remoteSteps, localSteps);
+    if (!isNoopTextOps(rebased)) {
+      const op: PageOp = { type: "text", field: fieldKey, ops: rebased };
+      applyPageOp(sim, op, "materialize");
+      mergedOps.push(op);
+      nextFallback[fieldKey] = { base: live, next: readField(sim, fieldKey) ?? live };
+    }
+  }
+
+  if (orphaned.length) publishOrphans(submission.scope, submission.pageId, session.epoch, orphaned);
+  if (!mergedOps.length) return { scope: submission.scope, pageId: submission.pageId, epoch: session.epoch, baseSeq: session.ackSeq, ops: [] };
+
+  // Synchronize any tracked pending entries with the newly 3-way-merged ops.
+  const tokens = new Set(changes.map((c) => c.token));
+  let replaced = false;
+  session.pending = session.pending.flatMap((entry) => {
+    if (!tokens.has(entry.token)) return [entry];
+    if (replaced) return [];
+    replaced = true;
+    return [{ ...entry, ops: mergedOps.map((op) => structuredClone(op)), fallbackFields: structuredClone(nextFallback) }];
+  });
+  session.optimistic = rebuildOptimistic(session);
+  session.localVersion += 1;
+  notify(session.scope, session.pageId);
+
+  return {
+    scope: submission.scope,
+    pageId: submission.pageId,
+    epoch: session.epoch,
+    baseSeq: session.ackSeq,
+    ops: mergedOps,
+    fallbackFields: nextFallback,
+  };
+}
+
+/**
+ * Optimistically restore a journaled `PageOpSubmission` into an open `PageSession`
+ * after reload (UC-37), returning a `LocalPageChange` token bound to `session.pending`.
+ */
+export function restoreJournalPageOps(submission: PageOpSubmission): LocalPageChange | null {
+  const session = sessionFor(submission.scope, submission.pageId);
+  if (!session || !session.canEdit || session.epoch !== submission.epoch || submission.baseSeq < session.prunedBefore) {
     return null;
   }
-  const observed = observedText();
-  const changed: Array<{ key: string; text: Y.Text | null; next: RichText; base?: RichText; live: boolean }> = [...session.doc.getMap<Y.Text>("fields")].flatMap(([key, text]): Array<{ key: string; text: Y.Text | null; next: RichText; live: boolean }> => {
-    const address = fieldAddress(key); if (address?.collection !== collection || address.id !== id) return [];
-    const old = valueAt(before, address.path); const next = valueAt(after, address.path);
-    let desired = Array.isArray(next) ? next as RichText : [];
-    const base = Array.isArray(old) ? old as RichText : [];
-    /* A DOM-driven write on an observed field may carry a stale view: the
-       shared text can hold words the DOM never drew (a peer's merge or a
-       reset seed). Merging the shown intent onto the live text keeps those
-       atoms instead of silently re-removing them, while atoms the DOM did
-       show — and re-submitted — must not be applied again. Only the
-       observed basis tells the DOM's view: structural and non-observed
-       writes keep their authored intent. */
-    const live = readText(text);
-    /* Same identity only: the shown-text merge assumes the DOM could have
-     *  drawn atoms of this Y.Text. A binding from an earlier generation
-     *  points at a different document's text — its DOM never carried these
-     *  atoms, so identical values must not short-circuit the rebase. */
-    if (observed && observed.field.pageId === session.snapshot.pageId && observed.field.key === key && observed.field.text === text) {
-      const seen = basisText(observed.basis);
-      if (JSON.stringify(seen) !== JSON.stringify(live)) return [{ key, text, next: mergeShownText(seen, desired, live), live: true }];
-    }
-    return JSON.stringify(base) === JSON.stringify(desired) ? [] : [{ key, text, next: desired, live: false }];
-  });
-  /* A record the structural change just made may predate the field's
-   *  Y.Text in this document — the generation carrying it has not arrived.
-   *  The intent still goes on the record: queued alongside the doc-driven
-   *  fields, it migrates onto the new document with the rest of pendingText. */
-  const held = new Set(changed.map((item) => item.key));
-  const absent = Object.keys(collection === "pages" ? fieldsInPage(pageId as string, after, []) : fieldsInPage(pageId as string, {}, [{ id, value: after }]))
-    .flatMap((key) => {
-      if (held.has(key)) return [];
-      const address = fieldAddress(key); if (address?.collection !== collection || address.id !== id) return [];
-      const old = valueAt(before, address.path); const next = valueAt(after, address.path);
-      const base = Array.isArray(old) ? old as RichText : []; const desired = Array.isArray(next) ? next as RichText : [];
-      return JSON.stringify(base) === JSON.stringify(desired) ? [] : [{ key, text: null as Y.Text | null, next: desired, base, live: false }];
-    });
-  changed.push(...absent);
-  if (!changed.length) return null;
-  const vector = Y.encodeStateVector(session.doc);
-  const kind = changed.some(({ text, next }) => !text || readText(text).map((run) => run.text ?? "\u2063").join("") !== next.map((run) => run.text ?? "\u2063").join("")) ? "typing" : "format";
-  if (session.lastField !== changed[0].key || session.lastKind !== kind) session.foldStop = true;
-  session.lastField = changed[0].key; session.lastKind = kind;
-  const fields = Object.fromEntries(changed.map(({ key, text, base }) => [key, { base: text ? readText(text) : base ?? [], next: [] as RichText }]));
-  session.doc.transact(() => { for (const change of changed) { if (!change.text) continue; const field = registeredField(session, change.key); if (!field) continue; if (change.live) editLiveField(field, change.next); else editObservedField(field, change.next); } }, structureDepth ? STRUCTURAL : LOCAL_TEXT_ORIGIN);
-  const keys = changed.map((item) => item.key);
-  for (const key of keys) session.revAtWrite.set(key, session.fieldRevs.get(key) ?? 0);
-  const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope, pageId: session.snapshot.pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
-  for (const { key, text, next } of changed) fields[key].next = text ? readText(text) : next;
-  /* Structural text writes are undone through record history; plain ones
-   *  fold into the step on top while the burst lasts — the undo manager's
-   *  old captureTimeout became this boundary flag. */
-  if (!structureDepth) {
-    const now = Date.now();
-    const top = session.shadowUndo.at(-1);
-    const folds = !session.foldStop && top && now - session.stepAt <= 1000 && top.keys.length === keys.length && top.keys.every((key, index) => key === keys[index])
-      && keys.every((key) => JSON.stringify(top.fields[key]?.next) === JSON.stringify(fields[key]?.base));
-    if (folds && top) for (const key of keys) top.fields[key].next = fields[key].next;
-    /* The step folds only its own copy: the pending submission keeps its
-     *  authored intent — folding it away would resubmit a merged delta
-     *  whose early half the server never saw. */
-    else session.shadowUndo.push({ keys, fields: structuredClone(fields), time: nextHistoryOrder(), view: historyView });
-    session.stepAt = now; session.foldStop = false;
-  }
-  session.pendingText.push({ keys, change, update: change.update, fields });
-  session.pendingRev += 1;
-  collabVersion += 1;
-  return change;
+  const entry: PendingOpEntry = {
+    token: Symbol("restored-page-op"),
+    ops: submission.ops.map((op) => structuredClone(op)),
+    fallbackFields: structuredClone(submission.fallbackFields ?? {}),
+    external: true,
+    settled: false,
+  };
+  session.pending.push(entry);
+  const oldOptimistic = session.optimistic;
+  session.optimistic = rebuildOptimistic(session);
+  session.localVersion += 1;
+  bumpDivergedFields(session, oldOptimistic, session.optimistic);
+  notify(session.scope, session.pageId);
+  return {
+    token: entry.token,
+    scope: submission.scope,
+    pageId: submission.pageId,
+    epoch: submission.epoch,
+    baseSeq: submission.baseSeq,
+    ops: submission.ops,
+    fallbackFields: submission.fallbackFields ?? {},
+    external: true,
+    hasStructural: submission.ops.some((op) => op.type !== "text"),
+  };
 }
-export function settleText(change: LocalTextChange): void {
-  if (settledChanges.has(change)) return;
-  settledChanges.add(change);
-  for (const session of sessions.values()) {
-    const index = session.pendingText.findIndex((entry) => entry.change === change);
-    /* Removing the entry flips fieldIsOurs for that key: the field's text
-     *  stops matching the write chain, so the next projection and bound
-     *  read must see it as settled. Nothing else notifies at this point —
-     *  without this the element keeps the write's echo state forever. */
-    if (index >= 0) {
-      const [entry] = session.pendingText.splice(index, 1);
-      session.pendingRev += 1;
-      for (const [field, held] of Object.entries(entry.fields)) {
-        /* Echoes land out of order: an earlier write's delta can arrive
-         *  after a newer one settled, so the window keeps the last few
-         *  submitted values — a lagging `hello ` still reads as ours once
-         *  `hello world` owns the tail. */
-        const echoes = session.recentEcho.get(field) ?? [];
-        echoes.push(held.next);
-        session.recentEcho.set(field, echoes.slice(-16));
-      }
-      notify(session.snapshot.scope, session.snapshot.pageId);
-      return;
-    }
-  }
-}
-export async function resetRefusedText(address: DocumentAddress): Promise<void> {
-  const key = documentKey(address); pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
-  const current = sessionFor(address.scope, address.pageId);
-  if (current) { destroySession(current); deleteSession(documentKey(address)); }
+
+export async function resetRefusedPage(address: DocumentAddress): Promise<void> {
+  const key = documentKey(address);
+  pageLifecycles.set(key, (pageLifecycles.get(key) ?? 0) + 1);
+  if (sessions.has(key)) deleteSession(key);
   await openCollaborativePage(address.scope, address.pageId).catch(() => undefined);
 }
-export function restorePendingText(update: TextUpdate, change?: LocalTextChange): string[] | null {
-  const session = sessionFor(update.scope, update.pageId);
-  if (!session || resyncTails.has(documentKey(update)) || session.snapshot.generation !== update.generation || !session.snapshot.canEdit) return null;
-  const before = readFields(session.doc);
-  Y.applyUpdate(session.doc, base64ToBytes(update.update), "recovered pending text");
-  const after = readFields(session.doc);
-  const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  const fields = Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }]));
-  session.pendingText.push({ keys, change, update, external: true, fields });
-  session.shadowRedo.push({ keys, fields: structuredClone(fields), time: nextHistoryOrder(), view: historyView });
-  session.pendingRev += 1;
-  collabVersion += 1;
-  return keys;
-}
-function sessionForPage(pageId: string): Session | undefined { return sessionsByPage.get(pageId); }
+
+/* ── Unified Personal Selective Undo / Redo ───────────────────────────────── */
+
 export function textHistoryTime(pageId: string, direction: "undo" | "redo"): number {
-  const session = sessionForPage(pageId); const stack = direction === "undo" ? session?.shadowUndo : session?.shadowRedo;
+  const session = sessionForPage(pageId);
+  const stack = direction === "undo" ? session?.undoStack : session?.redoStack;
   return stack?.at(-1)?.time ?? 0;
 }
-export function canTextHistory(pageId: string, direction: "undo" | "redo"): boolean { const session = sessionForPage(pageId); return Boolean(session?.snapshot.canEdit && (direction === "undo" ? session.shadowUndo.length : session.shadowRedo.length)); }
-export function replayTextHistory(pageId: string, direction: "undo" | "redo"): Promise<unknown> | null {
-  const session = sessionForPage(pageId); if (!session) return null;
-  /* A step written before a generation swap already migrated into the new
-   *  session by the time the tail resolves — replaying then pops it on a
-   *  live document and submits a delta of the new generation, instead of
-   *  racing the swap on the dying one. */
-  const tail = resyncTails.get(documentKey(session.snapshot));
-  if (tail) return tail.catch(() => undefined).then(() => replayTextHistory(pageId, direction));
-  if (!canTextHistory(pageId, direction)) return null;
-  const undoing = direction === "undo";
-  const step = (undoing ? session.shadowUndo : session.shadowRedo).pop();
-  if (!step) return null;
-  const vector = Y.encodeStateVector(session.doc);
-  const before = readFields(session.doc);
-  const fields = session.doc.getMap<Y.Text>("fields");
-  /* The step is the forward change (base → next). Replaying it rebases the
-   *  transform onto the live text instead of diffing against a stale base,
-   *  so remote atoms it never knew are not deleted with it. */
-  const targetOf = (intent: { base: RichText; next: RichText }, live: RichText) =>
-    undoing ? rebaseText(intent.next, intent.base, live) : rebaseText(intent.base, intent.next, live);
-  session.doc.transact(() => {
-    for (const key of step.keys) {
-      const intent = step.fields[key]; if (!intent) continue;
-      const text = fields.get(key);
-      if (text instanceof Y.Text) editText(text, captureText(text), targetOf(intent, readText(text)));
-    }
-  }, LOCAL_TEXT_ORIGIN);
-  const after = readFields(session.doc);
-  const realizedFields: TextStep["fields"] = {};
-  const keys = Object.keys(after).filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  /* The counterpart stack gets a forward step anchored on live values:
-   *  undoing it must restore the state this replay moved away from.
-   *  A redo replay applies base → next, so its step is the inverse of what
-   *  just ran (after → before); an undo replay applies next → base, so its
-   *  step keeps the replay's own direction (before → after). Live values
-   *  are used verbatim — a rebase could not recover the atom order. */
-  for (const key of keys) realizedFields[key] = undoing
-    ? { base: after[key], next: before[key] }
-    : { base: before[key], next: after[key] };
-  (undoing ? session.shadowRedo : session.shadowUndo).push({ keys, fields: realizedFields, time: nextHistoryOrder(), view: step.view });
-  const change: LocalTextChange = { sessionKey: documentKey(session.snapshot), update: { scope: session.snapshot.scope, pageId, generation: session.snapshot.generation, update: bytesToBase64(Y.encodeStateAsUpdate(session.doc, vector)) }, keys };
-  session.pendingText.push({ keys, change, update: change.update, external: true, fields: Object.fromEntries(keys.map((key) => [key, { base: before[key], next: after[key] }])) });
-  session.pendingRev += 1;
-  collabVersion += 1;
-  return submitUndo(change.update).then((result) => result, (reason) => { throw reason; }).finally(() => settleText(change));
+
+export function canTextHistory(pageId: string, direction: "undo" | "redo"): boolean {
+  const session = sessionForPage(pageId);
+  return Boolean(session?.canEdit && (direction === "undo" ? session.undoStack.length : session.redoStack.length));
 }
+
+export function replayTextHistory(pageId: string, direction: "undo" | "redo"): Promise<unknown> | null {
+  const session = sessionForPage(pageId);
+  if (!session || !canTextHistory(pageId, direction)) return null;
+  const undoing = direction === "undo";
+  const sourceStack = undoing ? session.undoStack : session.redoStack;
+  const targetStack = undoing ? session.redoStack : session.undoStack;
+
+  while (sourceStack.length) {
+    const step = sourceStack.pop()!;
+    if (!step.ops.length) continue;
+
+    const appliedOps: PageOp[] = [];
+    const counterOps: PageOp[] = [];
+    const fallbackFields: Record<string, { base: RichText; next: RichText }> = {};
+
+    for (const op of step.ops) {
+      if (op.type === "text" && readField(session.optimistic, op.field) === null) continue;
+      if (op.type === "merge_block" && (!session.optimistic.blocks.has(op.intoBlockId) || !session.optimistic.blocks.has(op.fromBlockId))) continue;
+      if (op.type === "split_block" && !session.optimistic.blocks.has(op.blockId)) continue;
+      const beforeState = clonePageState(session.optimistic);
+      const res = applyPageOp(session.optimistic, op, "materialize");
+      const appliedOp = res.applied;
+      if (!appliedOp) continue;
+      appliedOps.push(appliedOp);
+      counterOps.unshift(...invertPageOp(beforeState, appliedOp));
+      if (appliedOp.type === "text") {
+        const prevField = readField(beforeState, appliedOp.field);
+        const nextField = readField(session.optimistic, appliedOp.field);
+        if (prevField !== null && nextField !== null) {
+          fallbackFields[appliedOp.field] = { base: prevField, next: nextField };
+        }
+        queueCaretSteps(session, appliedOp.field, appliedOp.ops);
+        bumpFieldTick(session, appliedOp.field);
+      } else {
+        for (const fieldKey of touchedFieldsOfOp(session.pageId, appliedOp)) {
+          bumpFieldTick(session, fieldKey);
+        }
+      }
+    }
+
+    if (!appliedOps.length) continue;
+
+    if (counterOps.length) {
+      targetStack.push({
+        ops: counterOps,
+        time: nextHistoryOrder(),
+        view: step.view,
+        stepAt: Date.now(),
+      });
+    }
+
+    session.localVersion += 1;
+    session.foldStop = true;
+    const entry: PendingOpEntry = {
+      token: Symbol("history-page-op"),
+      ops: appliedOps.map((op) => structuredClone(op)),
+      fallbackFields: structuredClone(fallbackFields),
+      external: true,
+      settled: false,
+    };
+    session.pending.push(entry);
+    notify(session.scope, session.pageId);
+
+    const change: LocalPageChange = {
+      token: entry.token,
+      scope: session.scope,
+      pageId: session.pageId,
+      epoch: session.epoch,
+      baseSeq: session.ackSeq,
+      ops: appliedOps,
+      fallbackFields,
+      external: true,
+      hasStructural: appliedOps.some((op) => op.type !== "text"),
+    };
+    return submitUndo(change);
+  }
+  return null;
+}
+
 export function latestTextHistory(direction: "undo" | "redo"): { pageId: string; order: number; view: string } | null {
   let latest: { pageId: string; order: number; view: string } | null = null;
   for (const session of sessions.values()) {
-    if (!session.snapshot.canEdit) continue;
-    const stack = direction === "undo" ? session.shadowUndo : session.shadowRedo;
+    if (!session.canEdit) continue;
+    const stack = direction === "undo" ? session.undoStack : session.redoStack;
     const step = stack.at(-1);
-    if (step && (!latest || step.time > latest.order)) latest = { pageId: session.snapshot.pageId, order: step.time, view: step.view };
+    if (step && (!latest || step.time > latest.order)) {
+      latest = { pageId: session.pageId, order: step.time, view: step.view };
+    }
   }
   return latest;
 }
-export function discardTextRedo(): void { for (const session of sessions.values()) session.shadowRedo = []; }
-export function stopTextHistory(pageId?: string): void { for (const session of sessions.values()) if (!pageId || session.snapshot.pageId === pageId) session.foldStop = true; }
-export function connectedPage(pageId: string): boolean { return Boolean(sessionForPage(pageId)); }
-/** The page's session is being fetched right now — a write that reaches the
- *  queue before it lands would bypass the document entirely. */
-/* Test hook: does a live collaborative document exist for this page. */
-declare global { interface Window { __collabSession?: (pageId: string) => boolean; } }
-if (typeof window !== "undefined") window.__collabSession = (pageId) => Boolean(sessionForPage(pageId));
+
+export function discardTextRedo(): void {
+  for (const session of sessions.values()) session.redoStack = [];
+}
+
+export function stopTextHistory(pageId?: string): void {
+  for (const session of sessions.values()) {
+    if (!pageId || session.pageId === pageId) session.foldStop = true;
+  }
+}
+
+export function connectedPage(pageId: string): boolean {
+  return Boolean(sessionForPage(pageId));
+}
+
 export function collaborativePageOpening(scope: string, pageId: string): boolean {
   return Boolean(sessionFor(scope, pageId)) || opening.has(documentKey({ scope, pageId }));
 }
+
+declare global {
+  interface Window {
+    __collabSession?: (pageId: string) => boolean;
+  }
+}
+if (typeof window !== "undefined") {
+  window.__collabSession = (pageId) => Boolean(sessionForPage(pageId));
+}
+
 export function closeCollaboration(): void {
-  lifecycle += 1; suspended = true; clearTimeout(reconnect); socket?.close(); socket = null;
-  for (const session of sessions.values()) { session.doc.destroy(); }
-  sessions.clear(); sessionsByPage.clear(); opening.clear(); resyncTails.clear(); pageLifecycles.clear(); scopeListeners.clear(); pageListeners.clear();
+  lifecycle += 1;
+  suspended = true;
+  clearTimeout(reconnect);
+  socket?.close();
+  socket = null;
+  setSocketConnected(false);
+  sessions.clear();
+  sessionsByPage.clear();
+  opening.clear();
+  pageLifecycles.clear();
+  scopeListeners.clear();
+  pageListeners.clear();
+  spaceDeltaListeners.clear();
+  spacePresenceListeners.clear();
+  latestSpacePresence.clear();
+  subscribedSpaces.clear();
+  authRequestListeners.clear();
   collabVersion += 1;
 }
+
+/** Expose `parseFieldKey` convenience for UI layers. */
+export { parseFieldKey };

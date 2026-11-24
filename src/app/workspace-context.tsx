@@ -30,7 +30,14 @@ import { createPlatformClient, type KnowledgeBaseClient, type PlatformClient } f
 import { WorkspaceDocument, type SyncStatus, type WorkspaceMutation } from "../platform/workspace-document";
 import { WorkspaceStateStore, WorkspaceStoreContext } from "./workspace-store";
 import { useWindowCommands } from "./window-commands";
-import { discardTextRedo, openWhenDocument, recordTextManaged, setTextHistoryView } from "../collaboration/client";
+import {
+  discardTextRedo,
+  openWhenDocument,
+  pagePresenceAnchor,
+  recordTextManaged,
+  setTextHistoryView,
+  type SemanticLocalOpInput,
+} from "../collaboration/client";
 import { hasMetadataChange, isStructureChange } from "../collaboration/protocol";
 import { pageOfRef, recordValue, recordsOfPath, refKey } from "../platform/records";
 import { consumePrefetchedSpaces, request } from "../platform/http";
@@ -81,6 +88,9 @@ export interface WorkspaceActionsValue {
   /** Writes a change already worked out as writes — the editor's, sent to
    *  the pages holding what it touched. `record: false` keeps it out of undo. */
   commitWrites(mutations: WorkspaceMutation[], record?: boolean): void;
+  /** Commits single-page semantic OT ops directly on the active PageSession.
+   *  Returns false if no editable collaborative session is open yet. */
+  commitPageOps(pageId: string, ops: readonly SemanticLocalOpInput[], options?: { record?: boolean; fold?: boolean }): boolean;
   /** Keeps a checkpoint of the page in its history. False when the page is
    *  too large for one: nothing is kept. */
   checkpointPage(pageId: string, summary: string): boolean;
@@ -313,6 +323,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [document, platform, activeSpaceId, selectedPageId]);
 
   useEffect(() => {
+    if (!document || !selectedPageId || !selectedPageExists) return;
+    const scope = spaceOfPage(document.state.pages, selectedPageId) ?? "personal";
+    void openWhenDocument(scope, selectedPageId).catch(() => undefined);
+  }, [document, selectedPageId, selectedPageExists]);
+
+  useEffect(() => {
     if (!platform || !selectedPageId) {
       setPresence([]);
       return;
@@ -327,7 +343,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const say = () => {
       timer = null;
       lastSaid = Date.now();
-      const nextPresence = selection ? { pageId: selectedPageId, status: "editing" as const, selection } : { pageId: selectedPageId, status: "viewing" as const };
+      const anchored = spaceId && selection ? pagePresenceAnchor(spaceId, selectedPageId, selection) : null;
+      const nextPresence = anchored?.selection
+        ? {
+          pageId: selectedPageId,
+          status: "editing" as const,
+          ...(anchored.epoch !== undefined ? { epoch: anchored.epoch } : {}),
+          ...(anchored.seq !== undefined ? { seq: anchored.seq } : {}),
+          selection: anchored.selection,
+        }
+        : { pageId: selectedPageId, status: "viewing" as const };
       const text = JSON.stringify(nextPresence);
       if (text === said) return;
       said = text;
@@ -455,6 +480,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [document, history]);
 
+  const commitPageOps = useCallback((
+    pageId: string,
+    ops: readonly SemanticLocalOpInput[],
+    options: { record?: boolean; fold?: boolean } = {},
+  ): boolean => {
+    if (!document || !ops.length) return false;
+    setTextHistoryView(selectedRef.current);
+    const applied = document.commitPageOps(pageId, ops, options);
+    if (applied && options.record !== false) {
+      history.discardRedo();
+    }
+    return applied;
+  }, [document, history]);
+
   const setPreference = useCallback(<K extends keyof WorkspacePreferences>(key: K, value: WorkspacePreferences[K]) => {
     if (!document) return;
     commit([{ type: "set", path: ["preferences", key], value }]);
@@ -556,6 +595,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     movePage: pageOps.movePage,
     applyBlockMutations: pageOps.applyBlockMutations,
     commitWrites: commit,
+    commitPageOps,
     checkpointPage: pageOps.checkpointPage,
     archivePage: pageOps.archivePage,
     restorePage: pageOps.restorePage,
@@ -600,6 +640,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     pageOps.movePage,
     pageOps.applyBlockMutations,
     commit,
+    commitPageOps,
     pageOps.checkpointPage,
     pageOps.archivePage,
     pageOps.restorePage,

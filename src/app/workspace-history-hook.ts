@@ -52,8 +52,11 @@ export function useWorkspaceHistory({
       const saved = replayTextHistory(text.pageId, direction);
       if (saved) {
         document.track(saved);
-        const view = text.view || text.pageId;
-        if (document.state.pages[view] && view !== selectedRef.current) setSelectedPageId(view);
+        flushSync(() => {
+          document.syncPagePlane(text.pageId);
+          const view = text.view || text.pageId;
+          if (document.state.pages[view] && view !== selectedRef.current) setSelectedPageId(view);
+        });
         queueMicrotask(() => window.dispatchEvent(new Event(HISTORY_REPLAY_EVENT)));
         return true;
       }

@@ -110,8 +110,8 @@ export interface Editor {
   createPage(parentId?: string | null, kind?: NotePage["kind"], options?: CreatePageOptions): string | null;
   checkpointHistory(focus?: HistoryFocus | null): void;
   annotateHistory(input: HistoryInput): void;
-  write(change: EditorTransaction, options?: { cut?: readonly string[]; record?: boolean }): void;
-  execute(change: EditorTransaction | null, focus?: PendingFocus, options?: { cut?: readonly string[] }): void;
+  write(change: EditorTransaction, options?: { cut?: readonly string[]; record?: boolean; fold?: boolean }): void;
+  execute(change: EditorTransaction | null, focus?: PendingFocus, options?: { cut?: readonly string[]; fold?: boolean }): void;
   /** A command on selected blocks, which keeps them selected. */
   executeOnBlocks(transaction: EditorTransaction | null, options?: { cut?: readonly string[] }): void;
   runReplace(transaction: EditorTransaction | null, options?: { cut?: readonly string[] }): boolean;

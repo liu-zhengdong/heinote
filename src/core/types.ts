@@ -399,6 +399,9 @@ export interface PresenceState {
   blockId?: string;
   status?: "viewing" | "editing";
   color?: string;
+  /** Collaborative page epoch & seq at which `selection` was anchored. */
+  epoch?: string;
+  seq?: number;
   /** Where their caret is (`focus`) and where what they select starts
    *  (`anchor`, the same place for a caret), while it is in a block's text. */
   selection?: { anchor: TextPoint; focus: TextPoint };

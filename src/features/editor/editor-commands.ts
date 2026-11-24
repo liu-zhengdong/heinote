@@ -10,9 +10,20 @@ import {
 import { concatInlineContent, inlinePlainText, sliceInlineContent, splitInlineContent } from "../../core/inline-content";
 import type { Block, BlockKind, BlockMutation, BlockTree, Embed, InlineContent } from "../../core/types";
 
+export type EditorSemanticOp =
+  | { type: "text"; blockId: string; content: InlineContent }
+  | { type: "split_block"; blockId: string; offset: number; newBlockId: string; newKind: BlockKind; newProps?: Record<string, unknown> }
+  | { type: "merge_block"; intoBlockId: string; fromBlockId: string }
+  | { type: "create_block"; block: Block; parentId: string | null; afterId: string | null; beforeId: string | null }
+  | { type: "delete_blocks"; blockIds: string[]; fallbackBlock?: Block }
+  | { type: "move_blocks"; blockIds: string[]; parentId: string | null; afterId: string | null; beforeId: string | null }
+  | { type: "set_block_fields"; blockId: string; patch: Record<string, unknown>; removedTableRows?: string[]; removedTableColumns?: string[] };
+
 export interface EditorTransaction {
   mutations: BlockMutation[];
   focus?: { id: string; offset: number };
+  /** Semantic intent for single-page collaborative OT (bypassed when crossing inline sub-page boundaries). */
+  semantic?: EditorSemanticOp[];
 }
 
 export function applyEditorTransaction(tree: BlockTree, transaction: EditorTransaction): BlockTree {
@@ -27,13 +38,34 @@ export function applyEditorTransaction(tree: BlockTree, transaction: EditorTrans
 export function updateBlockContent(tree: BlockTree, blockId: string, content: InlineContent): EditorTransaction | null {
   const block = tree.by_id[blockId];
   if (!block) return null;
-  return { mutations: [{ action: "put", block: { ...block, content } }] };
+  return {
+    mutations: [{ action: "put", block: { ...block, content } }],
+    semantic: [{ type: "text", blockId, content }],
+  };
 }
 
 export function updateBlockFields(tree: BlockTree, blockId: string, patch: Partial<Block>): EditorTransaction | null {
   const block = tree.by_id[blockId];
   if (!block) return null;
-  return { mutations: [{ action: "put", block: { ...block, ...patch, id: block.id } }] };
+  const semantic: EditorSemanticOp[] = [];
+  const fieldPatch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === "id") continue;
+    if (key === "content" && Array.isArray(value)) {
+      semantic.push({ type: "text", blockId, content: value as InlineContent });
+      continue;
+    }
+    if (key === "parent_id" || key === "order") {
+      // Tree placement changes via updateBlockFields fall back to raw writes unless expressed via moveBlocks.
+      return { mutations: [{ action: "put", block: { ...block, ...patch, id: block.id } }] };
+    }
+    fieldPatch[key] = value === undefined ? null : value;
+  }
+  if (Object.keys(fieldPatch).length) semantic.push({ type: "set_block_fields", blockId, patch: fieldPatch });
+  return {
+    mutations: [{ action: "put", block: { ...block, ...patch, id: block.id } }],
+    ...(semantic.length ? { semantic } : {}),
+  };
 }
 
 export function convertBlock(tree: BlockTree, blockId: string, kind: BlockKind): EditorTransaction | null {
@@ -47,6 +79,11 @@ export function convertBlock(tree: BlockTree, blockId: string, kind: BlockKind):
   return {
     mutations: [{ action: "put", block: converted }],
     focus: kind === "divider" ? undefined : { id: blockId, offset: inlinePlainText(block.content).length },
+    semantic: [{
+      type: "set_block_fields",
+      blockId,
+      patch: { kind, checked: kind === "todo" ? (block.checked ?? false) : null },
+    }],
   };
 }
 
@@ -61,6 +98,7 @@ export function checkLines(tree: BlockTree, blockIds: readonly string[]): Editor
   if (bullets.length) {
     return {
       mutations: bullets.map((block) => ({ action: "put" as const, block: { ...block, kind: "todo" as const, checked: false } })),
+      semantic: bullets.map((block) => ({ type: "set_block_fields" as const, blockId: block.id, patch: { kind: "todo", checked: false } })),
     };
   }
   const todos = lines.filter((block) => block.kind === "todo");
@@ -68,6 +106,7 @@ export function checkLines(tree: BlockTree, blockIds: readonly string[]): Editor
   const tick = todos.some((block) => !block.checked);
   return {
     mutations: todos.map((block) => ({ action: "put" as const, block: { ...block, checked: tick } })),
+    semantic: todos.map((block) => ({ type: "set_block_fields" as const, blockId: block.id, patch: { checked: tick } })),
   };
 }
 
@@ -128,6 +167,13 @@ function insertBlockBeside(tree: BlockTree, blockId: string, newId: string, kind
   return {
     mutations: [{ action: "put", block: inserted }],
     focus: { id: inserted.id, offset: 0 },
+    semantic: [{
+      type: "create_block",
+      block: inserted,
+      parentId: block.parent_id,
+      afterId: previous?.id ?? null,
+      beforeId: next?.id ?? null,
+    }],
   };
 }
 
@@ -137,7 +183,17 @@ export function insertFirstChild(tree: BlockTree, blockId: string, newId: string
   if (!tree.by_id[blockId]) return null;
   const first = orderedBlocks(tree, blockId)[0];
   const inserted = createBlock(newId, kind, { parent_id: blockId, order: blockOrderBetween(tree, blockId, undefined, first?.id) });
-  return { mutations: [{ action: "put", block: inserted }], focus: { id: inserted.id, offset: 0 } };
+  return {
+    mutations: [{ action: "put", block: inserted }],
+    focus: { id: inserted.id, offset: 0 },
+    semantic: [{
+      type: "create_block",
+      block: inserted,
+      parentId: blockId,
+      afterId: null,
+      beforeId: first?.id ?? null,
+    }],
+  };
 }
 
 export const insertBlockAfter = (tree: BlockTree, blockId: string, newId: string, kind: BlockKind = "text") =>
@@ -165,6 +221,14 @@ export function splitBlock(
       { action: "put", block: { ...nextBlock, content: right } },
     ],
     focus: { id: newId, offset: 0 },
+    semantic: [{
+      type: "split_block",
+      blockId,
+      offset,
+      newBlockId: newId,
+      newKind: nextKind,
+      ...(nextKind === "todo" ? { newProps: { checked: false } } : {}),
+    }],
   };
 }
 
@@ -174,7 +238,14 @@ export function deleteBlock(tree: BlockTree, blockId: string): EditorTransaction
   const siblings = orderedBlocks(tree, block.parent_id);
   if (siblings.length === 1 && block.parent_id === null) {
     const replacement = { ...block, kind: "text" as const, content: [], checked: undefined, language: undefined };
-    return { mutations: [{ action: "put", block: replacement }], focus: { id: block.id, offset: 0 } };
+    return {
+      mutations: [{ action: "put", block: replacement }],
+      focus: { id: block.id, offset: 0 },
+      semantic: [
+        { type: "text", blockId: block.id, content: [] },
+        { type: "set_block_fields", blockId: block.id, patch: { kind: "text", checked: null, language: null } },
+      ],
+    };
   }
   const index = siblings.findIndex((item) => item.id === blockId);
   const removed = [block, ...descendantsOf(tree, blockId)];
@@ -186,6 +257,7 @@ export function deleteBlock(tree: BlockTree, blockId: string): EditorTransaction
   return {
     mutations: removed.map((item) => ({ action: "delete" as const, blockId: item.id })),
     focus: focus ? { id: focus.id, offset: inlinePlainText(focus.content).length } : undefined,
+    semantic: [{ type: "delete_blocks", blockIds: removed.map((item) => item.id) }],
   };
 }
 
@@ -230,6 +302,7 @@ export function mergeBlockBackward(tree: BlockTree, blockId: string): EditorTran
       { action: "delete", blockId },
     ],
     focus: { id: previous.id, offset },
+    semantic: [{ type: "merge_block", intoBlockId: previous.id, fromBlockId: blockId }],
   };
 }
 
@@ -422,10 +495,15 @@ export function deleteBlocks(tree: BlockTree, blockIds: readonly string[], newId
   if (!tops.length) return null;
   const doomed = subtreeIds(tree, tops);
   const mutations: BlockMutation[] = [...doomed].map((blockId) => ({ action: "delete", blockId }));
+  let fallbackBlock: Block | undefined;
   if (!Object.values(tree.by_id).some((block) => block.parent_id === null && !doomed.has(block.id))) {
-    mutations.push({ action: "put", block: createBlock(newId) });
+    fallbackBlock = createBlock(newId);
+    mutations.push({ action: "put", block: fallbackBlock });
   }
-  return { mutations };
+  return {
+    mutations,
+    semantic: [{ type: "delete_blocks", blockIds: [...doomed], ...(fallbackBlock ? { fallbackBlock } : {}) }],
+  };
 }
 
 /** Copies of the blocks and their subtrees, together, after the last of them. */
@@ -478,9 +556,13 @@ export function moveBlocks(
   let parentId: string | null;
   let left: number | undefined;
   let right: number | undefined;
+  let afterId: string | null = null;
+  let beforeId: string | null = null;
   if (target.edge === "inside") {
     parentId = anchor.id;
-    left = orderedBlocks(tree, anchor.id).filter((block) => !moving.has(block.id)).at(-1)?.order;
+    const lastChild = orderedBlocks(tree, anchor.id).filter((block) => !moving.has(block.id)).at(-1);
+    left = lastChild?.order;
+    afterId = lastChild?.id ?? null;
   } else {
     parentId = anchor.parent_id;
     const siblings = orderedBlocks(tree, parentId).filter((block) => !moving.has(block.id));
@@ -488,14 +570,25 @@ export function moveBlocks(
     if (target.edge === "above") {
       left = siblings[index - 1]?.order;
       right = anchor.order;
+      afterId = siblings[index - 1]?.id ?? null;
+      beforeId = anchor.id;
     } else {
       left = anchor.order;
       right = siblings[index + 1]?.order;
+      afterId = anchor.id;
+      beforeId = siblings[index + 1]?.id ?? null;
     }
   }
   const orders = ordersBetween(left, right, tops.length);
   return {
     mutations: tops.map((block, index) => ({ action: "put" as const, block: { ...block, parent_id: parentId, order: orders[index] } })),
+    semantic: [{
+      type: "move_blocks",
+      blockIds: tops.map((block) => block.id),
+      parentId,
+      afterId,
+      beforeId,
+    }],
   };
 }
 
@@ -518,9 +611,17 @@ export function indentBlocks(tree: BlockTree, blockIds: readonly string[]): Edit
   if (!siblings) return null;
   const previous = siblings[siblings.findIndex((block) => block.id === tops[0].id) - 1];
   if (!previous || previous.kind === "page") return null;
-  const orders = ordersBetween(orderedBlocks(tree, previous.id).at(-1)?.order, undefined, tops.length);
+  const lastPrevChild = orderedBlocks(tree, previous.id).at(-1);
+  const orders = ordersBetween(lastPrevChild?.order, undefined, tops.length);
   return {
     mutations: tops.map((block, index) => ({ action: "put" as const, block: { ...block, parent_id: previous.id, order: orders[index] } })),
+    semantic: [{
+      type: "move_blocks",
+      blockIds: tops.map((block) => block.id),
+      parentId: previous.id,
+      afterId: lastPrevChild?.id ?? null,
+      beforeId: null,
+    }],
   };
 }
 
@@ -537,35 +638,61 @@ export function outdentBlocks(tree: BlockTree, blockIds: readonly string[]): Edi
   const orders = ordersBetween(parent.order, after?.order, tops.length);
   const last = tops[tops.length - 1];
   const trailing = siblings.slice(siblings.findIndex((block) => block.id === last.id) + 1);
-  const adopted = ordersBetween(orderedBlocks(tree, last.id).at(-1)?.order, undefined, trailing.length);
+  const lastChild = orderedBlocks(tree, last.id).at(-1);
+  const adopted = ordersBetween(lastChild?.order, undefined, trailing.length);
+  const semantic: EditorSemanticOp[] = [{
+    type: "move_blocks",
+    blockIds: tops.map((block) => block.id),
+    parentId: parent.parent_id,
+    afterId: parent.id,
+    beforeId: after?.id ?? null,
+  }];
+  if (trailing.length) {
+    semantic.push({
+      type: "move_blocks",
+      blockIds: trailing.map((block) => block.id),
+      parentId: last.id,
+      afterId: lastChild?.id ?? null,
+      beforeId: null,
+    });
+  }
   return {
     mutations: [
       ...tops.map((block, index) => ({ action: "put" as const, block: { ...block, parent_id: parent.parent_id, order: orders[index] } })),
       ...trailing.map((block, index) => ({ action: "put" as const, block: { ...block, parent_id: last.id, order: adopted[index] } })),
     ],
+    semantic,
   };
 }
 
 /** Turn into, for every selected block that is text in some form — never a
  *  page's row, nor a folded block, which is a whole block and not a line. */
 export function convertBlocks(tree: BlockTree, blockIds: readonly string[], kind: BlockKind): EditorTransaction | null {
-  const mutations = blockIds
+  const converted = blockIds
     .map((blockId) => tree.by_id[blockId])
     // A table is its grid, and a card its link, not words in a costume:
     // turned into a line either would lose what it is.
     .filter((block): block is Block => Boolean(block) && block.kind !== "page" && block.kind !== "table" && block.kind !== "embed")
-    .flatMap((block) => convertBlock(tree, block.id, kind)?.mutations ?? []);
-  return mutations.length ? { mutations } : null;
+    .map((block) => convertBlock(tree, block.id, kind))
+    .filter((tx): tx is EditorTransaction => Boolean(tx));
+  const mutations = converted.flatMap((tx) => tx.mutations);
+  const semantic = converted.flatMap((tx) => tx.semantic ?? []);
+  return mutations.length ? { mutations, ...(semantic.length ? { semantic } : {}) } : null;
 }
 
 /** Colour, for every selected block but a divider or a folded block: a text
  *  colour, a background, or none. */
 export function colorBlocks(tree: BlockTree, blockIds: readonly string[], color: Block["color"]): EditorTransaction | null {
-  const mutations = blockIds
+  const targets = blockIds
     .map((blockId) => tree.by_id[blockId])
-    .filter((block): block is Block => Boolean(block) && block.kind !== "divider" && block.kind !== "page")
-    .map((block) => ({ action: "put" as const, block: { ...block, color } }));
-  return mutations.length ? { mutations } : null;
+    .filter((block): block is Block => Boolean(block) && block.kind !== "divider" && block.kind !== "page");
+  const mutations = targets.map((block) => ({ action: "put" as const, block: { ...block, color } }));
+  return mutations.length
+    ? {
+      mutations,
+      semantic: targets.map((block) => ({ type: "set_block_fields" as const, blockId: block.id, patch: { color: color ?? null } })),
+    }
+    : null;
 }
 
 /* ── Fragments: blocks lifted out of a page ─────────────────────────────── */
@@ -892,5 +1019,5 @@ export function withoutEmptyPages(tree: BlockTree, transaction: EditorTransactio
   }
   if (!extra.length) return transaction;
   if (!orderedBlocks(after).length) extra.push({ action: "put", block: createBlock(newId()) });
-  return { ...transaction, mutations: [...transaction.mutations, ...extra] };
+  return { ...transaction, mutations: [...transaction.mutations, ...extra], semantic: undefined };
 }

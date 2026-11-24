@@ -453,7 +453,7 @@ export function blockKeys(editor: Editor & BlockTyping) {
       // Only marks change on the line left behind: it is redrawn, with the
       // new one, before the caret goes to the new line.
       pendingTextSelection.current = { ranges: [{ blockId: newId, start: 0, end: 0 }], forceIds: [block.id, newId] };
-      execute({ mutations: split.mutations });
+      execute({ mutations: split.mutations, semantic: split.semantic });
       checkpointHistory({ kind: "text", pageId: page.id, ranges: [{ blockId: newId, start: 0, end: 0 }] });
       execute(updateBlockContent(tree, block.id, linked));
       return;

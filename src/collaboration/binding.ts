@@ -1,70 +1,107 @@
-import type * as Y from "yjs";
 import type { RichText } from "../platform/schema";
-import { basisText, captureText, editText, readText, type TextBasis } from "./text";
+import { deepEqual, normalizeRichText } from "./ot/text";
 import { publishRecovery } from "./recovery";
 
-export interface RegisteredField { pageId: string; key: string; generation: string; text: Y.Text; canEdit: boolean; revision?: string; scope?: string; userId?: string }
-export interface BoundText { field: RegisteredField; basis: TextBasis }
+export interface RegisteredField {
+  pageId: string;
+  key: string;
+  epoch: string;
+  /** Alias of `epoch` kept for compatibility with existing callers/drafts. */
+  generation: string;
+  canEdit: boolean;
+  revision?: string;
+  scope?: string;
+  userId?: string;
+  runs: RichText;
+}
+
+export interface BoundText {
+  field: RegisteredField;
+  /** Exact normalized runs that the DOM element last rendered or submitted. */
+  shown: RichText;
+}
+
 let lookup: (pageId: string, key: string) => RegisteredField | null = () => null;
 let active: { current: BoundText | null } | null = null;
-export function installTextLookup(get: typeof lookup): void { lookup = get; }
-export function observedText(): BoundText | null { return active?.current ?? null; }
-/** Capture this only when the corresponding shared runs are actually drawn. */
+
+export function installTextLookup(get: typeof lookup): void {
+  lookup = get;
+}
+
+export function observedText(): BoundText | null {
+  return active?.current ?? null;
+}
+
+export function setObservedShown(field: RegisteredField, shown: RichText): void {
+  if (!active) return;
+  const current = active.current;
+  if (current && current.field.pageId === field.pageId && current.field.key === field.key) {
+    active.current = { field, shown: normalizeRichText(shown) };
+  }
+}
+
+/** Capture the field's live runs only when the corresponding shared runs are actually drawn. */
 export function renderedText(pageId: string, key: string): BoundText | null {
   const field = lookup(pageId, key);
-  return field ? { field, basis: captureText(field.text) } : null;
+  return field ? { field, shown: normalizeRichText(field.runs) } : null;
 }
-/** A new generation can keep the exact words the DOM observed. In that
- * case its identity may be adopted without discarding the user's next input.
- * Same-generation remote edits retain the old observed basis for merging. */
+
+/**
+ * A new epoch can keep the exact words the DOM observed; in that case its
+ * identity may be adopted without discarding the user's next input.
+ * Same-epoch remote edits retain the old `shown` basis so local edits are
+ * diffed against what the DOM actually displayed and transformed across unseen
+ * remote insertions (protecting IME composition and frame-delay races).
+ */
 export function refreshTextBinding(bound: BoundText): BoundText | null {
   const current = lookup(bound.field.pageId, bound.field.key);
   if (!current) return null;
-  if (current.text === bound.field.text && current.generation === bound.field.generation) return bound;
-  return JSON.stringify(basisText(bound.basis)) === JSON.stringify(readText(current.text))
-    ? { field: current, basis: captureText(current.text) } : null;
+  if (current.epoch === bound.field.epoch) return bound;
+  return deepEqual(bound.shown, normalizeRichText(current.runs))
+    ? { field: current, shown: normalizeRichText(current.runs) }
+    : null;
 }
-/** Scope native DOM intent across the existing synchronous mutation pipeline. */
+
+/** Scope native DOM intent across the synchronous mutation pipeline. */
 export function withTextBasis(bound: BoundText | null, action: () => void): BoundText | null {
   const current = bound ? lookup(bound.field.pageId, bound.field.key) : null;
-  // Unchanged hosts can retain a memoized basis while another block redraws.
-  // Advance only the page revision when this observed field still agrees.
   let prepared = bound;
-  if (bound && current && current.text === bound.field.text && current.generation === bound.field.generation && JSON.stringify(basisText(bound.basis)) === JSON.stringify(readText(current.text))) prepared = { ...bound, field: { ...bound.field, revision: current.revision } };
-  const previous = active; const context = { current: prepared }; active = context;
-  try { action(); return context.current; } finally { active = previous; }
-}
-/** Keep IME text if a reset or remote deletion unmounts its active host. */
-export function preserveTextDraft(bound: BoundText | null, content: RichText, message = "编辑位置已变化。输入中的文字已保留为草稿。"): void {
-  if (!bound) return;
-  const draft = { message, writes: [], documents: [{ scope: bound.field.scope, pageId: bound.field.pageId, generation: bound.field.generation, fields: { [bound.field.key]: content } }] };
-  if (bound.field.userId) publishRecovery(bound.field.userId, draft);
-  else window.dispatchEvent(new CustomEvent("notes:save-refused", { detail: draft }));
-}
-/** Called inside the owning session's local-origin Yjs transaction when the
- *  observed basis and the live text diverged: `next` is already merged with
- *  remote additions, so diffing against the stale DOM basis would re-insert
- *  them. Diff against the live state, and rebind the element's basis so the
- *  next commit anchors to what it now shows. */
-export function editLiveField(field: RegisteredField, next: RichText): void {
-  const observed = active?.current;
-  const matching = observed?.field.text === field.text && observed.field.generation === field.generation;
-  const nextBasis = editText(field.text, captureText(field.text), next);
-  if (active && matching) active.current = { field, basis: nextBasis };
-}
-/** Called inside the owning session's local-origin Yjs transaction. */
-export function editObservedField(field: RegisteredField, next: RichText): void {
-  const observed = active?.current;
-  /* The draft guard belongs to the observed element's own field: a
-   *  structural write can patch a sibling field while the caret sits in
-   *  this one, and refusing that batch would roll the structure back. */
-  const sameField = observed?.field.pageId === field.pageId && observed.field.key === field.key;
-  const matching = sameField && observed.field.text === field.text && observed.field.generation === field.generation;
-  if (sameField && !matching) {
-    preserveTextDraft(observed, next, "页面结构或版本已变化。输入中的文字已保留为草稿。");
-    throw new Error("The rendered text belongs to an earlier document generation");
+  if (
+    bound
+    && current
+    && current.epoch === bound.field.epoch
+    && deepEqual(bound.shown, normalizeRichText(current.runs))
+  ) {
+    prepared = { ...bound, field: { ...bound.field, revision: current.revision, runs: current.runs } };
   }
-  const basis = matching ? observed.basis : captureText(field.text);
-  const nextBasis = editText(field.text, basis, next);
-  if (active && matching) active.current = { field, basis: nextBasis };
+  const previous = active;
+  const context = { current: prepared };
+  active = context;
+  try {
+    action();
+    return context.current;
+  } finally {
+    active = previous;
+  }
+}
+
+/** Keep IME or stale-epoch text if a reset or remote deletion unmounts its active host. */
+export function preserveTextDraft(
+  bound: BoundText | null,
+  content: RichText,
+  message = "编辑位置已变化。输入中的文字已保留为草稿。",
+): void {
+  if (!bound) return;
+  const draft = {
+    message,
+    writes: [],
+    documents: [{
+      scope: bound.field.scope,
+      pageId: bound.field.pageId,
+      generation: bound.field.epoch,
+      fields: { [bound.field.key]: content },
+    }],
+  };
+  if (bound.field.userId) publishRecovery(bound.field.userId, draft);
+  else if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("notes:save-refused", { detail: draft }));
 }

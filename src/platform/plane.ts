@@ -148,6 +148,14 @@ export class Plane {
     return this.live.get(ref.collection)?.get(ref.id);
   }
 
+  /** Synchronously read all collections held by this plane (reflecting optimistic PageSession state). */
+  snapshot(): PlaneRecords {
+    return {
+      ...emptyPlane(),
+      ...Object.fromEntries([...this.live].map(([name, live]) => [name, readLive(live)])),
+    };
+  }
+
   /** The pages this plane's blocks mirror holds (UC-48): the projector marks
    *  these loaded; the rest project without a body. */
   get loadedPageIds(): ReadonlySet<string> {

@@ -97,7 +97,7 @@ function fields<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined && item !== null)) as T;
 }
 
-function storedTable(table: SimpleTable): NonNullable<BlockRecord["table"]> {
+export function storedTable(table: SimpleTable): NonNullable<BlockRecord["table"]> {
   return {
     ...table,
     rows: Object.fromEntries(Object.entries(table.rows ?? {}).map(([id, row]) => [id, {
@@ -122,7 +122,7 @@ function tableOfRecord(value: unknown): unknown {
  *  the editor's alone (features/editor/composite.ts), never written as
  *  itself: one that reached here would be kept as the line of its name, as
  *  a page's tree reads one (core/block-tree.ts). */
-function storedBlock(block: Block): Omit<BlockRecord, "page"> {
+export function storedBlock(block: Block): Omit<BlockRecord, "page"> {
   const { kind, parent_id, content, name, table, embed, ...rest } = block;
   return fields({
     ...rest,

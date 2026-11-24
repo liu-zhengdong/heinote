@@ -1,9 +1,11 @@
 import { Link2 } from "lucide-react";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ClipboardEvent,
   type DragEvent,
   type FocusEvent,
@@ -30,10 +32,9 @@ import { normalizeCell } from "../../core/simple-table";
 import { replaceInTitle, titleRuns } from "../../core/title";
 import type { InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import type { RichText } from "../../platform/schema";
-import { fieldIsOurs, fieldStale } from "../../collaboration/client";
+import { collaborationFieldTick, consumePendingCaretOps, subscribeCollaboration } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
-import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
+import { transformTextOffset } from "../../collaboration/ot/text";
 import type { AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { DismissReason } from "../../hooks/useDismiss";
 import { useFold } from "../../hooks/useFold";
@@ -192,6 +193,13 @@ export function RichField({
   const [bar, setBar] = useState<FieldSelection | null>(null);
   const [linkOpen, setLinkOpen] = useState(false);
   const [href, setHref] = useState("");
+  const collaborationPageId = collaboration?.pageId;
+  const subscribeCollab = useCallback(
+    (listener: () => void) => (collaborationPageId ? subscribeCollaboration(listener, collaborationPageId) : () => {}),
+    [collaborationPageId],
+  );
+  const collabSnapshot = () => (collaboration ? collaborationFieldTick(collaboration.pageId, collaboration.key) : "none");
+  const collaborationTick = useSyncExternalStore(subscribeCollab, collabSnapshot, collabSnapshot);
 
   const saveDraft = (draft: NonNullable<typeof compositionDraft.current>) => {
     if (draft.bound) preserveTextDraft(draft.bound, storedRuns(draft.content));
@@ -208,7 +216,7 @@ export function RichField({
   const adoptBound = (): BoundText | null => {
     if (bound.current || !collaboration) return bound.current;
     const live = renderedText(collaboration.pageId, collaboration.key);
-    if (live && lastInput.current && sameInlineContent(grammar.normalize(contentOfRuns(readText(live.field.text))), lastInput.current)) bound.current = live;
+    if (live && lastInput.current && sameInlineContent(grammar.normalize(contentOfRuns(live.shown)), lastInput.current)) bound.current = live;
     return bound.current;
   };
   const run = (action: () => void): boolean => {
@@ -252,16 +260,7 @@ export function RichField({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      /* Same rule as InlineEditor: a bound field only rewrites when it is
-       *  outside our own write chain; otherwise the newest in-flight commit
-       *  beats the possibly stale `content` prop. */
-      const boundRuns = nextBound ? readText(nextBound.field.text) : null;
-      const chain: { next?: RichText } = {};
-      const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
-      const remote = boundRuns !== null && collaboration != null && !fieldStale(collaboration.pageId, collaboration.key) && !ours && chain.next === undefined;
-      const chainHead = chain.next ? grammar.normalize(contentOfRuns(chain.next)) : null;
-      const remoteContent = remote && boundRuns ? grammar.normalize(contentOfRuns(boundRuns)) : null;
-      const wantedContent = remoteContent ?? chainHead ?? content;
+      const wantedContent = nextBound ? grammar.normalize(contentOfRuns(nextBound.shown)) : content;
       const html = grammar.html(wantedContent);
       if (document.activeElement !== element) {
         if (element.innerHTML !== html) element.innerHTML = html;
@@ -269,14 +268,19 @@ export function RichField({
         const showing = shownWords(element, grammar);
         if (!sameInlineContent(showing, wantedContent) || !holdsOnly(element, grammar)) {
           const selection = selectionOffsets(element);
-          const anchored = selection && bound.current ? captureSelection(bound.current.basis, selection.start, selection.end) : null;
-          const resolved = anchored && nextBound ? resolveSelection(nextBound.field.text, anchored) : null;
+          const caretOps = collaboration ? consumePendingCaretOps(collaboration.pageId, collaboration.key) : [];
           const shown = inlinePlainText(showing);
           const wanted = inlinePlainText(wantedContent);
           element.innerHTML = html;
-          if (selection) focusRange(element,
-            resolved?.start ?? keptOffset(shown, wanted, selection.start),
-            resolved?.end ?? keptOffset(shown, wanted, selection.end));
+          if (selection) {
+            focusRange(
+              element,
+              caretOps.length ? transformTextOffset(selection.start, caretOps, "right") : keptOffset(shown, wanted, selection.start),
+              caretOps.length ? transformTextOffset(selection.end, caretOps, "right") : keptOffset(shown, wanted, selection.end),
+            );
+          }
+        } else if (collaboration) {
+          consumePendingCaretOps(collaboration.pageId, collaboration.key);
         }
       }
       element.toggleAttribute("data-blank", !element.textContent);
@@ -284,7 +288,7 @@ export function RichField({
       lastInput.current = wantedContent;
     };
     sync.current();
-  }, [content, grammar, collaboration?.pageId, collaboration?.key]);
+  }, [content, grammar, collaboration?.pageId, collaboration?.key, collaborationTick]);
 
   useLayoutEffect(() => {
     const element = ref.current;
@@ -461,7 +465,7 @@ export function RichField({
       if (lastInput.current && sameInlineContent(lastInput.current, next)) return;
       if (!adoptBound() && collaboration) {
         const live = renderedText(collaboration.pageId, collaboration.key);
-        if (live && !sameInlineContent(next, grammar.normalize(contentOfRuns(readText(live.field.text))))) {
+        if (live && !sameInlineContent(next, grammar.normalize(contentOfRuns(live.shown)))) {
           saveDraft({ bound: live, content: next, address: collaboration });
           lastInput.current = next;
           sync.current();

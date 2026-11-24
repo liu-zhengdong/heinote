@@ -14,10 +14,9 @@ import {
 import { inlineFromText, inlinePlainText, inlineSignature, sameInlineContent, type DescribeMention } from "../../core/inline-content";
 import type { Block, InlineContent } from "../../core/types";
 import { contentOfRuns, storedRuns } from "../../core/stored-runs";
-import type { RichText } from "../../platform/schema";
-import { collaborationFieldTick, fieldIsOurs, fieldStale, subscribeCollaboration } from "../../collaboration/client";
+import { collaborationFieldTick, consumePendingCaretOps, subscribeCollaboration } from "../../collaboration/client";
 import { preserveTextDraft, refreshTextBinding, renderedText, withTextBasis, type BoundText } from "../../collaboration/binding";
-import { captureSelection, readText, resolveSelection } from "../../collaboration/text";
+import { transformTextOffset } from "../../collaboration/ot/text";
 import { editableHtml } from "./block-html";
 import { blockDefinition } from "./block-registry";
 import { highlighterReady, whenHighlighterReady } from "./code-highlight";
@@ -134,7 +133,7 @@ export const InlineEditor = memo(function InlineEditor({
   const adoptBound = (): BoundText | null => {
     if (bound.current || !collaboration) return bound.current;
     const live = renderedText(collaboration.pageId, collaboration.key);
-    if (live && lastInput.current && sameInlineContent(contentOfRuns(readText(live.field.text)), lastInput.current)) bound.current = live;
+    if (live && lastInput.current && sameInlineContent(contentOfRuns(live.shown), lastInput.current)) bound.current = live;
     return bound.current;
   };
   const run = (action: () => void): boolean => {
@@ -192,7 +191,7 @@ export const InlineEditor = memo(function InlineEditor({
       if (lastInput.current && sameInlineContent(lastInput.current, content)) return;
       if (!adoptBound() && collaboration) {
         const live = renderedText(collaboration.pageId, collaboration.key);
-        if (live && !sameInlineContent(content, contentOfRuns(readText(live.field.text)))) {
+        if (live && !sameInlineContent(content, contentOfRuns(live.shown))) {
           saveDraft({ bound: live, content, address: collaboration });
           lastInput.current = content;
           sync.current(true);
@@ -215,44 +214,7 @@ export const InlineEditor = memo(function InlineEditor({
       const element = ref.current;
       if (!element || composing.current) return;
       const nextBound = collaboration ? renderedText(collaboration.pageId, collaboration.key) : null;
-      /* A bound field may only rewrite the element when its text is outside
-       *  our own write chain: genuinely remote (past the latest delta for a
-       *  local write, and equal to neither the base nor the result of an
-       *  in-flight commit). Everything else — a stale seed, an older commit's
-       *  echo, the acknowledgment for the newest one — is our own text on
-       *  its way back, and the DOM already carries at least that. */
-      const boundRuns = nextBound ? readText(nextBound.field.text) : null;
-      const chain: { next?: RichText } = {};
-      /* A bound equal to the record prop cannot be a lagging echo: both
-       *  mirror the same committed record, so the field already carries
-       *  current truth. Stale only matters while the field lags the
-       *  record — then redrawing it would tear the newer text. */
-      const stale = boundRuns !== null && collaboration != null
-        && !sameInlineContent(contentOfRuns(boundRuns), block.content)
-        && fieldStale(collaboration.pageId, collaboration.key);
-      const ours = boundRuns !== null && collaboration != null && fieldIsOurs(collaboration.pageId, collaboration.key, boundRuns, chain);
-      /* While a write is in flight the field can only ever show chain
-       *  values or their echoes; a bound matching neither is not newer —
-       *  it is simply not ours, so the focused DOM stays ahead. A true
-       *  peer merge lands after the pending entries settle, when the
-       *  next projection renders it fresh again. */
-      const remote = boundRuns !== null && !stale && !ours && chain.next === undefined;
-      /* A bound behind the record prop is a lagging echo: the prop already
-       *  carries a newer value, so the echo may not overwrite it. A peer's
-       *  write lands in both at once, so a true remote still wins. */
-      const boundContent = remote && boundRuns && !sameInlineContent(contentOfRuns(boundRuns), block.content) ? null : remote && boundRuns ? contentOfRuns(boundRuns) : null;
-      const showing = document.activeElement === element ? readDom(element) : null;
-      const chainHead = chain.next ? contentOfRuns(chain.next) : null;
-      /* The focused DOM shows a programmatic value — never an edit — while
-       *  it carries the same text the element last submitted and the chain
-       *  carries nothing different. A write that settles this field to
-       *  something other than the submitted text — a split truncating the
-       *  element, undo, redo, recovered pending text — outranks the DOM:
-       *  the submitted text is then simply an older value, not user intent.
-       *  Plain typing submits the same text the chain holds, so nothing
-       *  mid-typing ever tears. */
-      const wroteElsewhere = chainHead !== null && (lastInput.current === null || !sameInlineContent(chainHead, lastInput.current));
-      const content = boundContent ?? (wroteElsewhere ? chainHead : showing ?? chainHead ?? block.content);
+      const content = nextBound ? contentOfRuns(nextBound.shown) : block.content;
       if (document.activeElement !== element) {
         const prev = drawnMeta.current;
         if (
@@ -281,27 +243,30 @@ export const InlineEditor = memo(function InlineEditor({
         lastInput.current = content;
         return;
       }
+      const showing = readDom(element);
       const html = editableHtml({ ...block, content }, describe);
       element.toggleAttribute("data-blank", !inlinePlainText(content));
-      const shown = showing ? inlinePlainText(showing) : element.textContent ?? "";
+      const shown = inlinePlainText(showing);
       const wanted = inlinePlainText(content);
-      const agree = showing
-        ? marks || nextBound ? sameInlineContent(showing, content) : inlineSignature(showing) === inlineSignature(content)
-        : html === drawn.current && shown === wanted;
+      const agree = (!code || html === drawn.current)
+        && (marks || nextBound ? sameInlineContent(showing, content) : inlineSignature(showing) === inlineSignature(content));
       if (!agree) {
         const selection = selectionOffsets(element);
-        const anchored = selection && bound.current ? captureSelection(bound.current.basis, selection.start, selection.end) : null;
-        const resolved = anchored && nextBound ? resolveSelection(nextBound.field.text, anchored) : null;
+        const caretOps = collaboration ? consumePendingCaretOps(collaboration.pageId, collaboration.key) : [];
         element.innerHTML = html;
         drawn.current = html;
         drawnMeta.current = { element, content, kind: block.kind, language: block.language, coloured, describe };
-        if (selection) focusRange(element,
-          resolved?.start ?? keptOffset(shown, wanted, selection.start),
-          resolved?.end ?? keptOffset(shown, wanted, selection.end));
+        if (selection) {
+          focusRange(
+            element,
+            caretOps.length ? transformTextOffset(selection.start, caretOps, "right") : keptOffset(shown, wanted, selection.start),
+            caretOps.length ? transformTextOffset(selection.end, caretOps, "right") : keptOffset(shown, wanted, selection.end),
+          );
+        }
       } else {
+        if (collaboration) consumePendingCaretOps(collaboration.pageId, collaboration.key);
         drawnMeta.current = { element, content, kind: block.kind, language: block.language, coloured, describe };
       }
-      // Capture only after the DOM contains these complete shared runs.
       bound.current = nextBound;
       lastInput.current = content;
     };

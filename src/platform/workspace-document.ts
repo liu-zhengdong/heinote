@@ -8,9 +8,9 @@ import { request } from "./http";
 import { Plane } from "./plane";
 import { deleteScopeMirror, setMirrorUser } from "./mirror";
 import { blockRecordId } from "./record-ids";
-import { restoreSavedWrites, withRecordTransaction } from "./live";
+import { restoreSavedWrites, submitPageOps, withRecordTransaction } from "./live";
 import { hasMetadataChange } from "../collaboration/protocol";
-import { awaitCollaborativeBasis, withStructureText } from "../collaboration/client";
+import { awaitCollaborativeBasis, hasEditableSession, recordLocalSemanticOps, withStructureText, type SemanticLocalOpInput } from "../collaboration/client";
 import { getRecovery } from "../collaboration/recovery";
 import {
   pageOfRef,
@@ -419,6 +419,51 @@ export class WorkspaceDocument {
      into the plane it entered, and deletes it from the one it left; a page
      shared from the member's own plane leaves its record there, which says
      where it stands among their pages. */
+  /**
+   * Synchronously re-read the plane owning `pageId` (reflecting active `PageSession`
+   * optimistic state) and reproject immediately — used after semantic ops and undo/redo.
+   */
+  syncPagePlane(pageId: string): void {
+    if (this.closed) return;
+    const planeKey = planeOfPage(this.state, pageId);
+    if (!planeKey) return;
+    const plane = this.planes.get(planeKey);
+    if (!plane) return;
+    this.held.set(planeKey, plane.snapshot());
+    this.reproject(true);
+  }
+
+  /**
+   * Apply semantic page operations (text, split, merge, move, create, delete, block/page fields)
+   * directly on the page's active `PageSession`, synchronously reprojecting the workspace state
+   * so React mounts/focuses new blocks before the next keystroke.
+   * Returns `false` if the page has no open editable `PageSession` yet (caller falls back to `transact`).
+   */
+  commitPageOps(
+    pageId: string,
+    inputs: readonly SemanticLocalOpInput[],
+    options: { record?: boolean; fold?: boolean } = {},
+  ): boolean {
+    if (this.closed) throw new Error("Workspace is closed");
+    if (!inputs.length) return true;
+    const planeKey = planeOfPage(this.state, pageId);
+    if (!planeKey || this.readOnly.has(planeKey)) return false;
+    const plane = this.planes.get(planeKey);
+    if (!plane || !hasEditableSession(planeKey, pageId)) return false;
+    let change;
+    try {
+      change = recordLocalSemanticOps(planeKey, pageId, inputs, options);
+    } catch {
+      this.refuse();
+      return true;
+    }
+    if (!change) return true;
+    this.held.set(planeKey, plane.snapshot());
+    this.reproject(true);
+    this.track(submitPageOps(change));
+    return true;
+  }
+
   transact(requested: WorkspaceMutation[]): void {
     if (this.closed) throw new Error("Workspace is closed");
     const mutations = withoutFreshStamps(this.state, requested).filter(isWorkspaceMutation);

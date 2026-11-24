@@ -687,7 +687,7 @@ export function extractInsertedRuns(ops: readonly TextStep[]): RichText {
   return normalizeRichText(out);
 }
 
-type DiffChunk<T> = { kind: "equal"; aStart: number; bStart: number; count: number }
+type DiffChunk = { kind: "equal"; aStart: number; bStart: number; count: number }
   | { kind: "delete"; aStart: number; count: number }
   | { kind: "insert"; bStart: number; count: number };
 
@@ -697,7 +697,7 @@ const MAX_MYERS_D = 512;
  * Zero-dependency Myers O(ND) diff over arbitrary arrays with a bounded edit-distance
  * fallback so pathological huge pastes stay sub-millisecond.
  */
-function myersDiff<T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => boolean): DiffChunk<T>[] {
+function myersDiff<T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => boolean): DiffChunk[] {
   const n = a.length;
   const m = b.length;
   if (n === 0 && m === 0) return [];
@@ -710,7 +710,7 @@ function myersDiff<T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => bool
   let suffix = 0;
   while (suffix < n - prefix && suffix < m - prefix && eq(a[n - 1 - suffix], b[m - 1 - suffix])) suffix += 1;
 
-  const chunks: DiffChunk<T>[] = [];
+  const chunks: DiffChunk[] = [];
   if (prefix > 0) chunks.push({ kind: "equal", aStart: 0, bStart: 0, count: prefix });
 
   const midAStart = prefix;
@@ -757,7 +757,7 @@ function myersDiff<T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => bool
       chunks.push({ kind: "delete", aStart: midAStart, count: midN });
       chunks.push({ kind: "insert", bStart: midBStart, count: midM });
     } else {
-      const midChunks: DiffChunk<T>[] = [];
+      const midChunks: DiffChunk[] = [];
       let x = midN;
       let y = midM;
       for (let d = foundD; d > 0; d -= 1) {
@@ -800,7 +800,7 @@ function myersDiff<T>(a: readonly T[], b: readonly T[], eq: (x: T, y: T) => bool
   return chunks;
 }
 
-function pushMergedChunk<T>(list: DiffChunk<T>[], item: DiffChunk<T>): void {
+function pushMergedChunk(list: DiffChunk[], item: DiffChunk): void {
   const prev = list.at(-1);
   if (!prev || prev.kind !== item.kind) {
     list.push(item);

@@ -24,7 +24,6 @@ import type {
   PageState,
   SelectionPoint,
   SelectionRange,
-  TextStep,
 } from "./types";
 
 export const ORDER_STEP = 1024;
@@ -674,19 +673,23 @@ export function applyPageOp(
       }
     }
     if (isObj(block.table)) {
-      if (op.removedTableRows?.length && isObj(block.table.rows)) {
-        const nextRows = { ...block.table.rows };
+      let tableObj: JsonRecord = block.table;
+      if (op.removedTableRows?.length && isObj(tableObj.rows)) {
+        const nextRows = { ...tableObj.rows };
         for (const rowId of op.removedTableRows) delete nextRows[rowId];
-        block.table = { ...block.table, rows: nextRows };
+        tableObj = { ...tableObj, rows: nextRows };
       }
       if (op.removedTableColumns?.length) {
         const doomedCols = new Set(op.removedTableColumns);
-        if (Array.isArray(block.table.columns)) {
-          block.table.columns = block.table.columns.filter((col) => !(isObj(col) && typeof col.id === "string" && doomedCols.has(col.id)));
+        if (Array.isArray(tableObj.columns)) {
+          tableObj = {
+            ...tableObj,
+            columns: tableObj.columns.filter((col: unknown) => !(isObj(col) && typeof col.id === "string" && doomedCols.has(col.id))),
+          };
         }
-        if (isObj(block.table.rows)) {
+        if (isObj(tableObj.rows)) {
           const nextRows: JsonRecord = {};
-          for (const [rowId, rowVal] of Object.entries(block.table.rows)) {
+          for (const [rowId, rowVal] of Object.entries(tableObj.rows)) {
             if (!isObj(rowVal)) { nextRows[rowId] = rowVal; continue; }
             if (isObj(rowVal.cells)) {
               const nextCells = { ...rowVal.cells };
@@ -696,9 +699,10 @@ export function applyPageOp(
               nextRows[rowId] = rowVal;
             }
           }
-          block.table = { ...block.table, rows: nextRows };
+          tableObj = { ...tableObj, rows: nextRows };
         }
       }
+      block.table = tableObj;
     }
     return { applied: structuredClone(op), orphaned };
   }
