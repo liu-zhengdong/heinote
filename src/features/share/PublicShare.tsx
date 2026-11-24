@@ -124,8 +124,9 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   }, [active, document]);
 
   const isApp = Boolean(active && active.kind === "app");
+  const isDatabase = Boolean(active && active.kind === "database");
 
-  return <main className={`public-reader${isApp ? " public-reader--app" : ""}`}>
+  return <main className={`public-reader${isApp ? " public-reader--app" : ""}${isDatabase ? " public-reader--db" : ""}`}>
     <header className="public-reader__head">
       <a href="/" className="public-reader__brand">HeiNote</a>
       {isApp && active ? (
@@ -151,7 +152,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
               : <p className="public-reader__app-empty account-muted">小应用尚未启用。</p>}
           </article>
         ) : (
-          <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
+          <article key={active.id} className={`public-reader__document${active.full_width ? " public-reader__document--wide" : ""}${isDatabase ? " public-reader__document--db" : ""}${mobile && tree && listedCount > 1 ? " public-reader__document--with-mobile-pill" : ""}`} aria-label={titleOf(active)}>
             {active.cover_image ? <img className="public-reader__cover" src={context.fileHref(active.cover_image)} alt="" /> : null}
             <div className={`public-reader__content public-reader__content--${active.font ?? "default"}`}>
               {pageIcon(active) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={active} context={context} size={72} /></div> : null}

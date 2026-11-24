@@ -78,15 +78,25 @@
 .public-reader__children a:hover { background: var(--fill-hover); }
 .public-reader__children svg { flex: none; }
 
-/* ISS-23: a shared database page renders its first view as a read-only
-   table — same .db__table furniture as the desk — instead of an empty
-   document above a flat list of row pages. */
-.public-reader__db { margin-top: 8px; }
+/* ISS-23 + unified Database styling: unlock the full container width like
+   DatabasePage in edit mode (instead of clamping inside the 780px text
+   column), remove double horizontal gutters, and prevent document typography
+   rules (1.75 line-height, link underlines) from leaking into database views. */
+.public-reader--db .public-reader__layout { width: 100%; max-width: none; margin: 0; }
+.public-reader--db .public-reader__nav { min-height: calc(100dvh - 52px); border-right: 1px solid var(--hairline); }
+.public-reader__document--db { --gutter: clamp(20px, 4vw, 56px); }
+.public-reader__document--db .public-reader__content { max-width: none; margin: 0; padding: 28px var(--gutter) 48px; }
+.public-reader__document--db .public-reader__content h1 { margin-bottom: 12px; }
+.db.public-reader__db { padding: 0; min-height: 0; margin-top: 0; line-height: 1.5; }
+.public-reader__db .dbv--page > .db__toolbar { top: 0; }
+.public-reader__db .db__views { display: flex; scroll-snap-type: inline proximity; }
+.public-reader__db .view-tab { scroll-snap-align: start; }
 .public-reader__db .db__th { display: flex; align-items: center; gap: 6px; padding: 0 8px; }
 .public-reader__db .db__cell { display: block; }
-.public-reader__db .db-rel { text-decoration: none; }
+.public-reader__db :is(a.db__row-name, a.db-list__title, a.board__card-title, a.db-card__title, a.db-cal__item, a.db-rel) { text-decoration: none; }
 .public-reader__db td:empty { background: none; }
 @media (max-width: 559.98px) {
+  .public-reader--db .public-reader__nav { border-right: 0; }
   .public-reader__db .db__name { position: static; }
 }
 

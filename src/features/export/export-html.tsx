@@ -82,7 +82,12 @@ const EXPORT_CSS = `
     --text-gray: #787774; --text-brown: #9f6b53; --text-orange: #d9730d; --text-yellow: #cb912f; --text-green: #448361;
     --text-blue: #337ea9; --text-purple: #9065b0; --text-pink: #c14c8a; --text-red: #d44c47;
   }
-  .db { position: relative; }
+  .db { position: relative; line-height: 1.5; }
+  .dbv { --db-row: 30px; display: flex; min-width: 0; flex-direction: column; container: dbv / inline-size; }
+  .db__toolbar { display: flex; height: 34px; align-items: center; gap: 4px; border-bottom: 1px solid var(--hairline); }
+  .db__tabs, .db__views { display: flex; min-width: 0; flex: 1; align-items: center; gap: 2px; overflow-x: auto; }
+  .view-tab { display: inline-flex; height: 26px; flex: none; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 4px; background: none; color: var(--ink-3); font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .view-tab.is-active { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); border-radius: 4px 4px 0 0; }
   .db__table-wrap { overflow-x: auto; }
   .db__table { width: 100%; border-collapse: collapse; font-size: 14.72px; table-layout: fixed; }
   .db__table th, .db__table td { height: var(--db-row); padding: 0; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); text-align: left; vertical-align: middle; }
@@ -96,14 +101,49 @@ const EXPORT_CSS = `
   .db__name { position: sticky; z-index: 3; left: 0; background: var(--paper); box-shadow: inset -1px 0 0 var(--name-edge); }
   .db__table tbody tr:hover .db__name { background: color-mix(in srgb, var(--ink) 4%, var(--paper)); }
   .db__row-name { display: flex; width: 100%; min-height: var(--db-row); align-items: center; gap: 7px; padding: 0 8px; color: var(--ink); font-size: 14px; text-align: left; text-decoration: none; }
+  .db__row-name.is-wrapped { align-items: flex-start; padding-block: calc((var(--db-row) - 1lh) / 2 - .2em); }
   .db__row-name > .db__row-title:not([data-empty]) { overflow: hidden; min-width: 0; padding-block: .2em; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+  .db__row-name.is-wrapped > .db__row-title:not([data-empty]) { overflow-wrap: anywhere; white-space: normal; }
   .db__row-mark { flex: none; }
   .db__row-title[data-empty] { min-width: 0; flex: 1; color: var(--ink-4); font-weight: 500; }
   .db__row-title[data-empty]::before { content: "Untitled"; }
   .db__cell { width: 100%; height: var(--db-row); padding: 0 8px; border: 0; background: none; color: inherit; font-size: 14px; }
   .db__text { display: grid; min-width: 0; }
-  .db__text::after { box-sizing: border-box; content: " "; visibility: hidden; }
+  .db__text::after { box-sizing: border-box; content: attr(data-value) " "; visibility: hidden; }
   .db__text > .db__cell, .db__text::after { min-width: 0; height: auto; min-height: var(--db-row); padding: calc((var(--db-row) - 1lh) / 2) 8px; font-size: 14px; grid-area: 1 / 1; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .db__text.is-one-line::after { content: none; }
+  .db__text.is-one-line > .db__cell { height: var(--db-row); padding-block: 0; line-height: var(--db-row); overflow-wrap: normal; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .db__table tfoot td { height: 32px; border-bottom: 0; background: var(--paper); box-shadow: 0 -1px 0 var(--hairline-strong); color: var(--ink-2); font-size: 12px; }
+  .db__calc { display: inline-flex; align-items: baseline; gap: 6px; }
+  .db__calc-fn { color: var(--ink-3); font-size: 11.5px; }
+  .db__calc-val { font-weight: 500; font-variant-numeric: tabular-nums; }
+  .db-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+  .db-chip { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-2); font-size: 12px; }
+  .board { display: flex; align-items: flex-start; gap: 12px; padding-top: 12px; overflow-x: auto; }
+  .board__column { width: 260px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+  .board__column-head { display: flex; align-items: center; gap: 8px; }
+  .board__count { color: var(--ink-3); font-size: 12px; }
+  .board__card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: 6px; background: var(--paper); box-shadow: 0 0 0 1px var(--hairline-strong); }
+  .board__card-title { color: var(--ink); font-size: 14px; font-weight: 500; text-decoration: none; }
+  .board__card p { margin: 0; color: var(--ink-2); font-size: 12.5px; }
+  .db-list { display: flex; flex-direction: column; padding-top: 4px; }
+  .db-list__row { display: flex; min-height: 36px; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 8px; border-bottom: 1px solid var(--hairline); }
+  .db-list__name { display: inline-flex; min-width: 0; align-items: center; gap: 7px; }
+  .db-list__title { color: var(--ink); font-size: 14px; font-weight: 500; text-decoration: none; }
+  .db-gallery { display: grid; padding-top: 12px; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .db-card { display: flex; flex-direction: column; overflow: hidden; border-radius: 6px; background: var(--paper); box-shadow: 0 0 0 1px var(--hairline-strong); }
+  .db-card__preview { display: flex; height: 112px; flex-direction: column; gap: 4px; padding: 10px 12px; overflow: hidden; background: var(--fill); color: var(--ink-2); font-size: 12px; }
+  .db-card__preview--cover { padding: 0; }
+  .db-card__cover-image { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .db-card__body { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+  .db-card__title { color: var(--ink); font-size: 14px; font-weight: 500; text-decoration: none; }
+  .db-cal { display: flex; flex-direction: column; padding-top: 8px; }
+  .db-cal__bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .db-cal__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--hairline); border-left: 1px solid var(--hairline); }
+  .db-cal__weekday { padding: 6px 8px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); color: var(--ink-3); font-size: 12px; }
+  .db-cal__day { min-height: 84px; padding: 6px; border-right: 1px solid var(--hairline); border-bottom: 1px solid var(--hairline); display: flex; flex-direction: column; gap: 4px; }
+  .db-cal__date { color: var(--ink-3); font-size: 12px; }
+  .db-cal__item { display: block; padding: 2px 6px; border-radius: 3px; background: var(--fill); color: var(--ink); font-size: 12px; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .db__cell--select { position: relative; display: flex; height: var(--db-row); align-items: center; gap: 4px; }
   .db__cell--line { height: var(--db-row); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: var(--db-row); }
   .db__cell--number { font-variant-numeric: tabular-nums; text-align: right; }
@@ -163,13 +203,13 @@ function ReaderArticle({ page, context, children }: { page: NotePage; context: R
   const childPages = page.kind === "database" ? []
     : [...context.pages.values()].filter((item) => item.parent_id === page.id && !inTrash(context.pages, item.id));
   return (
-    <article className={`public-reader__document${page.full_width ? " public-reader__document--wide" : ""}`} aria-label={titleOf(page)}>
+    <article className={`public-reader__document${page.full_width || page.kind === "database" ? " public-reader__document--wide" : ""}`} aria-label={titleOf(page)}>
       {page.cover_image ? <img className="public-reader__cover" src={context.fileHref(page.cover_image)} alt="" /> : null}
       <div className={`public-reader__content public-reader__content--${page.font ?? "default"}`}>
         {pageIcon(page) ? <div className="public-reader__icon" aria-hidden="true"><ReaderPageIcon page={page} context={context} size={72} /></div> : null}
         <h1>{page.title_content?.length ? <ReaderInline content={page.title_content} context={context} /> : titleOf(page)}</h1>
         {page.kind === "database" && page.database ? (
-          <PublicDatabase database={page} pages={[...context.pages.values()]} context={{
+          <PublicDatabase interactive={false} database={page} pages={[...context.pages.values()]} context={{
             pages: context.pages,
             pageHref: (id) => context.pageHref(id),
             pageTitle: titleOf,
