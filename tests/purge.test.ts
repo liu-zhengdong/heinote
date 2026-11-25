@@ -233,14 +233,15 @@ test("UC-57 AC-05: purge endpoint enforces permissions, state checks, idempotenc
 
 test("UC-57 AC-03 & AC-04: 2,000-page subtree purges bottom-up without blocking concurrent edits or leaking collaboration_archives", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "notes-purge-2k-"));
-  t.after(async () => {
-    await rm(dir, { recursive: true, force: true });
-  });
   await migrateDatabase(dir);
   const store = new Store(dir);
-  t.after(() => {
+  // Tear down in one hook so the database is closed before the temp dir is
+  // removed. On Windows the open SQLite handle (and its WAL -shm/-wal files)
+  // keeps the directory busy; POSIX lets the unlink succeed either way.
+  t.after(async () => {
     store.purge.stop();
     store.db.close();
+    await rm(dir, { recursive: true, force: true });
   });
 
   const actor = {
