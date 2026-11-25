@@ -1,4 +1,5 @@
 import { isRetryable, type FileUrl } from "../../platform/schema";
+import { copyImageBlob } from "../../core/clipboard";
 import { isImageType } from "../../core/files";
 import { createId } from "../../core/ids";
 import type { StoredFile } from "../../core/types";
@@ -239,6 +240,17 @@ async function bytesOf(files: Files, file: StoredFile, path: string): Promise<Bl
   } finally {
     shown.release();
   }
+}
+
+/** A file's original bytes themselves (to save or copy): in hand, or from this
+ *  session's copy, read once. */
+export function readFileBlob(files: Files, file: StoredFile): Promise<Blob> {
+  return bytesOf(files, file, file.path);
+}
+
+/** Copies a stored image's original pixels to the system clipboard as PNG. */
+export function copyStoredImage(files: Files, file: StoredFile): Promise<void> {
+  return copyImageBlob(() => bytesOf(files, file, file.path));
 }
 
 /** Saves the original to the reader's computer. Handed over as plain bytes,

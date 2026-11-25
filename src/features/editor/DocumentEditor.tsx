@@ -1,4 +1,4 @@
-import { AppWindow, ArrowUpRight, ImageIcon, Link2, RefreshCw, Smile, X } from "lucide-react";
+import { AppWindow, ArrowUpRight, ImageIcon, Link2, MoreHorizontal, RefreshCw, Smile, X } from "lucide-react";
 import "./editor.css";
 import "./picker.css";
 import {
@@ -24,7 +24,7 @@ import { flushSync } from "react-dom";
 import { Popover } from "../../components/Popover";
 import { PageOutline } from "../../components/PageOutline";
 import { extractOutline } from "../../core/outline";
-import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
 import { clearEditSurface, registerEditSurface } from "../../app/edit-surface";
 import { useUi } from "../../app/ui-context";
@@ -72,19 +72,20 @@ import {
   insertToken,
   tokenSpan,
   sliceInlineContent,
+  soleImage,
   soleLink,
   updateMentionAt,
   mentionFromAttributes,
   type ShownLink,
   type ToggleableMark,
 } from "../../core/inline-content";
-import type { Block, BlockKind, BlockMutation, BlockTree, ContentColor, Embed, InlineContent, InlineMarks, NotePage } from "../../core/types";
+import type { Block, BlockKind, BlockMutation, BlockTree, ContentColor, Embed, InlineContent, InlineMarks, Mention, NotePage, StoredFile } from "../../core/types";
 import { imeComposing } from "../../core/keyboard";
 import { CardOffer, LinkHoverCard, useLinkHover, type CardOfferState, type HoveredLink } from "./LinkHoverCard";
-import { readBlocks, textToBlocks, writeBlocks, type CopiedBlocks } from "./block-clipboard";
+import { copySingleImageBlocks, readBlocks, textToBlocks, writeBlocks, type CopiedBlocks } from "./block-clipboard";
 import { editableHtml } from "./block-html";
 import { blockDefinition, DatabaseIcon, PageIcon, pageGlyph } from "./block-registry";
-import { downloadFile, isImageType, notShown, refuseFiles, showFile, stageFile, type StagedFile } from "./file-store";
+import { copyStoredImage, downloadFile, isImageType, notShown, readFileBlob, refuseFiles, showFile, stageFile, type StagedFile } from "./file-store";
 import { CoverImage, settleCover, useHomedCovers } from "./CoverImage";
 import { IconImage, PageIconMark, recentsFile, rememberIconFile, settleIcon, useHomedIcons } from "./PageIcon";
 import { ImageViewer } from "./ImageViewer";
@@ -178,7 +179,7 @@ import { useFormatToolbar } from "./useFormatToolbar";
 import { useMarquee } from "./useMarquee";
 import { usePictures } from "./pictures";
 import { carry } from "./carry";
-import { PictureTools } from "./PictureTools";
+import { PictureMenu, PictureTools } from "./PictureTools";
 import { hideMarker, landingAt, sameSpot, showMarker, type Spot } from "./drop-spot";
 import {
   VIEW_ONLY,
@@ -1047,13 +1048,17 @@ export function DocumentEditor({
       const words = sliceInlineContent(tree.by_id[range.blockId]?.content ?? [], range.start, range.end);
       if (!words.some((run) => run.mention)) return false;
       const lineId = createId("block");
-      writeBlocks(data, { tree: { by_id: { [lineId]: createBlock(lineId, "text", { content: words }) } }, cut, source: page.id }, titleOf);
+      const payload: CopiedBlocks = { tree: { by_id: { [lineId]: createBlock(lineId, "text", { content: words }) } }, cut, source: page.id };
+      writeBlocks(data, payload, titleOf);
+      if (platform) {
+        void copySingleImageBlocks(payload, titleOf, (image) => readFileBlob(platform.files, image.file))?.catch(() => undefined);
+      }
       return true;
     }
     if (ranges.length < 2) return false;
     writeBlocks(data, { tree: selectionFragment(tree, ranges), cut, source: page.id }, titleOf);
     return true;
-  }, [page.id, titleOf, tree]);
+  }, [page.id, platform, titleOf, tree]);
 
   const onCopySelection = useCallback((event: ClipboardEvent<HTMLDivElement>) => {
     if (copyTextSelection(event.clipboardData, false)) event.preventDefault();
@@ -1446,11 +1451,11 @@ export function DocumentEditor({
       if (anchor) setLinkedPick({ blockId, stripped, pick, anchor });
     },
   };
-  const { uploads, pictureUploads, retries, viewing, setViewing, fileInput, placeFiles, pickMedia, pickFile, onFileInputChange } = useMedia(editor);
+  const { uploads, pictureUploads, retries, fileInput, placeFiles, pickMedia, pickFile, pickPictureReplacement, onFileInputChange } = useMedia(editor);
   const typing = blockTyping({ ...editor, placeFiles, pickMedia });
   const { onBlockChange, chooseMention, onBlockPaste, nextEditable, runCommand } = typing;
   const { onBlockKeyDown, onBlockBeforeInput } = blockKeys({ ...editor, ...typing, latestTree });
-  useSelectedBlockKeys(editor);
+  useSelectedBlockKeys({ ...editor, placeFiles });
 
   /** Follows a link — to a page, or to a block where it is now (found by its
    *  own id, so a block moved since it was linked is still found): beside the
@@ -1535,6 +1540,67 @@ export function DocumentEditor({
     return { block, offset: range.toString().length };
   }, [tree]);
 
+  /* Every inline picture on this page in reading order — powers next/previous
+     stepping in ImageViewer and keeps viewer actions synced after edits. */
+  const pageImages = useMemo(() => {
+    const list: Array<{ blockId: string; offset: number; mention: Extract<Mention, { kind: "image" }>; file: StoredFile }> = [];
+    for (const { block } of rows) {
+      if (block.kind === "code" || block.kind === "file") continue;
+      let offset = 0;
+      for (const run of block.content) {
+        if (run.mention?.kind === "image") {
+          list.push({ blockId: block.id, offset, mention: run.mention, file: run.mention.file });
+        }
+        offset += run.text.length;
+      }
+    }
+    return list;
+  }, [rows]);
+
+  const [viewingTarget, setViewingTarget] = useState<{ blockId: string; offset: number } | null>(null);
+  const [pictureMenu, setPictureMenu] = useState<{ blockId: string; offset: number; anchor: AnchorRect; inViewer?: boolean } | null>(null);
+
+  const viewingIndex = useMemo(() => {
+    if (!viewingTarget) return -1;
+    return pageImages.findIndex((item) => item.blockId === viewingTarget.blockId && item.offset === viewingTarget.offset);
+  }, [pageImages, viewingTarget]);
+  const viewingEntry = viewingIndex >= 0 ? pageImages[viewingIndex] : null;
+
+  const copyPicture = useCallback(async (file: StoredFile): Promise<boolean> => {
+    if (!platform) return false;
+    try {
+      await copyStoredImage(platform.files, file);
+      toast("图片已复制", "success");
+      return true;
+    } catch (error) {
+      toast(error instanceof Error && error.message ? error.message : "复制图片失败，请尝试下载", "error");
+      return false;
+    }
+  }, [platform, toast]);
+
+  const downloadPicture = useCallback((file: StoredFile) => {
+    if (!platform) return;
+    void downloadFile(platform.files, file).catch(() => toast("Could not download that file", "error"));
+  }, [platform, toast]);
+
+  const resetPictureWidth = useCallback((blockId: string, offset: number) => {
+    const block = tree.by_id[blockId];
+    if (!block) return;
+    execute(updateBlockContent(tree, block.id, updateMentionAt(block.content, offset, (mention) => (
+      mention.kind === "image" ? { kind: "image", file: mention.file } : mention
+    ))));
+  }, [execute, tree]);
+
+  const deletePicture = useCallback((blockId: string, offset: number) => {
+    const block = tree.by_id[blockId];
+    if (!block) return;
+    const span = tokenSpan(block.content, offset);
+    const without = replaceRange(block.content, offset, offset + span, "");
+    const emptied = !inlinePlainText(without).trim() && !orderedBlocks(tree, block.id).length;
+    if (emptied) execute(deleteBlocks(tree, [block.id], createId("block")));
+    else execute(updateBlockContent(tree, block.id, without));
+  }, [execute, tree]);
+
   /* The picture the pointer is on, for its tools: let go of a moment after
      the pointer leaves it, so the pointer can reach them. */
   const [pictureHover, setPictureHover] = useState<HTMLElement | null>(null);
@@ -1552,7 +1618,7 @@ export function DocumentEditor({
     return () => window.removeEventListener("scroll", away, true);
   }, [pictureHover]);
 
-  /* Pictures among the words: painted in, and sized by their corner. */
+  /* Pictures among the words: painted in, and sized by their edge bars. */
   usePictures({
     hover: holdPicture,
     root: blocksRef,
@@ -1562,6 +1628,10 @@ export function DocumentEditor({
     resize: (token, picture, width) => {
       const link = linkAt(token);
       if (link) execute(updateBlockContent(tree, link.block.id, updateMentionAt(link.block.content, link.offset, () => ({ ...picture, width }))));
+    },
+    resetWidth: (token) => {
+      const link = linkAt(token);
+      if (link) resetPictureWidth(link.block.id, link.offset);
     },
     /* Out of its place and into where it lands, in one step of undo: among
        a line's words, or on a line of its own beside one. A line that keeps
@@ -1721,8 +1791,15 @@ export function DocumentEditor({
     if (kind === "image") {
       const mention = mentionFromAttributes((name) => token.getAttribute(`data-${name}`) ?? undefined);
       if (mention?.kind !== "image") return;
-      if (token.dataset.upload === "failed") retries.current.get(mention.file.path)?.();
-      else setViewing(mention.file);
+      if (token.dataset.upload === "failed") {
+        retries.current.get(mention.file.path)?.();
+        return;
+      }
+      const link = linkAt(token);
+      if (link) {
+        setPictureHover(null);
+        setViewingTarget({ blockId: link.block.id, offset: link.offset });
+      }
       return;
     }
     // The mark before a link to a page shows it here, or folds it; the words
@@ -1740,7 +1817,21 @@ export function DocumentEditor({
     if (!pageId || !pagesRef.current[pageId]) return;
     event.preventDefault();
     followLink(pageId, event.metaKey || event.ctrlKey);
-  }, [followLink, readOnly, retries, setViewing, toggleShownAt]);
+  }, [followLink, linkAt, readOnly, retries, toggleShownAt]);
+
+  /* Right-clicking an inline picture opens its dedicated context menu (copy,
+     view, download, replace, reset size, align, delete) because inline images
+     render as CSS-backed tokens rather than native <img> elements. */
+  const onBlocksContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    const token = (event.target as Element | null)?.closest<HTMLElement>('.mention[data-mention="image"]');
+    if (!token || token.closest(".blocks") !== event.currentTarget) return;
+    const link = linkAt(token);
+    if (!link) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setPictureHover(null);
+    setPictureMenu({ blockId: link.block.id, offset: link.offset, anchor: pointRect(event.clientX, event.clientY) });
+  }, [linkAt]);
 
   /* Shift+click selects blocks: from the selected ones, or from the block that
      has the caret, to the one clicked. */
@@ -2682,6 +2773,7 @@ export function DocumentEditor({
         if (blk) setCaretMarks(marksAtBlockCaret(blk, editable));
       }}
       onMouseDownCapture={onBlocksMouseDown}
+      onContextMenu={onBlocksContextMenu}
       onCopy={onCopySelection}
       onCut={onCutSelection}
       onClick={openMentionedPage}
@@ -2905,13 +2997,24 @@ export function DocumentEditor({
             setBlockSelection(null);
             if (made) copyPageLink(made);
           }}
+          onCopyImage={() => {
+            const block = tree.by_id[blockMenu.ids[0]];
+            const found = block ? soleImage(block.content) : null;
+            if (found) void copyPicture(found.mention.file);
+          }}
           onReplace={() => {
             const block = tree.by_id[blockMenu.ids[0]];
-            if (block) pickFile(block);
+            if (!block) return;
+            const found = block.kind !== "file" ? soleImage(block.content) : null;
+            if (found) pickPictureReplacement(block.id, found.offset);
+            else pickFile(block);
           }}
           onDownload={() => {
             const block = tree.by_id[blockMenu.ids[0]];
-            if (block) actions.downloadFile(block);
+            if (!block) return;
+            const found = block.kind !== "file" ? soleImage(block.content) : null;
+            if (found) downloadPicture(found.mention.file);
+            else actions.downloadFile(block);
           }}
           onTurnIntoLink={() => {
             const change = embedToLink(tree, blockMenu.ids[0]);
@@ -3015,30 +3118,90 @@ export function DocumentEditor({
         const mention = mentionFromAttributes((name) => pictureHover.getAttribute(`data-${name}`) ?? undefined);
         const link = linkAt(pictureHover);
         if (mention?.kind !== "image" || !link) return null;
+        const menuOpen = Boolean(pictureMenu && !pictureMenu.inViewer && pictureMenu.blockId === link.block.id && pictureMenu.offset === link.offset);
         return (
           <PictureTools
             rect={pictureHover.getBoundingClientRect()}
             align={link.block.align}
             readOnly={readOnly}
+            menuOpen={menuOpen}
             onAlign={(align) => execute(updateBlockFields(tree, link.block.id, { align }))}
-            onDownload={() => {
-              if (platform) void downloadFile(platform.files, mention.file).catch(() => toast("Could not download that file", "error"));
+            onCopy={() => copyPicture(mention.file)}
+            onDownload={() => downloadPicture(mention.file)}
+            onView={() => {
+              setPictureHover(null);
+              setViewingTarget({ blockId: link.block.id, offset: link.offset });
             }}
-            onView={() => setViewing(mention.file)}
+            onMore={(anchor) => setPictureMenu({ blockId: link.block.id, offset: link.offset, anchor })}
             onEnter={() => holdPicture(pictureHover)}
             onLeave={() => holdPicture(null)}
           />
         );
       })() : null}
 
-      {viewing ? (
+      {pictureMenu ? (() => {
+        const block = tree.by_id[pictureMenu.blockId];
+        const mention = block ? mentionAt(block.content, pictureMenu.offset) : undefined;
+        if (!block || mention?.kind !== "image") return null;
+        return (
+          <PictureMenu
+            anchor={pictureMenu.anchor}
+            align={block.align}
+            resized={mention.width !== undefined}
+            readOnly={readOnly}
+            onClose={() => setPictureMenu(null)}
+            onCopy={pictureMenu.inViewer ? undefined : () => { void copyPicture(mention.file); }}
+            onView={pictureMenu.inViewer ? undefined : () => setViewingTarget({ blockId: block.id, offset: pictureMenu.offset })}
+            onDownload={pictureMenu.inViewer ? undefined : () => downloadPicture(mention.file)}
+            onAlign={(align) => execute(updateBlockFields(tree, block.id, { align }))}
+            onReplace={() => pickPictureReplacement(block.id, pictureMenu.offset)}
+            onResetSize={() => resetPictureWidth(block.id, pictureMenu.offset)}
+            onDelete={() => {
+              if (pictureMenu.inViewer) setViewingTarget(null);
+              deletePicture(block.id, pictureMenu.offset);
+            }}
+          />
+        );
+      })() : null}
+
+      {viewingEntry ? (
         <ImageViewer
-          file={viewing}
+          file={viewingEntry.file}
           actions={actions}
-          onDownload={() => {
-            if (platform) void downloadFile(platform.files, viewing).catch(() => toast("Could not download that file", "error"));
+          browse={pageImages.length > 1 ? {
+            index: viewingIndex,
+            count: pageImages.length,
+            onStep: (delta) => {
+              const target = pageImages[viewingIndex + delta];
+              if (target) setViewingTarget({ blockId: target.blockId, offset: target.offset });
+            },
+          } : undefined}
+          onDownload={() => downloadPicture(viewingEntry.file)}
+          onCopyResult={(ok, message) => toast(message, ok ? "success" : "error")}
+          extraActions={!readOnly ? (
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="More image actions"
+              aria-haspopup="menu"
+              aria-expanded={Boolean(pictureMenu?.inViewer)}
+              title="More image actions"
+              onClick={(event) => {
+                setPictureMenu({
+                  blockId: viewingEntry.blockId,
+                  offset: viewingEntry.offset,
+                  anchor: rectOf(event.currentTarget),
+                  inViewer: true,
+                });
+              }}
+            >
+              <MoreHorizontal size={15} aria-hidden="true" />
+            </button>
+          ) : undefined}
+          onClose={() => {
+            setPictureMenu((current) => (current?.inViewer ? null : current));
+            setViewingTarget(null);
           }}
-          onClose={() => setViewing(null)}
         />
       ) : null}
 

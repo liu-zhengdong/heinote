@@ -1,13 +1,15 @@
-import { GripVertical, ImageIcon, ImageOff, Plus, X } from "lucide-react";
+import { Check, Copy, GripVertical, ImageIcon, ImageOff, Plus, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Popover } from "../../components/Popover";
 import { useUi } from "../../app/ui-context";
 import { useWorkspace } from "../../app/workspace-context";
+import { clipboardFiles } from "../../core/clipboard";
 import { formatFileSize } from "../../core/files";
 import type { DatabaseProperty, NotePage, StoredFile } from "../../core/types";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import type { WorkspaceMutation } from "../../platform/workspace-document";
 import {
+  copyStoredImage,
   downloadFile,
   homeFile,
   isImageType,
@@ -101,21 +103,6 @@ function queueUpload<T>(task: () => Promise<T>): Promise<T> {
     if (uploading < UPLOADS_AT_ONCE) start();
     else waiting.push(start);
   });
-}
-
-/** The files a paste carries: a screenshot, an image copied from a web page,
- *  files copied from the computer's own file manager. */
-function pastedFiles(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const files = [...data.files];
-  if (files.length) return files;
-  const fromItems: File[] = [];
-  for (const item of data.items) {
-    if (item.kind !== "file") continue;
-    const file = item.getAsFile();
-    if (file) fromItems.push(file);
-  }
-  return fromItems;
 }
 
 /* A picture a row's readers cannot reach — written to a member's own store
@@ -276,8 +263,31 @@ export function ImageProperty({
   // would land: before the picture with this path, or last (null).
   const [dragPath, setDragPath] = useState<string | null>(null);
   const [spot, setSpot] = useState<{ before: string | null } | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const copyTimer = useRef<number | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
   const name = propertyName(property);
+
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+  }, []);
+
+  const copyCellImage = (file: StoredFile) => {
+    if (!platform) return;
+    void copyStoredImage(platform.files, file)
+      .then(() => {
+        if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+        setCopiedPath(file.path);
+        copyTimer.current = window.setTimeout(() => {
+          copyTimer.current = null;
+          setCopiedPath(null);
+        }, 1600);
+        toast("图片已复制", "success");
+      })
+      .catch((error: unknown) => {
+        toast(error instanceof Error && error.message ? error.message : "复制图片失败，请尝试下载", "error");
+      });
+  };
 
   /* Drawn at once from the bytes in hand and saved behind them, a few at a
      time; a picture whose bytes cannot be saved is taken back out, and the
@@ -340,7 +350,7 @@ export function ImageProperty({
     const onPaste = (event: ClipboardEvent) => {
       event.preventDefault();
       event.stopPropagation();
-      const pasted = pastedFiles(event.clipboardData);
+      const pasted = clipboardFiles(event.clipboardData);
       if (pasted.length) void addRef.current(pasted);
       else toast("Nothing to add — copy an image first.", "info");
     };
@@ -419,7 +429,7 @@ export function ImageProperty({
         }}
         onPaste={(event) => {
           // The cell holding the keyboard takes a pasted picture, as its list does.
-          const pasted = readOnly ? [] : pastedFiles(event.clipboardData);
+          const pasted = readOnly ? [] : clipboardFiles(event.clipboardData);
           if (!pasted.length) return;
           event.preventDefault();
           void add(pasted);
@@ -504,6 +514,15 @@ export function ImageProperty({
                         <span className="img-prop__size">{formatFileSize(file.size)}</span>
                       </span>
                     </button>
+                    <button
+                      type="button"
+                      className={`icon-btn icon-btn--sm ${copiedPath === file.path ? "img-prop__copied" : ""}`}
+                      aria-label={`Copy ${file.name}`}
+                      title={copiedPath === file.path ? "Image copied" : "Copy image"}
+                      onClick={() => copyCellImage(file)}
+                    >
+                      {copiedPath === file.path ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                    </button>
                     {readOnly ? null : (
                       <button
                         type="button"
@@ -548,6 +567,7 @@ export function ImageProperty({
           onDownload={() => {
             if (platform) void downloadFile(platform.files, shown).catch(() => toast("Could not download that file", "error"));
           }}
+          onCopyResult={(ok, message) => toast(message, ok ? "success" : "error")}
           onClose={() => setViewing(null)}
         />
       ) : null}

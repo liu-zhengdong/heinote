@@ -279,6 +279,23 @@ export function mountedLink(content: InlineContent): ShownLink | null {
   return link?.expanded ? link : null;
 }
 
+/** An image when a paragraph holds nothing else (ignoring surrounding whitespace).
+ *  Answers the image mention and its character offset in the paragraph. */
+export function soleImage(content: InlineContent): { mention: Extract<Mention, { kind: "image" }>; offset: number } | null {
+  let found: { mention: Extract<Mention, { kind: "image" }>; offset: number } | null = null;
+  let offset = 0;
+  for (const run of content) {
+    if (run.mention) {
+      if (run.mention.kind !== "image" || found) return null;
+      found = { mention: run.mention, offset };
+    } else if (run.text.trim()) {
+      return null;
+    }
+    offset += run.text.length;
+  }
+  return found;
+}
+
 export function inlineFromText(text: string, marks?: InlineMarks): InlineContent {
   if (!text) return [];
   const normalized = normalizedMarks(marks);

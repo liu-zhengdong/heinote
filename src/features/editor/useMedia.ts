@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from "react";
 import { BLOCK_ORDER_STEP, createBlock, orderedBlocks } from "../../core/block-tree";
 import { normalizeStoredFile } from "../../core/files";
-import { inlinePlainText, insertToken, MENTION_CHAR } from "../../core/inline-content";
+import { inlinePlainText, insertToken, mentionAt, MENTION_CHAR, updateMentionAt } from "../../core/inline-content";
 import { updateBlockContent } from "./editor-commands";
 import { createId } from "../../core/ids";
 import type { Block, BlockKind, BlockMutation, InlineContent, StoredFile } from "../../core/types";
@@ -14,12 +14,13 @@ import type { Editor } from "./editor-state";
 
 export type MediaInsertKind = "image" | "file";
 
-/** Where files land: among a line's words, in place of `start` to `end`; or
+/** Where files land: among a line's words, in place of `start` to `end`; on
  *  lines of their own, before or after a line, or in place of an empty one
- *  ("fill"). */
+ *  ("fill"); or replacing one existing image mention in place. */
 export type Landing =
   | { kind: "words"; blockId: string; start: number; end: number }
-  | { kind: "line"; blockId: string; edge: "before" | "after" | "fill"; inside?: boolean };
+  | { kind: "line"; blockId: string; edge: "before" | "after" | "fill"; inside?: boolean }
+  | { kind: "replace-picture"; blockId: string; offset: number };
 
 /** Where newly picked images or files land relative to `block`:
  *  - an empty text/list/heading/quote/callout/file block is filled in place;
@@ -57,7 +58,6 @@ export function useMedia(editor: Editor) {
   /** Pictures on their way up, by their file's path. */
   const [pictureUploads, setPictureUploads] = useState<Record<string, UploadState>>({});
   const retries = useRef(new Map<string, () => void>());
-  const [viewing, setViewing] = useState<StoredFile | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
   const pickLanding = useRef<Landing | null>(null);
 
@@ -137,6 +137,34 @@ export function useMedia(editor: Editor) {
    *  Every one is drawn at once from the bytes in hand and saved behind it. */
   const placeFiles = useCallback(async (files: File[], landing: Landing) => {
     if (!platform || readOnly || !files.length) return;
+    if (landing.kind === "replace-picture") {
+      const replacement = files[0];
+      if (!replacement || !isImageType(replacement.type)) {
+        toast("请选择图片文件", "error");
+        return;
+      }
+      const singleRefusal = refuseFiles([replacement]);
+      if (singleRefusal) {
+        toast(singleRefusal, "error");
+        return;
+      }
+      const holder = ownerOf(landing.blockId);
+      const place = { pageId: holder, owner: platform.bootstrap.user.id, space: spaceOfPage(pagesRef.current, holder) };
+      let stagedOne: StagedFile;
+      try {
+        stagedOne = await stageFile(platform.files, replacement, place);
+      } catch {
+        toast("Could not read that file", "error");
+        return;
+      }
+      const current = latestTree();
+      const anchor = current.by_id[landing.blockId];
+      if (!anchor || mentionAt(anchor.content, landing.offset)?.kind !== "image") return;
+      const next = updateMentionAt(anchor.content, landing.offset, () => ({ kind: "image", file: stagedOne.file }));
+      execute(updateBlockContent(current, anchor.id, next));
+      sendPicture(stagedOne);
+      return;
+    }
     const refusal = refuseFiles(files);
     if (refusal) {
       toast(refusal, "error");
@@ -245,6 +273,11 @@ export function useMedia(editor: Editor) {
     pickMedia({ kind: "line", blockId: block.id, edge: "fill" }, { accept: "", multiple: !block.file });
   }, [pickMedia]);
 
+  /** Opens the file picker to replace an existing image mention in place. */
+  const pickPictureReplacement = useCallback((blockId: string, offset: number) => {
+    pickMedia({ kind: "replace-picture", blockId, offset }, { accept: "image/*", multiple: false });
+  }, [pickMedia]);
+
   const onFileInputChange = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const files = [...(event.currentTarget.files ?? [])];
     event.currentTarget.value = "";
@@ -286,5 +319,5 @@ export function useMedia(editor: Editor) {
     };
   }, []);
 
-  return { uploads, pictureUploads, retries, viewing, setViewing, fileInput, placeFiles, pickMedia, pickFile, onFileInputChange };
+  return { uploads, pictureUploads, retries, fileInput, placeFiles, pickMedia, pickFile, pickPictureReplacement, onFileInputChange };
 }

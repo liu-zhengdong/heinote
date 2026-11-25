@@ -1,9 +1,11 @@
 import { useEffect } from "react";
+import { clipboardFiles, isFilePaste } from "../../core/clipboard";
 import { createId } from "../../core/ids";
 import { imeComposing } from "../../core/keyboard";
 import { createBlock, orderedBlocks } from "../../core/block-tree";
 import { inlineFromText } from "../../core/inline-content";
-import { writeBlocks, type CopiedBlocks } from "./block-clipboard";
+import { copySingleImageBlocks, readBlocks, writeBlocks, type CopiedBlocks } from "./block-clipboard";
+import { readFileBlob } from "./file-store";
 import {
   checkLines,
   extractFragment,
@@ -15,15 +17,17 @@ import {
 } from "./editor-commands";
 import { editableWithin, focusAtEnd } from "./selection";
 import type { Editor } from "./editor-state";
+import type { Landing } from "./useMedia";
 
 /** Keys pressed while blocks are selected as blocks, as in Notion: the
  *  arrows move or grow the selection, Enter edits, Delete and Backspace
  *  delete, ⌘C/⌘X/⌘V copy, cut and paste them whole, ⌘D duplicates, Tab
  *  and Shift+Tab indent, ⌘⇧↑/↓ move them, Escape lets go. */
-export function useSelectedBlockKeys(editor: Editor): void {
+export function useSelectedBlockKeys(editor: Editor & { placeFiles(files: File[], landing: Landing): Promise<void> }): void {
   const {
-    page, readOnly, tree, rows, blocksRef, blockSelection, setBlockSelection, selectedIds, setBlockMenu,
+    page, platform, readOnly, tree, rows, blocksRef, blockSelection, setBlockSelection, selectedIds, setBlockMenu,
     executeOnBlocks, titleOf, deleteSelected, duplicateSelected, openMoveTo, anchorFor, pastedBlocks, adoptCutPages,
+    placeFiles,
   } = editor;
   useEffect(() => {
     if (!blockSelection || readOnly || !selectedIds.length) return;
@@ -138,26 +142,46 @@ export function useSelectedBlockKeys(editor: Editor): void {
       setBlockSelection(null);
     };
     const copied = (cut: boolean): CopiedBlocks => ({ tree: extractFragment(tree, selectedIds), cut, source: page.id });
+    const upgradeSingleImageCopy = (payload: CopiedBlocks) => {
+      if (!platform) return;
+      const upgraded = copySingleImageBlocks(payload, titleOf, (image) => readFileBlob(platform.files, image.file));
+      void upgraded?.catch(() => {
+        // Synchronous writeBlocks already populated clipboardData for in-app paste.
+      });
+    };
     const onCopy = (event: globalThis.ClipboardEvent) => {
       if (typing(event.target) || !event.clipboardData) return;
       event.preventDefault();
-      writeBlocks(event.clipboardData, copied(false), titleOf);
+      const payload = copied(false);
+      writeBlocks(event.clipboardData, payload, titleOf);
+      upgradeSingleImageCopy(payload);
     };
     const onCut = (event: globalThis.ClipboardEvent) => {
       if (typing(event.target) || !event.clipboardData) return;
       event.preventDefault();
-      writeBlocks(event.clipboardData, copied(true), titleOf);
+      const payload = copied(true);
+      writeBlocks(event.clipboardData, payload, titleOf);
+      upgradeSingleImageCopy(payload);
       deleteSelected(selectedIds, { cut: true });
     };
-    // Pasted with blocks selected, blocks land after them and are selected.
+    // Pasted with blocks selected, blocks (or pasted images/files) land after them and are selected.
     const onPaste = (event: globalThis.ClipboardEvent) => {
       if (typing(event.target) || !event.clipboardData) return;
-      const text = event.clipboardData.getData("text/plain").trim();
+      const after = topLevelBlocks(tree, selectedIds).at(-1);
+      if (!after) return;
+      const rawText = event.clipboardData.getData("text/plain");
+      const rawHtml = event.clipboardData.getData("text/html");
+      const files = clipboardFiles(event.clipboardData);
+      if (files.length && !readBlocks(event.clipboardData) && isFilePaste(files, rawText, rawHtml)) {
+        event.preventDefault();
+        void placeFiles(files, { kind: "line", blockId: after.id, edge: "after" });
+        return;
+      }
+      const text = rawText.trim();
       const lineId = createId("block");
       const pasted = pastedBlocks(event.clipboardData)
         ?? (text ? { incoming: null, fragment: { by_id: { [lineId]: createBlock(lineId, "text", { content: inlineFromText(text) }) } } } : null);
-      const after = topLevelBlocks(tree, selectedIds).at(-1);
-      if (!pasted || !after) return;
+      if (!pasted) return;
       event.preventDefault();
       if (!Object.keys(pasted.fragment.by_id).length) return;
       adoptCutPages(pasted.incoming, pasted.fragment, after.id);
@@ -180,7 +204,7 @@ export function useSelectedBlockKeys(editor: Editor): void {
     };
   }, [
     adoptCutPages, anchorFor, blockSelection, blocksRef, deleteSelected, duplicateSelected, executeOnBlocks,
-    openMoveTo, page.id, pastedBlocks, readOnly, rows, selectedIds, setBlockMenu, setBlockSelection,
-    titleOf, tree,
+    openMoveTo, page.id, pastedBlocks, placeFiles, platform, readOnly, rows, selectedIds, setBlockMenu,
+    setBlockSelection, titleOf, tree,
   ]);
 }

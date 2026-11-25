@@ -1,10 +1,12 @@
 import { Globe, Menu } from "lucide-react";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { BottomSheet } from "../../components/BottomSheet";
 import { PageOutline } from "../../components/PageOutline";
+import { layout } from "../../core/block-layout";
 import { extractOutline } from "../../core/outline";
 import { useFold } from "../../hooks/useFold";
-import type { NotePage } from "../../core/types";
+import type { NotePage, StoredFile } from "../../core/types";
+import { ImageViewer } from "../editor/ImageViewer";
 import { pageIcon } from "../editor/page-decoration";
 import { buildTree, type PageTree } from "../sidebar/tree";
 import { api, ApiError, errorMessage } from "../account/api";
@@ -69,6 +71,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const [revision, setRevision] = useState(0);
   const [pageId, setPageId] = useState(selectedPage);
   const [navOpen, setNavOpen] = useState(false);
+  const [viewingIndex, setViewingIndex] = useState<number | null>(null);
   const [readerEl, setReaderEl] = useState<HTMLElement | null>(null);
   const [documentEl, setDocumentEl] = useState<HTMLElement | null>(null);
   const mobile = useFold();
@@ -98,18 +101,82 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     return () => controller.abort();
   }, [token, revision]);
 
+  const pagesMap = useMemo(() => new Map((document?.pages ?? []).map((page) => [page.id, page])), [document]);
+  const root = document?.pages.find((page) => !page.parent_id || !pagesMap.has(page.parent_id)) ?? document?.pages[0];
+  const active = pageId ? pagesMap.get(pageId) ?? root : root;
+
+  /* Collect all images in reading order on the active public page so ImageViewer
+     supports next/previous stepping just like in the workspace editor. */
+  const publicImages = useMemo<StoredFile[]>(() => {
+    if (!active?.block_tree) return [];
+    const list: StoredFile[] = [];
+    for (const { block } of layout(active.block_tree).rows) {
+      if (block.kind === "code" || block.kind === "file") continue;
+      if (block.kind === "table" && block.table) {
+        const rows = Object.entries(block.table.rows).sort(([leftId, left], [rightId, right]) => left.order - right.order || leftId.localeCompare(rightId));
+        for (const [, row] of rows) {
+          for (const column of block.table.columns) {
+            for (const run of row.cells[column.id] ?? []) {
+              if (run.mention?.kind === "image") list.push(run.mention.file);
+            }
+          }
+        }
+        continue;
+      }
+      for (const run of block.content) {
+        if (run.mention?.kind === "image") list.push(run.mention.file);
+      }
+    }
+    return list;
+  }, [active]);
+
+  useEffect(() => { setViewingIndex(null); }, [active?.id]);
+
+  const openPublicImage = useCallback((file: StoredFile) => {
+    const index = publicImages.findIndex((item) => item.path === file.path);
+    setViewingIndex(index >= 0 ? index : 0);
+  }, [publicImages]);
+
+  const downloadPublicImage = useCallback((file: StoredFile) => {
+    const href = fileHref(file, token);
+    void fetch(href)
+      .then((response) => {
+        if (!response.ok) throw new Error("download failed");
+        return response.blob();
+      })
+      .then((blob) => {
+        const url = URL.createObjectURL(new Blob([blob], { type: "application/octet-stream" }));
+        const link = window.document.createElement("a");
+        link.href = url;
+        link.download = file.name || "image";
+        link.rel = "noopener";
+        window.document.body.append(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      })
+      .catch(() => {
+        window.open(href, "_blank", "noopener,noreferrer");
+      });
+  }, [token]);
+
   /* This reader resolves links by the share's own addresses: a page to its
    *  #page= hash, a file to /api/public/{token}/files?path=. The export
    *  reader answers the same questions with paths inside its zip. */
-  const context = useMemo<ReaderContext>(() => {
-    const pages = new Map((document?.pages ?? []).map((page) => [page.id, page]));
-    return {
-      pages,
-      fileHref: (file) => fileHref(file, token),
-      pageHref: (id) => (pages.has(id) ? pageHref(id) : undefined),
-      unresolvedPageLabel: "未公开页面",
-    };
-  }, [document, token]);
+  const context = useMemo<ReaderContext>(() => ({
+    pages: pagesMap,
+    fileHref: (file) => fileHref(file, token),
+    pageHref: (id) => (pagesMap.has(id) ? pageHref(id) : undefined),
+    unresolvedPageLabel: "未公开页面",
+    onImageClick: openPublicImage,
+  }), [openPublicImage, pagesMap, token]);
+
+  const viewerActions = useMemo(() => ({
+    showFile: (file: StoredFile) => {
+      const href = fileHref(file, token);
+      return { url: href, ready: Promise.resolve(href), release() {} };
+    },
+  }), [token]);
 
   /* The nav mirrors the page list back in HeiNote: each page nested under
    *  the page that holds it, sorted by name. A page whose parent is not
@@ -118,8 +185,6 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     ? buildTree(Object.fromEntries(document.pages.map((page) => [page.id, page])), "name")
     : undefined), [document]);
   const listedCount = tree ? tree.roots.length + [...tree.children.values()].reduce((count, pages) => count + pages.length, 0) : 0;
-  const root = document?.pages.find((page) => !page.parent_id || !context.pages.has(page.parent_id)) ?? document?.pages[0];
-  const active = pageId ? context.pages.get(pageId) ?? root : root;
   useEffect(() => {
     if (!document) return;
     const previous = window.document.title;
@@ -215,5 +280,18 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
           </>
         ) : null}
       </div>}
+    {viewingIndex !== null && publicImages[viewingIndex] ? (
+      <ImageViewer
+        file={publicImages[viewingIndex]}
+        actions={viewerActions}
+        browse={publicImages.length > 1 ? {
+          index: viewingIndex,
+          count: publicImages.length,
+          onStep: (delta) => setViewingIndex((current) => (current === null ? null : Math.max(0, Math.min(publicImages.length - 1, current + delta)))),
+        } : undefined}
+        onDownload={() => downloadPublicImage(publicImages[viewingIndex])}
+        onClose={() => setViewingIndex(null)}
+      />
+    ) : null}
   </main>;
 }

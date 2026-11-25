@@ -1,0 +1,298 @@
+/* Full-size picture viewer over a darkened page — owned by ImageViewer so both
+   the editor, database cells and standalone public share pages render identically. */
+
+.overlay:has(.viewer) .overlay__scrim {
+  background: rgba(15, 15, 15, 0.84);
+}
+
+.overlay__card.viewer {
+  display: flex;
+  width: min(1100px, 100%);
+  height: calc(100dvh - 48px);
+  flex-direction: column;
+  background: transparent;
+  box-shadow: none;
+}
+
+.viewer__bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 8px;
+  color: #fff;
+}
+
+.viewer__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.viewer__close {
+  flex: none;
+}
+
+@media (max-width: 559.98px) {
+  .viewer__bar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .viewer__name {
+    order: 1;
+  }
+
+  .viewer__count {
+    order: 2;
+  }
+
+  .viewer__close {
+    order: 3;
+  }
+
+  .viewer__actions {
+    order: 4;
+    flex: 1 0 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .viewer__actions::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.viewer__name {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.viewer__bar .icon-btn {
+  color: #fff;
+}
+
+.viewer__bar .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.viewer__bar .icon-btn.is-copied {
+  color: #69db7c;
+}
+
+.viewer__notice {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  margin: 0 0 8px;
+  background: rgba(224, 49, 49, 0.9);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.viewer__notice.is-ok {
+  background: rgba(47, 158, 68, 0.9);
+}
+
+.viewer__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The stage is the picture's room: what it holds is placed by the frame's
+   transform, not by layout, so the room can clip what zoom spills and the
+   marks can follow the picture as one. */
+.viewer__stage {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  color: #fff;
+}
+
+.viewer__stage:not(.is-annotating) {
+  cursor: zoom-in;
+}
+
+.viewer__stage.is-annotating {
+  cursor: crosshair;
+}
+
+/* The frame carries the picture and its marks as one thing: placed at its
+   pan corner, sized by the picture's zoom, moved about by the transform. */
+.viewer__frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.viewer__stage:not(.is-annotating) .viewer__frame {
+  cursor: grab;
+}
+
+.viewer__stage.is-panning .viewer__frame {
+  cursor: grabbing;
+}
+
+.viewer__frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--r-sm);
+  user-select: none;
+}
+
+/* The marks sit over the picture inside its frame: strokes are drawn in the
+   picture's own shares, so scaling the frame scales them with it. */
+.viewer__marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* While marks are being made, the picture itself takes no clicks — the
+   frame's pointer listeners do the drawing instead of the panning. */
+.viewer__stage.is-annotating .viewer__marks {
+  pointer-events: none;
+}
+
+/* The mark tools' second row: shaped like the bar's own, kept off it so a
+   picture's name and its steps keep their room. */
+.viewer__tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 0 8px;
+  color: #fff;
+}
+
+.viewer__tools .icon-btn {
+  color: #fff;
+}
+
+.viewer__tools .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.viewer__tools .icon-btn:disabled {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.viewer__tools .icon-btn.is-on,
+.viewer__bar .icon-btn.is-on {
+  background: rgba(35, 131, 226, 0.5);
+}
+
+.viewer__tools-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+.viewer__swatch {
+  width: 16px;
+  height: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 50%;
+  transition: transform var(--t-tap) var(--e-out);
+}
+
+.viewer__swatch.is-on {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.viewer__zoom {
+  min-width: 42px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+/* A text mark's input stands where its letters will land: transparent,
+   borderless, its size the letters' own so what is typed is what stays. */
+.viewer__text-spot {
+  position: absolute;
+  z-index: 3;
+  min-width: 120px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  font-weight: 600;
+  line-height: 1.3;
+  outline: 1px dashed rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+  resize: none;
+}
+
+/* A cell's or page's pictures stepped through: where this one stands, and the
+   steps either side of it. */
+.viewer__count {
+  flex: none;
+  padding: 0 8px;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer__step {
+  position: absolute;
+  top: 50%;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.42);
+  color: #fff;
+  place-items: center;
+  transform: translateY(-50%);
+  transition: background var(--t-tap) var(--e-out), opacity var(--t-fast) var(--e-out);
+}
+
+.viewer__step:hover {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.viewer__step:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.viewer__step--back {
+  left: 8px;
+}
+
+.viewer__step--next {
+  right: 8px;
+}
+
+.viewer__missing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.viewer__stage > .spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}

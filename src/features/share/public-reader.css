@@ -63,6 +63,11 @@
 .public-reader__content code { font-family: var(--heinote-font-code, monospace); padding: 2px 4px; border-radius: var(--r-xs); background: var(--code-bg); color: var(--code-ink); font-size: .9em; }
 .public-reader__content pre code { padding: 0; background: none; color: inherit; font-size: inherit; }
 .public-reader__image { display: inline-block; vertical-align: middle; border-radius: var(--r-xs); object-fit: contain; }
+.public-reader__image.is-clickable { cursor: zoom-in; transition: box-shadow var(--t-tap) var(--e-out); }
+@media (hover: hover) {
+  .public-reader__image.is-clickable:hover { box-shadow: 0 0 0 2px var(--hairline-strong); }
+}
+.public-reader__image.is-clickable:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 .public-reader__callout { display: flex; align-items: start; gap: 10px; padding: 14px 16px; border-radius: var(--r-sm); background: var(--callout-bg); }
 .public-reader__todo { display: flex; align-items: baseline; gap: 9px; }
 .public-reader__todo > [role="img"] { flex: none; color: var(--ink-2); }

@@ -1,5 +1,6 @@
 import type { ClipboardEvent } from "react";
 import { pointRect } from "../../hooks/useAnchoredPosition";
+import { clipboardFiles, isFilePaste } from "../../core/clipboard";
 import { createId } from "../../core/ids";
 import { decodeHtmlEntities } from "../../core/html-entities";
 import {
@@ -267,13 +268,13 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
       return;
     }
     // A picture or file on the clipboard — a screenshot, an image copied from
-    // a web page — is uploaded as a block. Copied text that also carries a
-    // picture of itself (a spreadsheet's cells) is pasted as the text.
-    const pastedFiles = [...event.clipboardData.files];
-    const pastedText = event.clipboardData.getData("text/plain").trim();
+    // a web page, or files copied from Finder — is uploaded as a block. Copied
+    // text that also carries a picture of itself (a spreadsheet's cells) is
+    // pasted as the text.
+    const pastedFiles = clipboardFiles(event.clipboardData);
+    const pastedText = event.clipboardData.getData("text/plain");
     const pastedHtml = event.clipboardData.getData("text/html");
-    if (pastedFiles.length && !readBlocks(event.clipboardData)
-      && (!pastedText || (/<img\b/i.test(pastedHtml) && !pastedHtml.replace(/<[^>]*>/g, "").trim()))) {
+    if (pastedFiles.length && !readBlocks(event.clipboardData) && isFilePaste(pastedFiles, pastedText, pastedHtml)) {
       event.preventDefault();
       /* Pictures stand among the words at the caret, as in Google Docs; an
          empty line — a list item's too — takes them as its own. A file, or a

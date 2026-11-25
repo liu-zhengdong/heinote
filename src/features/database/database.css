@@ -2682,6 +2682,10 @@ button.db__th:hover,
   font-size: 12px;
 }
 
+.img-prop__copied {
+  color: var(--text-green, #2f9e44);
+}
+
 .img-prop__empty {
   padding: 8px 8px 4px;
   margin: 0;

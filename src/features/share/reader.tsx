@@ -23,6 +23,8 @@ export interface ReaderContext {
   pageHref(pageId: string): string | undefined;
   /** What a page mention that cannot be resolved reads as. */
   unresolvedPageLabel: string;
+  /** Optional click handler for opening an image in the full-size viewer. */
+  onImageClick?(file: StoredFile): void;
 }
 
 const COLORS = new Set(["gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red"]);
@@ -55,8 +57,28 @@ function safeHref(value: string | undefined, context: ReaderContext): string | u
 export function ReaderInline({ content, context }: { content: InlineContent; context: ReaderContext }) {
   return <>{content.map((run, index) => {
     const mention = run.mention;
-    if (mention?.kind === "image") return <img key={index} className="public-reader__image" src={context.fileHref(mention.file)} alt={mention.file.name}
-      loading="lazy" width={mention.width ?? mention.file.width} height={mention.width ? undefined : mention.file.height} style={{ maxWidth: "100%", height: "auto" }} />;
+    if (mention?.kind === "image") {
+      const clickable = Boolean(context.onImageClick);
+      return <img
+        key={index}
+        className={`public-reader__image${clickable ? " is-clickable" : ""}`}
+        src={context.fileHref(mention.file)}
+        alt={mention.file.name}
+        loading="lazy"
+        width={mention.width ?? mention.file.width}
+        height={mention.width ? undefined : mention.file.height}
+        style={{ maxWidth: "100%", height: "auto" }}
+        tabIndex={clickable ? 0 : undefined}
+        role={clickable ? "button" : undefined}
+        onClick={clickable ? () => context.onImageClick!(mention.file) : undefined}
+        onKeyDown={clickable ? (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            context.onImageClick!(mention.file);
+          }
+        } : undefined}
+      />;
+    }
     if (mention?.kind === "page") {
       const target = context.pages.get(mention.page_id);
       const href = target ? context.pageHref(target.id) : undefined;

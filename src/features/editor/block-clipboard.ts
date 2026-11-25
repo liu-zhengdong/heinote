@@ -12,10 +12,11 @@
    unknown kinds become text and only safe links survive. */
 
 import { normalizeBlockTree, orderedBlocks } from "../../core/block-tree";
+import { blobToDataUrl, canCopyImage, copyImageBlob } from "../../core/clipboard";
 import { normalizeEmbed } from "../../core/embeds";
-import { escapeHtml, inlinePlainText, inlineToHtml } from "../../core/inline-content";
+import { escapeHtml, inlinePlainText, inlineToHtml, soleImage } from "../../core/inline-content";
 import { alignOf, colorOf, spanCovering, spansInRect, tableCells, tableGrid, tableToHtml, type CellRect } from "../../core/simple-table";
-import type { Block, BlockKind, BlockTree } from "../../core/types";
+import type { Block, BlockKind, BlockTree, Mention } from "../../core/types";
 import { blockTreeToMarkdown, markdownToBlockTree, readableTree } from "./adapters";
 import { BLOCK_DEFINITIONS } from "./block-registry";
 
@@ -95,6 +96,20 @@ function blocksHtml(tree: BlockTree, parentId: string | null): string {
   return html;
 }
 
+const MAX_INLINE_HTML_IMAGE_BYTES = 4 * 1024 * 1024;
+
+/** When a copied fragment contains exactly one block whose only content is one
+ *  image, returns that image mention so the clipboard can also carry its pixels. */
+export function singleCopiedImage(tree: BlockTree): Extract<Mention, { kind: "image" }> | null {
+  const blocks = Object.values(tree.by_id);
+  if (blocks.length !== 1) return null;
+  const block = blocks[0];
+  if (!block || block.kind === "code" || block.kind === "file" || block.kind === "table" || block.kind === "embed" || block.kind === "divider" || block.kind === "page") {
+    return null;
+  }
+  return soleImage(block.content)?.mention ?? null;
+}
+
 export function writeBlocks(
   data: DataTransfer,
   copied: CopiedBlocks,
@@ -105,6 +120,37 @@ export function writeBlocks(
   data.setData(BLOCKS_MIME, json);
   data.setData("text/html", `<meta charset="utf-8"><div data-notes-blocks="${escapeHtml(json)}">${blocksHtml(readableTree(copied.tree, titleOf), null)}</div>`);
   data.setData("text/plain", blockTreeToMarkdown(copied.tree, titleOf));
+}
+
+/** Upgrades a single-image block copy to carry `image/png` pixels alongside the
+ *  HeiNote block payload in `text/html` (with an inline `<img>` for external
+ *  rich-text editors) and Markdown in `text/plain`. Returns false if the
+ *  selection is not a single image or image clipboard write is unavailable. */
+export function copySingleImageBlocks(
+  copied: CopiedBlocks,
+  titleOf: (pageId: string) => string,
+  loadBlob: (image: Extract<Mention, { kind: "image" }>) => Promise<Blob>,
+): Promise<void> | null {
+  const image = singleCopiedImage(copied.tree);
+  if (!image || !canCopyImage()) return null;
+  const payload: Payload = { notes: 1, cut: copied.cut, source: copied.source, blocks: Object.values(copied.tree.by_id) };
+  const json = JSON.stringify(payload);
+  const plain = blockTreeToMarkdown(copied.tree, titleOf);
+  return copyImageBlob(
+    () => loadBlob(image),
+    (pngPromise) => ({
+      "text/html": pngPromise.then(async (png) => {
+        const imgTag = png.size <= MAX_INLINE_HTML_IMAGE_BYTES
+          ? `<img src="${await blobToDataUrl(png)}" alt="${escapeHtml(image.file.name)}">`
+          : "";
+        return new Blob(
+          [`<meta charset="utf-8"><div data-notes-blocks="${escapeHtml(json)}">${imgTag}</div>`],
+          { type: "text/html" },
+        );
+      }),
+      "text/plain": new Blob([plain], { type: "text/plain" }),
+    }),
+  );
 }
 
 /* The blocks inside copied HTML: a browser re-serialises it (wrapping it,

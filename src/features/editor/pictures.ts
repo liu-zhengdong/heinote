@@ -57,7 +57,7 @@ function edgeAt(token: HTMLElement, x: number): "left" | "right" | null {
   return null;
 }
 
-export function usePictures({ root, readOnly, uploads, show, resize, move, hover }: {
+export function usePictures({ root, readOnly, uploads, show, resize, resetWidth, move, hover }: {
   root: RefObject<HTMLElement | null>;
   readOnly: boolean;
   /** Pictures on their way up, by their file's path. */
@@ -65,16 +65,18 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
   show(file: StoredFile): ShownFile;
   /** A picture let go at a new width: the editor writes it. */
   resize(token: HTMLElement, picture: Picture, width: number): void;
+  /** Double-clicking a resize edge bar clears the custom width back to original. */
+  resetWidth?(token: HTMLElement, picture: Picture): void;
   /** A picture, or a link, carried to where it lands: the editor moves it. */
   move(token: HTMLElement, mention: Mention, to: Spot): void;
   /** The picture the pointer is on, or null once it has left it: the
    *  editor shows its tools. */
   hover(token: HTMLElement | null): void;
 }) {
-  const context = useRef({ show, resize, move, hover, readOnly, uploads });
+  const context = useRef({ show, resize, resetWidth, move, hover, readOnly, uploads });
   const repaint = useRef<() => void>(() => {});
   useEffect(() => {
-    context.current = { show, resize, move, hover, readOnly, uploads };
+    context.current = { show, resize, resetWidth, move, hover, readOnly, uploads };
   });
   // An upload's state is drawn on its picture: faded on its way, marked
   // when it failed (a click tries it again).
@@ -275,6 +277,29 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
       window.addEventListener("pointerup", stop);
       window.addEventListener("pointercancel", stop);
     };
+    /* Pressing or dragging a resize edge bar must not also open the full-size
+       viewer on click; double-clicking an edge bar resets the picture back to
+       its original width. */
+    const blockEdgeClick = (event: MouseEvent) => {
+      if (context.current.readOnly || event.button !== 0) return;
+      const token = (event.target as Element | null)?.closest<HTMLElement>(TOKEN);
+      if (!token || token.closest(".blocks") !== element) return;
+      if (edgeAt(token, event.clientX)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    const resetOnEdgeDoubleClick = (event: MouseEvent) => {
+      if (context.current.readOnly || event.button !== 0) return;
+      const token = (event.target as Element | null)?.closest<HTMLElement>(TOKEN);
+      if (!token || token.closest(".blocks") !== element || !edgeAt(token, event.clientX)) return;
+      const picture = pictureOf(token);
+      if (!picture || picture.width === undefined) return;
+      event.preventDefault();
+      event.stopPropagation();
+      token.style.width = picture.file.width ? `${picture.file.width}px` : "";
+      context.current.resetWidth?.(token, picture);
+    };
     element.addEventListener("pointermove", hover);
     element.addEventListener("pointerover", over);
     element.addEventListener("pointerout", out);
@@ -282,12 +307,16 @@ export function usePictures({ root, readOnly, uploads, show, resize, move, hover
     // selection.
     element.addEventListener("pointerdown", press, true);
     element.addEventListener("mousedown", hold, true);
+    element.addEventListener("click", blockEdgeClick, true);
+    element.addEventListener("dblclick", resetOnEdgeDoubleClick, true);
     return () => {
       element.removeEventListener("pointermove", hover);
       element.removeEventListener("pointerover", over);
       element.removeEventListener("pointerout", out);
       element.removeEventListener("pointerdown", press, true);
       element.removeEventListener("mousedown", hold, true);
+      element.removeEventListener("click", blockEdgeClick, true);
+      element.removeEventListener("dblclick", resetOnEdgeDoubleClick, true);
     };
   }, [root]);
 }

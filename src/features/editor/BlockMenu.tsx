@@ -1,8 +1,9 @@
-import { ChevronRight, Columns3, Copy, CornerDownRight, CornerUpLeft, Database, Download, Group, Link, Link2, Palette, Replace, Rows3, Trash2 } from "lucide-react";
+import { ChevronRight, Columns3, Copy, CornerDownRight, CornerUpLeft, Database, Download, Group, Image as ImageIcon, Link, Link2, Palette, Replace, Rows3, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { soleImage } from "../../core/inline-content";
 import { normalizeSimpleTable } from "../../core/simple-table";
 import type { Block, BlockKind, ContentColor } from "../../core/types";
 import { blockDefinition } from "./block-registry";
@@ -27,6 +28,7 @@ export function BlockMenu({
   onMoveTo,
   onMakeBlock,
   onCopyBlockLink,
+  onCopyImage,
   onReplace,
   onDownload,
   onTurnIntoDatabase,
@@ -45,6 +47,7 @@ export function BlockMenu({
   onMakeBlock(): void;
   /** Groups them into a block (unless they are one already) and copies its link. */
   onCopyBlockLink(): void;
+  onCopyImage?(): void;
   onReplace(): void;
   onDownload(): void;
   /** A list's lines, or a table, turned into a database — offered only when
@@ -66,10 +69,19 @@ export function BlockMenu({
   const several = blocks.length > 1;
   const kinds = new Set(blocks.map((block) => block.kind));
   const kind = kinds.size === 1 ? blocks[0]?.kind : undefined;
+  const solePicture = !several && blocks[0] && blocks[0].kind !== "code" && blocks[0].kind !== "file"
+    ? soleImage(blocks[0].content)
+    : null;
   // A child page or a database is not text in a different costume: turning
   // its block into a heading would leave the page it points at orphaned. An
   // image or a file is its bytes, not words, either.
-  const convertible = blocks.some((block) => block.kind !== "page" && block.kind !== "table" && block.kind !== "embed" && block.kind !== "file");
+  const convertible = blocks.some((block) => (
+    block.kind !== "page"
+    && block.kind !== "table"
+    && block.kind !== "embed"
+    && block.kind !== "file"
+    && !(block.kind !== "code" && soleImage(block.content))
+  ));
   // A card is its link, shown: it goes back to being the link.
   const card = !several && blocks[0]?.kind === "embed" ? blocks[0] : undefined;
   const media = !several && blocks[0] && blocks[0].kind === "file" ? blocks[0] : undefined;
@@ -94,8 +106,9 @@ export function BlockMenu({
           <MenuItem icon={<CornerDownRight size={16} />} label="Move to" hint="⌘⇧P" onSelect={() => { onClose(); onMoveTo(); }} />
           <MenuItem icon={<Group size={16} />} label="Group" onSelect={() => { onClose(); onMakeBlock(); }} />
           <MenuItem icon={<Link size={16} />} label="Copy link to block" onSelect={() => { onClose(); onCopyBlockLink(); }} />
-          {media ? <MenuItem icon={<Replace size={16} />} label="Replace" onSelect={() => { onClose(); onReplace(); }} /> : null}
-          {media?.file ? <MenuItem icon={<Download size={16} />} label="Download" onSelect={() => { onClose(); onDownload(); }} /> : null}
+          {solePicture && onCopyImage ? <MenuItem icon={<ImageIcon size={16} />} label="Copy image" onSelect={() => { onClose(); onCopyImage(); }} /> : null}
+          {media || solePicture ? <MenuItem icon={<Replace size={16} />} label={solePicture ? "Replace image" : "Replace"} onSelect={() => { onClose(); onReplace(); }} /> : null}
+          {media?.file || solePicture ? <MenuItem icon={<Download size={16} />} label="Download" onSelect={() => { onClose(); onDownload(); }} /> : null}
           {card && onTurnIntoLink ? <MenuItem icon={<Link2 size={16} />} label="Turn into link" onSelect={() => { onClose(); onTurnIntoLink(); }} /> : null}
           {convertible || colorable || onTurnIntoDatabase ? <MenuDivider /> : null}
           {convertible ? <button

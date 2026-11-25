@@ -1,11 +1,13 @@
-import { ArrowRight, ChevronLeft, ChevronRight, Download, Eraser, Expand, PenLine, Square, Type, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowRight, Check, ChevronLeft, ChevronRight, Copy, Download, Eraser, Expand, PenLine, Square, Type, Undo2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { copyImageBlob } from "../../core/clipboard";
 import type { StoredFile } from "../../core/types";
 import { Modal } from "../../components/Modal";
 import { useFileUrl, type MediaActions } from "./MediaBlocks";
+import "./image-viewer.css";
 
-/* A picture looked through in turn — a cell's: where this one stands among
-   the pictures, and the steps either side of it. */
+/* A picture looked through in turn — a cell's or a page's: where this one
+   stands among the pictures, and the steps either side of it. */
 export interface ViewerBrowse {
   count: number;
   index: number;
@@ -65,26 +67,11 @@ function imagePoint(clientX: number, clientY: number, stage: DOMRect, pan: Point
   };
 }
 
-function drawStrokes(canvas: HTMLCanvasElement, width: number, height: number, strokes: readonly Stroke[], draft: Stroke | null) {
-  const dpr = window.devicePixelRatio || 1;
-  const w = Math.max(1, Math.round(width));
-  const h = Math.max(1, Math.round(height));
-  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-  }
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  /* The canvas backing is device pixels, the marks' math is in the shown
-     picture's CSS pixels — the transform between them is the density's, so
-     a mark lands where the pointer did on screens of every density. */
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-  /* Everything drawn is in screen pixels of the shown picture: a mark's
-     place is its picture share times the shown size, its weight the same. */
+/** Paints normalized strokes into `ctx` for an image surface of CSS/pixel size `w × h`. */
+function paintStrokes(ctx: CanvasRenderingContext2D, w: number, h: number, strokes: readonly Stroke[], draft: Stroke | null) {
   const spot = (point: Point) => ({ x: point.x * w, y: point.y * h });
   for (const stroke of draft ? [...strokes, draft] : strokes) {
-    const weight = stroke.weight * Math.min(w, h);
+    const weight = Math.max(2, stroke.weight * Math.min(w, h));
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
     ctx.lineWidth = weight;
@@ -123,21 +110,71 @@ function drawStrokes(canvas: HTMLCanvasElement, width: number, height: number, s
   }
 }
 
+function drawStrokes(canvas: HTMLCanvasElement, width: number, height: number, strokes: readonly Stroke[], draft: Stroke | null) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(width));
+  const h = Math.max(1, Math.round(height));
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  /* The canvas backing is device pixels, the marks' math is in the shown
+     picture's CSS pixels — the transform between them is the density's, so
+     a mark lands where the pointer did on screens of every density. */
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  paintStrokes(ctx, w, h, strokes, draft);
+}
+
+/** Composites the original image and temporary marks at full natural resolution. */
+function renderAnnotatedPng(image: HTMLImageElement, width: number, height: number, strokes: readonly Stroke[]): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width));
+    canvas.height = Math.max(1, Math.round(height));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      reject(new Error("无法创建画布"));
+      return;
+    }
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    paintStrokes(ctx, canvas.width, canvas.height, strokes, null);
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("无法导出带标注图片"));
+    }, "image/png");
+  });
+}
+
+let lastAnnouncement = "";
+
 export function ImageViewer({
   file,
   browse,
   actions,
   onDownload,
+  onCopyResult,
+  extraActions,
   onClose,
 }: {
   file: StoredFile;
   browse?: ViewerBrowse;
   actions: Pick<MediaActions, "showFile">;
   onDownload?: () => void;
+  /** Optional host callback (e.g., workspace toast) for copy feedback. When
+   *  omitted — such as on the standalone public reader — the viewer renders its
+   *  own compact status banner. */
+  onCopyResult?(ok: boolean, message: string): void;
+  /** Optional host-specific actions placed in the viewer header bar (e.g.,
+   *  inline picture editing menu for mobile & desktop). */
+  extraActions?: ReactNode;
   onClose(): void;
 }) {
   const { url, failed, retry } = useFileUrl(file, "original", actions);
   const stageRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
   /** The picture's own pixels; the view's zoom counts from them. */
@@ -151,10 +188,16 @@ export function ImageViewer({
   const [draft, setDraft] = useState<Stroke | null>(null);
   const [textSpot, setTextSpot] = useState<Point | null>(null);
   const [textDraft, setTextDraft] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null);
+  const [liveStatus, setLiveStatus] = useState("");
+  const copyTimer = useRef<number | null>(null);
+  const noticeTimer = useRef<number | null>(null);
   const panFrom = useRef<{ start: Point; at: Point } | null>(null);
   const drawFrom = useRef<Stroke | null>(null);
 
   const annotating = tool !== null;
+  const hasMarks = strokes.length > 0;
   const first = !browse || browse.index <= 0;
   const last = !browse || browse.index >= browse.count - 1;
 
@@ -162,6 +205,70 @@ export function ImageViewer({
 
   /** The shown picture's screen pixels under the current zoom. */
   const shown = natural ? { w: natural.w * zoom, h: natural.h * zoom } : null;
+
+  const announce = useCallback((message: string) => {
+    let next = message;
+    if (next === lastAnnouncement) next += "\u00A0";
+    lastAnnouncement = next;
+    setLiveStatus(next);
+  }, []);
+
+  /** Copies the shown picture to the system clipboard as PNG — with temporary
+   *  marks burned in at full original resolution when any marks exist. */
+  const copyCurrentImage = useCallback(() => {
+    if (!url) return;
+    const activeStrokes = textSpot && textDraft.trim()
+      ? [...strokes, { tool: "text" as const, color, weight: STROKE_WEIGHT, points: [textSpot], text: textDraft.trim(), size: TEXT_SIZE }]
+      : strokes;
+    const annotated = activeStrokes.length > 0 && Boolean(imgRef.current && natural);
+    const loadBlob = annotated
+      ? () => renderAnnotatedPng(imgRef.current!, natural!.w, natural!.h, activeStrokes)
+      : async () => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("无法读取图片");
+        return response.blob();
+      };
+    void copyImageBlob(loadBlob)
+      .then(() => {
+        const message = annotated ? "已复制带标注图片" : "图片已复制";
+        if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+        setCopied(true);
+        copyTimer.current = window.setTimeout(() => {
+          copyTimer.current = null;
+          setCopied(false);
+        }, 1600);
+        announce(message);
+        if (onCopyResult) {
+          onCopyResult(true, message);
+        } else {
+          if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+          setNotice({ ok: true, text: message });
+          noticeTimer.current = window.setTimeout(() => {
+            noticeTimer.current = null;
+            setNotice(null);
+          }, 2000);
+        }
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error && error.message ? error.message : "复制图片失败，请尝试下载";
+        announce(message);
+        if (onCopyResult) {
+          onCopyResult(false, message);
+        } else {
+          if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+          setNotice({ ok: false, text: message });
+          noticeTimer.current = window.setTimeout(() => {
+            noticeTimer.current = null;
+            setNotice(null);
+          }, 3200);
+        }
+      });
+  }, [announce, color, natural, onCopyResult, strokes, textDraft, textSpot, url]);
+
+  useEffect(() => () => {
+    if (copyTimer.current !== null) window.clearTimeout(copyTimer.current);
+    if (noticeTimer.current !== null) window.clearTimeout(noticeTimer.current);
+  }, []);
 
   /** A picture arriving settles to its fit: as large as the room allows,
    *  never bigger than its own pixels. Everything it wore is gone with it. */
@@ -180,6 +287,8 @@ export function ImageViewer({
   /** A step to another picture is a new room: clean marks, fresh fit. */
   useEffect(() => {
     setNatural(null);
+    setCopied(false);
+    setNotice(null);
   }, [file]);
 
   /* Keep the picture in reach when the stage itself changes size. */
@@ -250,11 +359,21 @@ export function ImageViewer({
     return () => stage.removeEventListener("wheel", onWheel);
   }, [onWheel]);
 
-  /* Keys: +/−/0 zoom as the buttons do; arrows keep their picture steps —
-     taken in capture so the editor under the dialog hears none of them. */
+  /* Keys: +/−/0 zoom as the buttons do; arrows keep their picture steps;
+     ⌘C/Ctrl+C copies the current picture (with marks if any) — taken in
+     capture so the editor under the dialog hears none of them. */
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) return;
+      const meta = event.metaKey || event.ctrlKey;
+      if (meta && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "c") {
+        if (url && window.getSelection()?.isCollapsed !== false) {
+          event.preventDefault();
+          event.stopPropagation();
+          copyCurrentImage();
+        }
+        return;
+      }
       const handled =
         event.key === "+" || event.key === "=" ? (zoomTo(zoom * 1.25), true) :
         event.key === "-" ? (zoomTo(zoom / 1.25), true) :
@@ -268,7 +387,7 @@ export function ImageViewer({
     };
     window.addEventListener("keydown", keys, true);
     return () => window.removeEventListener("keydown", keys, true);
-  }, [zoom, zoomTo, natural, fit, first, last, browse]);
+  }, [zoom, zoomTo, natural, fit, first, last, browse, url, copyCurrentImage]);
 
   /* Escape reaches this room through the dialog's own onClose: marks it
      holds are left behind first — the dialog's close is asked, not taken. */
@@ -351,44 +470,64 @@ export function ImageViewer({
     return { left: pan.x + textSpot.x * natural.w * zoom, top: pan.y + textSpot.y * natural.h * zoom };
   };
 
+  const copyLabel = hasMarks ? "Copy image with marks" : "Copy image";
+
   return (
     <Modal open label={file.name} className="viewer" mobilePresentation="fullscreen" onClose={requestClose}>
       <div className="viewer__bar">
         <span className="viewer__name">{file.name}</span>
         {browse && browse.count > 1 ? <span className="viewer__count">{browse.index + 1} of {browse.count}</span> : null}
-        {url ? (
-          <>
-            <button type="button" className="icon-btn" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomTo(zoom / 1.25)}>
-              <ZoomOut size={15} />
+        <div className="viewer__actions">
+          {url ? (
+            <>
+              <button type="button" className="icon-btn" aria-label="Zoom out" title="Zoom out (−)" onClick={() => zoomTo(zoom / 1.25)}>
+                <ZoomOut size={15} aria-hidden="true" />
+              </button>
+              <span className="viewer__zoom">{Math.round(zoom * 100)}%</span>
+              <button type="button" className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomTo(zoom * 1.25)}>
+                <ZoomIn size={15} aria-hidden="true" />
+              </button>
+              <button type="button" className="icon-btn" aria-label="Fit to window" title="Fit to window (0)" onClick={() => natural && fit(natural)}>
+                <Expand size={15} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${annotating ? "is-on" : ""}`}
+                aria-label="Annotate"
+                aria-pressed={annotating}
+                title="Annotate"
+                onClick={() => setTool(annotating ? null : "pen")}
+              >
+                <PenLine size={15} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className={`icon-btn ${copied ? "is-copied" : ""}`}
+                aria-label={copyLabel}
+                title={`${copyLabel} (⌘C)`}
+                onClick={copyCurrentImage}
+              >
+                {copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />}
+              </button>
+            </>
+          ) : null}
+          {onDownload ? (
+            <button type="button" className="icon-btn" aria-label="Download" title="Download" onClick={onDownload}>
+              <Download size={15} aria-hidden="true" />
             </button>
-            <span className="viewer__zoom">{Math.round(zoom * 100)}%</span>
-            <button type="button" className="icon-btn" aria-label="Zoom in" title="Zoom in (+)" onClick={() => zoomTo(zoom * 1.25)}>
-              <ZoomIn size={15} />
-            </button>
-            <button type="button" className="icon-btn" aria-label="Fit to window" title="Fit to window (0)" onClick={() => natural && fit(natural)}>
-              <Expand size={15} />
-            </button>
-            <button
-              type="button"
-              className={`icon-btn ${annotating ? "is-on" : ""}`}
-              aria-label="Annotate"
-              aria-pressed={annotating}
-              title="Annotate"
-              onClick={() => setTool(annotating ? null : "pen")}
-            >
-              <PenLine size={15} />
-            </button>
-          </>
-        ) : null}
-        {onDownload ? (
-          <button type="button" className="icon-btn" aria-label="Download" onClick={onDownload}>
-            <Download size={15} />
-          </button>
-        ) : null}
-        <button type="button" className="icon-btn" aria-label="Close" onClick={onClose}>
-          <X size={16} />
+          ) : null}
+          {extraActions}
+        </div>
+        <button type="button" className="icon-btn viewer__close" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+          <X size={16} aria-hidden="true" />
         </button>
       </div>
+      <span className="viewer__sr" role="status" aria-live="polite">{liveStatus}</span>
+      {notice ? (
+        <div className={`viewer__notice ${notice.ok ? "is-ok" : ""}`} role={notice.ok ? "status" : "alert"}>
+          {notice.text}
+        </div>
+      ) : null}
       {annotating ? (
         <div className="viewer__tools" role="toolbar" aria-label="Annotate tools">
           {(["pen", "arrow", "rect", "text"] as const).map((name) => (
@@ -444,6 +583,7 @@ export function ImageViewer({
             onClick={annotating ? undefined : (event) => event.stopPropagation()}
           >
             <img
+              ref={imgRef}
               src={url}
               alt={file.name}
               draggable={false}
