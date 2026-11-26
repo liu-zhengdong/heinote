@@ -1,6 +1,7 @@
 import { Table2 } from "lucide-react";
 import { useCallback, useLayoutEffect, useRef } from "react";
 import { useWorkspace } from "../../app/workspace-context";
+import { ImeInput } from "../../components/ImeInput";
 import { PageIconMark } from "../editor/PageIcon";
 import { RemoteCarets } from "../editor/RemoteCarets";
 import { DatabaseViews } from "./DatabaseViews";
@@ -90,7 +91,7 @@ export function InlineDatabase({
         title={pinnedViewId ? undefined : (
           <>
             <span className="dbv-inline__icon" aria-hidden="true"><PageIconMark page={database} size={16} /></span>
-            <input
+            <ImeInput
               ref={nameRef}
               className="dbv-inline__title t-control-size-keep"
               data-block-id={databaseId}
@@ -99,7 +100,7 @@ export function InlineDatabase({
               placeholder="Untitled database"
               aria-label="Database title"
               readOnly={readOnly}
-              onChange={(event) => { if (!readOnly) updatePage(databaseId, { title: event.target.value }); }}
+              onValueChange={(next) => { if (!readOnly) updatePage(databaseId, { title: next }); }}
             />
           </>
         )}

@@ -1,5 +1,6 @@
 import { ArrowDown, ArrowLeftRight, ArrowLeftToLine, ArrowRightToLine, ArrowUp, ChevronRight, Copy, Repeat, SlidersHorizontal, TextWrap, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { ImeInput } from "../../components/ImeInput";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Select } from "../../components/Select";
@@ -137,7 +138,7 @@ export function PropertyMenu({
             >
               {property ? <PropertyIcon property={property} size={16} /> : <TitleIcon icon={icon} size={16} />}
             </button>
-            <input
+            <ImeInput
               ref={nameRef}
               className="prop-menu__name"
               value={name}
@@ -146,7 +147,7 @@ export function PropertyMenu({
               data-history-field={`property-name:${column}`}
               data-page-id={databaseId}
               spellCheck={false}
-              onChange={(event) => onRename(event.target.value)}
+              onValueChange={onRename}
               onKeyDown={(event) => {
                 if (imeComposing(event)) return;
                 if (event.key === "Enter") {

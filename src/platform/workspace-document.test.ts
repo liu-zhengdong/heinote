@@ -10,6 +10,7 @@ vi.mock("../collaboration/client", () => ({
   acknowledgePageBatch: vi.fn().mockResolvedValue(undefined),
   activeSessionPageIds: () => [],
   activeSessionRecords: () => null,
+  applyAcceptedRawRecord: () => {},
   awaitCollaborativeBasis: async () => {},
   bindPendingRequest: vi.fn(),
   closeCollaborativePage: vi.fn(),

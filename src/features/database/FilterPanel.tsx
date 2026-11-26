@@ -1,5 +1,6 @@
 import { FileText, Plus, Trash2, X } from "lucide-react";
 import type { ReactNode } from "react";
+import { ImeInput } from "../../components/ImeInput";
 import { MenuItem, MenuList } from "../../components/Menu";
 import { Select } from "../../components/Select";
 import { pageName } from "../../core/block-tree";
@@ -124,13 +125,13 @@ function ConditionValue({
     );
   }
   return (
-    <input
+    <ImeInput
       className="filter-panel__input"
       type={property.type === "number" ? "number" : "text"}
       aria-label="Filter value"
       placeholder="Type a value…"
       value={condition.value ?? ""}
-      onChange={(event) => onChange(event.target.value)}
+      onValueChange={onChange}
     />
   );
 }

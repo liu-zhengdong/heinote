@@ -31,6 +31,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
+import { ImeInput } from "../../components/ImeInput";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
@@ -1061,14 +1062,15 @@ export function DatabaseView({
         {menuView ? (
           <div className="view-menu">
             {/* One view has no tab to name: the database's name is its name. */}
-            {config.views.length > 1 ? <input
+            {config.views.length > 1 ? <ImeInput
+              key={menuView.id}
               className="view-menu__name"
               value={menuView.name}
               aria-label="View name"
               data-history-field={`view:${menuView.id}`}
               data-page-id={databaseId}
               placeholder={viewKindLabel(menuView.kind)}
-              onChange={(event) => saveView({ ...menuView, name: event.target.value })}
+              onValueChange={(next) => saveView({ ...menuView, name: next })}
               onKeyDown={(event) => { if (event.key === "Enter" && !imeComposing(event)) setMenu(null); }}
             /> : null}
             <MenuList label="View settings" autoFocus={config.views.length <= 1}>

@@ -1,5 +1,6 @@
 import { ALargeSmall, ArrowLeftRight, AtSign, Calendar, Check, Clock, Fingerprint, Hash, History, ImageIcon, Link as LinkIcon, ListFilter, Phone, SquareCheckBig, Tags, Text as TextIcon, UserCheck, UserPlus, UserRound } from "lucide-react";
 import { Avatar } from "../../components/Avatar";
+import { ImeInput, useImeValue } from "../../components/ImeInput";
 import { Select } from "../../components/Select";
 import { imeComposing } from "../../core/keyboard";
 import type { DatabaseProperty, NotePage, OptionColor } from "../../core/types";
@@ -125,17 +126,17 @@ function TextValue({
   readOnly: boolean;
   wrap: boolean;
 }) {
+  const ime = useImeValue<HTMLTextAreaElement>(value, onChange);
   return (
-    <span className={`db__text ${wrap ? "" : "is-one-line"}`} data-value={value}>
+    <span className={`db__text ${wrap ? "" : "is-one-line"}`} data-value={ime.value}>
       <textarea
         className="db__cell db__cell--text"
         rows={1}
-        value={value}
         aria-label={propertyName(property)}
         data-history-field={`property:${property.id}`}
         placeholder="Empty"
         readOnly={readOnly}
-        onChange={(event) => onChange(event.target.value)}
+        {...ime}
         onKeyDown={(event) => {
           if (event.key !== "Enter" || event.shiftKey || imeComposing(event)) return;
           event.preventDefault();
@@ -211,13 +212,13 @@ export function PropertyEditor({
     return (
       <label className="db__person">
         {value ? <Avatar name={value} size={20} /> : null}
-        <input
+        <ImeInput
           value={value}
           aria-label={propertyName(property)}
           data-history-field={`property:${property.id}`}
           placeholder="Empty"
           readOnly={readOnly}
-          onChange={(event) => onChange(event.target.value)}
+          onValueChange={onChange}
         />
       </label>
     );
@@ -296,7 +297,7 @@ export function PropertyEditor({
     }
     return (
       <span className={`db__line ${value ? "" : "is-empty"}`}>
-        <input
+        <ImeInput
           type="text"
           className={`db__cell db__cell--line ${link ? "db__cell--link" : ""} ${property.type === "number" ? "db__cell--number" : ""}`}
           value={value}
@@ -305,7 +306,7 @@ export function PropertyEditor({
           data-history-field={`property:${property.id}`}
           placeholder="Empty"
           readOnly={readOnly}
-          onChange={(event) => onChange(event.target.value)}
+          onValueChange={onChange}
           onKeyDown={(event) => {
             if (event.key !== "Enter" || imeComposing(event)) return;
             event.preventDefault();

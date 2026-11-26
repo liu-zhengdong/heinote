@@ -1237,6 +1237,62 @@ export function activeSessionRecords(
   return pageIds.size ? { pageIds, records } : null;
 }
 
+/**
+ * Reflect an accepted raw HTTP record write (`put`/`patch`/`delete`) directly
+ * into any active `PageSession`'s confirmed state so `LiveCollection.values()`
+ * never snaps backwards to pre-write fields while waiting for the async WS
+ * `reset` snapshot.
+ */
+export function applyAcceptedRawRecord(
+  scope: string,
+  collection: string,
+  id: string,
+  value: JsonRecord | null,
+  patchKeys?: readonly string[],
+): void {
+  if (collection !== "pages" && collection !== "blocks") return;
+  const pageId = collection === "pages" ? id : parseBlockRecordId(id)?.pageId;
+  if (!pageId) return;
+  const session = sessionFor(scope, pageId);
+  if (!session) return;
+
+  if (collection === "pages") {
+    if (!value) {
+      deleteSession(documentKey({ scope, pageId }));
+      return;
+    }
+    const nextPage = structuredClone(value);
+    if (patchKeys && !patchKeys.includes("title_content") && session.pending.length > 0 && "title_content" in session.confirmed.page) {
+      nextPage.title_content = structuredClone(session.confirmed.page.title_content);
+    }
+    session.confirmed = { ...session.confirmed, page: nextPage };
+  } else {
+    const blockId = parseBlockRecordId(id)?.blockId;
+    if (!blockId) return;
+    const nextBlocks = new Map(session.confirmed.blocks);
+    if (!value) {
+      nextBlocks.delete(blockId);
+    } else {
+      const nextBlock = structuredClone(value);
+      const prevBlock = session.confirmed.blocks.get(blockId);
+      if (patchKeys && session.pending.length > 0 && prevBlock) {
+        if (!patchKeys.includes("content") && "content" in prevBlock) {
+          nextBlock.content = structuredClone(prevBlock.content);
+        }
+        if (!patchKeys.includes("table") && "table" in prevBlock) {
+          nextBlock.table = structuredClone(prevBlock.table);
+        }
+      }
+      nextBlocks.set(blockId, nextBlock);
+    }
+    session.confirmed = { ...session.confirmed, blocks: nextBlocks };
+  }
+
+  session.optimistic = rebuildOptimistic(session);
+  session.localVersion += 1;
+  collabVersion += 1;
+}
+
 export function pageBasis(scope: string, pageId: string): ExpectedPage | null {
   const session = sessionFor(scope, pageId);
   if (!session) return null;

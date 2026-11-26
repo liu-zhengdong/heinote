@@ -20,6 +20,7 @@ vi.mock("../collaboration/client", () => ({
   acknowledgePageBatch: hooks.acknowledgePageBatch,
   activeSessionPageIds: () => [],
   activeSessionRecords: () => null,
+  applyAcceptedRawRecord: () => {},
   awaitCollaborativeBasis: () => Promise.resolve(),
   bindPendingRequest: hooks.bindPendingRequest,
   coalescePageOps: (ops: PageOp[]) => ops,

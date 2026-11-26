@@ -3,6 +3,8 @@ import type { RichText } from "../platform/schema";
 import { blockField, type DocumentSnapshot, type JsonRecord } from "./protocol";
 import {
   acknowledgePageBatch,
+  activeSessionRecords,
+  applyAcceptedRawRecord,
   bindPendingRequest,
   closeCollaboration,
   collaborationFieldTick,
@@ -262,5 +264,28 @@ describe("semantic PageSession truth-chain, rebase, presence & selective undo", 
     reply(new Response(JSON.stringify(snapshotOf("page", "e1", [{ id: "block", text: "old" }])), { status: 200 }));
     await pending;
     expect(connectedPage("page")).toBe(false);
+  });
+
+  it("reflects accepted raw page patches in activeSessionRecords without clobbering pending OT title ops", async () => {
+    const snap = snapshotOf("page", "e1", [], { seq: 0, title: "Old" });
+    fetchTo(() => snap);
+    await openCollaborativePage("A", "page");
+
+    // Stage a pending OT title edit before a raw database metadata patch settles.
+    recordLocalTextEdit("A", "pages", "page", { id: "page", title_content: runs("Old") }, { id: "page", title_content: runs("Old+") });
+
+    applyAcceptedRawRecord(
+      "A",
+      "pages",
+      "page",
+      { id: "page", kind: "database", title_content: runs("Old"), database: { title_name: "任务" } },
+      ["database", "updated_at"],
+    );
+
+    const active = activeSessionRecords("A", "pages");
+    expect(active?.records.get("page")).toMatchObject({
+      database: { title_name: "任务" },
+      title_content: runs("Old+"),
+    });
   });
 });

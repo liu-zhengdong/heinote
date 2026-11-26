@@ -7,6 +7,7 @@ import {
   acknowledgePageBatch,
   activeSessionPageIds,
   activeSessionRecords,
+  applyAcceptedRawRecord,
   awaitCollaborativeBasis,
   bindPendingRequest,
   coalescePageOps,
@@ -1227,6 +1228,15 @@ export class LiveCollection<R extends object> {
     this.pending = this.pending.filter((item) => item !== write);
     if (value) this.remote.set(write.id, value as R);
     else this.remote.delete(write.id);
+    if (this.name === "pages" || this.name === "blocks") {
+      applyAcceptedRawRecord(
+        this.scope,
+        this.name,
+        write.id,
+        value,
+        write.action === "patch" && isObject(write.patch) ? Object.keys(write.patch) : undefined,
+      );
+    }
     this.persistMirror();
     this.emit();
   }

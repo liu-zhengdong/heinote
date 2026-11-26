@@ -281,3 +281,67 @@ test("UC-22: new property types, relation, views and linked view render and are 
   await shot(page, join(evidence, "uc22-linked-view-dark@2x.png"));
   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
 });
+
+test("Windows Chinese IME composition does not duplicate pinyin when naming database tables, columns, views, or cells", async ({ page }) => {
+  await register(page, "uc22_ime");
+  const cdp = await page.context().newCDPSession(page);
+  const composeRenwu = async () => {
+    for (const preedit of ["r", "re", "ren", "ren’w", "ren’wu"]) {
+      await cdp.send("Input.imeSetComposition", {
+        text: preedit,
+        selectionStart: preedit.length,
+        selectionEnd: preedit.length,
+      });
+      await page.waitForTimeout(40);
+    }
+    await cdp.send("Input.insertText", { text: "任务" });
+    await page.waitForTimeout(150);
+  };
+
+  // Inline database title
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  const editable = page.locator(".block__editable[contenteditable='true']").first();
+  await editable.click();
+  await page.keyboard.type("/database");
+  await page.locator(".slash-menu button, [role='option'], .menu__item").filter({ hasText: /Table view/i }).first().click();
+  const inlineTitle = page.locator(".dbv-inline__title").first();
+  await expect(inlineTitle).toBeVisible();
+  await inlineTitle.click();
+  await composeRenwu();
+  await expect(inlineTitle).toHaveValue("任务");
+
+  // Open as full page (active PageSession) and test column name + view name + text cell
+  await page.getByRole("button", { name: "View and database settings" }).first().click();
+  await page.locator(".menu__item").filter({ hasText: "Open as full page" }).first().click();
+  await expect(page.locator(".db--page")).toBeVisible();
+  await page.waitForTimeout(300);
+
+  // Column header rename (PropertyMenu)
+  await page.locator("th[data-column] button.db__th").first().click();
+  const propInput = page.locator("input.prop-menu__name").first();
+  await expect(propInput).toBeVisible();
+  await composeRenwu();
+  await expect(propInput).toHaveValue("任务");
+  await page.keyboard.press("Enter");
+
+  // Add second view and rename view (DatabaseView)
+  await page.getByRole("button", { name: "View and database settings" }).click();
+  await page.locator(".menu__item").filter({ hasText: "Add a view" }).first().click();
+  await page.locator(".menu__item").filter({ hasText: "Board" }).first().click();
+  await page.waitForTimeout(300);
+  await page.getByRole("button", { name: "View and database settings" }).click();
+  const viewInput = page.locator("input.view-menu__name").first();
+  await expect(viewInput).toBeVisible();
+  await viewInput.click();
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  await composeRenwu();
+  await expect(viewInput).toHaveValue("任务");
+  await page.keyboard.press("Enter");
+
+  // Verify persistence across reload
+  await page.waitForTimeout(300);
+  await page.reload();
+  await expect(page.locator(".db--page .doc__title")).toHaveText("任务");
+  await expect(page.getByRole("tab", { name: "任务" })).toBeVisible();
+});
