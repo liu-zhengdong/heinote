@@ -13,6 +13,7 @@ import {
   PanelLeft,
   Plus,
   Search,
+  Shield,
   SquarePen,
   Star,
   Table2,
@@ -56,6 +57,7 @@ import { capitalized } from "../../core/title";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
 import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
+import { useSession } from "../account/AuthGate";
 import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
 import {
   measureTree,
@@ -120,7 +122,9 @@ export function Sidebar() {
     ensureAllSpaces,
     directoryLoading,
   } = useWorkspace();
-  const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast } = useUi();
+  const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast, adminOpen, openAdmin, closeAdmin } = useUi();
+  const { user: sessionUser } = useSession();
+  const isAdmin = sessionUser?.siteRole === "admin";
   const folded = useFold();
 
   const asideRef = useRef<HTMLElement | null>(null);
@@ -392,6 +396,7 @@ export function Sidebar() {
 
   const createIn = (parentId: string | null, kind: PageKind) => {
     if (!writable) return;
+    if (adminOpen) closeAdmin();
     const id = createPage(parentId, kind, { block: true });
     if (id && view !== "files") setPreference("sidebar_view", "files");
     setNewMenu(null);
@@ -749,6 +754,7 @@ export function Sidebar() {
   );
 
   const selectSidebarView = (nextView: SidebarView) => {
+    if (adminOpen) closeAdmin();
     setPreference("sidebar_view", nextView);
     if (railed) setPreference("sidebar_collapsed", false);
   };
@@ -1039,7 +1045,10 @@ export function Sidebar() {
                 type="button"
                 className="icon-btn rail__btn sidebar__search"
                 aria-label="Search"
-                onClick={() => setQuickFindOpen(true)}
+                onClick={() => {
+                  if (adminOpen) closeAdmin();
+                  setQuickFindOpen(true);
+                }}
               >
                 <Search size={16} aria-hidden="true" />
               </button>
@@ -1051,16 +1060,17 @@ export function Sidebar() {
               const Icon = VIEW_ICONS[value];
               const count = viewCounts[value];
               const tip = count !== undefined ? `${VIEW_LABELS[value]} · ${count}` : VIEW_LABELS[value];
+              const selectedTab = !adminOpen && view === value;
               return (
                 <Tooltip key={value} label={tip} placement="right-start">
                   <button
                     type="button"
                     role="tab"
-                    aria-selected={view === value}
+                    aria-selected={selectedTab}
                     aria-label={capitalized(value)}
                     tabIndex={view === value ? 0 : -1}
                     data-count={count}
-                    className={`icon-btn rail__btn rail__tab rail__tab--${value} ${view === value ? "is-active" : ""}`}
+                    className={`icon-btn rail__btn rail__tab rail__tab--${value} ${selectedTab ? "is-active" : ""}`}
                     onClick={() => selectSidebarView(value)}
                     onKeyDown={(event) => {
                       const index = visibleViews.indexOf(value);
@@ -1084,7 +1094,7 @@ export function Sidebar() {
           </div>
 
           <div className="rail__group rail__group--foot">
-            {railed ? (
+            {railed && !adminOpen ? (
               <>
                 <Tooltip label="Show the list" hint="⌘\" placement="right-start">
                   <button
@@ -1098,6 +1108,19 @@ export function Sidebar() {
                 </Tooltip>
                 <SpaceSwitcher compact placement="right-start" onSwitch={afterNavigate} />
               </>
+            ) : null}
+            {isAdmin ? (
+              <Tooltip label={adminOpen ? "返回笔记" : "后台管理"} placement="right-start">
+                <button
+                  type="button"
+                  className={`icon-btn rail__btn rail__tab rail__tab--admin ${adminOpen ? "is-active" : ""}`}
+                  aria-label="后台管理"
+                  aria-pressed={adminOpen}
+                  onClick={() => { if (adminOpen) closeAdmin(); else openAdmin(); }}
+                >
+                  <span className="sidebar__view-icon sidebar__view-icon--admin"><Shield size={16} aria-hidden="true" /></span>
+                </button>
+              </Tooltip>
             ) : null}
             <AccountSettingsButton onOpen={beforeAccountSettings} />
           </div>
@@ -1116,7 +1139,7 @@ export function Sidebar() {
         >
           {list}
         </BottomSheet>
-      ) : !railed ? (
+      ) : !railed && !adminOpen ? (
         <aside
           ref={asideRef}
           className={["sidebar", resizing ? "is-resizing" : ""].filter(Boolean).join(" ")}

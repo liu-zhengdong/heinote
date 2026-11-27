@@ -1,5 +1,5 @@
-import { AlertTriangle, ArrowLeft, ArrowUpCircle, BookMarked, CheckCircle2, CloudUpload, Code2, DatabaseBackup, ExternalLink, HardDrive, Info, RefreshCw, Search, Settings2, Users } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ArrowLeft, ArrowUpCircle, BookMarked, CheckCircle2, CloudUpload, Code2, DatabaseBackup, ExternalLink, HardDrive, Info, LayoutGrid, RefreshCw, Search, Settings2, SlidersHorizontal, Users } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLayer } from "../../components/layer-stack";
 import { Select } from "../../components/Select";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
@@ -10,14 +10,15 @@ import { formatBytes, formatDate, formatDateTime, parseBytesInput, type About, t
 import "./admin.css";
 
 type Tab = "overview" | "users" | "teams" | "quotas" | "backups" | "about";
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "概览" },
-  { id: "users", label: "用户" },
-  { id: "teams", label: "团队知识库" },
-  { id: "quotas", label: "限额设置" },
-  { id: "backups", label: "备份" },
-  { id: "about", label: "关于" },
+const TABS: { id: Tab; label: string; group: "运营" | "系统"; desc: string; icon: typeof LayoutGrid }[] = [
+  { id: "overview", label: "概览", group: "运营", desc: "站点容量、用户规模与待处理状态总览。", icon: LayoutGrid },
+  { id: "users", label: "用户", group: "运营", desc: "管理站点成员角色、个人存储限额与团队创建上限。", icon: Users },
+  { id: "teams", label: "团队知识库", group: "运营", desc: "查看所有团队知识库的成员规模、归档状态与存储配额。", icon: BookMarked },
+  { id: "quotas", label: "限额设置", group: "系统", desc: "统一调整新旧继承对象的默认存储与建库上限。", icon: SlidersHorizontal },
+  { id: "backups", label: "备份", group: "系统", desc: "配置 WebDAV 异地分片备份、计划时刻与手动触发。", icon: DatabaseBackup },
+  { id: "about", label: "关于", group: "系统", desc: "当前运行环境、代码仓库与在线版本更新。", icon: Info },
 ];
+const TAB_GROUPS: readonly ("运营" | "系统")[] = ["运营", "系统"];
 
 function useBusy() {
   const [busy, setBusy] = useState(0);
@@ -59,6 +60,7 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [detail, setDetail] = useState(false); // narrow layout: inspector visible
+  const [summary, setSummary] = useState<Overview | null>(null);
   const { busy } = useBusy();
   const root = useRef<HTMLDivElement>(null);
 
@@ -88,25 +90,87 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
     } finally { setConfirming(false); }
   };
 
+  const activeMeta = TABS.find((item) => item.id === tab) ?? TABS[0];
+  const isSplit = tab === "users" || tab === "teams";
+
+  const tabBadge = (id: Tab) => {
+    if (!summary) return null;
+    if (id === "overview" && summary.over.length > 0) {
+      return <span className="admin__badge admin__badge--danger" aria-hidden="true">{summary.over.length}</span>;
+    }
+    if (id === "users") return <span className="admin__badge" aria-hidden="true">{summary.users}</span>;
+    if (id === "teams") return <span className="admin__badge" aria-hidden="true">{summary.teams.active}</span>;
+    return null;
+  };
+
   return <div className="admin" ref={root} tabIndex={-1} data-detail={detail ? "1" : undefined} aria-busy={busy || undefined}>
-    <header className="admin__top">
-      <button type="button" className="btn admin__back" onClick={onClose}><ArrowLeft size={16} />返回笔记</button>
-      <strong className="admin__brand">小黑笔记</strong>
-      <span className="admin__who">{user ? `管理员 · ${personName(user)}` : ""}</span>
-    </header>
-    <nav className="admin__tabs" role="tablist" aria-label="后台管理">
-      {TABS.map((item) => <button key={item.id} type="button" role="tab" aria-selected={tab === item.id}
-        className={tab === item.id ? "admin__tab admin__tab--on" : "admin__tab"}
-        onClick={() => { setTab(item.id); setDetail(false); }}>{item.label}</button>)}
-    </nav>
-    <main className="admin__main">
-      {tab === "overview" ? <OverviewPanel onOpen={openObject} /> : null}
-      {tab === "users" ? <UsersPanel selected={selectedUser} onSelect={(id) => { setSelectedUser(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
-      {tab === "teams" ? <TeamsPanel selected={selectedTeam} onSelect={(id) => { setSelectedTeam(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
-      {tab === "quotas" ? <QuotasPanel onConfirm={setConfirm} /> : null}
-      {tab === "backups" ? <BackupsPanel /> : null}
-      {tab === "about" ? <AboutPanel /> : null}
-    </main>
+    <aside className="admin__nav">
+      <header className="admin__top">
+        <button type="button" className="btn admin__back" onClick={onClose}><ArrowLeft size={15} />返回笔记</button>
+        <span className="admin__who admin__who--mobile">{user ? `管理员 · ${personName(user)}` : ""}</span>
+      </header>
+      <div className="admin__brand-block">
+        <strong className="admin__brand">小黑笔记</strong>
+        <span className="admin__subtitle">站点后台管理</span>
+      </div>
+      <nav className="admin__tabs" role="tablist" aria-label="后台管理">
+        {TAB_GROUPS.map((group) => (
+          <div className="admin__tab-group" key={group}>
+            <div className="admin__group-label" aria-hidden="true">{group}</div>
+            {TABS.filter((item) => item.group === group).map((item) => {
+              const Icon = item.icon;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  role="tab"
+                  aria-label={item.label}
+                  aria-selected={tab === item.id}
+                  className={tab === item.id ? "admin__tab admin__tab--on" : "admin__tab"}
+                  onClick={() => { setTab(item.id); setDetail(false); }}
+                >
+                  <span className="admin__tab-icon" aria-hidden="true"><Icon size={15} /></span>
+                  <span className="admin__tab-label">{item.label}</span>
+                  {tabBadge(item.id)}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+      {user ? (
+        <div className="admin__foot">
+          <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={24} />
+          <div className="admin__foot-copy">
+            <span className="admin__who">{personName(user)}</span>
+            <span className="admin__role">站点管理员</span>
+          </div>
+        </div>
+      ) : null}
+    </aside>
+
+    <div className="admin__island">
+      <header className="admin__header">
+        <div>
+          <h1>{activeMeta.label}</h1>
+          <p>{activeMeta.desc}</p>
+        </div>
+        {tab === "overview" && summary ? (
+          summary.over.length > 0
+            ? <span className="ac-pill ac-pill--danger"><AlertTriangle size={12} /> {summary.over.length} 项超额</span>
+            : <span className="ac-pill ac-pill--ok"><CheckCircle2 size={12} /> 状态健康</span>
+        ) : null}
+      </header>
+      <main className={`admin__main ${isSplit ? "admin__main--split" : ""}`}>
+        {tab === "overview" ? <OverviewPanel onOpen={openObject} onNavigate={setTab} onLoaded={setSummary} /> : null}
+        {tab === "users" ? <UsersPanel selected={selectedUser} onSelect={(id) => { setSelectedUser(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
+        {tab === "teams" ? <TeamsPanel selected={selectedTeam} onSelect={(id) => { setSelectedTeam(id); setDetail(true); }} onBack={() => setDetail(false)} /> : null}
+        {tab === "quotas" ? <QuotasPanel onConfirm={setConfirm} /> : null}
+        {tab === "backups" ? <BackupsPanel /> : null}
+        {tab === "about" ? <AboutPanel /> : null}
+      </main>
+    </div>
+
     {confirm ? <div className="ac-confirm-scrim" role="presentation" onClick={() => !confirming && setConfirm(null)}>
       <div className="ac-confirm" role="alertdialog" aria-modal="true" aria-label={confirm.title} onClick={(event) => event.stopPropagation()}>
         <h2>{confirm.title}</h2>
@@ -122,36 +186,85 @@ export function AdminConsole({ onClose }: { onClose(): void }) {
 
 /* ————————————————— 概览 ————————————————— */
 
-function OverviewPanel({ onOpen }: { onOpen(kind: "user" | "kb", id: string): void }) {
+function OverviewPanel({ onOpen, onNavigate, onLoaded }: {
+  onOpen(kind: "user" | "kb", id: string): void;
+  onNavigate(tab: Tab): void;
+  onLoaded(overview: Overview): void;
+}) {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
     setError("");
-    try { setData(await api<Overview>("/api/admin/overview")); }
-    catch (reason) { setError(errorMessage(reason)); }
-  }, []);
+    try {
+      const next = await api<Overview>("/api/admin/overview");
+      setData(next);
+      onLoaded(next);
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
+  }, [onLoaded]);
   useEffect(() => { void load(); }, [load]);
 
   if (error) return <div className="ac-empty"><p>{error}</p><button type="button" className="btn" onClick={() => void load()}>重试</button></div>;
   if (!data) return <div className="ac-empty"><p>载入中…</p></div>;
 
-  const tiles = [
-    { icon: <Users size={16} />, label: "用户", value: String(data.users), hint: `今日新增 ${data.newToday} 位 · 时区 ${data.timezone}` },
-    { icon: <BookMarked size={16} />, label: "团队知识库", value: String(data.teams.active), hint: `已归档 ${data.teams.archived} · 合计 ${data.teams.active + data.teams.archived}` },
-    { icon: <HardDrive size={16} />, label: "配额占用", value: formatBytes(data.quotaBytes.total), hint: `个人 ${formatBytes(data.quotaBytes.personal)} · 团队 ${formatBytes(data.quotaBytes.teams)}` },
-    { icon: <Settings2 size={16} />, label: "实际存储", value: formatBytes(data.disk.databaseBytes + data.disk.attachmentsBytes), hint: `数据库 ${formatBytes(data.disk.databaseBytes)} · 附件 ${formatBytes(data.disk.attachmentsBytes)}${data.disk.freeBytes != null ? ` · 卷可用 ${formatBytes(data.disk.freeBytes)}` : ""}` },
+  const usedDisk = data.disk.databaseBytes + data.disk.attachmentsBytes;
+  const totalDisk = data.disk.freeBytes != null ? usedDisk + data.disk.freeBytes : usedDisk;
+  const dbPct = totalDisk > 0 ? Math.max(data.disk.databaseBytes > 0 ? 1.5 : 0, (data.disk.databaseBytes / totalDisk) * 100) : 0;
+  const attPct = totalDisk > 0 ? Math.max(data.disk.attachmentsBytes > 0 ? 1.5 : 0, (data.disk.attachmentsBytes / totalDisk) * 100) : 0;
+
+  const tiles: { icon: ReactNode; label: string; value: string; hint: string; target?: Tab }[] = [
+    { icon: <Users size={15} />, label: "用户", value: String(data.users), hint: `今日新增 ${data.newToday} 位 · 时区 ${data.timezone}`, target: "users" },
+    { icon: <BookMarked size={15} />, label: "团队知识库", value: String(data.teams.active), hint: `已归档 ${data.teams.archived} · 合计 ${data.teams.active + data.teams.archived}`, target: "teams" },
+    { icon: <HardDrive size={15} />, label: "配额占用", value: formatBytes(data.quotaBytes.total), hint: `个人 ${formatBytes(data.quotaBytes.personal)} · 团队 ${formatBytes(data.quotaBytes.teams)}`, target: "quotas" },
+    { icon: <Settings2 size={15} />, label: "实际存储", value: formatBytes(usedDisk), hint: data.disk.freeBytes != null ? `卷可用 ${formatBytes(data.disk.freeBytes)}` : `数据库 ${formatBytes(data.disk.databaseBytes)} · 附件 ${formatBytes(data.disk.attachmentsBytes)}` },
   ];
   return <div className="ac-overview">
     <div className="ac-tiles">
-      {tiles.map((tile) => <div className="ac-tile" key={tile.label}>
-        <span className="ac-tile__icon">{tile.icon}</span>
-        <span className="ac-tile__label">{tile.label}</span>
-        <strong className="ac-tile__value">{tile.value}</strong>
-        <span className="ac-tile__hint">{tile.hint}</span>
-      </div>)}
+      {tiles.map((tile) => tile.target ? (
+        <button type="button" className="ac-tile ac-tile--click" key={tile.label} onClick={() => onNavigate(tile.target!)}>
+          <span className="ac-tile__top">
+            <span className="ac-tile__label">{tile.label}</span>
+            <span className="ac-tile__icon">{tile.icon}</span>
+          </span>
+          <strong className="ac-tile__value">{tile.value}</strong>
+          <span className="ac-tile__hint">{tile.hint}</span>
+        </button>
+      ) : (
+        <div className="ac-tile" key={tile.label}>
+          <span className="ac-tile__top">
+            <span className="ac-tile__label">{tile.label}</span>
+            <span className="ac-tile__icon">{tile.icon}</span>
+          </span>
+          <strong className="ac-tile__value">{tile.value}</strong>
+          <span className="ac-tile__hint">{tile.hint}</span>
+        </div>
+      ))}
     </div>
-    <section className="ac-queue">
-      <h3>需要处理</h3>
+
+    <section className="ac-panel">
+      <div className="ac-panel__hd">
+        <h3>存储占用分布</h3>
+        <span className="ac-muted ac-num">
+          已用 {formatBytes(usedDisk)}{data.disk.freeBytes != null ? ` · 卷剩余可用 ${formatBytes(data.disk.freeBytes)}` : ""}
+        </span>
+      </div>
+      <div className="ac-disk-bar" aria-hidden="true">
+        <span className="ac-disk-bar__seg ac-disk-bar__db" style={{ width: `${Math.min(100, dbPct)}%` }} />
+        <span className="ac-disk-bar__seg ac-disk-bar__att" style={{ width: `${Math.min(100 - dbPct, attPct)}%` }} />
+      </div>
+      <div className="ac-disk-legend">
+        <span><i className="ac-legend-dot ac-legend-dot--db" />数据库 <strong className="ac-num">{formatBytes(data.disk.databaseBytes)}</strong></span>
+        <span><i className="ac-legend-dot ac-legend-dot--att" />附件目录 <strong className="ac-num">{formatBytes(data.disk.attachmentsBytes)}</strong></span>
+        {data.disk.freeBytes != null ? <span><i className="ac-legend-dot ac-legend-dot--free" />剩余可用 <strong className="ac-num">{formatBytes(data.disk.freeBytes)}</strong></span> : null}
+      </div>
+    </section>
+
+    <section className="ac-panel ac-queue">
+      <div className="ac-panel__hd">
+        <h3>需要处理</h3>
+        {data.over.length ? <span className="ac-pill ac-pill--danger">{data.over.length} 项待处理</span> : null}
+      </div>
       {data.over.length ? <ul className="ac-queue__list">
         {data.over.map((row) => <li key={`${row.kind}:${row.id}`}>
           <button type="button" className="ac-queue__row" onClick={() => onOpen(row.kind, row.id)}>
@@ -160,7 +273,16 @@ function OverviewPanel({ onOpen }: { onOpen(kind: "user" | "kb", id: string): vo
             <OverBadge bytes={row.over} />
           </button>
         </li>)}
-      </ul> : <p className="ac-muted">所有对象都在限额内。</p>}
+      </ul> : <div className="ac-health">
+        <div className="ac-health__left">
+          <span className="ac-health__icon" aria-hidden="true"><CheckCircle2 size={17} /></span>
+          <div>
+            <p className="ac-health__title">所有对象都在限额内。</p>
+            <p className="ac-muted">暂无超额告警；可在「限额设置」调整全局默认上限。</p>
+          </div>
+        </div>
+        <button type="button" className="btn btn--outline" onClick={() => onNavigate("quotas")}>查看默认限额</button>
+      </div>}
     </section>
   </div>;
 }

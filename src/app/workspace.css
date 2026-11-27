@@ -28,6 +28,15 @@
   grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
 }
 
+.app-shell--admin {
+  --pane-left: var(--sidebar-rail);
+  grid-template-columns: var(--sidebar-rail) minmax(0, 1fr);
+}
+
+.app-shell--admin .app-main {
+  display: none;
+}
+
 .app-shell--mobile {
   --pane-left: 0px;
   grid-template-columns: minmax(0, 1fr);

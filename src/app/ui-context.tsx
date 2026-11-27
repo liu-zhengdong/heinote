@@ -34,9 +34,11 @@ interface UiContextValue {
   peekPageId: string | null;
   openPeek(pageId: string): void;
   closePeek(): void;
-  /** The admin console page. Full-window, opened from account settings. */
+  /** The admin console view. Seamless integrated workspace on desktop, full-screen on mobile. */
   adminOpen: boolean;
   setAdminOpen(open: boolean): void;
+  openAdmin(): void;
+  closeAdmin(): void;
   /** Whether the page history sheet/panel is open. */
   historyOpen: boolean;
   setHistoryOpen(open: boolean): void;
@@ -124,6 +126,17 @@ export function UiProvider({ children }: { children: ReactNode }) {
     setAccountSettingsOpen(false);
     setAccountSettingsNotice(null);
   }, []);
+  const openAdmin = useCallback(() => {
+    if (window.location.pathname !== "/admin") window.history.pushState(null, "", "/admin");
+    setAdminOpen(true);
+  }, []);
+  const closeAdmin = useCallback(() => {
+    // The console opened by pushing /admin, so back returns to the
+    // workspace; landing straight on the URL has nothing to go back to.
+    if (window.location.pathname === "/admin" && window.history.length > 1) window.history.back();
+    else if (window.location.pathname === "/admin") window.history.replaceState(null, "", "/");
+    setAdminOpen(false);
+  }, []);
 
   const value = useMemo<UiContextValue>(
     () => ({
@@ -140,6 +153,8 @@ export function UiProvider({ children }: { children: ReactNode }) {
       closePeek,
       adminOpen,
       setAdminOpen,
+      openAdmin,
+      closeAdmin,
       historyOpen,
       setHistoryOpen,
       accountSettingsOpen,
@@ -147,7 +162,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
       openAccountSettings,
       closeAccountSettings,
     }),
-    [accountSettingsNotice, accountSettingsOpen, adminOpen, closeAccountSettings, closePeek, closeShare, drawerOpen, historyOpen, openAccountSettings, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
+    [accountSettingsNotice, accountSettingsOpen, adminOpen, closeAccountSettings, closeAdmin, closePeek, closeShare, drawerOpen, historyOpen, openAccountSettings, openAdmin, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
   );
 
   return (

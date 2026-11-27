@@ -177,10 +177,47 @@ test("UC-16 console: quota enforcement dialog shows for over-limit KB", async ({
   await shots("team-limit-set");
 });
 
-test("UC-16 account quota line renders in profile settings", async ({ page }) => {
+test("UC-16 account quota line renders in profile settings and non-admin hides rail admin trigger", async ({ page }) => {
   await register(page, "viewer");
+  const rail = page.getByRole("navigation", { name: "HeiNote navigation", exact: true });
+  await expect(rail.getByRole("button", { name: "后台管理", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("tab", { name: "我的账号", exact: true }).click();
   await expect(page.locator(".settings-quota")).toContainText("存储");
   await expect(page.locator(".settings-quota")).toContainText("团队知识库");
+});
+
+test("admin toggles integrated console directly from left rail without overlapping", async ({ page }, info) => {
+  await login(page, "admin");
+  const rail = page.getByRole("navigation", { name: "HeiNote navigation", exact: true });
+  const adminBtn = rail.getByRole("button", { name: "后台管理", exact: true });
+  await expect(adminBtn).toBeVisible();
+  await expect(adminBtn).toHaveAttribute("aria-pressed", "false");
+
+  await adminBtn.click();
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(adminBtn).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".admin__island")).toBeVisible();
+  await expect(page.locator(".ac-disk-bar")).toBeVisible();
+
+  // Integrated desktop layout: .admin sits cleanly beside .rail with zero overlap.
+  const railBox = await rail.boundingBox();
+  const adminBox = await page.locator(".admin").boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(adminBox).not.toBeNull();
+  expect(adminBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width - 1);
+
+  const lightPath = info.outputPath("admin-integrated-light-2x.png");
+  await page.screenshot({ path: lightPath, scale: "device" });
+  await info.attach("admin-integrated-light", { path: lightPath, contentType: "image/png" });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  const darkPath = info.outputPath("admin-integrated-dark-2x.png");
+  await page.screenshot({ path: darkPath, scale: "device" });
+  await info.attach("admin-integrated-dark", { path: darkPath, contentType: "image/png" });
+
+  // Clicking a note view tab in the stationary rail switches straight back to Notes.
+  await rail.getByRole("tab", { name: "Files", exact: true }).click();
+  await expect(page.locator(".admin")).toHaveCount(0);
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toBeVisible();
 });

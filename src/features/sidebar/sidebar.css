@@ -117,6 +117,7 @@
 .rail__tab.is-active .sidebar__view-icon--shared { color: var(--green); }
 .rail__tab.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
 .rail__tab.is-active .sidebar__view-icon--trash { color: var(--danger); }
+.rail__tab.is-active .sidebar__view-icon--admin { color: var(--blue); }
 
 .rail .sidebar__search {
   width: 32px;

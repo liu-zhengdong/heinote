@@ -64,6 +64,7 @@ export function App() {
     toast,
     adminOpen,
     setAdminOpen,
+    closeAdmin,
     historyOpen,
     setHistoryOpen,
     accountSettingsOpen,
@@ -317,7 +318,7 @@ export function App() {
   return (
     <div
       ref={setShell}
-      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && peekOpen && peek.docked ? "app-shell--peek" : ""}`}
+      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && adminOpen ? "app-shell--admin" : ""} ${!mobile && !adminOpen && peekOpen && peek.docked ? "app-shell--peek" : ""}`}
       style={{ ["--sidebar-w" as string]: `${preferences.sidebar_width}px`, ["--peek-w" as string]: `${peek.width}px` }}
     >
       <Sidebar />
@@ -488,13 +489,7 @@ export function App() {
       ) : null}
       {adminOpen ? (
         <Suspense fallback={null}>
-          <AdminConsole onClose={() => {
-            // The console opened by pushing /admin, so back returns to the
-            // workspace; landing straight on the URL has nothing to go back to.
-            if (window.location.pathname === "/admin" && window.history.length > 1) window.history.back();
-            else window.history.replaceState(null, "", "/");
-            setAdminOpen(false);
-          }} />
+          <AdminConsole onClose={closeAdmin} />
         </Suspense>
       ) : null}
     </div>
