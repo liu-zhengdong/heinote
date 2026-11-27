@@ -440,7 +440,7 @@ function UserInspector({ user, me, busy, edit, setEdit, onBack, onRole, onSave }
         <dd>
           <Meter used={user.storageBytes} limit={user.storageLimit} />
           <OverBadge bytes={user.storageOver} />
-          <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(user.storageLimit / 1e8) / 10) })}>调整</button>
+          <button type="button" className="btn btn--outline" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(user.storageLimit / 1e8) / 10) })}>调整</button>
           {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.storageBytes} source={user.storageSource} unit="GB" busy={busy} onSave={(value) => onSave("storage", value)} /> : null}
         </dd>
       </div>
@@ -448,7 +448,7 @@ function UserInspector({ user, me, busy, edit, setEdit, onBack, onRole, onSave }
         <dt>团队创建上限 <small className="ac-src">{user.teamLimitSource === "custom" ? "单独设置" : "默认"}</small></dt>
         <dd>
           <span className="ac-teams-line">已拥有 {user.teamCount} 个 · 上限 {user.teamLimit} 个{user.teamCount > user.teamLimit ? <span className="ac-over"><AlertTriangle size={12} /> 超额 {user.teamCount - user.teamLimit} 个</span> : null}</span>
-          <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "teams", input: String(user.teamLimit) })}>调整</button>
+          <button type="button" className="btn btn--outline" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "teams", input: String(user.teamLimit) })}>调整</button>
           {edit?.kind === "teams" ? <LimitEditor edit={edit} setEdit={setEdit} used={user.teamCount} source={user.teamLimitSource} unit="个" busy={busy} onSave={(value) => onSave("teams", value)} /> : null}
         </dd>
       </div>
@@ -539,7 +539,7 @@ function TeamsPanel({ selected, onSelect, onBack }: {
             <dd>
               <Meter used={current.storageBytes} limit={current.storageLimit} />
               <OverBadge bytes={current.storageOver} />
-              <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(current.storageLimit / 1e8) / 10) })}>调整</button>
+              <button type="button" className="btn btn--outline" disabled={busy || Boolean(edit)} onClick={() => setEdit({ kind: "storage", input: String(Math.round(current.storageLimit / 1e8) / 10) })}>调整</button>
               {edit?.kind === "storage" ? <LimitEditor edit={edit} setEdit={setEdit} used={current.storageBytes} source={current.storageSource} unit="GB" busy={busy} onSave={(value) => void saveLimit(current, value)} /> : null}
             </dd>
           </div>
@@ -631,7 +631,7 @@ function QuotasPanel({ onConfirm }: { onConfirm(state: ConfirmState | null): voi
         </div>
         <div className="ac-qrow__side">
           <strong className="ac-qrow__value">{row.value}</strong>
-          <button type="button" className="btn" disabled={busy || Boolean(edit)} onClick={() => setEdit({ key: row.key, input: String(row.gb) })}>调整</button>
+          <button type="button" className="btn btn--outline" disabled={busy || Boolean(edit)} onClick={() => setEdit({ key: row.key, input: String(row.gb) })}>调整</button>
         </div>
       </li>)}
     </ul>
@@ -656,14 +656,23 @@ function BackupsPanel() {
   const [data, setData] = useState<BackupStatus | null>(null);
   const [error, setError] = useState("");
   const [form, setForm] = useState<BackupForm>({ url: "", user: "", password: "" });
+  const formInitRef = useRef(false);
   const [planEdit, setPlanEdit] = useState<PlanEdit>(null);
   const [testing, setTesting] = useState<BackupTestResult | null>(null);
   const { busy, run } = useBusy();
 
   const load = useCallback(async () => {
     setError("");
-    try { setData(await api<BackupStatus>("/api/admin/backups")); }
-    catch (reason) { setError(errorMessage(reason)); }
+    try {
+      const next = await api<BackupStatus>("/api/admin/backups");
+      setData(next);
+      if (!formInitRef.current) {
+        formInitRef.current = true;
+        setForm({ url: next.config.webdav.url, user: next.config.webdav.user, password: "" });
+      }
+    } catch (reason) {
+      setError(errorMessage(reason));
+    }
   }, []);
   useEffect(() => { void load(); }, [load]);
   // Poll while a run is in flight so the tiles/track reflect progress.
@@ -673,19 +682,20 @@ function BackupsPanel() {
     return () => clearInterval(timer);
   }, [data?.state.running, load]);
 
-  if (error) return <div className="ac-empty"><p>{error}</p><button type="button" className="btn" onClick={() => void load()}>重试</button></div>;
+  if (error) return <div className="ac-empty"><p>{error}</p><button type="button" className="btn btn--outline" onClick={() => void load()}>重试</button></div>;
   if (!data) return <div className="ac-empty"><p>载入中…</p></div>;
 
   const { config, state } = data;
-  const saveSettings = (body: object) => run(async () => {
+  const saveSettings = (body: object, okMsg?: string) => run(async () => {
     await api("/api/admin/backups/settings", { method: "PUT", body: JSON.stringify(body) });
     await load();
+    if (okMsg) toast(okMsg);
   }).catch((reason) => toast(errorMessage(reason), "error"));
 
   const test = () => run(async () => {
     const result = await api<BackupTestResult>("/api/admin/backups/test", {
       method: "POST",
-      body: JSON.stringify({ webdav: { url: form.url || config.webdav.url, user: form.user || config.webdav.user, password: form.password } }),
+      body: JSON.stringify({ webdav: { url: form.url.trim(), user: form.user.trim(), password: form.password } }),
     });
     setTesting(result);
   }).catch((reason) => toast(errorMessage(reason), "error"));
@@ -699,12 +709,12 @@ function BackupsPanel() {
 
   const saveWebdav = () => void saveSettings({
     webdav: {
-      url: form.url || config.webdav.url,
-      user: form.user || config.webdav.user,
+      url: form.url.trim(),
+      user: form.user.trim(),
       password: form.password,
     },
     enabled: config.enabled,
-  });
+  }, "WebDAV 配置已保存。");
 
   const savePlan = () => {
     if (!planEdit) return;
@@ -718,17 +728,18 @@ function BackupsPanel() {
       && Number.isInteger(chunk) && chunk >= 4 && chunk <= 512;
     if (!valid) { toast("请检查时间、保留份数（1–100）与分片大小（4–512 MiB）。", "error"); return; }
     setPlanEdit(null);
-    void saveSettings({ schedule: { hour, minute }, retention, chunkBytes: chunk * 1024 * 1024 });
+    void saveSettings({ schedule: { hour, minute }, retention, chunkBytes: chunk * 1024 * 1024 }, "备份计划已保存。");
   };
 
   const scheduleText = `${String(config.schedule.hour).padStart(2, "0")}:${String(config.schedule.minute).padStart(2, "0")}`;
+  const chunkMiB = Math.round(config.chunkBytes / 1024 / 1024);
   const webdavSet = Boolean(config.webdav.url && config.webdav.user);
   const failed = !state.running && state.lastResult && state.lastResult !== "ok" && state.lastResult !== "interrupted";
   const needsAttention = !webdavSet || failed || Boolean(state.pending) || state.lastResult === "interrupted";
 
   const tiles = [
     {
-      icon: <DatabaseBackup size={16} />, label: "上次备份",
+      icon: <DatabaseBackup size={15} />, label: "上次备份",
       value: state.running ? "进行中…" : state.lastResult ? BACKUP_KIND_LABEL[state.lastResult] ?? state.lastResult : "从未备份",
       hint: state.running
         ? `开始于 ${formatDateTime(state.runningSince ?? "")}`
@@ -736,119 +747,184 @@ function BackupsPanel() {
       danger: Boolean(failed) || state.lastResult === "interrupted",
     },
     {
-      icon: <CloudUpload size={16} />, label: "云端归档",
+      icon: <CloudUpload size={15} />, label: "云端归档",
       value: webdavSet ? `${state.remoteCount ?? "—"} / ${config.retention}` : "未配置",
       hint: state.pending ? `一份归档待续传：${state.pending.archiveId}` : webdavSet ? `最近 ${config.retention} 份保留于云端` : "填写 WebDAV 目标后可用",
     },
     {
-      icon: <Settings2 size={16} />, label: "自动备份",
+      icon: <Settings2 size={15} />, label: "自动备份",
       value: config.enabled ? `每天 ${scheduleText}` : "已关闭",
       hint: config.enabled ? "到达时刻自动执行；失败当日不重试" : "仍可手动「立即备份」",
     },
   ];
 
   return <div className="ac-overview">
-    <div className="ac-tiles">
+    <div className="ac-tiles ac-tiles--3">
       {tiles.map((tile) => <div className={tile.danger ? "ac-tile ac-tile--danger" : "ac-tile"} key={tile.label}>
-        <span className="ac-tile__icon">{tile.icon}</span>
-        <span className="ac-tile__label">{tile.label}</span>
+        <span className="ac-tile__top">
+          <span className="ac-tile__label">{tile.label}</span>
+          <span className="ac-tile__icon">{tile.icon}</span>
+        </span>
         <strong className="ac-tile__value">{tile.value}</strong>
         <span className="ac-tile__hint">{tile.hint}</span>
       </div>)}
     </div>
 
-    {needsAttention ? <section className="ac-queue">
-      <h3>需要处理</h3>
-      <ul className="ac-queue__list">
-        {!webdavSet ? <li><div className="ac-queue__row ac-queue__row--static">
-          <span className="ac-queue__name">尚未配置 WebDAV 目标<i className="ac-dot" aria-label="待处理" /></span>
-          <span className="ac-muted">填写下方地址与凭据后保存</span>
-          <span />
-        </div></li> : null}
-        {failed ? <li><div className="ac-queue__row ac-queue__row--static">
-          <span className="ac-queue__name">{BACKUP_KIND_LABEL[state.lastResult ?? "other"] ?? "备份失败"}<i className="ac-dot" aria-label="失败" /></span>
-          <span className="ac-muted">{state.lastError ?? ""}</span>
-          <button type="button" className="btn" disabled={busy || state.running} onClick={runNow}>{state.pending ? "立即续传" : "重试备份"}</button>
-        </div></li> : null}
-        {!failed && (state.pending || state.lastResult === "interrupted") ? <li><div className="ac-queue__row ac-queue__row--static">
-          <span className="ac-queue__name">{state.pending ? "有一份归档未完成上传" : "上次运行被中断"}<i className="ac-dot" aria-label="待续传" /></span>
-          <span className="ac-muted">{state.pending ? `已传分片将跳过，补传缺失部分` : "下次执行时继续"}</span>
-          <button type="button" className="btn" disabled={busy || state.running} onClick={runNow}>立即续传</button>
-        </div></li> : null}
-      </ul>
-    </section> : null}
+    {needsAttention ? (
+      <section className={`ac-banner ${failed || state.lastResult === "interrupted" ? "ac-banner--danger" : "ac-banner--info"}`}>
+        <div className="ac-banner__items">
+          {!webdavSet ? (
+            <div className="ac-banner__row">
+              <span className="ac-banner__icon" aria-hidden="true"><Info size={16} /></span>
+              <div className="ac-banner__copy">
+                <strong>尚未配置 WebDAV 存储目标</strong>
+                <p className="ac-muted">填写下方远端地址与凭据并保存，即可启用每日定时备份与手动备份。</p>
+              </div>
+            </div>
+          ) : null}
+          {failed ? (
+            <div className="ac-banner__row">
+              <span className="ac-banner__icon ac-banner__icon--danger" aria-hidden="true"><AlertTriangle size={16} /></span>
+              <div className="ac-banner__copy">
+                <strong>{BACKUP_KIND_LABEL[state.lastResult ?? "other"] ?? "备份失败"}</strong>
+                <p className="ac-muted">{state.lastError ?? "请检查 WebDAV 地址、网络与凭据。"}</p>
+              </div>
+              <button type="button" className="btn btn--outline" disabled={busy || state.running} onClick={runNow}>{state.pending ? "立即续传" : "重试备份"}</button>
+            </div>
+          ) : null}
+          {!failed && (state.pending || state.lastResult === "interrupted") ? (
+            <div className="ac-banner__row">
+              <span className="ac-banner__icon ac-banner__icon--danger" aria-hidden="true"><AlertTriangle size={16} /></span>
+              <div className="ac-banner__copy">
+                <strong>{state.pending ? "有一份归档未完成上传" : "上次运行被中断"}</strong>
+                <p className="ac-muted">{state.pending ? "已上传的分片将自动跳过，仅补传缺失部分。" : "下次计划执行时会自动继续，也可现在手动续传。"}</p>
+              </div>
+              <button type="button" className="btn btn--outline" disabled={busy || state.running} onClick={runNow}>立即续传</button>
+            </div>
+          ) : null}
+        </div>
+      </section>
+    ) : null}
 
-    <section className="ac-queue">
-      <h3>设置</h3>
-      <dl className="ac-fields ac-fields--form">
+    <section className="ac-panel">
+      <div className="ac-panel__hd">
+        <h3>WebDAV 存储目标</h3>
+        <span className={`ac-pill ${webdavSet ? "ac-pill--ok" : "ac-pill--neutral"}`}>
+          {webdavSet ? <><CheckCircle2 size={12} /> 已配置</> : "未配置"}
+        </span>
+      </div>
+      <dl className="ac-fields ac-fields--compact">
         <div className="ac-field">
           <dt>WebDAV 地址</dt>
           <dd>
             <input className="ac-input" type="url" placeholder="https://dav.example.com/dav/目录" aria-label="WebDAV 地址"
-              value={form.url || config.webdav.url} disabled={busy}
-              onChange={(event) => setForm({ ...form, url: event.target.value })} />
+              value={form.url} disabled={busy}
+              onChange={(event) => { setForm({ ...form, url: event.target.value }); setTesting(null); }} />
           </dd>
         </div>
         <div className="ac-field">
           <dt>账号</dt>
           <dd>
             <input className="ac-input" type="text" placeholder="云盘账号或邮箱" aria-label="WebDAV 账号" autoComplete="off"
-              value={form.user || config.webdav.user} disabled={busy}
-              onChange={(event) => setForm({ ...form, user: event.target.value })} />
+              value={form.user} disabled={busy}
+              onChange={(event) => { setForm({ ...form, user: event.target.value }); setTesting(null); }} />
           </dd>
         </div>
         <div className="ac-field">
           <dt>密码</dt>
           <dd>
-            <input className="ac-input ac-input--mid" type="password" placeholder={config.webdav.passwordSet ? "已设置（留空保持不变）" : "应用专用密码"} aria-label="WebDAV 密码"
+            <input className="ac-input" type="password" placeholder={config.webdav.passwordSet ? "已设置（留空保持不变）" : "应用专用密码"} aria-label="WebDAV 密码"
               value={form.password} disabled={busy}
-              onChange={(event) => setForm({ ...form, password: event.target.value })} />
-            <button type="button" className="btn" disabled={busy} onClick={test}>测试连接</button>
-            <button type="button" className="btn btn--primary" disabled={busy} onClick={saveWebdav}>保存</button>
+              onChange={(event) => { setForm({ ...form, password: event.target.value }); setTesting(null); }} />
           </dd>
-          {testing ? <dd className={testing.ok ? "ac-muted" : "ac-error"}>{testing.ok ? "连接成功。" : `测试失败：${testing.error}`}{testing.warning ? <p className="ac-warn"><AlertTriangle size={13} /> {testing.warning}</p> : null}</dd> : null}
         </div>
+      </dl>
+      <div className="ac-panel__foot">
+        <div className="ac-panel__status">
+          {testing ? (
+            testing.ok ? (
+              <span className="ac-status-ok"><CheckCircle2 size={14} /> 连接成功。{testing.warning ? <span className="ac-warn-inline">（{testing.warning}）</span> : null}</span>
+            ) : (
+              <span className="ac-error"><AlertTriangle size={14} /> 测试失败：{testing.error}</span>
+            )
+          ) : (
+            <span className="ac-muted">推荐使用云盘的应用专用密码，凭据仅保存在本地服务配置中。</span>
+          )}
+        </div>
+        <div className="ac-panel__actions">
+          <button type="button" className="btn btn--outline" disabled={busy} onClick={test}>测试连接</button>
+          <button type="button" className="btn btn--primary" disabled={busy} onClick={saveWebdav}>保存</button>
+        </div>
+      </div>
+    </section>
+
+    <section className="ac-panel">
+      <div className="ac-panel__hd">
+        <h3>备份计划与执行</h3>
+        <button type="button" className="btn btn--outline" disabled={busy || state.running || !webdavSet} onClick={runNow}>
+          <CloudUpload size={14} />
+          {state.running ? "进行中…" : state.pending ? "立即备份（续传）" : "立即备份"}
+        </button>
+      </div>
+      <dl className="ac-fields ac-fields--compact">
         <div className="ac-field">
           <dt>自动备份</dt>
           <dd>
-            <span>{config.enabled ? "开启" : "关闭"}</span>
-            <button type="button" className="btn" disabled={busy || !webdavSet}
-              onClick={() => void saveSettings({ enabled: !config.enabled })}>{config.enabled ? "关闭" : "开启"}</button>
-            {!webdavSet ? <span className="ac-muted">先配置 WebDAV 目标</span> : null}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={config.enabled}
+              aria-label="自动备份"
+              className={`ac-switch ${config.enabled ? "is-on" : ""}`}
+              disabled={busy || !webdavSet}
+              onClick={() => void saveSettings({ enabled: !config.enabled })}
+            >
+              <span className="ac-switch__thumb" />
+            </button>
+            <span className="ac-switch__label">{config.enabled ? "已开启" : "已关闭"}</span>
+            <span className="ac-muted">{!webdavSet ? "先配置 WebDAV 目标后可开启" : "到达计划时刻自动执行；失败当日不重试"}</span>
           </dd>
         </div>
         <div className="ac-field">
           <dt>备份计划</dt>
           <dd>
-            <span>每天 {scheduleText}（服务时区）· 保留 {config.retention} 份 · 分片 {Math.round(config.chunkBytes / 1024 / 1024)} MiB</span>
-            <button type="button" className="btn" disabled={busy} onClick={() => setPlanEdit({ hour: String(config.schedule.hour), minute: String(config.schedule.minute), retention: String(config.retention), chunk: String(Math.round(config.chunkBytes / 1024 / 1024)) })}>调整</button>
-          </dd>
-          {planEdit ? <dd><div className="ac-edit"><div className="ac-edit__row">
-            <span className="ac-muted">时刻</span>
-            <input className="ac-input ac-input--s" type="number" min={0} max={23} value={planEdit.hour} aria-label="执行小时" onChange={(e) => setPlanEdit({ ...planEdit, hour: e.target.value })} />
-            <span>:</span>
-            <input className="ac-input ac-input--s" type="number" min={0} max={59} value={planEdit.minute} aria-label="执行分钟" onChange={(e) => setPlanEdit({ ...planEdit, minute: e.target.value })} />
-            <span className="ac-muted">保留</span>
-            <input className="ac-input ac-input--s" type="number" min={1} max={100} value={planEdit.retention} aria-label="保留份数" onChange={(e) => setPlanEdit({ ...planEdit, retention: e.target.value })} />
-            <span className="ac-muted">份 · 分片</span>
-            <input className="ac-input ac-input--s" type="number" min={4} max={512} value={planEdit.chunk} aria-label="分片 MiB" onChange={(e) => setPlanEdit({ ...planEdit, chunk: e.target.value })} />
-            <span className="ac-muted">MiB</span>
-            <span className="ac-edit__gap" />
-            <button type="button" className="btn" disabled={busy} onClick={() => setPlanEdit(null)}>取消</button>
-            <button type="button" className="btn btn--primary" disabled={busy} onClick={savePlan}>保存</button>
-          </div></div></dd> : null}
-        </div>
-        <div className="ac-field">
-          <dt>手动备份</dt>
-          <dd>
-            <button type="button" className="btn" disabled={busy || state.running || !webdavSet} onClick={runNow}>
-              {state.running ? "进行中…" : state.pending ? "立即备份（续传）" : "立即备份"}
-            </button>
-            <span className="ac-muted">与计划备份走同一流程；已传分片会自动跳过。</span>
+            <span className="ac-plan-chips">
+              <span className="ac-pill ac-pill--neutral ac-num">每天 {scheduleText}</span>
+              <span className="ac-pill ac-pill--neutral ac-num">保留 {config.retention} 份</span>
+              <span className="ac-pill ac-pill--neutral ac-num">分片 {chunkMiB} MiB</span>
+            </span>
+            <button type="button" className="btn btn--outline" disabled={busy || Boolean(planEdit)}
+              onClick={() => setPlanEdit({ hour: String(config.schedule.hour), minute: String(config.schedule.minute), retention: String(config.retention), chunk: String(chunkMiB) })}>调整</button>
+            {planEdit ? (
+              <div className="ac-plan-edit">
+                <div className="ac-plan-edit__grid">
+                  <label className="ac-plan-field">
+                    <span>执行时刻（服务时区）</span>
+                    <span className="ac-plan-time">
+                      <input className="ac-input ac-input--s" type="number" min={0} max={23} value={planEdit.hour} aria-label="执行小时" onChange={(e) => setPlanEdit({ ...planEdit, hour: e.target.value })} />
+                      <span>:</span>
+                      <input className="ac-input ac-input--s" type="number" min={0} max={59} value={planEdit.minute} aria-label="执行分钟" onChange={(e) => setPlanEdit({ ...planEdit, minute: e.target.value })} />
+                    </span>
+                  </label>
+                  <label className="ac-plan-field">
+                    <span>保留份数（1–100）</span>
+                    <input className="ac-input ac-input--s" type="number" min={1} max={100} value={planEdit.retention} aria-label="保留份数" onChange={(e) => setPlanEdit({ ...planEdit, retention: e.target.value })} />
+                  </label>
+                  <label className="ac-plan-field">
+                    <span>分片大小（MiB）</span>
+                    <input className="ac-input ac-input--s" type="number" min={4} max={512} value={planEdit.chunk} aria-label="分片 MiB" onChange={(e) => setPlanEdit({ ...planEdit, chunk: e.target.value })} />
+                  </label>
+                </div>
+                <div className="ac-edit__actions">
+                  <button type="button" className="btn" disabled={busy} onClick={() => setPlanEdit(null)}>取消</button>
+                  <button type="button" className="btn btn--primary" disabled={busy} onClick={savePlan}>保存计划</button>
+                </div>
+              </div>
+            ) : null}
           </dd>
         </div>
       </dl>
-      <p className="ac-muted">归档含数据库与全部附件，以分片与清单上传到远端目录。恢复：下载同组全部分片拼接解压，替换数据目录。</p>
+      <p className="ac-panel__note">归档含数据库与全部附件，以分片与清单上传到远端目录；已传分片在续传时会自动跳过。恢复方式：下载同组全部分片拼接解压并替换数据目录。</p>
     </section>
   </div>;
 }
@@ -977,7 +1053,7 @@ function UpdateCard({ data }: { data: About }) {
             ? <button type="button" className="btn btn--primary" onClick={() => void apply()}>更新到 {check.tag}</button>
             : <a className="ac-about__link ac-update__manual" href={releaseUrl ?? data.repository} target="_blank" rel="noreferrer">手动升级 <ExternalLink size={13} /></a>
         ) : null}
-        <button type="button" className="btn" disabled={checking} onClick={() => void doCheck()}>
+        <button type="button" className="btn btn--outline" disabled={checking} onClick={() => void doCheck()}>
           <RefreshCw size={14} aria-hidden="true" className={checking ? "spin" : undefined} />{checking ? "检查中…" : check || error ? "重新检查" : "检查更新"}
         </button>
       </div> : null}

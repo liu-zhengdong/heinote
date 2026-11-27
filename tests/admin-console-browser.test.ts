@@ -216,6 +216,19 @@ test("admin toggles integrated console directly from left rail without overlappi
   await page.screenshot({ path: darkPath, scale: "device" });
   await info.attach("admin-integrated-dark", { path: darkPath, contentType: "image/png" });
 
+  // Verify the redesigned Backups tab in both dark and light themes.
+  await page.getByRole("tab", { name: "备份", exact: true }).click();
+  await expect(page.locator(".ac-tiles--3 .ac-tile")).toHaveCount(3);
+  await expect(page.getByRole("switch", { name: "自动备份", exact: true })).toBeVisible();
+  const backupDarkPath = info.outputPath("admin-backups-dark-2x.png");
+  await page.screenshot({ path: backupDarkPath, scale: "device" });
+  await info.attach("admin-backups-dark", { path: backupDarkPath, contentType: "image/png" });
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  const backupLightPath = info.outputPath("admin-backups-light-2x.png");
+  await page.screenshot({ path: backupLightPath, scale: "device" });
+  await info.attach("admin-backups-light", { path: backupLightPath, contentType: "image/png" });
+
   // Clicking a note view tab in the stationary rail switches straight back to Notes.
   await rail.getByRole("tab", { name: "Files", exact: true }).click();
   await expect(page.locator(".admin")).toHaveCount(0);
