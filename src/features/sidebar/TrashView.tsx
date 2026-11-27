@@ -1,5 +1,5 @@
-import { RotateCcw, X } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { RotateCcw, X, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../../components/Modal";
 import { imeComposing } from "../../core/keyboard";
 import { pageName } from "../../core/block-tree";
@@ -8,6 +8,7 @@ import type { NotePage } from "../../core/types";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageGlyph } from "../editor/block-registry";
+import { listMemos, purgeMemo, restoreMemo, type MemoDto } from "../memos/memo-api";
 
 function when(value: string | undefined): string {
   if (!value) return "";
@@ -25,14 +26,30 @@ export function TrashView({ pages, onOpenPage }: {
   pages: Record<string, NotePage>;
   onOpenPage(pageId: string): void;
 }) {
-  const { restorePage, deletePage, canEdit, canRestorePage, canDeletePage } = useWorkspace();
-  const { toast } = useUi();
+  const { activeSpaceId, restorePage, deletePage, canEdit, canRestorePage, canDeletePage } = useWorkspace();
+  const { toast, memoRefreshNonce, bumpMemoRefresh } = useUi();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [confirmingMemo, setConfirmingMemo] = useState<MemoDto | null>(null);
+  const [trashedMemos, setTrashedMemos] = useState<MemoDto[]>([]);
   const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(new Set());
   const deleting = useRef(new Set<string>());
   const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (activeSpaceId !== "personal") {
+      setTrashedMemos([]);
+      return;
+    }
+    const controller = new AbortController();
+    void listMemos({ filter: "trashed", limit: 50, signal: controller.signal })
+      .then((res) => {
+        if (!controller.signal.aborted) setTrashedMemos(res.memos);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [activeSpaceId, memoRefreshNonce]);
 
   const needle = query.trim().toLowerCase();
   const hits = useMemo(() => Object.values(pages)
@@ -57,6 +74,48 @@ export function TrashView({ pages, onOpenPage }: {
       toast(reason instanceof Error ? reason.message : "无法永久删除页面，请重试。", "error");
     } finally {
       deleting.current.delete(pageId);
+      setPendingIds(new Set(deleting.current));
+    }
+  };
+
+  const memoHits = useMemo(() => trashedMemos.filter((memo) => (
+    !needle
+    || memo.summary.toLowerCase().includes(needle)
+    || memo.text.toLowerCase().includes(needle)
+    || memo.tags.some((tag) => tag.toLowerCase().includes(needle))
+  )), [needle, trashedMemos]);
+
+  const restoreTrashedMemo = async (memo: MemoDto) => {
+    if (deleting.current.has(memo.id)) return;
+    deleting.current.add(memo.id);
+    setPendingIds(new Set(deleting.current));
+    try {
+      await restoreMemo(memo.id);
+      setTrashedMemos((current) => current.filter((item) => item.id !== memo.id));
+      bumpMemoRefresh();
+      toast("已恢复闪念", "success");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "无法恢复闪念，请重试。", "error");
+    } finally {
+      deleting.current.delete(memo.id);
+      setPendingIds(new Set(deleting.current));
+    }
+  };
+
+  const removeMemoPermanently = async (memoId: string) => {
+    setConfirmingMemo(null);
+    if (deleting.current.has(memoId)) return;
+    deleting.current.add(memoId);
+    setPendingIds(new Set(deleting.current));
+    try {
+      await purgeMemo(memoId);
+      setTrashedMemos((current) => current.filter((item) => item.id !== memoId));
+      bumpMemoRefresh();
+      toast("Deleted permanently", "success");
+    } catch (reason) {
+      toast(reason instanceof Error ? reason.message : "无法永久删除闪念，请重试。", "error");
+    } finally {
+      deleting.current.delete(memoId);
       setPendingIds(new Set(deleting.current));
     }
   };
@@ -131,15 +190,56 @@ export function TrashView({ pages, onOpenPage }: {
               ) : null}
             </span>
           </div>;
-        }) : <p className="move-to__empty">{needle ? "No pages match" : "Trash is empty"}</p>}
+        }) : null}
+        {memoHits.map((memo) => {
+          const pending = pendingIds.has(memo.id);
+          const title = memo.summary || "无标题闪念";
+          return (
+            <div key={memo.id} role="option" aria-selected={false} className="move-to__item trash__item">
+              <span className="move-to__icon" aria-hidden="true"><Zap size={15} /></span>
+              <span className="move-to__copy">
+                <span className="move-to__title">{title}</span>
+                <span className="move-to__crumb">
+                  {["闪念", memo.commentCount > 0 ? `含 ${memo.commentCount} 条批注` : "", when(memo.archivedAt ?? undefined)].filter(Boolean).join(" · ")}
+                </span>
+              </span>
+              <span className="trash__actions">
+                <button
+                  type="button"
+                  className="icon-btn icon-btn--sm"
+                  aria-label={`恢复闪念 ${title}`}
+                  disabled={pending}
+                  title="恢复闪念"
+                  onClick={(event) => { event.stopPropagation(); void restoreTrashedMemo(memo); }}
+                >
+                  <RotateCcw size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn icon-btn--sm"
+                  aria-label={`永久删除闪念 ${title}`}
+                  disabled={pending}
+                  aria-busy={pending}
+                  onClick={(event) => { event.stopPropagation(); setConfirmingMemo(memo); }}
+                >
+                  <X size={14} />
+                </button>
+              </span>
+            </div>
+          );
+        })}
+        {!hits.length && !memoHits.length ? <p className="move-to__empty">{needle ? "No pages match" : "Trash is empty"}</p> : null}
       </div>
 
       <DeletePageConfirm
-        open={Boolean(confirmingPage)}
-        title={confirmingPage ? pageName(confirmingPage) || "Untitled" : ""}
-        childCount={confirmingPage ? descendantCount(pages, confirmingPage.id) : 0}
-        onCancel={() => setConfirming(null)}
-        onConfirm={() => confirmingPage && void removePermanently(confirmingPage.id)}
+        open={Boolean(confirmingPage || confirmingMemo)}
+        title={confirmingPage ? pageName(confirmingPage) || "Untitled" : (confirmingMemo?.summary || "无标题闪念")}
+        childCount={confirmingPage ? descendantCount(pages, confirmingPage.id) : (confirmingMemo?.commentCount ?? 0)}
+        onCancel={() => { setConfirming(null); setConfirmingMemo(null); }}
+        onConfirm={() => {
+          if (confirmingPage) void removePermanently(confirmingPage.id);
+          else if (confirmingMemo) void removeMemoPermanently(confirmingMemo.id);
+        }}
       />
     </div>
   );

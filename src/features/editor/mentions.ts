@@ -75,7 +75,7 @@ export function mentionItems(
 ): MentionItem[] {
   const needle = query.trim().toLowerCase();
   const found = Object.values(pages)
-    .filter((page) => !inTrash(pages, page.id) && page.id !== currentPageId && (needle || !isShelved(pages, page.id)))
+    .filter((page) => page.kind !== "memo" && !inTrash(pages, page.id) && page.id !== currentPageId && (needle || !isShelved(pages, page.id)))
     .map((page) => {
       const name = pageName(page);
       return { page, name, shelved: isShelved(pages, page.id), rank: rank(name.toLowerCase(), needle) };

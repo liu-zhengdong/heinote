@@ -1,0 +1,674 @@
+/* ============================================================================
+   Memo Stream (UC-64) — aligned 1:1 with HeiNote's paper, hairlines,
+   Notion-blue primary action, soft tag pills, and quote-rule comments.
+   ========================================================================== */
+
+.memo-stream-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.memo-page-surface {
+  padding-bottom: 72px;
+}
+
+.memo-col {
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.memo-head {
+  padding-top: 22px;
+  padding-bottom: 10px;
+}
+
+.memo-head__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+}
+
+/* Database-style horizontal filter toolbar */
+.memo-toolbar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 18px;
+}
+
+.memo-toolbar__tabs {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.memo-toolbar__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.memo-tab {
+  position: relative;
+  display: inline-flex;
+  height: 26px;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.memo-tab:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.memo-tab.is-active {
+  color: var(--ink);
+}
+
+.memo-tab.is-active::after {
+  position: absolute;
+  right: 6px;
+  bottom: -4px;
+  left: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: "";
+}
+
+.memo-tab__num {
+  color: var(--ink-4);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memo-search {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+}
+
+.memo-search:focus-within {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.memo-search input {
+  width: 136px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.memo-search input::placeholder {
+  color: var(--ink-4);
+}
+
+/* Mobile horizontal tag pills */
+.memo-mobile-tags {
+  display: none;
+  gap: 6px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.memo-mobile-tags::-webkit-scrollbar {
+  display: none;
+}
+
+.memo-mobile-tag-pill {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.memo-mobile-tag-pill.is-active {
+  background: var(--fill-active);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+/* Paper-integrated Composer */
+.memo-composer {
+  position: relative;
+  padding: 11px 13px 8px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-md);
+  margin-bottom: 10px;
+  background: var(--paper);
+  transition: border-color var(--t-fast) var(--e-out), box-shadow var(--t-fast) var(--e-out);
+}
+
+.memo-composer:focus-within {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px var(--blue-tint);
+}
+
+.memo-composer.is-shake {
+  animation: memo-shake 240ms ease;
+}
+
+@keyframes memo-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.memo-composer__textarea {
+  width: 100%;
+  min-height: 64px;
+  max-height: 240px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 15.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.memo-composer__textarea::placeholder {
+  color: var(--ink-4);
+}
+
+.memo-composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.memo-attach-chip {
+  position: relative;
+  width: 108px;
+  height: 76px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  overflow: hidden;
+}
+
+.memo-attach-chip img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.memo-attach-chip__rm {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(15, 15, 15, 0.65);
+  color: #fff;
+  font-size: 11px;
+}
+
+.memo-composer__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+  margin-top: 6px;
+}
+
+.memo-composer__tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.memo-composer__tools .btn {
+  min-height: 26px;
+  padding: 0 7px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+/* Autocomplete & Mention Pickers */
+.memo-suggest-pop {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% - 36px);
+  left: 12px;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: 220px;
+  padding: 5px;
+  border-radius: var(--r-md);
+  background: var(--elevated);
+  box-shadow: var(--shadow-pop);
+  overflow-y: auto;
+}
+
+/* Hairline-separated Memo Stream */
+.memo-feed {
+  display: flex;
+  flex-direction: column;
+}
+
+.memo-entry {
+  padding: 18px 2px;
+  border-bottom: 1px solid var(--hairline);
+  transition: background var(--t-base) var(--e-out);
+}
+
+.memo-entry__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.memo-entry__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memo-pin-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--yellow);
+  font-weight: 500;
+}
+
+.memo-entry__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.memo-entry:hover .memo-entry__actions,
+.memo-entry:focus-within .memo-entry__actions {
+  opacity: 1;
+}
+
+.memo-entry__actions .btn {
+  min-height: 24px;
+  padding: 0 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.memo-entry__actions .btn.is-on {
+  color: var(--yellow);
+}
+
+.memo-body {
+  color: var(--ink);
+  font-size: 15.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.memo-body.is-collapsed {
+  max-height: 158px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 72%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 72%, transparent 100%);
+}
+
+.memo-line {
+  min-height: 1.35em;
+  margin: 2px 0;
+}
+
+.memo-todo {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 3px 0;
+}
+
+.memo-todo input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  margin-top: 6px;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.memo-todo.is-done span {
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+
+.memo-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  margin: 0 1px;
+  background: var(--tag-default-bg);
+  color: var(--tag-default-ink);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.55;
+  cursor: pointer;
+}
+
+.memo-tag-chip:hover {
+  filter: brightness(0.95);
+}
+
+.memo-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: var(--r-xs);
+  color: var(--ink);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--hairline-strong);
+  text-underline-offset: 3px;
+}
+
+.memo-mention-chip:hover {
+  background: var(--fill-hover);
+}
+
+.memo-expand-toggle {
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.memo-expand-toggle:hover {
+  color: var(--ink);
+}
+
+.memo-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.memo-thumb {
+  max-width: 240px;
+  max-height: 180px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  background: var(--fill);
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.memo-thumb img {
+  display: block;
+  max-width: 240px;
+  max-height: 180px;
+  object-fit: cover;
+}
+
+.memo-inline-edit textarea {
+  width: 100%;
+  min-height: 84px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--blue);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  outline: 0;
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+
+.memo-inline-edit__bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Left-Border Quote-Style Comment Thread */
+.memo-comment-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: var(--r-sm);
+  margin-top: 8px;
+  margin-left: -7px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.memo-comment-summary:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.memo-comment-thread {
+  padding: 2px 0 2px 14px;
+  border-left: 2px solid var(--hairline-strong);
+  margin-top: 10px;
+}
+
+.memo-comment-thread__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.memo-comment-item {
+  padding: 5px 6px;
+  border-radius: var(--r-sm);
+  margin-bottom: 4px;
+  margin-left: -6px;
+}
+
+.memo-comment-item:hover {
+  background: var(--fill);
+}
+
+.memo-comment-item__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memo-comment-item__actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+.memo-comment-item:hover .memo-comment-item__actions,
+.memo-comment-item:focus-within .memo-comment-item__actions {
+  opacity: 1;
+}
+
+.memo-comment-item__body {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.memo-comment-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.memo-comment-composer textarea {
+  flex: 1;
+  min-height: 32px;
+  max-height: 100px;
+  padding: 5px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  outline: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  resize: none;
+}
+
+.memo-comment-composer textarea:focus {
+  border-color: var(--blue);
+  background: var(--paper);
+}
+
+.memo-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 6px;
+}
+
+.memo-empty {
+  padding: 44px 16px;
+  color: var(--ink-3);
+  text-align: center;
+}
+
+.memo-modal {
+  width: min(460px, 100%);
+  padding: 20px 22px;
+}
+
+.memo-modal h2 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.memo-modal__input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  outline: 0;
+}
+
+.memo-modal__input:focus {
+  border-color: var(--blue);
+}
+
+.memo-modal__note {
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  margin-top: 12px;
+  background: var(--callout-bg);
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.memo-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.memo-lightbox {
+  width: min(720px, 100%);
+  padding: 14px;
+}
+
+.memo-lightbox img {
+  display: block;
+  width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+}
+
+/* Sidebar Tag Tree */
+.memo-tag-row .tree-row__actions {
+  right: 4px;
+}
+
+.memo-tag-row:hover .tree-row__main {
+  padding-right: 60px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .memo-entry__actions,
+  .memo-comment-item__actions {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 559.98px) {
+  .memo-col {
+    padding: 0 16px;
+  }
+
+  .memo-head {
+    padding-top: 10px;
+  }
+
+  .memo-head__title {
+    font-size: 26px;
+  }
+
+  .memo-mobile-tags {
+    display: flex;
+  }
+
+  .memo-entry__actions .btn span {
+    display: none;
+  }
+
+  .memo-search input {
+    width: 104px;
+  }
+}

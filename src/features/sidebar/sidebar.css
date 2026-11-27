@@ -113,6 +113,7 @@
 }
 
 .rail__tab.is-active .sidebar__view-icon--files { color: var(--blue); }
+.rail__tab.is-active .sidebar__view-icon--memos { color: var(--green); }
 .rail__tab.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
 .rail__tab.is-active .sidebar__view-icon--shared { color: var(--green); }
 .rail__tab.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
@@ -327,6 +328,7 @@
 }
 
 .sidebar__view.is-active .sidebar__view-icon--files { color: var(--blue); }
+.sidebar__view.is-active .sidebar__view-icon--memos { color: var(--green); }
 .sidebar__view.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
 .sidebar__view.is-active .sidebar__view-icon--shared { color: var(--green); }
 .sidebar__view.is-active .sidebar__view-icon--graph { color: var(--text-purple); }

@@ -16,12 +16,30 @@ import { useFold } from "../hooks/useFold";
 import { useIsMobileEditing } from "./edit-surface";
 import { useWorkspace } from "./workspace-context";
 
+export type MemoQuickFilter = "all" | "pinned" | "commented" | "untagged";
+
+export interface MemoJumpTarget {
+  memoId: string;
+  commentId?: string;
+  nonce: number;
+}
+
 interface UiContextValue {
   toast(message: string, tone?: ToastTone): void;
   quickFindOpen: boolean;
   setQuickFindOpen(open: boolean): void;
   drawerOpen: boolean;
   setDrawerOpen(open: boolean): void;
+  memoQuickFilter: MemoQuickFilter;
+  setMemoQuickFilter(filter: MemoQuickFilter): void;
+  memoTagFilter: string | null;
+  setMemoTagFilter(tag: string | null): void;
+  memoTarget: MemoJumpTarget | null;
+  openMemo(memoId?: string, commentId?: string): void;
+  memoRefreshNonce: number;
+  bumpMemoRefresh(): void;
+  memoFocusNonce: number;
+  focusMemoComposer(): void;
   /** The page whose sharing is open, or null. Keyed by page rather than a
    *  boolean so that opening Share *as part of* a navigation — creating a page
    *  and immediately sharing it — cannot be undone by the navigation. */
@@ -80,6 +98,11 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [accountSettingsNotice, setAccountSettingsNotice] = useState<GithubResult | null>(null);
+  const [memoQuickFilter, setMemoQuickFilter] = useState<MemoQuickFilter>("all");
+  const [memoTagFilter, setMemoTagFilter] = useState<string | null>(null);
+  const [memoTarget, setMemoTarget] = useState<MemoJumpTarget | null>(null);
+  const [memoRefreshNonce, setMemoRefreshNonce] = useState(0);
+  const [memoFocusNonce, setMemoFocusNonce] = useState(0);
   // `/admin` is a real URL: deep links and reloads land back on the console.
   const [adminOpen, setAdminOpen] = useState(() => window.location.pathname === "/admin");
   const mobile = useFold();
@@ -137,6 +160,22 @@ export function UiProvider({ children }: { children: ReactNode }) {
     else if (window.location.pathname === "/admin") window.history.replaceState(null, "", "/");
     setAdminOpen(false);
   }, []);
+  const openMemo = useCallback((memoId?: string, commentId?: string) => {
+    setAdminOpen(false);
+    setDrawerOpen(false);
+    setQuickFindOpen(false);
+    if (memoId) {
+      setMemoQuickFilter("all");
+      setMemoTagFilter(null);
+      setMemoTarget((prev) => ({ memoId, ...(commentId ? { commentId } : {}), nonce: (prev?.nonce ?? 0) + 1 }));
+    }
+  }, []);
+  const bumpMemoRefresh = useCallback(() => {
+    setMemoRefreshNonce((value) => value + 1);
+  }, []);
+  const focusMemoComposer = useCallback(() => {
+    setMemoFocusNonce((value) => value + 1);
+  }, []);
 
   const value = useMemo<UiContextValue>(
     () => ({
@@ -145,6 +184,16 @@ export function UiProvider({ children }: { children: ReactNode }) {
       setQuickFindOpen,
       drawerOpen,
       setDrawerOpen,
+      memoQuickFilter,
+      setMemoQuickFilter,
+      memoTagFilter,
+      setMemoTagFilter,
+      memoTarget,
+      openMemo,
+      memoRefreshNonce,
+      bumpMemoRefresh,
+      memoFocusNonce,
+      focusMemoComposer,
       sharePageId,
       requestShare,
       closeShare,
@@ -162,7 +211,7 @@ export function UiProvider({ children }: { children: ReactNode }) {
       openAccountSettings,
       closeAccountSettings,
     }),
-    [accountSettingsNotice, accountSettingsOpen, adminOpen, closeAccountSettings, closeAdmin, closePeek, closeShare, drawerOpen, historyOpen, openAccountSettings, openAdmin, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
+    [accountSettingsNotice, accountSettingsOpen, adminOpen, bumpMemoRefresh, closeAccountSettings, closeAdmin, closePeek, closeShare, drawerOpen, focusMemoComposer, historyOpen, memoFocusNonce, memoQuickFilter, memoRefreshNonce, memoTagFilter, memoTarget, openAccountSettings, openAdmin, openMemo, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
   );
 
   return (

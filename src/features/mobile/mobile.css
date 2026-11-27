@@ -47,6 +47,7 @@
 }
 
 .mobile-dock__nav,
+.mobile-dock__memo,
 .mobile-dock__search,
 .mobile-dock__icon-search,
 .mobile-dock__add {
@@ -65,6 +66,25 @@
   color: var(--ink);
   font-size: 13.5px;
   font-weight: 550;
+}
+
+.mobile-dock__memo {
+  gap: 4px;
+  padding: 0 10px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 550;
+}
+
+.mobile-dock__memo:hover,
+.mobile-dock__memo:active {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.mobile-dock__memo.is-active {
+  background: var(--green-tint, var(--blue-tint));
+  color: var(--green);
 }
 
 .mobile-dock__nav:hover,

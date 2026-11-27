@@ -76,6 +76,11 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 
 ```sh
 heinote pages [--full]                        # 列出页面（默认 id/title/kind 摘要）
+heinote memos [--filter F] [--tag T] [--q Q] [--limit N]
+                                              # 列出个人空间闪念流（all/pinned/commented/untagged/trashed）
+heinote memo-add (--text STR | --markdown STR) [--parent-id P] [--pinned]
+                                              # 新建闪念或为卡片追加批注（#标签自动识别）
+heinote memo-tags                             # 列出闪念多级标签树与置顶标签
 heinote search <query> [--space S] [--include-archived] [--limit N] [--offset N]
                                               # 搜标题与正文（默认不含已归档）；返回 {hits,total,archivedTotal,hasMore,nextOffset}
 heinote page <id>                             # 读页面与块树（完整 JSON）
@@ -123,7 +128,10 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 任务 | 命令 |
 | --- | --- |
 | 列出可见页面 | `heinote pages` |
-| 跨空间搜索页面 | `heinote search "关键词"` |
+| 列出或筛选闪念 | `heinote memos --tag 工作/设计` |
+| 快速记一条闪念 | `heinote memo-add --markdown "今天想到 #灵感/产品"` |
+| 为闪念加一条批注 | `heinote memo-add --parent-id <memoId> --text "补充一条"` |
+| 跨空间搜索页面与闪念 | `heinote search "关键词"` |
 | 读页面与块树 | `heinote page <id>`（要块 ID、修订时） |
 | 读正文为 Markdown | `heinote markdown <id>`（人类可读；页面提及为标题、附件为下载链接） |
 | 追加文字 | `heinote append <id> --text "内容"` 或 `--text -` |

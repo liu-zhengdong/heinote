@@ -90,6 +90,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS records(scope TEXT NOT NULL, collection TEXT NOT NULL, id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(scope,collection,id));
       CREATE INDEX IF NOT EXISTS records_page ON records(scope,collection,json_extract(value,'$.page'));
       CREATE INDEX IF NOT EXISTS records_parent ON records(scope,collection,json_extract(value,'$.parent_id'));
+      CREATE INDEX IF NOT EXISTS records_memo_kind ON records(scope,collection,json_extract(value,'$.kind'),json_extract(value,'$.created_at'));
       CREATE TABLE IF NOT EXISTS tokens(id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL, user_id TEXT NOT NULL REFERENCES users(id), name TEXT NOT NULL, display_name TEXT, avatar TEXT, access TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, embed INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS token_events(id TEXT PRIMARY KEY, token_id TEXT NOT NULL REFERENCES tokens(id), action TEXT NOT NULL, page_id TEXT NOT NULL, page_title TEXT NOT NULL, version_id TEXT, created_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS token_events_token ON token_events(token_id,created_at);
@@ -235,7 +236,15 @@ export class Store {
     if (role !== "owner" && role !== "admin") fail(403, "需要空间管理权限。", "forbidden");
     return role;
   }
-  records(scope: string, collection: string): Array<{ id: string; value: Row }> {
+  records(scope: string, collection: string, options: { excludeKind?: string } = {}): Array<{ id: string; value: Row }> {
+    if (options.excludeKind) {
+      return this.all(
+        "SELECT id,value FROM records WHERE scope=? AND collection=? AND coalesce(json_extract(value,'$.kind'),'')!=? ORDER BY id",
+        scope,
+        collection,
+        options.excludeKind,
+      ).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
+    }
     return this.all("SELECT id,value FROM records WHERE scope=? AND collection=? ORDER BY id", scope, collection).map((row) => ({ id: String(row.id), value: JSON.parse(String(row.value)) }));
   }
   saveRequest(userId: string, requestId: string, digest: string, result: unknown): void {
@@ -262,16 +271,20 @@ export class Store {
    *  the changelog never entered it, so they're read from `records`).
    *  When tombstones at or past `after` were compacted, `reset: true` tells
    *  the client to perform a fresh `after=0` snapshot pull (UC-59). */
-  recordsSince(scope: string, collection: string, after: number): { latest: number; epoch: string; reset?: boolean; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
+  recordsSince(scope: string, collection: string, after: number, options: { excludeKind?: string } = {}): { latest: number; epoch: string; reset?: boolean; rows: Array<{ id: string; value: Row }>; deleted: string[] } {
     const { latest, prunedBefore } = this.watermarkState(scope, collection);
-    if (after <= 0) return { latest, epoch: this.dbEpoch, rows: this.records(scope, collection), deleted: [] };
+    if (after <= 0) return { latest, epoch: this.dbEpoch, rows: this.records(scope, collection, options), deleted: [] };
     if (after <= prunedBefore) return { latest, epoch: this.dbEpoch, reset: true, rows: [], deleted: [] };
     const changed = this.all(`SELECT c.id,c.deleted,r.value FROM record_changes c LEFT JOIN records r ON r.scope=c.scope AND r.collection=c.collection AND r.id=c.id
       WHERE c.scope=? AND c.collection=? AND c.seq>? ORDER BY c.seq`, scope, collection, after);
     const rows: Array<{ id: string; value: Row }> = []; const deleted: string[] = [];
     for (const row of changed) {
       if (Number(row.deleted) || row.value == null) deleted.push(String(row.id));
-      else rows.push({ id: String(row.id), value: JSON.parse(String(row.value)) });
+      else {
+        const value = JSON.parse(String(row.value)) as Row;
+        if (options.excludeKind && value.kind === options.excludeKind) continue;
+        rows.push({ id: String(row.id), value });
+      }
     }
     return { latest, epoch: this.dbEpoch, rows, deleted };
   }
@@ -748,6 +761,7 @@ export class Store {
           const spec = schema.definition.collections[write.collection as keyof typeof schema.definition.collections];
           next = z.object(spec.fields).strict().parse(next) as Row;
           if (write.collection === "pages") {
+            if (next.kind === "memo" && !scope.startsWith("user:")) fail(400, "闪念仅支持个人空间。", "bad_request");
             if (Boolean(next.purging) !== Boolean(current?.purging)) fail(403, "不能直接修改删除状态。", "forbidden");
             if (next.id !== write.id) fail(400, "页面 ID 不一致。");
             if (next.share_space_id) {

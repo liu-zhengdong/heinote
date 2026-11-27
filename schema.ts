@@ -57,7 +57,7 @@ export const VIEW_KINDS = ["table", "board", "list", "gallery", "calendar"] as c
 export const THEMES = ["system", "light", "dark"] as const;
 
 /** The page list's views and the file tree's orders. */
-export const SIDEBAR_VIEWS = ["files", "favorites", "shared", "graph", "trash"] as const;
+export const SIDEBAR_VIEWS = ["files", "memos", "favorites", "shared", "graph", "trash"] as const;
 export const SIDEBAR_SORTS = ["manual", "name", "name-desc", "modified", "modified-asc", "created", "created-asc"] as const;
 
 /** How much history a page keeps: the host retires what is past them. */
@@ -298,7 +298,11 @@ export default schema({
         id: t.string(),
         title_content: t.richText().describe("Its name: the only place it is kept."),
         icon: t.string(),
-        kind: t.choice("document", "database", "app"),
+        kind: t.choice("document", "database", "app", "memo"),
+        /** Whether a memo card is pinned at the top of the memo stream. */
+        pinned: t.bool().optional(),
+        /** Extracted #tag paths for memo cards (personal scope only). */
+        tags: t.list(t.string()).optional(),
         /** The page it is in; none at the top level. */
         parent_id: t.string().optional(),
         /** A database row's values, words, and its pictures apart from them,
@@ -406,6 +410,7 @@ export default schema({
         sidebar_sort: t.choice(...SIDEBAR_SORTS).optional(),
         graph: graph.optional(),
         roots: t.list(t.string()).optional(),
+        pinned_memo_tags: t.list(t.string()).optional(),
       },
       agents: "read",
     },

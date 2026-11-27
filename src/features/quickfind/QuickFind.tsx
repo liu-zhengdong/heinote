@@ -22,6 +22,8 @@ export interface Hit {
   excerpt?: string;
   spaceId?: string;
   archived?: boolean;
+  memoParentId?: string;
+  memoComment?: boolean;
 }
 
 export interface QuickFindBuckets {
@@ -40,6 +42,8 @@ type RemoteHit = {
   excerpt?: string;
   space: string;
   archived?: boolean;
+  memoParentId?: string;
+  memoComment?: boolean;
 };
 
 type QuickFindEntry =
@@ -154,8 +158,8 @@ export function quickFind(allPages: Record<string, NotePage>, query: string): Hi
  *  Archived (shelved) pages and archived knowledge bases stay folded at the
  *  bottom until expanded, or expand automatically when active hits are empty. */
 export function QuickFind() {
-  const { selectPage, activateSpace, activeSpaceId, activeSpace, spaces } = useWorkspace();
-  const { quickFindOpen, setQuickFindOpen } = useUi();
+  const { selectPage, activateSpace, activeSpaceId, activeSpace, spaces, preferences, setPreference } = useWorkspace();
+  const { quickFindOpen, setQuickFindOpen, openMemo } = useUi();
   // Closed, it reads nothing — and is not redrawn as pages change.
   const allPages = useWorkspaceState((state) => (quickFindOpen ? state.pages : null));
   const [query, setQuery] = useState("");
@@ -234,6 +238,29 @@ export function QuickFind() {
         if (scope === "current" && targetSpace !== activeSpaceId) return [];
         const page = allPages[hit.id];
         const crumb = scope === "all" ? [hit.space, hit.crumb].filter(Boolean).join(" / ") : hit.crumb;
+        if (hit.kind === "memo") {
+          if (expectArchived || hit.archived) return [];
+          const placeholder: NotePage = {
+            id: hit.id,
+            kind: "memo",
+            icon: hit.icon ?? "",
+            title: hit.title,
+            title_content: [{ text: hit.title }],
+            parent_id: hit.memoParentId ?? null,
+            created_at: "",
+            updated_at: "",
+            created_by: "",
+            updated_by: "",
+          };
+          return [{
+            page: placeholder,
+            excerpt: hit.excerpt,
+            crumb,
+            spaceId: targetSpace,
+            ...(hit.memoParentId ? { memoParentId: hit.memoParentId } : {}),
+            ...(hit.memoComment ? { memoComment: true } : {}),
+          }];
+        }
         if (page) {
           if (inTrash(allPages, hit.id)) return [];
           const currentlyArchived = isShelved(allPages, hit.id) || Boolean(spaces[targetSpace]?.knowledgeBase?.archived);
@@ -310,7 +337,21 @@ export function QuickFind() {
   }, [activeIndex, entries, quickFindOpen]);
 
   const open = (hit: Hit) => {
+    if (hit.page.kind === "memo") {
+      const finishMemo = () => {
+        setPreference("sidebar_view", "memos");
+        openMemo(hit.memoParentId ?? hit.page.id, hit.memoComment ? hit.page.id : undefined);
+        setQuickFindOpen(false);
+      };
+      if (activeSpaceId !== "personal") {
+        void activateSpace("personal").then(finishMemo).catch(() => undefined);
+      } else {
+        finishMemo();
+      }
+      return;
+    }
     const finish = () => {
+      if (preferences.sidebar_view === "memos") setPreference("sidebar_view", "files");
       selectPage(hit.page.id);
       setQuickFindOpen(false);
     };
@@ -340,6 +381,7 @@ export function QuickFind() {
         {hit.excerpt ? <span className="menu__description">{markText(hit.excerpt, query)}</span> : null}
       </span>
       {hit.crumb ? <span className="quickfind__crumb">{hit.crumb}</span> : null}
+      {hit.page.kind === "memo" ? <span className="quickfind__badge">{hit.memoComment ? "批注" : "闪念"}</span> : null}
       {hit.archived ? <span className="quickfind__badge">已归档</span> : null}
     </button>
   );

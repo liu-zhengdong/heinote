@@ -193,7 +193,31 @@ POST /api/v1/pages/:id/copy
 }
 ```
 
-`archived` 仅在命中属于已归档页面或已归档团队知识库时出现。正文命中行截取最多 90 个字符。无命中返回空 `hits` 与 `total: 0`。
+`archived` 仅在命中属于已归档页面或已归档团队知识库时出现。个人空间的闪念及其批注也会返回在 `hits` 中：此时 `kind` 为 `"memo"`，`title` 为摘要，`createdAt` 为原始创建时间；若命中批注，还附带 `"memoParentId": "<主闪念 ID>"` 与 `"memoComment": true`。正文命中行截取最多 90 个字符。无命中返回空 `hits` 与 `total: 0`。
+
+## 闪念接口
+
+闪念仅存在于账号私有个人空间（`user:<id>`），不进入普通页面目录、关系图谱或团队知识库。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/memos` | 列出个人空间闪念流（支持 `limit`、`cursor`、`filter`、`tag`、`q`、`around`） |
+| POST | `/memos` | 创建一条闪念或 1 层批注（`parentId`） |
+| PATCH | `/memos/:id` | 修改闪念正文、附件或置顶状态 `pinned` |
+| DELETE | `/memos/:id` | 闪念默认软删进回收站；带 `?permanent=true` 彻底删除；批注直接删除 |
+| POST | `/memos/:id/restore` | 恢复回收站中的闪念 |
+| POST | `/memos/:id/promote` | 将闪念转为正式 `document` 页面，保留原 ID 与反向链接并合并批注 |
+| GET | `/memos/tags` | 返回分级标签树（`tags`）及置顶标签列表（`pinnedTags`） |
+| PUT | `/memos/tags/pinned` | 保存置顶标签列表 `{ tags }` |
+| POST | `/memos/tags/rename` | 批量重命名标签 `{ from, to }` |
+| POST | `/memos/tags/delete` | 从所有未入站闪念正文中移除标签 `{ tag }` |
+
+创建与筛选要点：
+
+- `GET /memos` 的 `filter` 可选 `all`、`pinned`、`commented`、`untagged`、`trashed`；传 `tag=parent` 会同时匹配 `#parent` 与 `#parent/...`；传 `around=<memoId>` 返回能包含该卡片的窗口结果。默认按 `pinned DESC, created_at DESC` 排序。
+- `POST /memos` 接受 `markdown` 或 `text`（互斥，可与 `attachments` 并存）、可选 `parentId`（仅允许指向顶层闪念，不可嵌套）、可选 `pinned` 与 `mentionPageIds`。
+- 闪念与 `#tag`（含多级 `#工作/设计`）自动从正文提取并索引；添加或删除批注不会改变父闪念的 `created_at` 排序位置。
+- `GET /pages` 与 `/api/records/personal/pages` 不返回 `kind: "memo"` 记录。
 
 ## 数据库接口
 

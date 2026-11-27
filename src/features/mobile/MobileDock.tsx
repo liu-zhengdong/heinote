@@ -1,4 +1,4 @@
-import { AppWindow, FileText, Menu, Plus, Search, Table2 } from "lucide-react";
+import { AppWindow, FileText, Menu, Plus, Search, Table2, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useIsMobileEditing } from "../../app/edit-surface";
 import { useUi } from "../../app/ui-context";
@@ -28,7 +28,10 @@ export function MobileDock({
     peekPageId,
     sharePageId,
     adminOpen,
+    focusMemoComposer,
   } = useUi();
+  const inPersonal = !activeSpace?.knowledgeBase;
+  const inMemos = inPersonal && preferences.sidebar_view === "memos";
   const editing = useIsMobileEditing();
   const [condensed, setCondensed] = useState(false);
   const [newSheetOpen, setNewSheetOpen] = useState(false);
@@ -90,6 +93,22 @@ export function MobileDock({
             <span>目录</span>
           </button>
 
+          {inPersonal ? (
+            <button
+              type="button"
+              className={`mobile-dock__memo ${inMemos ? "is-active" : ""}`}
+              aria-label="Memos"
+              aria-pressed={inMemos}
+              onClick={() => {
+                setCondensed(false);
+                setPreference("sidebar_view", inMemos ? "files" : "memos");
+              }}
+            >
+              <Zap size={16} aria-hidden="true" />
+              <span>闪念</span>
+            </button>
+          ) : null}
+
           {condensed ? (
             <button
               type="button"
@@ -119,11 +138,12 @@ export function MobileDock({
             className="mobile-dock__add"
             aria-label="新建"
             disabled={!writable}
-            aria-haspopup="dialog"
-            aria-expanded={newSheetOpen}
+            aria-haspopup={inMemos ? undefined : "dialog"}
+            aria-expanded={inMemos ? undefined : newSheetOpen}
             onClick={() => {
               setCondensed(false);
-              setNewSheetOpen(true);
+              if (inMemos) focusMemoComposer();
+              else setNewSheetOpen(true);
             }}
           >
             <Plus size={18} aria-hidden="true" />

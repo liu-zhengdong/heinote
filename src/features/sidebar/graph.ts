@@ -36,7 +36,7 @@ export type Point = { x: number; y: number };
 /** Every page not in the trash is drawn — a database's rows too, joined to
  *  it as the pages it holds, as the page list shows them under it. */
 function listed(pages: Record<string, NotePage>, page: NotePage | undefined): page is NotePage {
-  return Boolean(page?.id && !inTrash(pages, page.id));
+  return Boolean(page?.id && page.kind !== "memo" && !inTrash(pages, page.id));
 }
 
 export function buildGraph(pages: Record<string, NotePage>, references: ReadonlyMap<string, readonly BlockReference[]>): Graph {

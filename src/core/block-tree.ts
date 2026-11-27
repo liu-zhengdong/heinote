@@ -335,6 +335,22 @@ export function normalizePage(value: unknown, ensureParagraph = true): NotePage 
     const block = createBlock(`block_${candidate.id}_root`);
     blockTree.by_id[block.id] = block;
   }
-  const kind = candidate.kind === "database" ? "database" : candidate.kind === "app" ? "app" : "document";
-  return { ...candidate, kind, block_tree: blockTree } as unknown as NotePage;
+  const kind = candidate.kind === "database"
+    ? "database"
+    : candidate.kind === "app"
+      ? "app"
+      : candidate.kind === "memo"
+        ? "memo"
+        : "document";
+  const pinned = typeof candidate.pinned === "boolean" ? candidate.pinned : undefined;
+  const tags = Array.isArray(candidate.tags)
+    ? candidate.tags.filter((tag): tag is string => typeof tag === "string" && tag.length > 0)
+    : undefined;
+  return {
+    ...candidate,
+    kind,
+    ...(pinned !== undefined ? { pinned } : {}),
+    ...(tags !== undefined ? { tags } : {}),
+    block_tree: blockTree,
+  } as unknown as NotePage;
 }

@@ -587,6 +587,45 @@ def cmd_download(client, a):
         sys.stdout.buffer.write(data)
 
 
+def cmd_memos(client, a):
+    from urllib.parse import urlencode
+    params = {}
+    if a.filter:
+        params["filter"] = a.filter
+    if a.tag:
+        params["tag"] = a.tag
+    if a.q:
+        params["q"] = a.q
+    if a.limit is not None:
+        params["limit"] = a.limit
+    qs = f"?{urlencode(params)}" if params else ""
+    status, payload = client.request("GET", f"/api/v1/memos{qs}")
+    emit(status, payload)
+
+
+def cmd_memo_add(client, a):
+    if a.text is not None and a.markdown is not None:
+        die("--text 与 --markdown 只能提供一个。")
+    body = {}
+    if a.markdown is not None:
+        body["markdown"] = read_value(a.markdown)
+    elif a.text is not None:
+        body["text"] = read_value(a.text)
+    else:
+        die("memo-add 需要 --text 或 --markdown。")
+    if a.parent_id:
+        body["parentId"] = a.parent_id
+    if a.pinned:
+        body["pinned"] = True
+    status, payload = client.request("POST", "/api/v1/memos", body)
+    emit(status, payload)
+
+
+def cmd_memo_tags(client, _a):
+    status, payload = client.request("GET", "/api/v1/memos/tags")
+    emit(status, payload)
+
+
 def cmd_req(client, a):
     path = a.path if a.path.startswith("/api/v1") else "/api/v1" + (a.path if a.path.startswith("/") else "/" + a.path)
     body = read_json(a.data) if a.data else None
@@ -777,6 +816,23 @@ def build_parser():
     sp.add_argument("--path", required=True, help="附件路径（files/...）")
     sp.add_argument("--out", help="输出文件路径；省略时写 stdout")
     sp.set_defaults(fn=cmd_download)
+
+    sp = sub.add_parser("memos", help="列出个人空间闪念流")
+    sp.add_argument("--filter", choices=["all", "pinned", "commented", "untagged", "trashed"])
+    sp.add_argument("--tag", help="按标签或父级标签前缀筛选（不含 #）")
+    sp.add_argument("--q", help="按正文关键词筛选")
+    sp.add_argument("--limit", type=int, help="每页条数")
+    sp.set_defaults(fn=cmd_memos)
+
+    sp = sub.add_parser("memo-add", help="记录一条闪念或给卡片追加批注")
+    sp.add_argument("--text", help="纯文本（或 `-` 读 stdin）")
+    sp.add_argument("--markdown", help="Markdown（或 `-` 读 stdin）")
+    sp.add_argument("--parent-id", help="父闪念 ID（传入即作为 1 层批注）")
+    sp.add_argument("--pinned", action="store_true", help="创建时置顶")
+    sp.set_defaults(fn=cmd_memo_add)
+
+    sp = sub.add_parser("memo-tags", help="列出闪念多级标签树与置顶标签")
+    sp.set_defaults(fn=cmd_memo_tags)
 
     sp = sub.add_parser("req", help="透传任意 /api/v1 请求")
     sp.add_argument("method")

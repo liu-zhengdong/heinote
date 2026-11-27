@@ -86,6 +86,7 @@ function createButton(page: Page) {
 
 const views = [
   { name: "Files", label: "全部页面", mobileLabel: "全部" },
+  { name: "Memos", label: "闪念", mobileLabel: "闪念" },
   { name: "Favorites", label: "收藏夹", mobileLabel: "收藏" },
   { name: "Shared", label: "已分享", mobileLabel: "已分享" },
   { name: "Graph", label: "关系图谱", mobileLabel: "图谱" },
@@ -119,7 +120,7 @@ async function expectNavigationLayout(page: Page) {
     const topbar = sidebar.locator(".sidebar__topbar");
     const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
     await expect(tabs).toHaveAttribute("aria-orientation", "horizontal");
-    await expect(tabs.getByRole("tab")).toHaveCount(5);
+    await expect(tabs.getByRole("tab")).toHaveCount(6);
     await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
     await expect(topbar.locator("kbd")).toHaveCount(0);
     await expect(createButton(page)).toBeVisible();
@@ -168,7 +169,7 @@ async function expectNavigationLayout(page: Page) {
   await expect(rail).toBeVisible();
   const tabs = rail.getByRole("tablist", { name: "Page list", exact: true });
   await expect(tabs).toHaveAttribute("aria-orientation", "vertical");
-  await expect(tabs.getByRole("tab")).toHaveCount(5);
+  await expect(tabs.getByRole("tab")).toHaveCount(6);
   await expect(rail.getByRole("button", { name: "Search", exact: true })).toBeVisible();
   await expect(createButton(page)).toBeVisible();
   await expect(createButton(page)).toHaveText("");
@@ -384,6 +385,10 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
 
   await files.focus();
   await files.press("ArrowDown");
+  const memos = tabs.getByRole("tab", { name: "Memos", exact: true });
+  await expect(memos).toBeFocused();
+  await expect(memos).toHaveAttribute("aria-selected", "true");
+  await memos.press("ArrowDown");
   await expect(favorites).toBeFocused();
   await expect(favorites).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tree", { name: "Favorites", exact: true }).locator(".tree-row__label")).toHaveText(["Alpha reference"]);

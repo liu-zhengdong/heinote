@@ -21,6 +21,7 @@ import {
   UserPlus,
   Users,
   Waypoints,
+  Zap,
 } from "lucide-react";
 import {
   lazy,
@@ -55,6 +56,7 @@ import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
 import { capitalized } from "../../core/title";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
+import { MemoSidebarPane } from "../memos/MemoSidebarPane";
 import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
 import { useSession } from "../account/AuthGate";
@@ -78,13 +80,13 @@ import "./sidebar.css";
 /* The graph is loaded the first time it is looked at. */
 const GraphView = lazy(() => import("./GraphView").then((module) => ({ default: module.GraphView })));
 
-const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, favorites: Star, shared: Users, graph: Waypoints, trash: Trash2 };
+const VIEW_ICONS: Record<SidebarView, typeof Files> = { files: Files, memos: Zap, favorites: Star, shared: Users, graph: Waypoints, trash: Trash2 };
 /* One word for every way a page leaves the member's private space:
    member-shared trees and public read-only links. "空间" stays with
    knowledge bases — the only real space the member navigates between. */
-const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", favorites: "收藏夹", shared: "已分享", graph: "关系图谱", trash: "回收站" };
-const MOBILE_VIEW_LABELS: Record<SidebarView, string> = { files: "全部", favorites: "收藏", shared: "已分享", graph: "图谱", trash: "回收站" };
-const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", favorites: "星标置顶", shared: "已分享", graph: "知识拓扑", trash: "回收站" };
+const VIEW_LABELS: Record<SidebarView, string> = { files: "全部页面", memos: "闪念", favorites: "收藏夹", shared: "已分享", graph: "关系图谱", trash: "回收站" };
+const MOBILE_VIEW_LABELS: Record<SidebarView, string> = { files: "全部", memos: "闪念", favorites: "收藏", shared: "已分享", graph: "图谱", trash: "回收站" };
+const SECTION_LABELS: Record<SidebarView, string> = { files: "笔记", memos: "闪念", favorites: "星标置顶", shared: "已分享", graph: "知识拓扑", trash: "回收站" };
 
 const SORTS: readonly SidebarSort[] = SIDEBAR_SORTS;
 
@@ -165,10 +167,12 @@ export function Sidebar() {
      page list and hide the tab below. */
   const inLibrary = Boolean(activeSpace?.knowledgeBase);
   const visibleViews = useMemo(
-    () => SIDEBAR_VIEWS.filter((value) => !(inLibrary && value === "shared")),
+    () => SIDEBAR_VIEWS.filter((value) => !(inLibrary && (value === "shared" || value === "memos"))),
     [inLibrary],
   );
-  const view: SidebarView = inLibrary && preferences.sidebar_view === "shared" ? "files" : preferences.sidebar_view;
+  const view: SidebarView = inLibrary && (preferences.sidebar_view === "shared" || preferences.sidebar_view === "memos")
+    ? "files"
+    : preferences.sidebar_view;
   const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
   const shelvedTree = useMemo(() => buildShelvedTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
@@ -473,6 +477,7 @@ export function Sidebar() {
     handlers.current = {
       select: (pageId) => {
         selectPage(pageId);
+        if (view === "memos") setPreference("sidebar_view", "files");
         afterNavigate();
       },
       toggle: (id) => updateExpanded((current) => {
@@ -948,6 +953,8 @@ export function Sidebar() {
             </>
           ) : null}
 
+          {view === "memos" ? <MemoSidebarPane /> : null}
+
           {view === "favorites" ? (
             favorites.length ? favorites.map((favorite) => flatRow(favorite)) : (
               <div className="sidebar__empty">
@@ -960,7 +967,10 @@ export function Sidebar() {
           {view === "trash" ? (
             <TrashView
               pages={pages}
-              onOpenPage={(pageId) => { selectPage(pageId); afterNavigate(); }}
+              onOpenPage={(pageId) => {
+                selectPage(pageId);
+                afterNavigate();
+              }}
             />
           ) : null}
 

@@ -5,6 +5,7 @@ import type { NotePage } from "../src/core/types.ts";
 import { pageAncestry, inTrash, isShelved } from "../src/core/page-tree.ts";
 import { orderedBlocks, pageName } from "../src/core/block-tree.ts";
 import { inlinePlainText, inlineReadableText } from "../src/core/inline-content.ts";
+import { memoSummaryTitle } from "../src/core/memos.ts";
 import { tableCells, tableGrid } from "../src/core/simple-table.ts";
 import { readableDescriber } from "../src/core/export-markdown.ts";
 
@@ -65,6 +66,44 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
       if (inTrash(pages, page.id)) continue;
       const scope = scopeOf(page);
       if (wanted && scope !== wanted) continue;
+      if (page.kind === "memo") {
+        if (!scope.startsWith("user:")) continue;
+        const parentMemo = page.parent_id ? pages[page.parent_id] : undefined;
+        if (page.parent_id && (!parentMemo || parentMemo.kind !== "memo" || inTrash(pages, parentMemo.id))) continue;
+        const lines = orderedBlocks(page.block_tree).map((block) => inlineReadableText(block.content, readable));
+        const tags = Array.isArray(page.tags) ? page.tags : [];
+        const qTag = q.startsWith("#") ? q.slice(1) : q;
+        const matchedLine = lines.find((line) => fold(line).includes(q));
+        const matchedTag = qTag ? tags.find((tag) => fold(tag).includes(qTag)) : undefined;
+        if (!matchedLine && !matchedTag) continue;
+        const summary = memoSummaryTitle(lines.join("\n"));
+        const isComment = Boolean(page.parent_id);
+        const rank = fold(summary).startsWith(q) ? 0 : fold(summary).includes(q) || matchedTag ? 1 : 2;
+        const library = store.knowledgeBases.get(scope);
+        const archived = Boolean(library?.archived);
+        const entry: ScoredHit = {
+          hit: {
+            id: page.id,
+            title: isComment ? (matchedLine ?? summary).slice(0, 60) : summary,
+            scope,
+            spaceId: "personal",
+            icon: "",
+            kind: page.kind,
+            space: "个人空间",
+            crumb: isComment ? "闪念 / 批注" : (tags.length ? `闪念 · #${tags.slice(0, 3).join(" #")}` : "闪念"),
+            tags,
+            createdAt: page.created_at,
+            ...(isComment ? { memoParentId: page.parent_id, memoComment: true } : {}),
+            ...(matchedLine ? { excerpt: matchedLine.slice(0, 90) } : matchedTag ? { excerpt: `#${matchedTag}` } : {}),
+            ...(archived ? { archived: true } : {}),
+          },
+          rank,
+          updated: page.updated_at,
+        };
+        if (archived) archivedScored.push(entry);
+        else activeScored.push(entry);
+        continue;
+      }
       const title = fold(pageName(page));
       let rank: number;
       let excerpt: string | undefined;

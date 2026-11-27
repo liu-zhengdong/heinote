@@ -147,7 +147,7 @@ export function unlisted(pages: Record<string, NotePage>): ReadonlySet<string> {
   if (cached) return cached;
   const out = new Set<string>();
   for (const page of Object.values(pages)) {
-    if (page?.id && isBareRow(pages, page)) out.add(page.id);
+    if (page?.id && (page.kind === "memo" || isBareRow(pages, page))) out.add(page.id);
   }
   unlistedSets.set(pages, out);
   return out;

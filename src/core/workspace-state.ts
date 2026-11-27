@@ -21,13 +21,17 @@ export const DEFAULT_PREFERENCES: WorkspacePreferences = {
   sidebar_view: "files",
   sidebar_sort: "manual",
   graph: DEFAULT_GRAPH_SETTINGS,
+  pinned_memo_tags: [],
 };
 
 /** The member's preferences as their settings record holds them — each
  *  field's shape held by schema.ts — with the default for any not set yet. */
 export function readPreferences(value: SettingsRecord | undefined): WorkspacePreferences {
   const { roots: _roots, ...set } = value ?? {};
-  return { ...DEFAULT_PREFERENCES, ...set } as WorkspacePreferences;
+  const pinned_memo_tags = Array.isArray(set.pinned_memo_tags)
+    ? set.pinned_memo_tags.filter((tag): tag is string => typeof tag === "string" && tag.length > 0)
+    : DEFAULT_PREFERENCES.pinned_memo_tags;
+  return { ...DEFAULT_PREFERENCES, ...set, pinned_memo_tags } as WorkspacePreferences;
 }
 
 export function emptyWorkspace(): WorkspaceState {

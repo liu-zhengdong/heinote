@@ -34,6 +34,7 @@ const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then(
 const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
+const MemoStream = lazy(() => import("../features/memos/MemoStream").then((module) => ({ default: module.MemoStream })));
 
 /** An app page redrawn as the page changes — its run surface and editor. */
 function AppPageShell({ pageId }: { pageId: string }) {
@@ -201,6 +202,8 @@ export function App() {
   const openedFromHash = useRef("");
   const wantedPage = useRef<string | null>(new URLSearchParams(window.location.search).get("page"));
   const locating = useRef(new Set<string>());
+  const sidebarViewRef = useRef(preferences.sidebar_view);
+  sidebarViewRef.current = preferences.sidebar_view;
   useEffect(() => {
     const openWanted = () => {
       const wanted = wantedPage.current;
@@ -208,13 +211,17 @@ export function App() {
       const id = linkedPageId(wanted, store.getState().pages);
       if (id) {
         wantedPage.current = null;
+        if (sidebarViewRef.current === "memos") setPreference("sidebar_view", "files");
         selectPage(id);
         return;
       }
       if (!loading && !locating.current.has(wanted)) {
         locating.current.add(wanted);
         void openLocatedPage(wanted).then((opened) => {
-          if (opened && wantedPage.current === wanted) wantedPage.current = null;
+          if (opened) {
+            if (sidebarViewRef.current === "memos") setPreference("sidebar_view", "files");
+            if (wantedPage.current === wanted) wantedPage.current = null;
+          }
         });
       }
     };
@@ -224,6 +231,7 @@ export function App() {
       const id = linkedPageId(link, store.getState().pages);
       if (!id) return;
       openedFromHash.current = link;
+      if (sidebarViewRef.current === "memos") setPreference("sidebar_view", "files");
       selectPage(id);
     };
     const open = () => {
@@ -245,7 +253,7 @@ export function App() {
       stopRoutes();
       window.removeEventListener("hashchange", openFromHash);
     };
-  }, [loading, openLocatedPage, selectPage, store]);
+  }, [loading, openLocatedPage, selectPage, setPreference, store]);
 
   /* The address says which page is open — `?page=<id>`, the place a link or
      an agent's `open` brings the window back to — so the desktop can tell an
@@ -315,6 +323,8 @@ export function App() {
     );
   }
 
+  const inMemos = !activeSpace?.knowledgeBase && preferences.sidebar_view === "memos" && !graphOpen && !adminOpen;
+
   return (
     <div
       ref={setShell}
@@ -323,6 +333,12 @@ export function App() {
     >
       <Sidebar />
       <div className="app-main">
+        {inMemos ? (
+          <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+            <MemoStream onSurfaceRef={setSurfaceEl} />
+          </Suspense>
+        ) : (
+        <>
         <TopBar
           onHistory={() => {
             if (historyOpen) {
@@ -427,6 +443,8 @@ export function App() {
           </main>
           )}
         </div>
+        </>
+        )}
       </div>
 
       <SidePeek

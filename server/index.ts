@@ -23,6 +23,7 @@ import { transferPageTree, transferSchema } from "./tree-transfer.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
 import { attachAgentDatabases } from "./agent-databases.ts";
 import { attachAgentSearch } from "./agent-search.ts";
+import { attachMemos } from "./memos.ts";
 import { attachAgentAuthRequests, pendingAuthRequests } from "./agent-auth-requests.ts";
 import { attachAgentOnboarding } from "./agent-onboarding.ts";
 import { attachPublicApp } from "./public-app.ts";
@@ -590,8 +591,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       for (const group of groups) if (group.since > 0) merge(store.recordsSincePages(scope, collection, [group.pageId], group.since));
       res.json({ latest, epoch: store.dbEpoch, ...(reset ? { reset: true } : {}), rows: [...rows].map(([id, value]) => ({ id, value })), deleted: [...deleted] });
     }
-    else if (after === undefined) res.json(store.records(scope, collection));
-    else res.json(store.recordsSince(scope, collection, after));
+    else if (after === undefined) res.json(store.records(scope, collection, collection === "pages" ? { excludeKind: "memo" } : {}));
+    else res.json(store.recordsSince(scope, collection, after, collection === "pages" ? { excludeKind: "memo" } : {}));
   });
   app.get("/api/collaboration/:scope/:pageId/ops", (req, res) => {
     const after = parse(z.number().int().min(0), Number(req.query.after ?? 0));
@@ -792,7 +793,8 @@ export async function startServer(options: { dataDir?: string; host?: string; po
       : store.all("SELECT * FROM shares WHERE user_id=?", who.user.id)).map(shareDto));
   });
   app.post("/api/shares", (req, res) => {
-    const who = actor(req); const { pageId } = parse(z.object({ pageId: z.string() }), req.body); const { scope } = store.page(who, pageId);
+    const who = actor(req); const { pageId } = parse(z.object({ pageId: z.string() }), req.body); const { scope, page } = store.page(who, pageId);
+    if (page.kind === "memo") fail(400, "闪念需先转为正式页面后再公开分享。", "bad_request");
     if (store.knowledgeBases.get(scope)) fail(403, "团队知识库页面不能公开分享。", "forbidden");
     if (!scope.startsWith("user:") && store.role(who, scope) !== "owner") fail(403, "只有所有者可以公开分享。");
     const row = { id: id(), token: secret(), created_at: currentTime() };
@@ -822,7 +824,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   app.get("/api/v1/pages", (req, res) => {
     const who = actor(req);
     const pages = store.pagesState(who);
-    res.json(Object.values(pages).filter((page) => !inTrash(pages, page.id)).map((page) => store.pageDto(who, page.id)));
+    res.json(Object.values(pages).filter((page) => page.kind !== "memo" && !inTrash(pages, page.id)).map((page) => store.pageDto(who, page.id)));
   });
   app.post("/api/v1/pages", (req, res) => {
     const who = actor(req); const input = parse(z.object({ title: z.string().max(500).default(""), text: z.string().max(100000).optional(), markdown: z.string().max(100000).optional(), kind: z.enum(["document", "app"]).default("document"), parentId: z.string().min(1).max(256).optional(), spaceId: z.string().min(1).max(256).optional(), scope: z.string().min(1).max(256).optional() }).strict(), req.body);
@@ -1001,6 +1003,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   });
 
   attachAgentDatabases(app, store, actor);
+  attachMemos(app, store, actor);
   attachAgentSearch(app, store, actor);
   attachAgentAuthRequests(app, store, actor, (userId) => {
     collaborationSocket?.notifyAuthRequests(userId, pendingAuthRequests(store, userId));
