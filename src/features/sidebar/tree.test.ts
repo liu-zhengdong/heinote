@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { NotePage } from "../../core/types";
 import { restoredPage } from "../../core/versions";
 import { mentionDescriber, mentionItems, referenceIndex } from "../editor/mentions";
+import { quickFindBuckets } from "../quickfind/QuickFind";
 import { buildGraph, graphAnchor } from "./graph";
-import { buildTree, countTree, flattenTree, manualOrderKey, nextSidebarOrder, planSidebarReorder, sameListing, SIDEBAR_ORDER_STEP } from "./tree";
+import { buildShelvedTree, buildTree, countTree, flattenTree, manualOrderKey, nextSidebarOrder, planSidebarReorder, sameListing, SIDEBAR_ORDER_STEP } from "./tree";
 import { resolveRowDropPosition } from "./TreeRow";
 
 function page(id: string, options: Partial<NotePage> = {}): NotePage {
@@ -194,5 +195,60 @@ describe("UC-62: manual sidebar sorting, reorder planning, and drop zone resolut
 
     expect(resolveRowDropPosition(0, 0, rect, true)).toBe("inside");
     expect(resolveRowDropPosition(0, 0, rect, false)).toBe("after");
+  });
+
+  it("UC-63: splits active vs shelved sidebar trees, folds QuickFind buckets, ranks active mentions first, and keeps shelved on restore", () => {
+    const active = page("active", { title: "认证方案", sidebar_order: 1000, updated_at: "2026-11-26T00:00:00Z" });
+    const folder = page("folder", { title: "工作区", sidebar_order: 2000, updated_at: "2026-11-25T00:00:00Z" });
+    const oldProj = page("oldProj", {
+      title: "旧项目",
+      parent_id: "folder",
+      shelved: true,
+      shelved_at: "2026-11-27T00:00:00Z",
+      updated_at: "2026-11-27T01:00:00Z",
+    });
+    const oldUc = page("oldUc", {
+      title: "认证 UC-01",
+      parent_id: "oldProj",
+      updated_at: "2026-11-27T02:00:00Z",
+    });
+    const pages = { active, folder, oldProj, oldUc };
+
+    const activeTree = buildTree(pages, "manual");
+    expect(flattenTree(activeTree).map((item) => item.id)).toEqual(["active", "folder"]);
+
+    const archivedTree = buildShelvedTree(pages, "manual");
+    expect(archivedTree.roots.map((item) => item.id)).toEqual(["oldProj"]);
+    expect(archivedTree.children.get("oldProj")?.map((item) => item.id)).toEqual(["oldUc"]);
+
+    expect(sameListing(pages, { ...pages, oldProj: { ...oldProj, shelved: undefined } }, "manual")).toBe(false);
+
+    // QuickFind: empty query excludes shelved pages; query splits active and archived buckets.
+    const recent = quickFindBuckets(pages, "");
+    expect(recent.active.map((hit) => hit.page.id)).toEqual(["active", "folder"]);
+    expect(recent.archivedTotal).toBe(0);
+
+    const matched = quickFindBuckets(pages, "认证");
+    expect(matched.active.map((hit) => hit.page.id)).toEqual(["active"]);
+    expect(matched.archived.map((hit) => hit.page.id)).toEqual(["oldUc"]);
+    expect(matched.archivedTotal).toBe(1);
+    expect(matched.archived[0].archived).toBe(true);
+
+    // Mentions: empty query skips shelved; typed query puts active first and labels shelved.
+    const emptyMentions = mentionItems("", "@", pages, "folder").filter((item) => item.kind === "page");
+    expect(emptyMentions.map((item) => item.page.id)).toEqual(["active"]);
+
+    const typedMentions = mentionItems("认证", "@", pages, "folder").filter((item) => item.kind === "page");
+    expect(typedMentions.map((item) => item.page.id)).toEqual(["active", "oldUc"]);
+    expect(typedMentions[1].context).toContain("已归档");
+
+    // Version restore keeps shelved metadata intact.
+    const restored = restoredPage(
+      { ...oldProj, title: "旧标题", shelved: undefined, shelved_at: undefined },
+      oldProj,
+    );
+    expect(restored.title).toBe("旧标题");
+    expect(restored.shelved).toBe(true);
+    expect(restored.shelved_at).toBe("2026-11-27T00:00:00Z");
   });
 });

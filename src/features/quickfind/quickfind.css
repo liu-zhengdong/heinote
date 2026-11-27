@@ -83,6 +83,58 @@
    characters so the row's greyscale hierarchy is untouched. */
 .quickfind mark { background:none; color:var(--blue); font-weight:600; }
 
+.quickfind__archived-toggle {
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  color: var(--ink-3);
+}
+
+.quickfind__archived-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--hairline);
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.quickfind__archived-head--solo {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.quickfind__archived-collapse {
+  padding: 1px 6px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.quickfind__archived-collapse:hover {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.quickfind__item--archived .menu__label,
+.quickfind__item--archived .menu__icon {
+  color: var(--ink-2);
+}
+
+.quickfind__badge {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 @media (max-height: 420px) {
   .quickfind {
     margin-top: 12px;

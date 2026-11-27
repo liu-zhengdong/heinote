@@ -187,6 +187,23 @@ export function canTrashPage(
   return !page.share_space_id || role === "owner";
 }
 
+/** Whether a member may archive (shelve) or unarchive a page: same write
+ *  boundary as trashing — anything editable except a knowledge base's home page
+ *  (the knowledge base archives as a whole) or someone else's shared root. */
+export function canShelvePage(
+  pages: Record<string, NotePage>,
+  spaces: Record<string, PermissionSpace>,
+  pageId: string,
+): boolean {
+  const page = pages[pageId];
+  if (!page || inTrash(pages, pageId)) return false;
+  const spaceId = spaceOfPage(pages, pageId);
+  const role = spaceId ? spaces[spaceId]?.role : "owner";
+  const library = spaceId ? spaces[spaceId]?.knowledgeBase : undefined;
+  if (role === "viewer" || library?.archived || library?.homePageId === pageId) return false;
+  return !page.share_space_id || role === "owner";
+}
+
 /** Whether a member may restore a page from the trash: writable in its space,
  *  its parent is not also in the trash, and an ordinary shared root belongs
  *  to its owner only. */
@@ -263,6 +280,7 @@ function ancestorMarkedSet(
 
 const purgingSets = new WeakMap<PageCollection, ReadonlySet<string>>();
 const trashedSets = new WeakMap<PageCollection, ReadonlySet<string>>();
+const shelvedSets = new WeakMap<PageCollection, ReadonlySet<string>>();
 const descendantCountMaps = new WeakMap<Record<string, NotePage>, ReadonlyMap<string, number>>();
 
 /** Pages queued for background permanent deletion, directly or under a purging ancestor. */
@@ -275,6 +293,11 @@ export function trashedPageIds(pages: PageCollection): ReadonlySet<string> {
   return ancestorMarkedSet(pages, trashedSets, (page) => Boolean(page.archived || page.purging));
 }
 
+/** Pages archived (shelved) for completed projects, directly or under a shelved ancestor. */
+export function shelvedPageIds(pages: PageCollection): ReadonlySet<string> {
+  return ancestorMarkedSet(pages, shelvedSets, (page) => Boolean(page.shelved));
+}
+
 /** Whether a page is queued for background permanent deletion, itself or with an ancestor. */
 export function isPurging(pages: PageCollection, pageId: string): boolean {
   return Boolean(pageId) && purgingPageIds(pages).has(pageId);
@@ -283,6 +306,18 @@ export function isPurging(pages: PageCollection, pageId: string): boolean {
 /** Whether a page is in the trash (or being purged), itself or with a parent. */
 export function inTrash(pages: PageCollection, pageId: string): boolean {
   return Boolean(pageId) && trashedPageIds(pages).has(pageId);
+}
+
+/** Whether a page is archived (shelved), itself or via any ancestor. */
+export function isShelved(pages: PageCollection, pageId: string): boolean {
+  return Boolean(pageId) && shelvedPageIds(pages).has(pageId);
+}
+
+/** The outermost archived (shelved) ancestor of `pageId` (or the page itself),
+ *  or null when neither the page nor any ancestor is shelved. */
+export function shelvedRoot(pages: Record<string, NotePage>, pageId: string | null | undefined): NotePage | null {
+  if (!pageId || inTrash(pages, pageId)) return null;
+  return pageAncestry(pages, pageId).find((page) => Boolean(page.shelved)) ?? null;
 }
 
 /** Non-purging descendant counts for every page, computed in one O(N) pass. */

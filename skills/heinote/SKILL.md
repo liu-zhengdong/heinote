@@ -76,8 +76,8 @@ heinote auth-request --name "<你的 Agent 名>" --access read
 
 ```sh
 heinote pages [--full]                        # 列出页面（默认 id/title/kind 摘要）
-heinote search <query> [--space S] [--limit N] [--offset N]
-                                              # 搜标题与正文；返回 {hits,total,hasMore,nextOffset}
+heinote search <query> [--space S] [--include-archived] [--limit N] [--offset N]
+                                              # 搜标题与正文（默认不含已归档）；返回 {hits,total,archivedTotal,hasMore,nextOffset}
 heinote page <id>                             # 读页面与块树（完整 JSON）
 heinote markdown <id> [--out F]               # 读正文 Markdown（块树的可读投影，默认 stdout）
 heinote create-page --title T [--text STR | --markdown STR] [--parent-id P] [--space-id S]
@@ -110,8 +110,9 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 `--request-id auto`（确定性标识）或 `--request-id <值>`。
 
 `search` 的每条 `hits` 含 `id`、`title`、`scope`、`space`、`crumb`，正文命中
-时另有 `excerpt`。搜索忽略大小写，也忽略全角/半角与 NFC/NFD 的写法差异；
-显示的文字仍是页面原文。
+时另有 `excerpt`，归档命中带 `archived: true`。默认仅返回活跃页面，响应中
+`archivedTotal` 告知归档命中总数；加 `--include-archived` 先返活跃再返归档。
+搜索忽略大小写，也忽略全角/半角与 NFC/NFD 的写法差异；显示的文字仍是页面原文。
 
 `upload` 的 `--path` 必须以 `files/` 开头。段内可以用中文和 emoji，但不能
 含 `\ : * ? " < > |` 或控制字符，不能以空格、点结尾，也不能用 `con`、`nul`、

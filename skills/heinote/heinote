@@ -178,6 +178,8 @@ def cmd_search(client, a):
     params = {"q": a.query}
     if a.space:
         params["space"] = a.space
+    if a.include_archived:
+        params["include_archived"] = "true"
     if a.limit is not None:
         params["limit"] = a.limit
     if a.offset:
@@ -612,6 +614,7 @@ def build_parser():
     sp = sub.add_parser("search", help="跨空间搜索页面（个人 + 团队知识库）")
     sp.add_argument("query", help="搜索关键词")
     sp.add_argument("--space", help="限定空间：personal 或空间 ID")
+    sp.add_argument("--include-archived", action="store_true", help="包含已归档页面与已归档团队知识库")
     sp.add_argument("--limit", type=int, help="每页条数，默认 12，上限 100")
     sp.add_argument("--offset", type=int, default=0)
     sp.set_defaults(fn=cmd_search)

@@ -329,6 +329,11 @@ export default schema({
         archived: t.bool().optional(),
         /** When it went to the trash. */
         archived_at: t.string().optional(),
+        /** Put away once a project is done: still editable, tucked out of the
+         *  active sidebar and folded in search (inherited by descendants). */
+        shelved: t.bool().optional(),
+        /** When it was archived (shelved). */
+        shelved_at: t.string().optional(),
         /** Set by the server once permanent deletion is queued for background purge. */
         purging: t.bool().optional(),
         /** Where it stands among its database's rows, as a moment in

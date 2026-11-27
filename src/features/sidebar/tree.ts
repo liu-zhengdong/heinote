@@ -1,5 +1,5 @@
 import { pageName } from "../../core/block-tree";
-import { inTrash, isBareRow } from "../../core/page-tree";
+import { inTrash, isBareRow, isShelved } from "../../core/page-tree";
 import type { NotePage, SidebarSort } from "../../core/types";
 import { outsideLinks, referenceIndex } from "../editor/mentions";
 
@@ -158,17 +158,41 @@ export function buildTree(pages: Record<string, NotePage>, sort: SidebarSort): P
   const children = new Map<string, NotePage[]>();
   const left = unlisted(pages);
   for (const page of Object.values(pages)) {
-    if (!page?.id || inTrash(pages, page.id) || left.has(page.id)) continue;
+    if (!page?.id || inTrash(pages, page.id) || isShelved(pages, page.id) || left.has(page.id)) continue;
     const parent = page.parent_id ? pages[page.parent_id] : undefined;
     if (!parent) {
       roots.push(page);
       continue;
     }
-    // Inside a page in the trash: not in the tree.
-    if (inTrash(pages, parent.id) || left.has(parent.id)) continue;
+    // Inside a page in the trash or shelved: not in the active tree.
+    if (inTrash(pages, parent.id) || isShelved(pages, parent.id) || left.has(parent.id)) continue;
     const siblings = children.get(parent.id);
     if (siblings) siblings.push(page);
     else children.set(parent.id, [page]);
+  }
+  const compare = comparePages(sort);
+  roots.sort(compare);
+  for (const siblings of children.values()) siblings.sort(compare);
+  return { roots, children };
+}
+
+/** Tree of archived (shelved) project roots and their descendants, for the
+ *  collapsible "已归档" section at the bottom of the sidebar. */
+export function buildShelvedTree(pages: Record<string, NotePage>, sort: SidebarSort): PageTree {
+  const roots: NotePage[] = [];
+  const children = new Map<string, NotePage[]>();
+  const left = unlisted(pages);
+  for (const page of Object.values(pages)) {
+    if (!page?.id || inTrash(pages, page.id) || !isShelved(pages, page.id) || left.has(page.id)) continue;
+    const parent = page.parent_id ? pages[page.parent_id] : undefined;
+    const parentShelved = Boolean(parent && !inTrash(pages, parent.id) && isShelved(pages, parent.id) && !left.has(parent.id));
+    if (!parentShelved) {
+      roots.push(page);
+      continue;
+    }
+    const siblings = children.get(parent!.id);
+    if (siblings) siblings.push(page);
+    else children.set(parent!.id, [page]);
   }
   const compare = comparePages(sort);
   roots.sort(compare);
@@ -234,7 +258,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
     if (before === after) continue;
     if (!after) return false;
     if (before.title !== after.title || before.icon !== after.icon || before.icon_image !== after.icon_image || before.parent_id !== after.parent_id
-      || before.archived !== after.archived || before.purging !== after.purging || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
+      || before.archived !== after.archived || before.shelved !== after.shelved || before.purging !== after.purging || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
     if (sort === "manual" && (before.sidebar_order !== after.sidebar_order || before.created_at !== after.created_at)) return false;
     if (byTime && (before.updated_at !== after.updated_at || before.created_at !== after.created_at)) return false;
     if (!after.title && pageName(before) !== pageName(after)) return false;

@@ -1,4 +1,6 @@
 import {
+  Archive,
+  ArchiveRestore,
   Clock3,
   Copy,
   CornerDownRight,
@@ -23,7 +25,7 @@ import { useFold } from "../../hooks/useFold";
 import { imeComposing } from "../../core/keyboard";
 import type { NotePage } from "../../core/types";
 import { lineLink, pageName } from "../../core/block-tree";
-import { inTrash } from "../../core/page-tree";
+import { inTrash, shelvedRoot } from "../../core/page-tree";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { LAND_EVENT, requestLanding } from "../editor/landing";
@@ -64,6 +66,7 @@ export function PageActions({
   const {
     selectedPageId,
     selectPage,
+    setPageShelved,
     archivePage,
     duplicatePage,
     copyPageTo,
@@ -77,6 +80,7 @@ export function PageActions({
     toggleFavorite,
     canEdit,
     canMovePage,
+    canShelvePage,
     canTrashPage,
     spaces,
     spaceOf,
@@ -108,6 +112,9 @@ export function PageActions({
   const moreRef = useRef<HTMLButtonElement | null>(null);
 
   const editable = canEdit(page.id);
+  const shelvedBy = useWorkspaceState((state) => shelvedRoot(state.pages, page.id));
+  const shelveTargetId = shelvedBy?.id ?? page.id;
+  const shelvable = canShelvePage(shelveTargetId);
   const trashable = canTrashPage(page.id);
   const spaceId = spaceOf(page.id);
   const library = spaces[spaceId ?? ""]?.knowledgeBase;
@@ -305,15 +312,28 @@ export function PageActions({
               shortcut that does the same thing from anywhere. */}
           <MenuItem icon={<Undo2 size={16} />} label="Undo" hint="⌘Z" disabled={!canUndo()} onSelect={() => { setMoreAnchor(null); undo(); }} />
           <MenuItem icon={<Redo2 size={16} />} label="Redo" hint="⌘⇧Z" disabled={!canRedo()} onSelect={() => { setMoreAnchor(null); redo(); }} />
-          {trashable ? (
+          {shelvable || trashable ? (
             <>
               <MenuDivider />
-              <MenuItem
-                icon={<Trash2 size={16} />}
-                label="Move to trash"
-                tone="danger"
-                onSelect={() => { setMoreAnchor(null); archivePage(page.id); toast("Moved to trash", "success"); }}
-              />
+              {shelvable ? (
+                <MenuItem
+                  icon={shelvedBy ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+                  label={shelvedBy ? (shelvedBy.id === page.id ? "取消归档" : `取消「${pageName(shelvedBy)}」归档`) : "归档"}
+                  onSelect={() => {
+                    setMoreAnchor(null);
+                    setPageShelved(shelveTargetId, !shelvedBy);
+                    toast(shelvedBy ? "已取消归档" : "已归档，默认在搜索中折叠", "success");
+                  }}
+                />
+              ) : null}
+              {trashable ? (
+                <MenuItem
+                  icon={<Trash2 size={16} />}
+                  label="Move to trash"
+                  tone="danger"
+                  onSelect={() => { setMoreAnchor(null); archivePage(page.id); toast("Moved to trash", "success"); }}
+                />
+              ) : null}
             </>
           ) : null}
         </MenuList>

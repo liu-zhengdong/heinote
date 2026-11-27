@@ -19,7 +19,7 @@ import type {
   SpaceSummary,
   WorkspacePreferences,
 } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canShelvePage as canShelvePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
 import {
   WorkspaceHistory,
   type HistoryFocus,
@@ -94,6 +94,8 @@ export interface WorkspaceActionsValue {
   /** Keeps a checkpoint of the page in its history. False when the page is
    *  too large for one: nothing is kept. */
   checkpointPage(pageId: string, summary: string): boolean;
+  /** Archive (shelve) or unarchive a completed project page tree. */
+  setPageShelved(pageId: string, shelved: boolean): void;
   /** To the trash. The page's block leaves its parent's body with it and is
    *  kept for a restore. */
   archivePage(pageId: string): void;
@@ -120,6 +122,8 @@ export interface WorkspaceActionsValue {
   canMovePage(pageId: string, targetId?: string | null): boolean;
   /** Whether this member may reorder a page among its current siblings. */
   canOrderPage(pageId: string): boolean;
+  /** Whether this member may archive (shelve) or unarchive a page (`canShelvePage`). */
+  canShelvePage(pageId: string): boolean;
   /** Whether this member may move a page to the trash (`canTrashPage`). */
   canTrashPage(pageId: string): boolean;
   canRestorePage(pageId: string): boolean;
@@ -555,6 +559,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [spaces, store],
   );
 
+  const canShelvePage = useCallback(
+    (pageId: string) => canShelvePageIn(store.getState().pages, spaces, pageId),
+    [spaces, store],
+  );
+
   const canTrashPage = useCallback(
     (pageId: string) => canTrashPageIn(store.getState().pages, spaces, pageId),
     [spaces, store],
@@ -604,6 +613,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     commitWrites: commit,
     commitPageOps,
     checkpointPage: pageOps.checkpointPage,
+    setPageShelved: pageOps.setPageShelved,
     archivePage: pageOps.archivePage,
     restorePage: pageOps.restorePage,
     deletePage: pageOps.deletePage,
@@ -615,6 +625,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     canEdit,
     canMovePage,
     canOrderPage,
+    canShelvePage,
     canTrashPage,
     canRestorePage,
     canDeletePage,
@@ -650,6 +661,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     commit,
     commitPageOps,
     pageOps.checkpointPage,
+    pageOps.setPageShelved,
     pageOps.archivePage,
     pageOps.restorePage,
     pageOps.deletePage,
@@ -661,6 +673,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     canEdit,
     canMovePage,
     canOrderPage,
+    canShelvePage,
     canTrashPage,
     canRestorePage,
     canDeletePage,

@@ -1,4 +1,4 @@
-import { inTrash, spaceOfPage } from "./page-tree";
+import { inTrash, isShelved, spaceOfPage } from "./page-tree";
 import type { NotePage, SpaceSummary, WorkspaceState } from "./types";
 
 /** Ordinary shared pages stay in the existing personal navigation. */
@@ -13,10 +13,11 @@ export function pagesInSpace(pages: Record<string, NotePage>, spaces: Record<str
 
 export function firstPageInSpace(state: WorkspaceState, spaces: Record<string, SpaceSummary>, spaceId: string, rememberedId?: string): string {
   const available = (id: string) => Boolean(state.pages[id] && !inTrash(state.pages, id) && navigationSpaceOf(state.pages, spaces, id) === spaceId);
+  const active = (id: string) => available(id) && !isShelved(state.pages, id);
   if (rememberedId && available(rememberedId)) return rememberedId;
   if (spaceId !== "personal") {
     const home = spaces[spaceId]?.knowledgeBase?.homePageId;
     return home && available(home) ? home : "";
   }
-  return state.roots.find(available) ?? Object.keys(state.pages).find(available) ?? "";
+  return state.roots.find(active) ?? Object.keys(state.pages).find(active) ?? state.roots.find(available) ?? Object.keys(state.pages).find(available) ?? "";
 }

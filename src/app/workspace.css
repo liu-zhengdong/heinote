@@ -364,17 +364,27 @@
   color: var(--danger);
 }
 
-.trash-banner > span {
+.trash-banner > span,
+.shelved-banner > span {
   flex: 1;
 }
 
-.trash-banner .btn {
+.trash-banner .btn,
+.shelved-banner .btn {
   min-height: 26px;
   font-size: 13px;
 }
 
-.trash-banner .btn--outline {
+.trash-banner .btn--outline,
+.shelved-banner .btn--outline {
   background: var(--paper);
+}
+
+/* Archived project page: calm neutral notice, content stays editable. */
+.shelved-banner {
+  padding-block: 5px;
+  background: var(--fill);
+  color: var(--ink-2);
 }
 
 /* A full-page database fills the pane (min-height: 100%). Under the notice it

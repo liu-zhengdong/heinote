@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canDeletePage, canMovePage, canOrderPage, canRestorePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
+import { canDeletePage, canMovePage, canOrderPage, canRestorePage, canShelvePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, isShelved, pageHolders, shelvedRoot, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
 import type { NotePage, WorkspaceState } from "./types";
 import { emptyWorkspace } from "./workspace-state";
 
@@ -232,5 +232,45 @@ describe("UC-57: multi-level trash, purging state, and descendant counts", () =>
     expect(canOrderPage(pages, activeKb, "kbChild")).toBe(true);
     expect(canOrderPage(pages, viewerKb, "kbChild")).toBe(false);
     expect(canOrderPage(pages, archivedKb, "kbChild")).toBe(false);
+  });
+
+  it("UC-63: inherits shelved state across subtrees and enforces shelve permissions", () => {
+    const pages = workspace(
+      page("liveRoot"),
+      page("liveChild", { parent_id: "liveRoot" }),
+      page("project", { shelved: true, shelved_at: "2026-11-27T00:00:00Z" }),
+      page("uc1", { parent_id: "project" }),
+      page("uc1Sub", { parent_id: "uc1", shelved: true }),
+      page("trashedShelved", { shelved: true, archived: true }),
+      page("sharedRoot", { share_space_id: "space_s" }),
+      page("sharedChild", { parent_id: "sharedRoot" }),
+      page("kbHome", { share_space_id: "space_kb" }),
+      page("kbChild", { parent_id: "kbHome" }),
+    ).pages;
+
+    expect(isShelved(pages, "liveRoot")).toBe(false);
+    expect(isShelved(pages, "liveChild")).toBe(false);
+    expect(isShelved(pages, "project")).toBe(true);
+    expect(isShelved(pages, "uc1")).toBe(true);
+    expect(isShelved(pages, "uc1Sub")).toBe(true);
+    expect(shelvedRoot(pages, "liveChild")).toBeNull();
+    expect(shelvedRoot(pages, "project")?.id).toBe("project");
+    expect(shelvedRoot(pages, "uc1")?.id).toBe("project");
+    // Outermost shelved ancestor wins so unarchiving never leaves a child stuck under an archived parent.
+    expect(shelvedRoot(pages, "uc1Sub")?.id).toBe("project");
+    expect(shelvedRoot(pages, "trashedShelved")).toBeNull();
+
+    expect(canShelvePage(pages, {}, "project")).toBe(true);
+    expect(canShelvePage(pages, {}, "trashedShelved")).toBe(false);
+    expect(canShelvePage(pages, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canShelvePage(pages, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    expect(canShelvePage(pages, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+    expect(canShelvePage(pages, { space_s: { role: "viewer" } }, "sharedChild")).toBe(false);
+
+    const activeKb = { space_kb: { role: "editor", knowledgeBase: { homePageId: "kbHome", archived: false } } };
+    const archivedKb = { space_kb: { role: "owner", knowledgeBase: { homePageId: "kbHome", archived: true } } };
+    expect(canShelvePage(pages, activeKb, "kbHome")).toBe(false);
+    expect(canShelvePage(pages, activeKb, "kbChild")).toBe(true);
+    expect(canShelvePage(pages, archivedKb, "kbChild")).toBe(false);
   });
 });

@@ -242,3 +242,128 @@ test("UC-35: folds width and composition before comparing", async (t) => {
   const excerpt = ok(await agent.search("q=abc")).hits.find((hit: Json) => hit.title === "全角检索页").excerpt;
   assert.match(excerpt, /ＡＢＣ/);
 });
+
+// UC-63: shelved project subtrees and archived knowledge bases stay out of
+// default search results, report archivedTotal, and can be included explicitly.
+test("UC-63: excludes shelved subtrees and archived knowledge bases by default and supports include_archived", async (t) => {
+  const { owner, browser, agent } = await fixture(t);
+  const activeProject = await agent.makePage({ title: "活跃项目 认证方案", text: "认证设计进行中。" });
+  const oldProject = await agent.makePage({ title: "旧项目 认证总览", text: "旧项目概览。" });
+  const oldUc = await agent.makePage({ title: "UC-01 认证登录", text: "旧账本专属关键词。", parentId: oldProject.id });
+
+  const kb = await makeKb(owner, "历史归档库");
+  const kbDoc = await agent.makePage({ title: "知识库 认证规范", text: "已归档知识库文档。", scope: kb.spaceId });
+
+  // Archive (shelve) the old project root via record batch — descendants inherit it.
+  const scope = oldProject.collaboration.scope;
+  ok(await owner.request("/api/records/batch", {
+    method: "POST",
+    body: {
+      requestId: randomUUID(),
+      expectedPages: [{ scope, pageId: oldProject.id, generation: oldProject.collaboration.generation, revision: oldProject.revision }],
+      writes: [{
+        scope,
+        collection: "pages",
+        id: oldProject.id,
+        action: "patch",
+        base: oldProject.page,
+        patch: { shelved: true, shelved_at: new Date().toISOString() },
+      }],
+    },
+  }));
+
+  // Archive the team knowledge base via KB lifecycle API.
+  ok(await owner.request(`/api/knowledge-bases/${kb.spaceId}/archive`, {
+    method: "POST",
+    body: { requestId: randomUUID(), revision: kb.knowledgeBase.revision, archived: true },
+  }));
+
+  // Default search: only active page returned, archivedTotal counts all 3 archived hits (oldProject, oldUc, kbDoc).
+  const defaultRes = ok(await agent.search("q=认证"));
+  assert.deepEqual(defaultRes.hits.map((hit: Json) => hit.id), [activeProject.id]);
+  assert.equal(defaultRes.total, 1);
+  assert.equal(defaultRes.archivedTotal, 3);
+
+  // include_archived=true: active hits first, then archived hits tagged archived: true.
+  const includeRes = ok(await agent.search("q=认证&include_archived=true"));
+  assert.equal(includeRes.hits[0].id, activeProject.id);
+  assert.equal(includeRes.hits[0].archived, undefined);
+  assert.equal(includeRes.total, 4);
+  assert.equal(includeRes.archivedTotal, 3);
+  const archivedPart = includeRes.hits.slice(1);
+  assert.deepEqual(archivedPart.map((hit: Json) => hit.id).sort(), [oldProject.id, oldUc.id, kbDoc.id].sort());
+  for (const hit of archivedPart) assert.equal(hit.archived, true);
+
+  // include_archived=only: returns only the archived matches.
+  const onlyRes = ok(await agent.search("q=认证&include_archived=only"));
+  assert.equal(onlyRes.total, 3);
+  assert.equal(onlyRes.archivedTotal, 3);
+  assert.deepEqual(onlyRes.hits.map((hit: Json) => hit.id).sort(), [oldProject.id, oldUc.id, kbDoc.id].sort());
+
+  // Archive-only keyword: default hits empty, archivedTotal=1, include_archived=only finds the descendant UC card.
+  const exclusiveDefault = ok(await agent.search("q=旧账本"));
+  assert.equal(exclusiveDefault.total, 0);
+  assert.equal(exclusiveDefault.archivedTotal, 1);
+  const exclusiveOnly = ok(await agent.search("q=旧账本&include_archived=only"));
+  assert.deepEqual(exclusiveOnly.hits.map((hit: Json) => hit.id), [oldUc.id]);
+  assert.equal(exclusiveOnly.hits[0].archived, true);
+
+  // Copying a shelved page creates an active copy at destination.
+  const copied = ok(await agent.request(`/pages/${oldProject.id}/copy`, {
+    method: "POST",
+    body: { requestId: randomUUID() },
+  }), 201);
+  assert.equal(copied.page.shelved, undefined);
+  const afterCopy = ok(await agent.search("q=旧账本"));
+  assert.equal(afterCopy.total, 1);
+
+  // Server permission guard: KB home page cannot be shelved.
+  const activeKb = await makeKb(owner, "活跃库");
+  const homeDto = ok(await agent.request(`/pages/${activeKb.knowledgeBase.homePageId}`));
+  const homeShelve = await owner.request("/api/records/batch", {
+    method: "POST",
+    body: {
+      requestId: randomUUID(),
+      expectedPages: [{ scope: activeKb.spaceId, pageId: homeDto.id, generation: homeDto.collaboration.generation, revision: homeDto.revision }],
+      writes: [{
+        scope: activeKb.spaceId,
+        collection: "pages",
+        id: homeDto.id,
+        action: "patch",
+        base: homeDto.page,
+        patch: { shelved: true },
+      }],
+    },
+  });
+  assert.equal(homeShelve.status, 403);
+
+  // Server permission guard: non-owner editor cannot shelve an ordinary shared root page.
+  const sharedRoot = await agent.makePage({ title: "共享根项目", text: "" });
+  const sharedSpace = ok(await owner.request("/api/spaces", {
+    method: "POST",
+    body: { name: "共享根项目" },
+  }), 201);
+  ok(await owner.request(`/api/pages/${sharedRoot.id}/transfer`, {
+    method: "POST",
+    body: { action: "share", spaceId: sharedSpace.spaceId },
+  }));
+  const editor = browser();
+  await register(editor, "shared_editor");
+  await invite(owner, editor, sharedSpace.spaceId, "shared_editor", "editor");
+  const editorRoot = ok(await editor.request(`/api/records/${sharedSpace.spaceId}/pages`)).find((row: Json) => row.id === sharedRoot.id);
+  const deniedShelve = await editor.request("/api/records/batch", {
+    method: "POST",
+    body: {
+      requestId: randomUUID(),
+      writes: [{
+        scope: sharedSpace.spaceId,
+        collection: "pages",
+        id: sharedRoot.id,
+        action: "patch",
+        base: editorRoot.value,
+        patch: { shelved: true },
+      }],
+    },
+  });
+  assert.equal(deniedShelve.status, 403);
+});

@@ -1,4 +1,4 @@
-import { CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Archive, CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { routes } from "../platform/schema";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
@@ -20,7 +20,7 @@ import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
 import { imeComposing } from "../core/keyboard";
 import { useUi } from "./ui-context";
 import { pageName } from "../core/block-tree";
-import { descendantCount, inTrash, isPurging, pageAncestry } from "../core/page-tree";
+import { descendantCount, inTrash, isPurging, pageAncestry, shelvedRoot } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
 
@@ -48,7 +48,7 @@ function AppPageShell({ pageId }: { pageId: string }) {
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canRestorePage, canDeletePage, graphOpen, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
+    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canShelvePage, canRestorePage, canDeletePage, graphOpen, setPageShelved, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { user, githubOutcome, clearGithubOutcome } = useSession();
@@ -115,6 +115,10 @@ export function App() {
   ));
   const trashedTitle = useWorkspaceState((state) => trashedAt && state.pages[trashedAt] ? pageName(state.pages[trashedAt]) || "Untitled" : "");
   const trashedChildCount = useWorkspaceState((state) => (trashedAt ? descendantCount(state.pages, trashedAt) : 0));
+  const shelvedBy = useWorkspaceState((state) => (
+    !selectedPageId || isPurging(state.pages, selectedPageId) ? null : shelvedRoot(state.pages, selectedPageId)
+  ));
+  const shelvedTitle = useWorkspaceState((state) => (shelvedBy && state.pages[shelvedBy.id] ? pageName(state.pages[shelvedBy.id]) || "Untitled" : ""));
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const removeTrashedPage = useCallback(async () => {
@@ -367,6 +371,24 @@ export function App() {
               <div className="history-banner" role="status">
                 <Eye size={14} />
                 <span>You can only view this page.</span>
+              </div>
+            ) : shelvedBy ? (
+              <div className="history-banner shelved-banner" role="status">
+                <Archive size={14} />
+                <span>
+                  {shelvedBy.id === selectedPageId
+                    ? "此页面已归档 · 搜索中默认折叠，内容仍可编辑"
+                    : `随「${shelvedTitle}」已归档 · 搜索中默认折叠，内容仍可编辑`}
+                </span>
+                {canShelvePage(shelvedBy.id) ? (
+                  <button
+                    type="button"
+                    className="btn btn--outline"
+                    onClick={() => { setPageShelved(shelvedBy.id, false); toast("已取消归档", "success"); }}
+                  >
+                    取消归档
+                  </button>
+                ) : null}
               </div>
             ) : null}
 

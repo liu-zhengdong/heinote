@@ -1,6 +1,9 @@
 import {
   AppWindow,
+  Archive,
+  ArchiveRestore,
   ArrowUpNarrowWide,
+  ChevronRight,
   ChevronsDownUp,
   Copy,
   FileText,
@@ -45,8 +48,8 @@ import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
-import { descendantPageIds, inTrash, isPurging, pageAncestry, spaceOfPage } from "../../core/page-tree";
-import { buildTree, countTree, flattenTree, linkedFromOutside, planSidebarReorder, sameListing, SORT_LABELS, type PageTree } from "./tree";
+import { descendantPageIds, inTrash, isPurging, pageAncestry, shelvedRoot, spaceOfPage } from "../../core/page-tree";
+import { buildShelvedTree, buildTree, countTree, flattenTree, linkedFromOutside, planSidebarReorder, sameListing, SORT_LABELS, type PageTree } from "./tree";
 import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
@@ -96,6 +99,7 @@ export function Sidebar() {
     sidebarSort,
     setSidebarSort,
     rosters,
+    setPageShelved,
     archivePage,
     createPage,
     duplicatePage,
@@ -108,6 +112,7 @@ export function Sidebar() {
     canEdit,
     canMovePage,
     canOrderPage,
+    canShelvePage,
     canTrashPage,
     canDeletePage,
     deletePage,
@@ -137,6 +142,7 @@ export function Sidebar() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [resizing, setResizing] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(readExpanded);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   const [rootDrop, setRootDrop] = useState(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const draggingIdRef = useRef<string | null>(null);
@@ -162,6 +168,7 @@ export function Sidebar() {
   );
   const view: SidebarView = inLibrary && preferences.sidebar_view === "shared" ? "files" : preferences.sidebar_view;
   const tree = useMemo(() => buildTree(pages, sort), [pages, sort]);
+  const shelvedTree = useMemo(() => buildShelvedTree(pages, sort), [pages, sort]);
   const favorites = useMemo(
     () => preferences.favorites.flatMap((id): NotePage[] => (pages[id] && !inTrash(pages, id) ? [pages[id]] : [])),
     [pages, preferences.favorites],
@@ -457,7 +464,7 @@ export function Sidebar() {
     }
     const targetPage = pages[target.pageId];
     if (!targetPage) return null;
-    const targetChildren = tree.children.get(targetPage.id) ?? [];
+    const targetChildren = tree.children.get(targetPage.id) ?? shelvedTree.children.get(targetPage.id) ?? [];
     const targetCanHold = targetPage.kind === "document" && canEdit(targetPage.id);
     if (target.position === "inside") {
       const rest = draggedPageId ? targetChildren.filter((item) => item.id !== draggedPageId) : targetChildren;
@@ -467,7 +474,7 @@ export function Sidebar() {
       return { targetParentId: targetPage.id, siblings: targetChildren, insertIndex: 0, indicatorDepth: rowDepth + 1, revealId: targetPage.id, explicitOrder: true };
     }
     const targetParentId = targetPage.parent_id ?? null;
-    const siblings = targetParentId ? (tree.children.get(targetParentId) ?? []) : tree.roots;
+    const siblings = targetParentId ? (tree.children.get(targetParentId) ?? shelvedTree.children.get(targetParentId) ?? []) : tree.roots;
     const rest = draggedPageId ? siblings.filter((item) => item.id !== draggedPageId) : siblings;
     const index = rest.findIndex((item) => item.id === targetPage.id);
     if (index < 0) return null;
@@ -936,7 +943,27 @@ export function Sidebar() {
               {tree.roots.length ? renderList(tree.roots, 0, 0) : !directoryLoading ? (
                 writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
                   <Plus size={15} />New page
-                </button> : <div className="sidebar__empty"><p>当前空间没有页面</p></div>
+                </button> : !shelvedTree.roots.length ? <div className="sidebar__empty"><p>当前空间没有页面</p></div> : null
+              ) : null}
+              {shelvedTree.roots.length ? (
+                <section className="sidebar__group sidebar__archived" aria-label="已归档">
+                  <button
+                    type="button"
+                    className="sidebar__archived-toggle"
+                    aria-expanded={archivedOpen}
+                    onClick={() => setArchivedOpen((open) => !open)}
+                  >
+                    <ChevronRight size={13} className={`sidebar__archived-chevron ${archivedOpen ? "is-open" : ""}`} aria-hidden="true" />
+                    <Archive size={13} aria-hidden="true" />
+                    <span>已归档</span>
+                    <span className="sidebar__archived-count">{shelvedTree.roots.length}</span>
+                  </button>
+                  {archivedOpen ? (
+                    <div className="sidebar__archived-list">
+                      {shelvedTree.roots.map((page) => branch(page, 0, shelvedTree))}
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
               {directoryLoading ? <div className="sidebar__empty" aria-busy="true"><p>正在加载目录…</p></div> : null}
             </>
@@ -997,6 +1024,9 @@ export function Sidebar() {
   );
 
   const menuEditable = menuPage ? canEdit(menuPage.id) : false;
+  const menuShelvedBy = menuPage ? shelvedRoot(pages, menuPage.id) : null;
+  const menuShelveTargetId = menuShelvedBy?.id ?? menuPage?.id ?? "";
+  const menuShelvable = Boolean(menuPage && canShelvePage(menuShelveTargetId));
   const menuTrashable = menuPage ? canTrashPage(menuPage.id) : false;
   const menuIsHome = Boolean(menuPage && activeSpace?.knowledgeBase?.homePageId === menuPage.id);
   const menuSpaceId = menuPage ? spaceOfPage(pages, menuPage.id) : undefined;
@@ -1194,15 +1224,28 @@ export function Sidebar() {
                 <MenuItem icon={<FileText size={16} />} label="Rename" onSelect={() => { setRenaming(menuPage.id); setRowMenu(null); }} />
               </>
             ) : null}
-            {menuTrashable ? (
+            {menuShelvable || menuTrashable ? (
               <>
                 <MenuDivider />
-                <MenuItem
-                  icon={<Trash2 size={16} />}
-                  label="Move to trash"
-                  tone="danger"
-                  onSelect={() => { archivePage(menuPage.id); setRowMenu(null); toast("Moved to trash", "success"); }}
-                />
+                {menuShelvable ? (
+                  <MenuItem
+                    icon={menuShelvedBy ? <ArchiveRestore size={16} /> : <Archive size={16} />}
+                    label={menuShelvedBy ? (menuShelvedBy.id === menuPage.id ? "取消归档" : `取消「${pageName(menuShelvedBy)}」归档`) : "归档"}
+                    onSelect={() => {
+                      setPageShelved(menuShelveTargetId, !menuShelvedBy);
+                      setRowMenu(null);
+                      toast(menuShelvedBy ? "已取消归档" : "已归档，默认在搜索中折叠", "success");
+                    }}
+                  />
+                ) : null}
+                {menuTrashable ? (
+                  <MenuItem
+                    icon={<Trash2 size={16} />}
+                    label="Move to trash"
+                    tone="danger"
+                    onSelect={() => { archivePage(menuPage.id); setRowMenu(null); toast("Moved to trash", "success"); }}
+                  />
+                ) : null}
               </>
             ) : null}
           </MenuList>

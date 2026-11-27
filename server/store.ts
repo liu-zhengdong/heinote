@@ -620,13 +620,14 @@ export class Store {
           }
           if (!scope.startsWith("user:") && !this.knowledgeBases.get(scope) && (write.action === "patch" || write.action === "put")) {
             const touchingArchived = write.action === "patch"
-              ? Boolean(write.patch && "archived" in write.patch)
+              ? Boolean(write.patch && ("archived" in write.patch || "shelved" in write.patch))
               : true;
             if (touchingArchived) {
               const existing = this.record(scope, "pages", write.id);
-              const nextArchived = write.action === "patch" ? write.patch?.archived : write.value?.archived;
-              if (existing?.share_space_id === scope && Boolean(nextArchived) !== Boolean(existing.archived) && this.role(actor, scope) !== "owner") {
-                fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+              const nextArchived = write.action === "patch" ? ("archived" in (write.patch ?? {}) ? write.patch?.archived : existing?.archived) : write.value?.archived;
+              const nextShelved = write.action === "patch" ? ("shelved" in (write.patch ?? {}) ? write.patch?.shelved : existing?.shelved) : write.value?.shelved;
+              if (existing?.share_space_id === scope && (Boolean(nextArchived) !== Boolean(existing.archived) || Boolean(nextShelved) !== Boolean(existing.shelved)) && this.role(actor, scope) !== "owner") {
+                fail(403, "只有所有者可以移入、归档或恢复共享根页面。", "owner_required");
               }
             }
           }
@@ -756,8 +757,8 @@ export class Store {
               if (scope !== `user:${actor.user.id}` && next.share_space_id !== scope) fail(400, "分享空间不一致。");
             }
             if (current && current.share_space_id !== next.share_space_id && scope !== `user:${actor.user.id}` && this.role(actor, scope) !== "owner") fail(403, "只有所有者可修改分享位置。", "owner_required");
-            if (current && !library && !scope.startsWith("user:") && current.share_space_id === scope && Boolean(next.archived) !== Boolean(current.archived) && this.role(actor, scope) !== "owner") {
-              fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+            if (current && !library && !scope.startsWith("user:") && current.share_space_id === scope && (Boolean(next.archived) !== Boolean(current.archived) || Boolean(next.shelved) !== Boolean(current.shelved)) && this.role(actor, scope) !== "owner") {
+              fail(403, "只有所有者可以移入、归档或恢复共享根页面。", "owner_required");
             }
             markRawPage(scope, write.id, current ? "updated" : "created");
           } else if (write.collection === "blocks") {
@@ -934,7 +935,7 @@ export class Store {
       };
       if (library) {
         const home = getPage(library.homePageId);
-        if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
+        if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived || home.shelved) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
       }
       for (const pageId of touched.putPages) {
         const page = getPage(pageId);
@@ -1006,7 +1007,7 @@ export class Store {
     const pages = new Map(this.records(scope, "pages").map((row) => [row.id, row.value]));
     if (library) {
       const home = pages.get(library.homePageId);
-      if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
+      if (!home || home.parent_id != null || home.share_space_id !== scope || home.archived || home.shelved) fail(403, "知识库首页不能删除、归档或移动。", "knowledge_base_home");
     }
     for (const [pageId, page] of pages) {
       if (library && pageId !== library.homePageId && page.share_space_id !== undefined) fail(400, "知识库页面必须继承首页的空间。", "knowledge_base_boundary");
@@ -1125,8 +1126,8 @@ export class Store {
         if (page.share_space_id && (!existing || existing.share_space_id !== page.share_space_id) && !this.ownsScope(who, scope)) {
           fail(403, "只有所有者可设置分享位置。", "owner_required");
         }
-        if (existing?.share_space_id === scope && Boolean(page.archived) !== Boolean(existing.archived) && !this.ownsScope(who, scope)) {
-          fail(403, "只有所有者可以移入或恢复共享根页面。", "owner_required");
+        if (existing?.share_space_id === scope && (Boolean(page.archived) !== Boolean(existing.archived) || Boolean(page.shelved) !== Boolean(existing.shelved)) && !this.ownsScope(who, scope)) {
+          fail(403, "只有所有者可以移入、归档或恢复共享根页面。", "owner_required");
         }
       }
       const { block_tree, title, title_content, parent_id, ...fields } = page;

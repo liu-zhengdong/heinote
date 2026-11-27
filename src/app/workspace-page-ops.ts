@@ -5,7 +5,7 @@ import { databaseRows, newDatabaseConfig, rowKey, rowOrderAfter } from "../featu
 import { markFresh } from "../features/database/fresh";
 import { reidentify } from "../features/editor/editor-commands";
 import type { BlockMutation, BlockTree, DatabaseConfig, NotePage, PageVersion, SpaceSummary } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canShelvePage as canShelvePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
 import { comparePages, nextSidebarOrder, planSidebarReorder } from "../features/sidebar/tree";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { renamedTitle } from "../core/title";
@@ -212,6 +212,10 @@ export function useWorkspacePageOps({
         updated_by: author,
       };
       delete copy.share_space_id;
+      if (originalId === pageId) {
+        delete copy.shelved;
+        delete copy.shelved_at;
+      }
       // A row copied with its database keeps its place among the rows; the
       // row copied by itself goes right after the original.
       const database = original.parent_id ? document.state.pages[original.parent_id] : undefined;
@@ -421,6 +425,21 @@ export function useWorkspacePageOps({
     if (leaving && leaving !== selectedPageId) checkpointPage(leaving, "Edited page");
   }, [checkpointPage, selectedPageId]);
 
+  const setPageShelved = useCallback((pageId: string, shelved: boolean) => {
+    if (!document || !platform) return;
+    if (!canShelvePageIn(document.state.pages, spacesRef.current, pageId)) return;
+    const current = document.state.pages[pageId];
+    if (!current || Boolean(current.shelved) === shelved) return;
+    commit([
+      shelved
+        ? { type: "set", path: ["pages", pageId, "shelved"], value: true }
+        : { type: "delete", path: ["pages", pageId, "shelved"] },
+      shelved
+        ? { type: "set", path: ["pages", pageId, "shelved_at"], value: new Date().toISOString() }
+        : { type: "delete", path: ["pages", pageId, "shelved_at"] },
+    ]);
+  }, [commit, document, platform, spacesRef]);
+
   const archivePage = useCallback((pageId: string) => {
     if (!document) return;
     const page = document.state.pages[pageId];
@@ -494,6 +513,7 @@ export function useWorkspacePageOps({
     movePage,
     applyBlockMutations,
     checkpointPage,
+    setPageShelved,
     archivePage,
     restorePage,
     deletePage,

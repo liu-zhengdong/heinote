@@ -141,6 +141,10 @@ export function attachAgentCopy(app: Express, { store, actor }: { store: Store; 
           copy.created_at = now; copy.updated_at = now;
           copy.created_by = author; copy.updated_by = author;
           delete copy.share_space_id;
+          if (isRoot) {
+            delete copy.shelved;
+            delete copy.shelved_at;
+          }
           // An app's bindings point at databases in the source space; the
           // copy keeps its source but arrives unbound.
           if (copy.app && targetScope !== source.scope) copy.app = { draft: copy.app.draft, enabled: copy.app.enabled };

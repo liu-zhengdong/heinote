@@ -2,7 +2,7 @@ import type { Express, Request } from "express";
 import type { Actor, Store } from "./store.ts";
 import { fail } from "./store.ts";
 import type { NotePage } from "../src/core/types.ts";
-import { pageAncestry, inTrash } from "../src/core/page-tree.ts";
+import { pageAncestry, inTrash, isShelved } from "../src/core/page-tree.ts";
 import { orderedBlocks, pageName } from "../src/core/block-tree.ts";
 import { inlinePlainText, inlineReadableText } from "../src/core/inline-content.ts";
 import { tableCells, tableGrid } from "../src/core/simple-table.ts";
@@ -37,6 +37,11 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
 
     const limit = Math.min(Math.max(Number(req.query.limit) || 12, 1), 100);
     const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const rawArchived = typeof req.query.include_archived === "string" ? req.query.include_archived.trim().toLowerCase() : "";
+    const archivedMode: "exclude" | "include" | "only" =
+      rawArchived === "only" ? "only"
+      : rawArchived === "1" || rawArchived === "true" ? "include"
+      : "exclude";
 
     const pages = store.projectScopes(who, ["pages", "blocks"], wanted).pages;
     const readable = readableDescriber((pageId) => pages[pageId] ? pageName(pages[pageId]) : "");
@@ -53,7 +58,9 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
     };
     const crumb = (page: NotePage): string => pageAncestry(pages, page.id).slice(0, -1).map((item) => pageName(item)).join(" / ");
 
-    const scored: Array<{ hit: Record<string, unknown>; rank: number; updated: string }> = [];
+    type ScoredHit = { hit: Record<string, unknown>; rank: number; updated: string };
+    const activeScored: ScoredHit[] = [];
+    const archivedScored: ScoredHit[] = [];
     for (const page of Object.values(pages)) {
       if (inTrash(pages, page.id)) continue;
       const scope = scopeOf(page);
@@ -73,8 +80,10 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
         if (!match) continue;
         excerpt = match.slice(0, 90);
       }
-      const spaceId = scope.startsWith("user:") ? "personal" : (store.knowledgeBases.get(scope) ? scope : "personal");
-      scored.push({
+      const library = store.knowledgeBases.get(scope);
+      const spaceId = scope.startsWith("user:") ? "personal" : (library ? scope : "personal");
+      const archived = isShelved(pages, page.id) || Boolean(library?.archived);
+      const entry: ScoredHit = {
         hit: {
           id: page.id,
           title: pageName(page),
@@ -85,14 +94,30 @@ export function attachAgentSearch(app: Express, store: Store, actor: (req: Reque
           space: scope.startsWith("user:") ? "个人空间" : (spaceNames.get(scope) ?? scope),
           crumb: crumb(page),
           ...(excerpt !== undefined ? { excerpt } : {}),
+          ...(archived ? { archived: true } : {}),
         },
         rank,
         updated: page.updated_at,
-      });
+      };
+      if (archived) archivedScored.push(entry);
+      else activeScored.push(entry);
     }
-    scored.sort((a, b) => a.rank - b.rank || b.updated.localeCompare(a.updated));
-    const total = scored.length;
-    const hits = scored.slice(offset, offset + limit).map((entry) => entry.hit);
-    res.json({ hits, total, hasMore: offset + hits.length < total, nextOffset: offset + hits.length < total ? offset + hits.length : null });
+    const byRank = (a: ScoredHit, b: ScoredHit) => a.rank - b.rank || b.updated.localeCompare(a.updated);
+    activeScored.sort(byRank);
+    archivedScored.sort(byRank);
+    const pool = archivedMode === "only"
+      ? archivedScored
+      : archivedMode === "include"
+        ? [...activeScored, ...archivedScored]
+        : activeScored;
+    const total = pool.length;
+    const hits = pool.slice(offset, offset + limit).map((entry) => entry.hit);
+    res.json({
+      hits,
+      total,
+      archivedTotal: archivedScored.length,
+      hasMore: offset + hits.length < total,
+      nextOffset: offset + hits.length < total ? offset + hits.length : null,
+    });
   });
 }

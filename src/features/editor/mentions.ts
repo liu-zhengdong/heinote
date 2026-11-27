@@ -1,7 +1,7 @@
 import { blocksInOrder, pageName } from "../../core/block-tree";
 import { dateLabel, isoDate, mentionFromAttributes, type DescribeMention } from "../../core/inline-content";
 import { isImageType, normalizeStoredFile } from "../../core/files";
-import { inTrash, isPurging } from "../../core/page-tree";
+import { inTrash, isPurging, isShelved } from "../../core/page-tree";
 import type { BlockTree, NotePage } from "../../core/types";
 
 /* Mentions — `@` and `[[` — as Notion has them: a page named among the words
@@ -75,17 +75,19 @@ export function mentionItems(
 ): MentionItem[] {
   const needle = query.trim().toLowerCase();
   const found = Object.values(pages)
-    .filter((page) => !inTrash(pages, page.id) && page.id !== currentPageId)
+    .filter((page) => !inTrash(pages, page.id) && page.id !== currentPageId && (needle || !isShelved(pages, page.id)))
     .map((page) => {
       const name = pageName(page);
-      return { page, name, rank: rank(name.toLowerCase(), needle) };
+      return { page, name, shelved: isShelved(pages, page.id), rank: rank(name.toLowerCase(), needle) };
     })
     .filter((entry) => entry.rank >= 0)
-    .toSorted((left, right) => left.rank - right.rank || (right.page.updated_at ?? "").localeCompare(left.page.updated_at ?? ""))
+    .toSorted((left, right) => Number(left.shelved) - Number(right.shelved) || left.rank - right.rank || (right.page.updated_at ?? "").localeCompare(left.page.updated_at ?? ""))
     .slice(0, PAGE_LIMIT)
-    .map(({ page, name }): MentionItem => {
+    .map(({ page, name, shelved }): MentionItem => {
       const parent = page.parent_id ? pages[page.parent_id] : undefined;
-      return { key: `page:${page.id}`, kind: "page", page, name, context: parent ? pageName(parent) : "" };
+      const place = parent ? pageName(parent) : "";
+      const context = shelved ? (place ? `${place} · 已归档` : "已归档") : place;
+      return { key: `page:${page.id}`, kind: "page", page, name, context };
     });
   const dates: MentionItem[] = trigger === "@"
     ? [0, 1, -1]
