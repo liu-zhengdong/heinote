@@ -3,6 +3,7 @@ import { decodeHtmlEntities } from "./html-entities";
 import {
   inlinePlainText,
   isKeptLink,
+  MENTION_CHAR,
   normalizeInlineContent,
   replaceRange,
   sameInlineContent,
@@ -43,15 +44,31 @@ interface Reader {
   read(match: RegExpExecArray, marks: InlineMarks): InlineContent;
 }
 
+/** Currency-safe inline math `$E = mc^2$`: avoids `$$` blocks, `\$` escapes,
+ *  leading/trailing spaces inside delimiters, and currency values like `$50`. */
+const INLINE_MATH_SOURCE = String.raw`(?<!\\)(?<!\$)\$(?!\$)(?!\s)((?:\\\$|[^$\n\u2063])+?)(?<!\s)(?<!\\)\$(?!\$)(?!\d)`;
+const INLINE_MATH_CLOSED = new RegExp(`(?:${INLINE_MATH_SOURCE})$`);
+
 /** What a line of Markdown holds: its marks, each read again inside but
- *  code; a [link](…) to the web or a page; and the `<br>` a table's cell
- *  writes for a line break. */
+ *  code; inline `$...$` equations; a [link](…) to the web or a page; and the `<br>` a table's cell
+ *  writes for a line break. Code and math sit before emphasis so underscores
+ *  or asterisks inside them do not turn into italics/bold. */
 const READERS: readonly Reader[] = [
-  ...RULES.map((rule): Reader => ({
+  {
+    pattern: new RegExp(RULES[0].pattern.source, "g"),
+    read: (match, marks) => [{ text: match[1], marks: { ...marks, ...RULES[0].marks } }],
+  },
+  {
+    pattern: new RegExp(INLINE_MATH_SOURCE, "g"),
+    read: (match, marks) => [{
+      text: MENTION_CHAR,
+      mention: { kind: "equation", expression: match[1] },
+      ...(Object.keys(marks).length ? { marks } : {}),
+    }],
+  },
+  ...RULES.slice(1).map((rule): Reader => ({
     pattern: new RegExp(rule.pattern.source, "g"),
-    read: (match, marks) => rule.marks.code
-      ? [{ text: match[1], marks: { ...marks, ...rule.marks } }]
-      : markdownRuns(match[1], { ...marks, ...rule.marks }),
+    read: (match, marks) => markdownRuns(match[1], { ...marks, ...rule.marks }),
   })),
   {
     pattern: /\[([^\]\n]+)\]\(([^\s)]+)\)/g,
@@ -113,7 +130,8 @@ export function collapseInlineMarkdown(
   content: InlineContent,
   caret: number,
 ): { content: InlineContent; caret: number; resume: TypingResume } | null {
-  const head = inlinePlainText(content).slice(0, caret);
+  const plain = inlinePlainText(content);
+  const head = plain.slice(0, caret);
   for (const rule of CLOSED) {
     const match = rule.pattern.exec(head);
     if (!match) continue;
@@ -125,6 +143,27 @@ export function collapseInlineMarkdown(
       caret: at,
       resume: { at, content: collapsed, marks: sliceInlineContent(content, start, start + 1)[0]?.marks },
     };
+  }
+  const mathMatch = !/^\d/.test(plain.slice(caret)) ? INLINE_MATH_CLOSED.exec(head) : null;
+  if (mathMatch) {
+    const start = caret - mathMatch[0].length;
+    const spanned = sliceInlineContent(content, start, caret);
+    if (!spanned.some((run) => run.marks?.code || run.mention)) {
+      const inherited = sliceInlineContent(content, start, start + 1)[0]?.marks;
+      const [before, rest] = splitInlineContent(content, start);
+      const [, after] = splitInlineContent(rest, mathMatch[0].length);
+      const collapsed = normalizeInlineContent([
+        ...before,
+        { text: MENTION_CHAR, mention: { kind: "equation", expression: mathMatch[1] }, ...(inherited ? { marks: inherited } : {}) },
+        ...after,
+      ]);
+      const at = start + 1;
+      return {
+        content: collapsed,
+        caret: at,
+        resume: { at, content: collapsed, marks: inherited },
+      };
+    }
   }
   return null;
 }

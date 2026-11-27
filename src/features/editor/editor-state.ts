@@ -67,6 +67,10 @@ export type SlashState = { blockId: string; from: number; query: string; anchor:
 export type MentionState = SlashState & { trigger: MentionTrigger };
 /** Where something dragged over the page would land. */
 export type DropState = { id: string; edge: "above" | "below" | "inside" };
+/** Floating equation editor open on an inline `$...$` token or a block equation. */
+export type EquationEditState =
+  | { mode: "inline"; blockId: string; offset: number; expression: string; anchor: AnchorRect; removeIfEmpty?: boolean }
+  | { mode: "block"; blockId: string; expression: string; anchor: AnchorRect };
 
 /** What the editor's parts — typing, keys, the keys of selected blocks,
  *  pictures and files — read of it and do through it: built once a render
@@ -127,6 +131,7 @@ export interface Editor {
   closeMenus(): void;
   applyMarkToBlocks(ranges: BlockTextRange[], mark: ToggleableMark | "link" | "color", value: boolean | string | undefined): void;
   openLink(): void;
+  openEquation(request: EquationEditState): void;
   pastedBlocks(data: DataTransfer): { incoming: CopiedBlocks | null; fragment: BlockTree } | null;
   adoptCutPages(incoming: CopiedBlocks | null, fragment: BlockTree, at: string | null): void;
   /** A YouTube or X link pasted onto a line of its own: offer its card, as

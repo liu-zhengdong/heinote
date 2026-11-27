@@ -11,6 +11,7 @@ import {
   ListOrdered,
   Minus,
   Quote,
+  Sigma,
   SquareCheck,
   Table,
   Table2,
@@ -109,6 +110,11 @@ export const BLOCK_DEFINITIONS: readonly BlockDefinition[] = [
     kind: "code", label: "Code",
     icon: Code2, tag: "pre", editable: true, continueAs: "text", shortcuts: ["```"], canHaveChildren: false,
     placeholder: "Code",
+  },
+  {
+    kind: "equation", label: "Block equation",
+    icon: Sigma, editable: false, shortcuts: ["$$"], canHaveChildren: false,
+    slash: { aliases: ["math", "latex", "katex", "formula", "tex", "equation", "公式", "数学公式", "块级公式"] },
   },
   {
     kind: "file", label: "File",

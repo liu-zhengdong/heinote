@@ -66,15 +66,19 @@ import { viewKindLabel } from "../database/database-model";
 import { consumeFresh, markFresh } from "../database/fresh";
 import {
   hasCjkItalic,
+  inlineFromText,
   inlinePlainText,
   mentionAt,
+  MENTION_CHAR,
   mountedLink,
+  normalizeInlineContent,
   replaceRange,
   insertToken,
   tokenSpan,
   sliceInlineContent,
   soleImage,
   soleLink,
+  splitInlineContent,
   updateMentionAt,
   mentionFromAttributes,
   type ShownLink,
@@ -175,7 +179,9 @@ import { LinkViewMenu } from "./LinkViewMenu";
 import { InlineDatabase } from "../database/InlineDatabase";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePages, useWorkspaceStore } from "../../app/workspace-store";
-import { mediaLanding, useMedia, type MediaInsertKind } from "./useMedia";
+import { useMedia, type MediaInsertKind, mediaLanding } from "./useMedia";
+import { useInlineEquations } from "./useInlineEquations";
+import { EquationPopover } from "./EquationPopover";
 import { useFormatToolbar } from "./useFormatToolbar";
 import { useMarquee } from "./useMarquee";
 import { usePictures } from "./pictures";
@@ -187,6 +193,7 @@ import {
   type DropState,
   type Editor,
   type EmbedOptions,
+  type EquationEditState,
   type MentionState,
   type MountHandle,
   type PendingFocus,
@@ -239,7 +246,7 @@ type PageMenuProps = ComponentProps<typeof PageMenu>;
 const ROW_ACTIONS: Record<Exclude<keyof BlockActions, "describeMention" | "showFile" | "writeTable">, true> = {
   add: true, dragOver: true, drop: true, toggleCheck: true, openBacklinks: true,
   toggleLink: true, openLinkMenu: true, rowDragStart: true, rowDragEnd: true, openBlockMenu: true,
-  openLinkedPage: true, setLanguage: true, copyCode: true, change: true, keyDown: true, beforeInput: true, paste: true, pickIcon: true,
+  openLinkedPage: true, setLanguage: true, copyCode: true, editEquation: true, change: true, keyDown: true, beforeInput: true, paste: true, pickIcon: true,
   pickFile: true, downloadFile: true, resizeCard: true,
   retryUpload: true, leaveTable: true, selectTable: true, readEmbed: true,
 };
@@ -380,6 +387,9 @@ export function DocumentEditor({
     anchor: AnchorRect | null;
   } | null>(null);
   const [format, setFormat] = useState<FormatState | null>(null);
+  const [equationEdit, setEquationEdit] = useState<EquationEditState | null>(null);
+  const equationEditRef = useRef<EquationEditState | null>(null);
+  equationEditRef.current = equationEdit;
   const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
   const [editingMode, setEditingMode] = useState<"block" | "title" | null>(null);
   const [caretMarks, setCaretMarks] = useState<Partial<Record<ToggleableMark, boolean>>>({});
@@ -1006,12 +1016,12 @@ export function DocumentEditor({
     if (standaloneRef.current) {
       if (standaloneRef.current.onBlurOutside) {
         requestAnimationFrame(() => {
-          if (subOverlayOpenRef.current) return;
+          if (subOverlayOpenRef.current || equationEditRef.current) return;
           const active = document.activeElement;
           const root = mountDocRef.current;
           if (active instanceof Element && (
             root?.contains(active)
-            || active.closest(".popover, .overlay, .format-bar, .menu, .slash, .mobile-edit-bar, .bottom-sheet, .memo-entry__actions, .memo-inline-edit__foot")
+            || active.closest(".popover, .pop, .overlay, .format-bar, .menu, .slash, .mobile-edit-bar, .bottom-sheet, .memo-entry__actions, .memo-inline-edit__foot")
           )) return;
           standaloneRef.current?.onBlurOutside?.();
         });
@@ -1542,6 +1552,7 @@ export function DocumentEditor({
     showInPlace, ownerOf, titleOf, anchorFor, createPage, checkpointHistory, annotateHistory,
     write, execute, executeOnBlocks, runReplace, replaceSelection, selectBlocks, deleteSelected, duplicateSelected,
     openMoveTo, closeMenus, applyMarkToBlocks, openLink, pastedBlocks, adoptCutPages, offerCard, toast,
+    openEquation: (request) => { if (!readOnly) setEquationEdit(request); },
     pickLinkedView: (blockId, stripped, pick) => {
       // The picker stands where the slash was typed; a block it cannot be
       // drawn beside is a pick that never happens — the link is not written.
@@ -1720,7 +1731,8 @@ export function DocumentEditor({
     return () => window.removeEventListener("scroll", away, true);
   }, [pictureHover]);
 
-  /* Pictures among the words: painted in, and sized by their edge bars. */
+  /* Pictures and inline equations among the words. */
+  useInlineEquations(blocksRef);
   usePictures({
     hover: holdPicture,
     root: blocksRef,
@@ -1888,6 +1900,23 @@ export function DocumentEditor({
     if (!token || token.closest(".blocks") !== event.currentTarget) return;
     const pageId = token.dataset.page;
     const kind = token.dataset.mention;
+    if (kind === "equation") {
+      if (readOnly) return;
+      const mention = mentionFromAttributes((name) => token.getAttribute(`data-${name}`) ?? undefined);
+      const link = linkAt(token);
+      if (mention?.kind === "equation" && link) {
+        event.preventDefault();
+        event.stopPropagation();
+        setEquationEdit({
+          mode: "inline",
+          blockId: link.block.id,
+          offset: link.offset,
+          expression: mention.expression,
+          anchor: rectOf(token),
+        });
+      }
+      return;
+    }
     // A picture opens to be looked at — or, when its upload failed, tries
     // it again.
     if (kind === "image") {
@@ -2357,6 +2386,15 @@ export function DocumentEditor({
         void copyText(inlinePlainText(block.content))
           .then(() => toast("Code copied", "success"))
           .catch(() => toast("Could not copy that code", "error"));
+      },
+      editEquation: (block, anchor) => {
+        if (readOnly) return;
+        setEquationEdit({
+          mode: "block",
+          blockId: block.id,
+          expression: inlinePlainText(block.content),
+          anchor,
+        });
       },
       change: onBlockChange,
       keyDown: onBlockKeyDown,
@@ -3229,8 +3267,108 @@ export function DocumentEditor({
           }}
           onSetLink={(href) => applyMark("link", href)}
           onColor={(color) => applyMark("color", color)}
+          onCreateEquation={format.ranges.length === 1 ? () => {
+            const range = format.ranges[0];
+            const block = tree.by_id[range.blockId];
+            if (!block || block.kind === "code") return;
+            const initial = inlinePlainText(sliceInlineContent(block.content, range.start, range.end));
+            const [head, rest] = splitInlineContent(block.content, range.start);
+            const [, tail] = splitInlineContent(rest, Math.max(0, range.end - range.start));
+            const nextContent = normalizeInlineContent([
+              ...head,
+              { text: MENTION_CHAR, mention: { kind: "equation", expression: initial } },
+              ...tail,
+            ]);
+            const anchorFallback = format.anchor;
+            setFormat(null);
+            execute(updateBlockContent(tree, block.id, nextContent), { id: block.id, start: range.start + 1, force: true });
+            requestAnimationFrame(() => {
+              const rowEl = blocksRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(block.id)}"]`);
+              const tokens = rowEl?.querySelectorAll<HTMLElement>('.mention[data-mention="equation"]');
+              let matched: HTMLElement | null = null;
+              if (tokens) {
+                for (const el of tokens) {
+                  const at = linkAt(el);
+                  if (at && at.offset === range.start) {
+                    matched = el;
+                    break;
+                  }
+                }
+              }
+              setEquationEdit({
+                mode: "inline",
+                blockId: block.id,
+                offset: range.start,
+                expression: initial,
+                anchor: matched ? rectOf(matched) : anchorFallback,
+                removeIfEmpty: true,
+              });
+            });
+          } : undefined}
           onClose={() => setFormat(null)}
           onReturn={() => selectRanges(blocksRef.current, format.ranges)}
+        />
+      ) : null}
+
+      {equationEdit && !readOnly ? (
+        <EquationPopover
+          anchor={equationEdit.anchor}
+          mode={equationEdit.mode}
+          initialExpression={equationEdit.expression}
+          onCommit={(nextExpr) => {
+            const currentEdit = equationEdit;
+            setEquationEdit(null);
+            const currentTree = latestTree.current;
+            const block = currentTree.by_id[currentEdit.blockId];
+            if (!block) return;
+            if (currentEdit.mode === "inline") {
+              if (!nextExpr.trim()) {
+                execute(
+                  updateBlockContent(currentTree, block.id, replaceRange(block.content, currentEdit.offset, currentEdit.offset + 1, "")),
+                  { id: block.id, start: currentEdit.offset, force: true },
+                );
+              } else {
+                execute(
+                  updateBlockContent(
+                    currentTree,
+                    block.id,
+                    updateMentionAt(block.content, currentEdit.offset, () => ({ kind: "equation", expression: nextExpr })),
+                  ),
+                  { id: block.id, start: currentEdit.offset + 1, force: true },
+                );
+              }
+            } else {
+              execute(updateBlockContent(currentTree, block.id, inlineFromText(nextExpr)));
+            }
+          }}
+          onRemove={() => {
+            const currentEdit = equationEdit;
+            setEquationEdit(null);
+            const currentTree = latestTree.current;
+            const block = currentTree.by_id[currentEdit.blockId];
+            if (!block) return;
+            if (currentEdit.mode === "inline") {
+              execute(
+                updateBlockContent(currentTree, block.id, replaceRange(block.content, currentEdit.offset, currentEdit.offset + 1, "")),
+                { id: block.id, start: currentEdit.offset, force: true },
+              );
+            } else {
+              execute(deleteBlocks(currentTree, [block.id], createId("block")));
+            }
+          }}
+          onCancel={() => {
+            const currentEdit = equationEdit;
+            setEquationEdit(null);
+            if (currentEdit.mode === "inline" && currentEdit.removeIfEmpty && !currentEdit.expression.trim()) {
+              const currentTree = latestTree.current;
+              const block = currentTree.by_id[currentEdit.blockId];
+              if (!block) return;
+              execute(
+                updateBlockContent(currentTree, block.id, replaceRange(block.content, currentEdit.offset, currentEdit.offset + 1, "")),
+                { id: block.id, start: currentEdit.offset, force: true },
+              );
+            }
+          }}
         />
       ) : null}
 
@@ -3358,7 +3496,7 @@ export function DocumentEditor({
             else effectiveUndo();
             return;
           }
-          if (slash || mention || cardOffer || blockMenu || pageMenu || linkedPick) return;
+          if (slash || mention || cardOffer || blockMenu || pageMenu || linkedPick || equationEdit) return;
           if (standalone.onShortcut?.(event)) {
             event.preventDefault();
             event.stopPropagation();

@@ -158,3 +158,22 @@
 @media (prefers-reduced-motion: reduce) {
   .public-reader__document { animation: none; }
 }
+
+.public-reader__math-inline {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
+}
+
+.public-reader__equation {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin: 10px 0;
+  padding: 8px 0;
+  overflow-x: auto;
+}
+
+.public-reader__equation .katex-display {
+  margin: 0;
+}

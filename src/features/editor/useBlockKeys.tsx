@@ -395,9 +395,9 @@ export function blockKeys(editor: Editor & BlockTyping) {
 
     if (event.key === "Enter") {
       event.preventDefault();
-      // A fence (```, ```python) closed by Enter is a code block, as in any
-      // Markdown editor — not a line holding the fence.
-      if (!event.shiftKey && /^```[^\s`]*$/.test(element.textContent ?? "") && applyBlockShortcut(block, element)) return;
+      // A fence (```, ```python) or block equation opener ($$) closed by Enter becomes that block.
+      const plainInput = element.textContent ?? "";
+      if (!event.shiftKey && (/^```[^\s`]*$/.test(plainInput) || plainInput === "$$") && applyBlockShortcut(block, element)) return;
       if (event.shiftKey) {
         const caret = caretOffset(element);
         execute(updateBlockContent(tree, block.id, replaceRange(block.content, caret, caret, "\n")), {

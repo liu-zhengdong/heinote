@@ -21,6 +21,7 @@ export function mentionDescriber(
   const describe: DescribeMention = (mention) => {
     if (mention.kind === "date") return { label: dateLabel(mention.date, now()) };
     if (mention.kind === "image") return { label: mention.file.name };
+    if (mention.kind === "equation") return { label: mention.expression || "New equation" };
     const all = pages();
     const page = all[mention.page_id];
     if (!page || isPurging(all, page.id)) return { label: "No access", state: "missing" };

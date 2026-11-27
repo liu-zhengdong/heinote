@@ -1,4 +1,4 @@
-import { CalendarDays, Columns3, Database, Image as ImageIcon, LayoutGrid, LayoutList, Paperclip } from "lucide-react";
+import { CalendarDays, Columns3, Database, Image as ImageIcon, LayoutGrid, LayoutList, Paperclip, Sigma } from "lucide-react";
 import type { ComponentType } from "react";
 import type { BlockKind, DatabaseViewKind } from "../../core/types";
 import { BLOCK_DEFINITIONS, DatabaseIcon, PageIcon } from "./block-registry";
@@ -20,7 +20,7 @@ export interface Command {
    *  here, opening on `view`; `database-page` makes a full-page database and
    *  leaves a link to it, which is what `/database` used to do; `image` and
    *  `file` open the native picker for images or attachments. */
-  action?: "page" | "database-inline" | "database-page" | "database-linked" | "image" | "file";
+  action?: "page" | "database-inline" | "database-page" | "database-linked" | "image" | "file" | "inline-equation";
   view?: DatabaseViewKind;
 }
 
@@ -34,6 +34,13 @@ const COMMANDS: Command[] = [
     kind: definition.kind,
     ...(definition.shortcuts[0] ? { hint: definition.shortcuts[0] } : {}),
   }] : [])),
+  {
+    id: "inline-equation", label: "Inline equation",
+    hint: "$…$",
+    icon: Sigma, group: "Basic",
+    aliases: ["math", "latex", "katex", "formula", "inline math", "行内公式", "公式"],
+    action: "inline-equation",
+  },
   {
     id: "image", label: "Image",
     icon: ImageIcon, group: "Media",

@@ -64,6 +64,7 @@ function blocksHtml(tree: BlockTree, parentId: string | null): string {
       case "numbered": html += `<li>${inner}${children}</li>`; break;
       case "quote": html += `<blockquote>${inner}</blockquote>${children}`; break;
       case "code": html += `<pre><code>${escapeHtml(inlinePlainText(block.content))}</code></pre>`; break;
+      case "equation": html += `<p>$$${escapeHtml(inlinePlainText(block.content))}$$</p>`; break;
       case "divider": html += "<hr>"; break;
       case "table": {
         const grid = tableGrid(block.table);

@@ -65,7 +65,7 @@ Authorization: Bearer notes_...
 }
 ```
 
-也可以用 `markdown` 代替 `text` 提供正文：服务端按与粘贴、导入相同的规则把 Markdown 解析为块树（标题、列表、todo、引用、代码块、分割线、表格及行内标记）。`text` 与 `markdown` 互斥，同时提供返回 400。
+也可以用 `markdown` 代替 `text` 提供正文：服务端按与粘贴、导入相同的规则把 Markdown 解析为块树（标题、列表、todo、引用、代码块、数学公式块 `$$...$$`、分割线、表格及行内标记和行内公式 `$...$`）。`text` 与 `markdown` 互斥，同时提供返回 400。
 
 `parentId` 存在时，页面继承父页面的空间。没有父页面和空间时，页面属于令牌账号的私有空间。标题最多 500 个字符。正文最多 100000 个字符。父页面是文档时，新页面同时以展开链接块（`expanded` 页面提及）出现在父页面正文末尾，与窗口「新建页面」一致；父页面是应用或数据库时无正文可承载，不插入链接。
 
@@ -97,7 +97,7 @@ Authorization: Bearer notes_...
 
 示例省略了页面的其他字段。`page.block_tree` 返回实际编辑器数据。`text` 是按顺序提取的纯文本，不能表达所有块类型。
 
-`GET /pages/:id/markdown` 返回 `{"id","title","revision","scope","markdown"}`，其中 `markdown` 是正文按复制与导出相同规则序列化的结果：标题、列表、todo、引用、代码块、表格、分割线展开为 Markdown 结构，行内标记保留。页面提及写为页面标题，附件写为可下载链接（`/api/v1/files/<scope>?path=…`，需要同一令牌访问）。这是可读投影，不保留块 ID、提及身份或不可序列化的结构（如 linked view 的视图固定）；写回请使用 `PATCH` 的 `markdown` 或 `insert_blocks`。仅文档页面可用，应用与数据库页面返回 400。
+`GET /pages/:id/markdown` 返回 `{"id","title","revision","scope","markdown"}`，其中 `markdown` 是正文按复制与导出相同规则序列化的结果：标题、列表、todo、引用、代码块、数学公式块（`$$...$$`）、表格、分割线展开为 Markdown 结构，行内标记与行内公式（`$...$`）保留。页面提及写为页面标题，附件写为可下载链接（`/api/v1/files/<scope>?path=…`，需要同一令牌访问）。这是可读投影，不保留块 ID、提及身份或不可序列化的结构（如 linked view 的视图固定）；写回请使用 `PATCH` 的 `markdown` 或 `insert_blocks`。仅文档页面可用，应用与数据库页面返回 400。
 
 更新输入：
 

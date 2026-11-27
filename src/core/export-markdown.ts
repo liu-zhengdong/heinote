@@ -36,6 +36,11 @@ export function inlineContentToMarkdown(content: InlineContent, describe: Descri
     words = [];
   };
   for (const run of content) {
+    if (run.mention?.kind === "equation") {
+      flush();
+      parts.push(`$${run.mention.expression}$`);
+      continue;
+    }
     if (run.mention?.kind !== "image") {
       words.push(run);
       continue;
@@ -64,6 +69,7 @@ function markdownLine(block: Block, number: number, describe: DescribeMention, h
     case "divider": return "---";
     case "table": return tableToMarkdown(tableGrid(block.table), (content) => inlineContentToMarkdown(content, describe, href));
     case "code": return `\`\`\`${block.language ?? ""}\n${inlinePlainText(block.content)}\n\`\`\``;
+    case "equation": return `$$\n${inlinePlainText(block.content)}\n$$`;
     // The bytes stay in HeiNote; outside it a file is its name.
     case "file": return `[${block.file?.name || "file"}](${href(block.file ?? { path: "", owner: "", name: "file", size: 0, type: "" })})${text ? ` ${text}` : ""}`;
     // Outside HeiNote a card is its link.
@@ -78,7 +84,8 @@ export function readableDescriber(titleOf: (pageId: string) => string): Describe
   return (mention) => ({
     label: mention.kind === "page" ? titleOf(mention.page_id) || "Untitled"
       : mention.kind === "image" ? mention.file.name
-        : dateLabel(mention.date),
+        : mention.kind === "equation" ? `$${mention.expression}$`
+          : dateLabel(mention.date),
   });
 }
 

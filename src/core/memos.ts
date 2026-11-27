@@ -46,7 +46,7 @@ export function extractTagsFromBlockTree(tree: BlockTree): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const block of blocksInOrder(tree)) {
-    if (block.kind === "code") continue;
+    if (block.kind === "code" || block.kind === "equation") continue;
     const lineText = block.content
       .filter((run) => !run.mention && !run.marks?.code)
       .map((run) => run.text)
@@ -104,7 +104,7 @@ export function rewriteTagInBlockTree(
   let changed = false;
   const nextById: Record<string, Block> = {};
   for (const [id, block] of Object.entries(tree.by_id)) {
-    if (block.kind === "code") {
+    if (block.kind === "code" || block.kind === "equation") {
       nextById[id] = block;
       continue;
     }

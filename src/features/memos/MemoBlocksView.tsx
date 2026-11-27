@@ -1,11 +1,13 @@
 import { FileText, ExternalLink } from "lucide-react";
 import { Fragment, type ReactNode } from "react";
 import { orderedBlocks, pageName } from "../../core/block-tree";
+import { inlinePlainText } from "../../core/inline-content";
 import { normalizeMemoTag } from "../../core/memos";
 import { tableCells, tableGrid } from "../../core/simple-table";
 import type { Block, BlockTree, InlineContent, InlineRun, NotePage, StoredFile } from "../../core/types";
 import { bulletFor, numberFor } from "../editor/BlockRow";
 import { codeHtml } from "../editor/code-highlight";
+import { MathView } from "../editor/math-render";
 import { memoFileUrl } from "./memo-api";
 
 const TAG_TONES = ["blue", "green", "purple", "orange", "yellow", "pink", "gray"] as const;
@@ -88,6 +90,13 @@ function renderInlineRun(
     }
     if (run.mention.kind === "date") {
       return <span key={key} className="memo-date-chip">@{run.mention.date}</span>;
+    }
+    if (run.mention.kind === "equation") {
+      return (
+        <span key={key} className="memo-math-inline">
+          <MathView expression={run.mention.expression} display={false} />
+        </span>
+      );
     }
     if (run.mention.kind === "image") {
       const file = run.mention.file;
@@ -181,6 +190,12 @@ function MemoBlockNode({
   let body: ReactNode;
   if (block.kind === "divider") {
     body = <hr className="block__rule" />;
+  } else if (block.kind === "equation") {
+    body = (
+      <div className="memo-math-block">
+        <MathView expression={inlinePlainText(block.content)} display />
+      </div>
+    );
   } else if (block.kind === "code") {
     const codeText = block.content.map((r) => r.text).join("");
     const highlighted = codeHtml(codeText, block.language);

@@ -1,5 +1,5 @@
 import type { ClipboardEvent } from "react";
-import { pointRect } from "../../hooks/useAnchoredPosition";
+import { pointRect, rectOf } from "../../hooks/useAnchoredPosition";
 import { clipboardFiles, isFilePaste } from "../../core/clipboard";
 import { createId } from "../../core/ids";
 import { decodeHtmlEntities } from "../../core/html-entities";
@@ -8,8 +8,11 @@ import {
   inlinePlainText,
   insertMention,
   isWebAddress,
+  MENTION_CHAR,
+  normalizeInlineContent,
   replaceRange,
   sliceInlineContent,
+  splitInlineContent,
 } from "../../core/inline-content";
 import type { Block, BlockMutation, InlineContent, Mention } from "../../core/types";
 import type { HistoryFocus } from "../../core/workspace-history";
@@ -63,8 +66,8 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
   const {
     page, tree, rows, embed, blocksRef, pagesRef, caretX, slash, setSlash, setSlashIndex, slashDismissed, mention,
     setMention, setMentionIndex, mentionDismissed, setFormat, resume, pendingTextSelection, ownerOf, createPage,
-    checkpointHistory, annotateHistory, execute, runReplace, replaceSelection, applyMarkToBlocks, placeFiles, pickMedia,
-    pastedBlocks, adoptCutPages, offerCard, pickLinkedView,
+    anchorFor, checkpointHistory, annotateHistory, execute, runReplace, replaceSelection, applyMarkToBlocks, placeFiles, pickMedia,
+    pastedBlocks, adoptCutPages, offerCard, pickLinkedView, openEquation,
   } = editor;
 
   /* ── Block editing ──────────────────────────────────────────────────── */
@@ -227,6 +230,22 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     // A fence that names its language (```python) sets it — and is the
     // language the next code block starts in, as one picked from the menu is.
     if (shortcut.language) rememberCodeLanguage(shortcut.language);
+    if (shortcut.kind === "equation") {
+      const convertedEq = updateBlockFields(tree, block.id, { kind: "equation", content: [] });
+      if (!convertedEq) return false;
+      execute(convertedEq);
+      setSlash(null);
+      requestAnimationFrame(() => {
+        const btn = blocksRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(block.id)}"] .block__equation`);
+        openEquation({
+          mode: "block",
+          blockId: block.id,
+          expression: "",
+          anchor: btn ? rectOf(btn) : (anchorFor(block.id) ?? pointRect(0, 0)),
+        });
+      });
+      return true;
+    }
     const converted = updateBlockFields(tree, block.id, {
       kind: shortcut.kind,
       content: [],
@@ -404,6 +423,30 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     const stripped = replaceRange(block.content, slash.from, slash.from + 1 + slash.query.length, "");
     setSlash(null);
 
+    if (command.action === "inline-equation") {
+      const offset = Math.min(slash.from, inlinePlainText(stripped).length);
+      const [head, tail] = splitInlineContent(stripped, offset);
+      const nextContent = normalizeInlineContent([
+        ...head,
+        { text: MENTION_CHAR, mention: { kind: "equation", expression: "" } },
+        ...tail,
+      ]);
+      execute(updateBlockContent(tree, block.id, nextContent), { id: block.id, start: offset + 1, force: true });
+      requestAnimationFrame(() => {
+        const rowEl = blocksRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(block.id)}"]`);
+        const token = [...(rowEl?.querySelectorAll<HTMLElement>('.mention[data-mention="equation"]') ?? [])].at(-1);
+        openEquation({
+          mode: "inline",
+          blockId: block.id,
+          offset,
+          expression: "",
+          anchor: token ? rectOf(token) : slash.anchor,
+          removeIfEmpty: true,
+        });
+      });
+      return;
+    }
+
     if (command.action === "image" || command.action === "file") {
       execute(updateBlockContent(tree, block.id, stripped), { id: block.id, start: slash.from, force: true });
       pickMedia(
@@ -448,6 +491,20 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
 
     if (!command.kind) return;
     const target = command.kind;
+    if (target === "equation") {
+      const initialExpression = inlinePlainText(stripped);
+      execute(updateBlockFields(tree, block.id, { kind: "equation", content: stripped }));
+      requestAnimationFrame(() => {
+        const btn = blocksRef.current?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(block.id)}"] .block__equation`);
+        openEquation({
+          mode: "block",
+          blockId: block.id,
+          expression: initialExpression,
+          anchor: btn ? rectOf(btn) : slash.anchor,
+        });
+      });
+      return;
+    }
     /* /table: the line becomes a table when the command was all it held,
        else one goes in after it; its first cell takes the caret, and a line
        follows it when it would end the page. */

@@ -4,7 +4,7 @@ import type { InlineContent, InlineMarks } from "../../core/types";
 
 /* What says which page or date a mention is. How it looks — its label and
    icon — is drawn afresh from the workspace, never read back. */
-const MENTION_KINDS = new Set(["page", "date", "image"]);
+const MENTION_KINDS = new Set(["page", "date", "image", "equation"]);
 
 /** Where a caret at `offset` in `before` belongs once the text is `after`:
  *  in place when the change is past it, shifted when the change is before it,

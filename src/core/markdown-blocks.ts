@@ -46,6 +46,21 @@ export function parseMarkdown(
       drafts.push({ kind: "code", content: [{ text: code.join("\n") }], language: fence[1] || undefined, depth: 0 });
       continue;
     }
+    const singleMath = line.match(/^\s*\$\$\s*(.+?)\s*\$\$\s*$/);
+    if (singleMath) {
+      drafts.push({ kind: "equation", content: [{ text: singleMath[1] }], depth: 0 });
+      continue;
+    }
+    if (/^\s*\$\$\s*$/.test(line)) {
+      const mathLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^\s*\$\$\s*$/.test(lines[index])) {
+        mathLines.push(lines[index]);
+        index += 1;
+      }
+      drafts.push({ kind: "equation", content: [{ text: mathLines.join("\n").trim() }], depth: 0 });
+      continue;
+    }
     if (!line.trim()) continue;
     // A Markdown table — a header, its rule, its rows — is a simple table.
     if (isMarkdownTableStart(line, lines[index + 1])) {

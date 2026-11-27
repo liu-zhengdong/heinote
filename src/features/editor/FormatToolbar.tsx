@@ -1,4 +1,4 @@
-import { Baseline, ChevronDown, Database, Group, Link, Link2 } from "lucide-react";
+import { Baseline, ChevronDown, Database, Group, Link, Link2, Sigma } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Popover } from "../../components/Popover";
 import { imeComposing } from "../../core/keyboard";
@@ -102,6 +102,7 @@ export function FormatToolbar({
   onTurnIntoDatabase,
   onSetLink,
   onColor,
+  onCreateEquation,
   onMakeBlock,
   onCopyBlockLink,
   onClose,
@@ -116,6 +117,7 @@ export function FormatToolbar({
   onTurnIntoDatabase?(): void;
   onSetLink(href: string | undefined): void;
   onColor(color: ContentColor | undefined): void;
+  onCreateEquation?(): void;
   onMakeBlock(): void;
   onCopyBlockLink(): void;
   onClose(): void;
@@ -222,6 +224,18 @@ export function FormatToolbar({
             >
               <Baseline size={15} />
             </button>
+            {state.ranges.length === 1 && onCreateEquation ? (
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Create equation"
+                title="Create equation"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={onCreateEquation}
+              >
+                <Sigma size={15} />
+              </button>
+            ) : null}
           </div>
           <div className="format-bar__group">
             <button

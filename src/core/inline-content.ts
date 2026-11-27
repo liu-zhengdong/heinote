@@ -54,6 +54,9 @@ export function normalizeMention(value: unknown): Mention | undefined {
     && !Number.isNaN(Date.parse(candidate.date))) {
     return { kind: "date", date: candidate.date };
   }
+  if (candidate.kind === "equation" && typeof candidate.expression === "string") {
+    return { kind: "equation", expression: candidate.expression.slice(0, 10_000) };
+  }
   const file = candidate.kind === "image" ? normalizeStoredFile(candidate.file) : undefined;
   if (file && isImageType(file.type)) {
     const width = typeof candidate.width === "number" && candidate.width >= 16 && candidate.width <= 10_000 ? Math.round(candidate.width) : undefined;
@@ -160,6 +163,7 @@ export function inlineReadable(content: InlineContent, describe: DescribeMention
 function mentionKey(mention: Mention): string {
   if (mention.kind === "page") return `${mention.page_id}:${mention.expanded ? "open" : ""}:${mention.locked ? "lock" : ""}:${mention.view ?? ""}`;
   if (mention.kind === "image") return `${mention.file.path}:${mention.file.preview ?? ""}:${mention.width ?? ""}`;
+  if (mention.kind === "equation") return `equation:${mention.expression}`;
   return mention.date;
 }
 
@@ -320,6 +324,10 @@ export function escapeHtml(value: string): string {
  *  changing an attribute, without touching the text or a caret in it. */
 export function mentionHtml(mention: Mention, describe?: DescribeMention): string {
   if (mention.kind === "image") return pictureHtml(mention);
+  if (mention.kind === "equation") {
+    const label = mention.expression || "New equation";
+    return `<span class="mention" contenteditable="false" data-mention="equation" data-expression="${escapeHtml(mention.expression)}" data-label="${escapeHtml(label)}">${MENTION_CHAR}</span>`;
+  }
   const identity = mention.kind === "page"
     ? `data-mention="page" data-page="${escapeHtml(mention.page_id)}"`
       + `${mention.expanded ? ' data-expanded="true"' : ""}${mention.locked ? ' data-locked="true"' : ""}${mention.view ? ` data-view="${escapeHtml(mention.view)}"` : ""}`
@@ -390,6 +398,9 @@ export function mentionFromAttributes(read: (name: string) => string | undefined
       return undefined;
     }
     return normalizeMention({ kind, file, width: Number(read("width")) || undefined });
+  }
+  if (kind === "equation") {
+    return normalizeMention({ kind, expression: read("expression") ?? "" });
   }
   return normalizeMention({ kind, date: read("date") });
 }

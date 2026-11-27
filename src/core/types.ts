@@ -57,6 +57,7 @@ export type Mention =
    *  draws that view read-only, under a caption — a linked view. */
   | { kind: "page"; page_id: string; expanded?: boolean; locked?: boolean; view?: string }
   | { kind: "date"; date: string }
+  | { kind: "equation"; expression: string }
   /** A picture in the words, as Google Docs has one "in line": it stands on
    *  the line like a large letter, `width` CSS pixels wide (its own width,
    *  within the column, when unset). */

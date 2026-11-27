@@ -985,3 +985,21 @@
     width: 124px;
   }
 }
+
+.memo-math-inline {
+  display: inline-flex;
+  align-items: baseline;
+  vertical-align: baseline;
+}
+
+.memo-math-block {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  padding: 8px 6px;
+  overflow-x: auto;
+}
+
+.memo-math-block .katex-display {
+  margin: 0;
+}

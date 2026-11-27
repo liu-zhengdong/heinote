@@ -29,7 +29,7 @@ import type {
 export const ORDER_STEP = 1024;
 export const ORDER_MIN_GAP = 1e-6;
 
-const NON_MERGEABLE_KINDS = new Set(["divider", "table", "embed", "file", "page"]);
+const NON_MERGEABLE_KINDS = new Set(["divider", "equation", "table", "embed", "file", "page"]);
 
 const isObj = (value: unknown): value is JsonRecord =>
   value !== null && typeof value === "object" && !Array.isArray(value);

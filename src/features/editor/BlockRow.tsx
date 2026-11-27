@@ -11,6 +11,7 @@ import { blockRecordId } from "../../platform/record-ids";
 import { blockDefinition } from "./block-registry";
 import { CODE_LANGUAGES, codeLanguage } from "./code-highlight";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { EquationBlock } from "./EquationBlock";
 import { InlineEditor } from "./InlineEditor";
 import { EmbedBlock, type EmbedActions } from "./EmbedBlock";
 import { FileBlock, type MediaActions, type UploadState } from "./MediaBlocks";
@@ -120,6 +121,7 @@ export interface BlockActions extends MediaActions, TableActions, EmbedActions {
   openLinkedPage(pageId: string, full: boolean): void;
   setLanguage(block: Block, language: string): void;
   copyCode(block: Block): void;
+  editEquation(block: Block, anchor: AnchorRect): void;
   pickIcon(block: Block, anchor: AnchorRect): void;
   change(block: Block, content: InlineContent, text: string, element: HTMLElement, composing: boolean): void;
   describeMention: DescribeMention;
@@ -346,6 +348,12 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
             <FileBlock block={block} readOnly={readOnly} upload={props.upload} actions={actions} />
             {block.file ? editable : null}
           </div>
+        ) : block.kind === "equation" ? (
+          <EquationBlock
+            block={block}
+            readOnly={readOnly}
+            onEdit={(anchor) => actions.editEquation(block, anchor)}
+          />
         ) : block.kind === "code" ? (
           <div className="block__code">
             <div className="block__code-bar" contentEditable={false}>

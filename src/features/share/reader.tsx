@@ -5,6 +5,7 @@ import type { Block, BlockTree, InlineContent, NotePage, StoredFile } from "../.
 import { pageIcon } from "../editor/page-decoration";
 import { codeHtml, codeLanguage, highlighterReady, whenHighlighterReady } from "../editor/code-highlight";
 import { MermaidDiagram } from "../editor/MermaidDiagram";
+import { MathView } from "../editor/math-render";
 
 /* The read-only page renderer PublicShare draws a shared page with — pulled
    out so an export can render the same page into a static file. The only
@@ -85,6 +86,9 @@ export function ReaderInline({ content, context }: { content: InlineContent; con
       return target ? <a key={index} href={href}>{titleOf(target)}</a> : <span key={index} className="account-muted">{context.unresolvedPageLabel}</span>;
     }
     if (mention?.kind === "date") return <time key={index} dateTime={mention.date}>{mention.date}</time>;
+    if (mention?.kind === "equation") {
+      return <span key={index} className="public-reader__math-inline"><MathView expression={mention.expression} display={false} /></span>;
+    }
     const marks = run.marks;
     let child: ReactNode = run.text;
     if (marks?.code) child = <code>{child}</code>;
@@ -132,6 +136,8 @@ function BlockBody({ block, context }: { block: Block; context: ReaderContext })
         <ReaderCode source={source} language={block.language} />
       </>;
     }
+    case "equation":
+      return <div className="public-reader__equation"><MathView expression={block.content.map((run) => run.text).join("")} display /></div>;
     case "file": return <div>{block.file ? <a className="public-reader__file" href={context.fileHref(block.file)} target="_blank" rel="noopener noreferrer"><Paperclip size={16} aria-hidden="true" />{block.file.name}</a> : "文件不可用"}{block.content.length ? <p>{text}</p> : null}</div>;
     case "table": {
       const table = block.table;

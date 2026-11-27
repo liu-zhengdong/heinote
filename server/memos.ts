@@ -233,7 +233,7 @@ function buildMemoBlockTree(
     }
     if (validTitles.size) {
       for (const block of Object.values(tree.by_id)) {
-        if (block.kind === "code") continue;
+        if (block.kind === "code" || block.kind === "equation") continue;
         const expandedRuns: typeof block.content = [];
         for (const run of block.content) {
           if (run.mention || run.marks?.code) { expandedRuns.push(run); continue; }

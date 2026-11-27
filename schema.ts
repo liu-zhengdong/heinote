@@ -31,7 +31,7 @@ import { schema, t } from "./src/platform/schema";
  *  its own: it stands among a line's words, and a line that holds nothing
  *  else is it on a line of its own. A page lives in its parent, as a file in
  *  a folder (`parent_id`); its words only link to pages. */
-export const BLOCK_KINDS = ["text", "heading1", "heading2", "heading3", "heading4", "heading5", "todo", "bullet", "numbered", "quote", "callout", "divider", "code", "file", "table", "embed"] as const;
+export const BLOCK_KINDS = ["text", "heading1", "heading2", "heading3", "heading4", "heading5", "todo", "bullet", "numbered", "quote", "callout", "divider", "code", "equation", "file", "table", "embed"] as const;
 
 /** Notion's nine colours, in the order Notion lists them. A block or a run of
  *  text takes one as its text colour, or — with `_background` — as a
@@ -101,9 +101,10 @@ const run = t.object({
     color: t.choice(...COLORS).optional(),
   }).optional(),
   mention: t.object({
-    kind: t.choice("page", "date"),
+    kind: t.choice("page", "date", "equation"),
     page_id: t.id().optional(),
     date: t.date().optional(),
+    expression: t.string(10000).optional(),
     /** A page link shown in place, and the database view it pins. */
     expanded: t.bool().optional(),
     locked: t.bool().optional(),

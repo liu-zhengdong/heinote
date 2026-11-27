@@ -111,7 +111,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     if (!active?.block_tree) return [];
     const list: StoredFile[] = [];
     for (const { block } of layout(active.block_tree).rows) {
-      if (block.kind === "code" || block.kind === "file") continue;
+      if (block.kind === "code" || block.kind === "equation" || block.kind === "file") continue;
       if (block.kind === "table" && block.table) {
         const rows = Object.entries(block.table.rows).sort(([leftId, left], [rightId, right]) => left.order - right.order || leftId.localeCompare(rightId));
         for (const [, row] of rows) {
@@ -197,6 +197,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
   const outlineItems = useMemo(
     () => (active && !isApp && !isDatabase ? extractOutline(active.block_tree, (mention) => {
       if (mention.kind === "date") return { label: mention.date };
+      if (mention.kind === "equation") return { label: `$${mention.expression}$` };
       if (mention.kind === "page") {
         const linked = context.pages.get(mention.page_id);
         return { label: linked ? titleOf(linked) : context.unresolvedPageLabel };
