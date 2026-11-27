@@ -15,6 +15,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -101,6 +102,165 @@ function stripAttachmentLines(markdown: string): string {
     .trim();
 }
 
+function caretOffsetFromClick(
+  container: HTMLElement,
+  clientX: number,
+  clientY: number,
+  rawText: string,
+  lineElement: HTMLElement | null,
+): number {
+  const lines = rawText.split("\n");
+  if (!lineElement) return rawText.length;
+  const lineIndex = Number(lineElement.dataset.lineIndex);
+  if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return rawText.length;
+  let lineStart = 0;
+  for (let i = 0; i < lineIndex; i++) lineStart += lines[i].length + 1;
+  const lineLength = lines[lineIndex].length;
+
+  try {
+    const doc = container.ownerDocument;
+    let node: Node | null = null;
+    let offset = 0;
+    const anyDoc = doc as Document & {
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    };
+    if (typeof anyDoc.caretPositionFromPoint === "function") {
+      const pos = anyDoc.caretPositionFromPoint(clientX, clientY);
+      if (pos) { node = pos.offsetNode; offset = pos.offset; }
+    } else if (typeof doc.caretRangeFromPoint === "function") {
+      const range = doc.caretRangeFromPoint(clientX, clientY);
+      if (range) { node = range.startContainer; offset = range.startOffset; }
+    }
+    if (node && lineElement.contains(node)) {
+      const probe = doc.createRange();
+      probe.setStart(lineElement, 0);
+      probe.setEnd(node, offset);
+      const within = Math.min(lineLength, probe.toString().length);
+      return lineStart + within;
+    }
+  } catch {
+    // Fallback to end of clicked line if range calculation is unavailable.
+  }
+  return lineStart + lineLength;
+}
+
+function SeamlessInlineEditor({
+  initialValue,
+  initialCaret,
+  ariaLabel,
+  variant = "memo",
+  allowEmpty = false,
+  emptyMessage,
+  onSave,
+  onCancel,
+}: {
+  initialValue: string;
+  initialCaret: number | null;
+  ariaLabel: string;
+  variant?: "memo" | "comment";
+  allowEmpty?: boolean;
+  emptyMessage: string;
+  onSave(nextValue: string): Promise<boolean>;
+  onCancel(): void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  const doneRef = useRef(false);
+  const savingRef = useRef(false);
+
+  const resize = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    resize();
+    el.focus({ preventScroll: true });
+    const caret = initialCaret === null ? el.value.length : Math.max(0, Math.min(el.value.length, initialCaret));
+    el.setSelectionRange(caret, caret);
+  }, [initialCaret, resize]);
+
+  const commit = useCallback(async () => {
+    if (doneRef.current || savingRef.current) return;
+    if (value === initialValue) {
+      doneRef.current = true;
+      onCancel();
+      return;
+    }
+    if (!value.trim() && !allowEmpty) {
+      doneRef.current = true;
+      onCancel();
+      return;
+    }
+    savingRef.current = true;
+    try {
+      const ok = await onSave(value);
+      if (ok) doneRef.current = true;
+    } finally {
+      savingRef.current = false;
+    }
+  }, [allowEmpty, initialValue, onCancel, onSave, value]);
+
+  return (
+    <div className={`memo-inline-edit ${variant === "comment" ? "memo-inline-edit--comment" : ""}`}>
+      <textarea
+        ref={ref}
+        className={`memo-seamless-input ${variant === "comment" ? "memo-seamless-input--comment" : ""}`}
+        aria-label={ariaLabel}
+        rows={1}
+        value={value}
+        placeholder={emptyMessage}
+        onChange={(event) => {
+          setValue(event.target.value);
+          resize();
+        }}
+        onBlur={() => { void commit(); }}
+        onKeyDown={(event) => {
+          if (imeComposing(event)) return;
+          if (event.key === "Escape") {
+            event.preventDefault();
+            doneRef.current = true;
+            onCancel();
+            return;
+          }
+          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+            event.preventDefault();
+            void commit();
+          }
+        }}
+      />
+      <div className="memo-inline-edit__foot">
+        <span className="memo-inline-edit__hint">Esc 取消 · 失焦自动保存</span>
+        <div className="memo-inline-edit__actions">
+          <button
+            type="button"
+            className="btn"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              doneRef.current = true;
+              onCancel();
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => { void commit(); }}
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement | null) => void }) {
   const { selectPage, setPreference, openLocatedPage, spaces } = useWorkspace();
   const {
@@ -146,16 +306,16 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
   // Card states
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [expandedLong, setExpandedLong] = useState<Record<string, boolean>>({});
-  const [editingMemoId, setEditingMemoId] = useState<string | null>(null);
-  const [editingMemoText, setEditingMemoText] = useState("");
+  const [editingMemo, setEditingMemo] = useState<{ id: string; text: string; caret: number | null } | null>(null);
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
-  const [editingComment, setEditingComment] = useState<{ memoId: string; commentId: string; text: string } | null>(null);
+  const [editingComment, setEditingComment] = useState<{ memoId: string; commentId: string; text: string; caret: number | null } | null>(null);
   const [promoteTarget, setPromoteTarget] = useState<MemoDto | null>(null);
   const [promoteTitle, setPromoteTitle] = useState("");
   const [promoting, setPromoting] = useState(false);
   const [previewFile, setPreviewFile] = useState<StoredFile | null>(null);
   const [flashMemoId, setFlashMemoId] = useState<string | null>(null);
   const [flashCommentId, setFlashCommentId] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const surfaceRef = useRef<HTMLElement | null>(null);
   const attachSurface = useCallback((el: HTMLElement | null) => {
@@ -165,7 +325,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
 
   const loadStream = useCallback((aroundId?: string) => {
     const controller = new AbortController();
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
     void Promise.all([
       listMemos({
         limit: 30,
@@ -179,6 +339,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     ])
       .then(([listRes, tagRes]) => {
         if (controller.signal.aborted) return;
+        hasLoadedRef.current = true;
         setMemos(listRes.memos);
         setCounts(listRes.counts);
         setNextCursor(listRes.nextCursor);
@@ -402,18 +563,21 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
   };
 
-  const saveEditMemo = async (memo: MemoDto) => {
-    const clean = editingMemoText.trim();
+  const saveEditMemo = async (memo: MemoDto, nextText: string): Promise<boolean> => {
+    const clean = nextText.trim();
     if (!clean && !memo.attachments.length) {
       toast("闪念内容不能为空。", "error");
-      return;
+      return false;
     }
     try {
-      await updateMemo(memo.id, { markdown: editingMemoText, attachments: memo.attachments });
-      setEditingMemoId(null);
+      const updated = await updateMemo(memo.id, { markdown: nextText, attachments: memo.attachments }) as MemoDto;
+      setMemos((prev) => prev.map((item) => (item.id === memo.id ? updated : item)));
+      setEditingMemo((curr) => (curr?.id === memo.id ? null : curr));
       bumpMemoRefresh();
+      return true;
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "保存修改失败。", "error");
+      return false;
     }
   };
 
@@ -463,20 +627,21 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
   };
 
-  const saveEditComment = async () => {
-    if (!editingComment) return;
-    const trimmed = editingComment.text.trim();
-    if (!trimmed) return;
+  const saveEditComment = async (memoId: string, commentId: string, nextText: string): Promise<boolean> => {
+    const trimmed = nextText.trim();
+    if (!trimmed) return false;
     try {
-      const updated = await updateMemo(editingComment.commentId, { markdown: trimmed }) as MemoCommentDto;
-      setMemos((prev) => prev.map((item) => (item.id === editingComment.memoId ? {
+      const updated = await updateMemo(commentId, { markdown: trimmed }) as MemoCommentDto;
+      setMemos((prev) => prev.map((item) => (item.id === memoId ? {
         ...item,
-        comments: item.comments.map((c) => (c.id === editingComment.commentId ? updated : c)),
+        comments: item.comments.map((c) => (c.id === commentId ? updated : c)),
       } : item)));
-      setEditingComment(null);
+      setEditingComment((curr) => (curr?.commentId === commentId ? null : curr));
       bumpMemoRefresh();
+      return true;
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "更新批注失败。", "error");
+      return false;
     }
   };
 
@@ -536,7 +701,8 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
           key={`mention-${keyIndex++}`}
           type="button"
           className="memo-mention-chip"
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation();
             selectPage(matchedMention.pageId);
             setPreference("sidebar_view", "files");
           }}
@@ -560,7 +726,8 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
           key={`tag-${keyIndex++}`}
           type="button"
           className={`memo-tag-chip memo-tag-chip--${tagTone(tag)}`}
-          onClick={() => {
+          onClick={(event) => {
+            event.stopPropagation();
             setMemoTagFilter(tag);
             setMemoQuickFilter("all");
           }}
@@ -582,19 +749,20 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
       if (todoMatch) {
         const checked = todoMatch[1].toLowerCase() === "x";
         return (
-          <div key={lineIdx} className={`memo-todo ${checked ? "is-done" : ""}`}>
+          <div key={lineIdx} data-line-index={lineIdx} className={`memo-todo ${checked ? "is-done" : ""}`}>
             <input
               type="checkbox"
               checked={checked}
               aria-label={todoMatch[2]}
+              onClick={(event) => event.stopPropagation()}
               onChange={(event) => void toggleTodoLine(memo, lineIdx, event.target.checked)}
             />
             <span>{renderInlineSegment(todoMatch[2], memo.mentions)}</span>
           </div>
         );
       }
-      if (!line.trim()) return <div key={lineIdx} className="memo-line" />;
-      return <div key={lineIdx} className="memo-line">{renderInlineSegment(line, memo.mentions)}</div>;
+      if (!line.trim()) return <div key={lineIdx} data-line-index={lineIdx} className="memo-line" />;
+      return <div key={lineIdx} data-line-index={lineIdx} className="memo-line">{renderInlineSegment(line, memo.mentions)}</div>;
     });
   };
 
@@ -848,7 +1016,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
             <div className="memo-feed">
               {memos.map((memo) => {
                 const bodyText = stripAttachmentLines(memo.markdown);
-                const isEditing = editingMemoId === memo.id;
+                const isEditing = editingMemo?.id === memo.id;
                 const isLong = bodyText.split("\n").length > 6 || bodyText.length > 260;
                 const isLongExpanded = Boolean(expandedLong[memo.id]);
                 const isCommentsOpen = Boolean(expandedComments[memo.id]);
@@ -857,7 +1025,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                   <article
                     key={memo.id}
                     id={`memo-card-${memo.id}`}
-                    className={`memo-entry ${memo.pinned ? "is-pinned" : ""} ${flashMemoId === memo.id ? "history-flash" : ""}`}
+                    className={`memo-entry ${memo.pinned ? "is-pinned" : ""} ${isEditing ? "is-editing" : ""} ${flashMemoId === memo.id ? "history-flash" : ""}`}
                   >
                     <div className="memo-entry__head">
                       <div className="memo-entry__meta">
@@ -895,10 +1063,8 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                           className="icon-btn icon-btn--sm"
                           aria-label="编辑"
                           title="编辑"
-                          onClick={() => {
-                            setEditingMemoId(memo.id);
-                            setEditingMemoText(bodyText);
-                          }}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => setEditingMemo({ id: memo.id, text: bodyText, caret: bodyText.length })}
                         >
                           <Pencil size={14} />
                         </button>
@@ -926,30 +1092,30 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                       </div>
                     </div>
 
-                    {isEditing ? (
-                      <div className="memo-inline-edit">
-                        <textarea
-                          autoFocus
-                          aria-label="编辑闪念"
-                          value={editingMemoText}
-                          onChange={(event) => setEditingMemoText(event.target.value)}
-                          onKeyDown={(event) => {
-                            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-                              event.preventDefault();
-                              void saveEditMemo(memo);
-                            } else if (event.key === "Escape") {
-                              setEditingMemoId(null);
-                            }
-                          }}
-                        />
-                        <div className="memo-inline-edit__bar">
-                          <button type="button" className="btn" onClick={() => setEditingMemoId(null)}>取消</button>
-                          <button type="button" className="btn btn--primary" onClick={() => void saveEditMemo(memo)}>保存</button>
-                        </div>
-                      </div>
+                    {isEditing && editingMemo ? (
+                      <SeamlessInlineEditor
+                        initialValue={editingMemo.text}
+                        initialCaret={editingMemo.caret}
+                        ariaLabel="编辑闪念"
+                        allowEmpty={memo.attachments.length > 0}
+                        emptyMessage="写点什么…"
+                        onSave={(nextText) => saveEditMemo(memo, nextText)}
+                        onCancel={() => setEditingMemo((curr) => (curr?.id === memo.id ? null : curr))}
+                      />
                     ) : (
                       <>
-                        <div className={`memo-body ${isLong && !isLongExpanded ? "is-collapsed" : ""}`}>
+                        <div
+                          className={`memo-body memo-body--editable ${isLong && !isLongExpanded ? "is-collapsed" : ""}`}
+                          onClick={(event) => {
+                            const target = event.target as HTMLElement;
+                            if (target.closest("button, a, input, [role='button']")) return;
+                            if (window.getSelection()?.toString()) return;
+                            const lineEl = target.closest<HTMLElement>("[data-line-index]");
+                            const caret = caretOffsetFromClick(event.currentTarget, event.clientX, event.clientY, bodyText, lineEl);
+                            setExpandedLong((prev) => (prev[memo.id] ? prev : { ...prev, [memo.id]: true }));
+                            setEditingMemo({ id: memo.id, text: bodyText, caret });
+                          }}
+                        >
                           {renderBody(memo, memo.markdown)}
                         </div>
                         {isLong ? (
@@ -1019,7 +1185,8 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                                     type="button"
                                     className="icon-btn icon-btn--sm"
                                     aria-label="编辑批注"
-                                    onClick={() => setEditingComment({ memoId: memo.id, commentId: comment.id, text: comment.markdown })}
+                                    onMouseDown={(event) => event.preventDefault()}
+                                    onClick={() => setEditingComment({ memoId: memo.id, commentId: comment.id, text: comment.markdown, caret: comment.markdown.length })}
                                   >
                                     <Pencil size={12} />
                                   </button>
@@ -1033,21 +1200,30 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                                   </button>
                                 </span>
                               </div>
-                              {isEditingC ? (
-                                <div className="memo-inline-edit" style={{ marginTop: 4 }}>
-                                  <textarea
-                                    autoFocus
-                                    style={{ minHeight: 52 }}
-                                    value={editingComment.text}
-                                    onChange={(event) => setEditingComment((prev) => (prev ? { ...prev, text: event.target.value } : null))}
-                                  />
-                                  <div className="memo-inline-edit__bar">
-                                    <button type="button" className="btn" onClick={() => setEditingComment(null)}>取消</button>
-                                    <button type="button" className="btn btn--primary" onClick={() => void saveEditComment()}>保存</button>
-                                  </div>
-                                </div>
+                              {isEditingC && editingComment ? (
+                                <SeamlessInlineEditor
+                                  initialValue={editingComment.text}
+                                  initialCaret={editingComment.caret}
+                                  ariaLabel="编辑批注内容"
+                                  variant="comment"
+                                  emptyMessage="写下批注…"
+                                  onSave={(nextText) => saveEditComment(memo.id, comment.id, nextText)}
+                                  onCancel={() => setEditingComment((curr) => (curr?.commentId === comment.id ? null : curr))}
+                                />
                               ) : (
-                                <div className="memo-comment-item__body">{renderBody(memo, comment.markdown, true)}</div>
+                                <div
+                                  className="memo-comment-item__body memo-body--editable"
+                                  onClick={(event) => {
+                                    const target = event.target as HTMLElement;
+                                    if (target.closest("button, a, input, [role='button']")) return;
+                                    if (window.getSelection()?.toString()) return;
+                                    const lineEl = target.closest<HTMLElement>("[data-line-index]");
+                                    const caret = caretOffsetFromClick(event.currentTarget, event.clientX, event.clientY, comment.markdown, lineEl);
+                                    setEditingComment({ memoId: memo.id, commentId: comment.id, text: comment.markdown, caret });
+                                  }}
+                                >
+                                  {renderBody(memo, comment.markdown, true)}
+                                </div>
                               )}
                             </div>
                           );

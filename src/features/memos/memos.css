@@ -375,6 +375,16 @@
   background: var(--elevated);
 }
 
+.memo-entry.is-editing {
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+}
+
+:root[data-theme="dark"] .memo-entry.is-editing {
+  background: var(--elevated);
+  box-shadow: rgba(0, 0, 0, 0.32) 0 2px 6px, rgba(255, 255, 255, 0.06) 0 0 0 1px;
+}
+
 .memo-entry__head {
   display: flex;
   min-height: 24px;
@@ -447,6 +457,7 @@
   font-size: 15px;
   line-height: 1.65;
   overflow-wrap: anywhere;
+  cursor: text;
 }
 
 .memo-body.is-collapsed {
@@ -565,26 +576,53 @@
   object-fit: cover;
 }
 
-.memo-inline-edit textarea {
+.memo-inline-edit textarea,
+.memo-seamless-input {
+  display: block;
   width: 100%;
-  min-height: 84px;
-  padding: 9px 11px;
+  min-height: 25px;
+  padding: 0;
   border: 0;
-  border-radius: var(--r-sm);
-  background: var(--paper);
-  box-shadow: 0 0 0 1.5px var(--blue);
+  background: transparent;
+  box-shadow: none;
   color: var(--ink);
   outline: 0;
   font-size: 15px;
   line-height: 1.65;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
 }
 
-.memo-inline-edit__bar {
+.memo-inline-edit--comment textarea,
+.memo-seamless-input--comment {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.memo-inline-edit__foot {
   display: flex;
-  justify-content: flex-end;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 8px;
+}
+
+.memo-inline-edit__hint {
+  color: var(--ink-4);
+  font-size: 11.5px;
+  user-select: none;
+}
+
+.memo-inline-edit__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.memo-inline-edit__actions .btn {
+  min-height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
 }
 
 /* ── Left-Border Quote-Style Comment Thread ──────────────────────────────── */
@@ -657,6 +695,7 @@
   font-size: 14px;
   line-height: 1.55;
   overflow-wrap: anywhere;
+  cursor: text;
 }
 
 .memo-comment-composer {

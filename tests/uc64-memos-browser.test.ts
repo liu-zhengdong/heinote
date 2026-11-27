@@ -100,12 +100,37 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
   await expect(page.locator(".memo-entry").nth(1)).toContainText("较早闪念 咖啡豆实验");
   await expect(page.locator(".memo-entry").nth(1)).not.toContainText("#好点子");
 
-  // Comment on older memo -> stays below newer memo across reload.
+  // Click-to-edit on memo body + auto-save on blur (and Escape cancel); tags still filter on click.
+  const latestCard = page.locator(".memo-entry").nth(0);
+  await latestCard.locator(".memo-body").click();
+  const inlineMemoInput = latestCard.getByLabel("编辑闪念", { exact: true });
+  await expect(inlineMemoInput).toBeFocused();
+  await inlineMemoInput.fill("误操作取消测试 #工作/设计");
+  await inlineMemoInput.press("Escape");
+  await expect(inlineMemoInput).toHaveCount(0);
+  await expect(latestCard).toContainText("最新闪念 界面打磨");
+
+  await latestCard.locator(".memo-body").click();
+  const inlineMemoInput2 = latestCard.getByLabel("编辑闪念", { exact: true });
+  await inlineMemoInput2.fill("最新闪念 界面打磨 点击即改 #工作/设计\n- [ ] 检查排版间距");
+  await page.locator(".memo-head__title").click();
+  await expect(inlineMemoInput2).toHaveCount(0);
+  await expect(latestCard).toContainText("点击即改");
+
+  // Comment on older memo -> stays below newer memo, and comment body also supports click-to-edit + blur save.
   const olderCard = page.locator(".memo-entry").nth(1);
   await olderCard.hover();
   await olderCard.getByRole("button", { name: "批注", exact: true }).click();
-  await olderCard.getByLabel("添加批注", { exact: true }).fill("老卡片的独有批注关键词");
+  await olderCard.getByLabel("添加批注", { exact: true }).fill("老卡片的独有批注");
   await olderCard.locator(".memo-comment-composer").getByRole("button", { name: "发送", exact: true }).click();
+  await expect(olderCard).toContainText("老卡片的独有批注");
+
+  await olderCard.locator(".memo-comment-item__body").click();
+  const inlineCommentInput = olderCard.getByLabel("编辑批注内容", { exact: true });
+  await expect(inlineCommentInput).toBeFocused();
+  await inlineCommentInput.fill("老卡片的独有批注关键词");
+  await page.locator(".memo-head__title").click();
+  await expect(inlineCommentInput).toHaveCount(0);
   await expect(olderCard).toContainText("老卡片的独有批注关键词");
   await expect(page.locator(".memo-entry").nth(0)).toContainText("最新闪念");
   await expect(page.locator(".memo-entry").nth(1)).toContainText("较早闪念");
