@@ -37,12 +37,32 @@ const sendMarkdown = (req: Request, res: Response, body: string, tag: string) =>
   res.send(body);
 };
 
-// Anything that asks for the root without wanting a web page is a program —
-// curl, fetch and other agent clients all send `Accept: */*` or an explicit
-// non-HTML type — so it gets the onboarding guide instead of a useless SPA
-// shell. Browsers always offer text/html and pass through to the frontend
-// (static files in production, Vite in dev, 404 in api-only mode).
-const wantsHtml = (accept: string | undefined): boolean => /text\/html|application\/xhtml\+xml/i.test(accept ?? "");
+// Negotiate "/" between browsers and programmatic clients (curl, fetch, AI
+// WebFetch). Browsers send `text/html` without `text/markdown`; clients that
+// omit `text/html`, reject it (`q=0`), or prefer `text/markdown` (e.g.
+// `Accept: text/markdown, text/html;q=0.8`) receive the onboarding markdown
+// directly instead of the SPA shell.
+const prefersHtml = (accept: string | undefined): boolean => {
+  let htmlQ = -1;
+  let mdQ = -1;
+  for (const part of (accept ?? "").split(",")) {
+    const [rawType, ...params] = part.split(";");
+    const type = rawType?.trim().toLowerCase();
+    if (type !== "text/html" && type !== "application/xhtml+xml" && type !== "text/markdown") continue;
+    let q = 1;
+    let valid = true;
+    for (const param of params) {
+      const match = /^\s*q\s*=\s*(.+?)\s*$/i.exec(param);
+      if (!match) continue;
+      if (!/^(?:1(?:\.0{0,3})?|0(?:\.\d{0,3})?)$/.test(match[1])) { valid = false; break; }
+      q = Number(match[1]);
+    }
+    if (!valid) continue;
+    if (type === "text/markdown") mdQ = Math.max(mdQ, q);
+    else htmlQ = Math.max(htmlQ, q);
+  }
+  return htmlQ > 0 && htmlQ > mdQ;
+};
 
 export function attachAgentOnboarding(app: Express): void {
   for (const { path, body } of docs) {
@@ -51,9 +71,11 @@ export function attachAgentOnboarding(app: Express): void {
   }
   const tag = etag(llmsTxt);
   app.get("/", (req: Request, res: Response, next: NextFunction) => {
-    // The two representations of "/" must never be coalesced by a shared cache.
+    // The two representations of "/" must never be coalesced by a shared cache,
+    // and even the HTML shell advertises the onboarding guide via Link header.
     res.vary("Accept");
-    if (wantsHtml(req.headers.accept)) return next();
+    res.set("Link", '</llms.txt>; rel="describedby"');
+    if (prefersHtml(req.headers.accept)) return next();
     sendMarkdown(req, res, llmsTxt, tag);
   });
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,9 +74,17 @@ test("UC-52: 文档带 ETag 与 describedby Link，条件请求回 304", async (
 test("UC-52: / 对非 HTML 客户端回导览，对浏览器继续交给前端管线", async (t) => {
   const server = await fixture(t);
 
-  // curl / fetch / agent clients ask for */* or an explicit type: they get
-  // the same guide body as /llms.txt, not the SPA shell.
-  for (const accept of ["*/*", "application/json", "text/markdown"]) {
+  // curl / fetch / agent clients ask for */*, a non-HTML type, or prefer
+  // text/markdown over text/html: they get the same guide body as /llms.txt,
+  // not the SPA shell.
+  for (const accept of [
+    "*/*",
+    "application/json",
+    "text/markdown",
+    "text/markdown, text/html;q=0.8",
+    "text/markdown, text/html",
+    "text/html;q=0, */*",
+  ]) {
     const res = await get(server, "/", { Accept: accept });
     assert.equal(res.status, 200, `Accept: ${accept}`);
     assert.match(res.headers.get("content-type") ?? "", /text\/markdown/);
@@ -92,11 +100,30 @@ test("UC-52: / 对非 HTML 客户端回导览，对浏览器继续交给前端�
 
   // A browser offers text/html and is handed on to the frontend pipeline —
   // in this api-only fixture nothing serves it, so the fallthrough shows as 404
-  // (and definitely not as markdown).
-  const browser = await get(server, "/", { Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" });
-  assert.notEqual(browser.status, 200);
-  assert.doesNotMatch(browser.headers.get("content-type") ?? "", /text\/markdown/);
-  assert.match(browser.headers.get("vary") ?? "", /Accept/i);
+  // (and definitely not as markdown), while still carrying Vary and Link.
+  for (const accept of [
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "text/html;q=0.9, text/markdown;q=0.5",
+  ]) {
+    const browser = await get(server, "/", { Accept: accept });
+    assert.notEqual(browser.status, 200, `Accept: ${accept}`);
+    assert.doesNotMatch(browser.headers.get("content-type") ?? "", /text\/markdown/);
+    assert.match(browser.headers.get("vary") ?? "", /Accept/i);
+    assert.match(browser.headers.get("link") ?? "", /<\/llms\.txt>; rel="describedby"/);
+  }
+});
+
+test("UC-52: index.html 内置面向 WebFetch 的精简 AI 导览指针", async () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  const html = await readFile(join(root, "index.html"), "utf8");
+  assert.match(html, /<meta\s+name="description"[^>]*\/llms\.txt/);
+  assert.match(html, /<link\s+rel="describedby"\s+href="\/llms\.txt"/);
+  const noscript = html.match(/<noscript>[\s\S]*?<\/noscript>/)?.[0] ?? "";
+  assert.ok(noscript, "<noscript> fallback present");
+  assert.match(noscript, /href="\/llms\.txt"/);
+  assert.match(noscript, /href="\/api\/v1\/skill\.md"/);
+  assert.match(noscript, /href="\/api\/v1\/agent-api\.md"/);
+  assert.match(noscript, /POST \/api\/v1\/auth\/requests/);
 });
 
 test("UC-52: /api/v1 响应带 describedby Link 指回导览", async (t) => {

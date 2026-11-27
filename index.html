@@ -6,6 +6,7 @@
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#1b1c1f" />
     <title>小黑笔记</title>
+    <meta name="description" content="小黑笔记（HeiNote）：自托管笔记、Database、附件与实时共编。Agent 接入导览见 /llms.txt，接入技能见 /api/v1/skill.md，API 契约见 /api/v1/agent-api.md。" />
     <link rel="describedby" href="/llms.txt" />
     <link rel="icon" href="/brand/favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" href="/brand/heinote-icon-64.png" />
@@ -18,6 +19,19 @@
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <main>
+        <h1>小黑笔记 (HeiNote)</h1>
+        <p>自托管笔记应用：文档页面、Database、附件与实时共编。网页端需要启用 JavaScript。</p>
+        <h2>AI / Agent 接入</h2>
+        <ul>
+          <li><a href="/llms.txt">站点导览（/llms.txt）</a>：自举步骤与免手动令牌授权流程</li>
+          <li><a href="/api/v1/skill.md">接入技能（/api/v1/skill.md）</a>：使用说明与内嵌 heinote 命令行助手脚本</li>
+          <li><a href="/api/v1/agent-api.md">API 契约（/api/v1/agent-api.md）</a>：页面、Database、附件与版本接口文档</li>
+        </ul>
+        <p>无需预置令牌：向 <code>POST /api/v1/auth/requests</code> 提交授权请求，用户批准后轮询获取 Bearer 令牌。</p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

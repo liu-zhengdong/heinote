@@ -2,7 +2,7 @@
 
 Agent 使用 Bearer 令牌访问同源 HTTP 服务。令牌由用户在账号面板创建。Agent 路径以 `/api/v1` 开头。浏览器审核路径在提案一节另列。
 
-本文档、接入技能与站点导览在部署站点上公开托管：`GET /llms.txt`、`GET /api/v1/skill.md`、`GET /api/v1/agent-api.md`，均免鉴权。站点根路径 `GET /` 在 `Accept` 不含 `text/html` 时返回 `llms.txt` 导览，浏览器照旧收到网页端。Agent 拿到站点 URL 即可自取接入材料，再经下方「授权请求」拿令牌。
+本文档、接入技能与站点导览在部署站点上公开托管：`GET /llms.txt`、`GET /api/v1/skill.md`、`GET /api/v1/agent-api.md`，均免鉴权。站点根路径 `GET /` 在 `Accept` 不偏好 `text/html`（如 `*/*` 或优先 `text/markdown`）时直接返回 `llms.txt` 导览；浏览器及请求 HTML 的抓取器收到网页端，并在响应头 `Link`、`<meta name="description">` 与 `<noscript>` 中携带导览指针。Agent 拿到站点 URL 即可自取接入材料，再经下方「授权请求」拿令牌。
 
 令牌携带一个 Agent 身份：显示名与头像。写操作以此身份署名版本、提案与变更记录。用户在设置中按令牌查看最近写操作；撤销令牌清除操作记录但保留已产生的署名。
 
