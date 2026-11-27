@@ -18,10 +18,113 @@ const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "bas
 
 const title = (page: NotePage) => pageName(page);
 
-/** Obsidian's orders. */
+export const SIDEBAR_ORDER_STEP = 1024;
+const SIDEBAR_ORDER_EPSILON = 1e-6;
+
+/** Where a page stands in manual sidebar order: its stored `sidebar_order`,
+ *  falling back to creation time for pages written before manual ordering. */
+export function manualOrderKey(page: Pick<NotePage, "sidebar_order" | "created_at">): number {
+  if (typeof page.sidebar_order === "number" && Number.isFinite(page.sidebar_order)) return page.sidebar_order;
+  const created = Date.parse(page.created_at ?? "");
+  return Number.isFinite(created) ? created : 0;
+}
+
+/** Order value that places a new or appended page at the end of `siblings`. */
+export function nextSidebarOrder(siblings: readonly NotePage[], now: number): number {
+  if (!siblings.length) return now;
+  let max = -Infinity;
+  for (const sibling of siblings) {
+    const key = manualOrderKey(sibling);
+    if (key > max) max = key;
+  }
+  return Number.isFinite(max) ? max + SIDEBAR_ORDER_STEP : now;
+}
+
+export interface SidebarReorderPlan {
+  sidebar_order: number;
+  /** Present when sibling keys need re-spacing (precision exhaustion or switching
+   *  from an automatic sort to manual while preserving the visible order). */
+  rewrite?: Record<string, number>;
+}
+
+/** Computes the `sidebar_order` update(s) needed to place `dragged` at
+ *  `insertIndex` (0..rest.length) among `siblings` (ordered as currently shown).
+ *  Returns null when the drop leaves manual order unchanged. */
+export function planSidebarReorder(
+  siblings: readonly NotePage[],
+  dragged: NotePage,
+  insertIndex: number,
+  options: {
+    currentSort: SidebarSort;
+    now: number;
+    canOrder?: (pageId: string) => boolean;
+  },
+): SidebarReorderPlan | null {
+  const { currentSort, now, canOrder = () => true } = options;
+  const oldIndex = siblings.findIndex((item) => item.id === dragged.id);
+  const rest = oldIndex >= 0 ? siblings.filter((item) => item.id !== dragged.id) : [...siblings];
+  const at = Math.max(0, Math.min(rest.length, insertIndex));
+  if (currentSort === "manual" && oldIndex >= 0 && oldIndex === at) return null;
+
+  const before = rest[at - 1];
+  const after = rest[at];
+  const lo = before ? manualOrderKey(before) : undefined;
+  const hi = after ? manualOrderKey(after) : undefined;
+  const needsRewrite = currentSort !== "manual"
+    || (lo !== undefined && hi !== undefined && hi - lo < SIDEBAR_ORDER_EPSILON);
+
+  if (!needsRewrite) {
+    const sidebar_order = lo === undefined && hi === undefined ? now
+      : lo === undefined ? hi! - SIDEBAR_ORDER_STEP
+      : hi === undefined ? lo + SIDEBAR_ORDER_STEP
+      : lo + (hi - lo) / 2;
+    return { sidebar_order };
+  }
+
+  const sequence = [...rest.slice(0, at), dragged, ...rest.slice(at)];
+  const rewrite: Record<string, number> = {};
+  const movable = (page: NotePage) => page.id === dragged.id || canOrder(page.id);
+  const hasFixedAnchor = sequence.some((page) => !movable(page));
+
+  if (!hasFixedAnchor) {
+    sequence.forEach((page, index) => { rewrite[page.id] = (index + 1) * SIDEBAR_ORDER_STEP; });
+    return { sidebar_order: rewrite[dragged.id], rewrite };
+  }
+
+  // Keep non-editable anchors (e.g. another user's shared root) untouched and
+  // space editable runs cleanly between their surrounding anchor keys.
+  for (let start = 0; start < sequence.length;) {
+    if (!movable(sequence[start])) {
+      start += 1;
+      continue;
+    }
+    let end = start;
+    while (end + 1 < sequence.length && movable(sequence[end + 1])) end += 1;
+    const leftAnchor = start > 0 ? manualOrderKey(sequence[start - 1]) : undefined;
+    const rightAnchor = end + 1 < sequence.length ? manualOrderKey(sequence[end + 1]) : undefined;
+    const count = end - start + 1;
+    for (let offset = 0; offset < count; offset += 1) {
+      const page = sequence[start + offset];
+      if (leftAnchor !== undefined && rightAnchor !== undefined && rightAnchor > leftAnchor) {
+        rewrite[page.id] = leftAnchor + ((rightAnchor - leftAnchor) * (offset + 1)) / (count + 1);
+      } else if (rightAnchor !== undefined && leftAnchor === undefined) {
+        rewrite[page.id] = rightAnchor - (count - offset) * SIDEBAR_ORDER_STEP;
+      } else if (leftAnchor !== undefined) {
+        rewrite[page.id] = leftAnchor + (offset + 1) * SIDEBAR_ORDER_STEP;
+      } else {
+        rewrite[page.id] = (start + offset + 1) * SIDEBAR_ORDER_STEP;
+      }
+    }
+    start = end + 1;
+  }
+  return { sidebar_order: rewrite[dragged.id], rewrite };
+}
+
+/** Manual order plus Obsidian's automatic orders. */
 export function comparePages(sort: SidebarSort): (left: NotePage, right: NotePage) => number {
   const order = (left: NotePage, right: NotePage): number => {
     switch (sort) {
+      case "manual": return (manualOrderKey(left) - manualOrderKey(right)) || collator.compare(title(left), title(right));
       case "name-desc": return collator.compare(title(right), title(left));
       case "modified": return (right.updated_at ?? "").localeCompare(left.updated_at ?? "");
       case "modified-asc": return (left.updated_at ?? "").localeCompare(right.updated_at ?? "");
@@ -124,7 +227,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
   if (left === right) return true;
   const ids = Object.keys(left);
   if (ids.length !== Object.keys(right).length) return false;
-  const byTime = sort !== "name" && sort !== "name-desc";
+  const byTime = sort !== "name" && sort !== "name-desc" && sort !== "manual";
   for (const id of ids) {
     const before = left[id];
     const after = right[id];
@@ -132,6 +235,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
     if (!after) return false;
     if (before.title !== after.title || before.icon !== after.icon || before.icon_image !== after.icon_image || before.parent_id !== after.parent_id
       || before.archived !== after.archived || before.purging !== after.purging || before.kind !== after.kind || before.share_space_id !== after.share_space_id) return false;
+    if (sort === "manual" && (before.sidebar_order !== after.sidebar_order || before.created_at !== after.created_at)) return false;
     if (byTime && (before.updated_at !== after.updated_at || before.created_at !== after.created_at)) return false;
     if (!after.title && pageName(before) !== pageName(after)) return false;
   }
@@ -140,6 +244,7 @@ export function sameListing(left: Record<string, NotePage>, right: Record<string
 }
 
 export const SORT_LABELS: Record<SidebarSort, string> = {
+  manual: "Manual",
   name: "File name (A to Z)",
   "name-desc": "File name (Z to A)",
   modified: "Modified time (new to old)",

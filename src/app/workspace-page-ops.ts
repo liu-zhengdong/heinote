@@ -5,7 +5,8 @@ import { databaseRows, newDatabaseConfig, rowKey, rowOrderAfter } from "../featu
 import { markFresh } from "../features/database/fresh";
 import { reidentify } from "../features/editor/editor-commands";
 import type { BlockMutation, BlockTree, DatabaseConfig, NotePage, PageVersion, SpaceSummary } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
+import { comparePages, nextSidebarOrder, planSidebarReorder } from "../features/sidebar/tree";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { renamedTitle } from "../core/title";
 import { pageBasis } from "../collaboration/client";
@@ -33,6 +34,18 @@ export interface CreatePageOptions {
   /** Its name from the start — a page made from a mention is named by what
    *  was typed after the `@`. */
   title?: string;
+}
+
+export interface MovePageOptions {
+  /** Target manual sidebar order for the moved/reordered page. */
+  sidebarOrder?: number;
+  /** Optional sibling re-spacing map produced by `planSidebarReorder`. */
+  rewriteOrders?: Record<string, number>;
+}
+
+/** Active siblings under `parentId` (null: top level of personal navigation). */
+function siblingsUnder(pages: Record<string, NotePage>, parentId: string | null): NotePage[] {
+  return Object.values(pages).filter((page) => page?.id && !inTrash(pages, page.id) && (page.parent_id ?? null) === parentId);
 }
 
 /** A copied page's body: every paragraph under a fresh id — so the copy and
@@ -101,7 +114,9 @@ export function useWorkspacePageOps({
     if (scope && (!targetSpace || targetSpace.knowledgeBase?.archived || !["owner", "admin", "editor"].includes(targetSpace.role))) return null;
     const id = createId(kind === "database" ? "database" : "page");
     const blank = blankPage(id, kind, parentId, platform.bootstrap.user.displayName);
-    const named = options.title ? { ...blank, title: options.title } : blank;
+    const siblings = siblingsUnder(document.state.pages, parentId);
+    const ordered: NotePage = { ...blank, sidebar_order: nextSidebarOrder(siblings, Date.now()) };
+    const named = options.title ? { ...ordered, title: options.title } : ordered;
     const page = kind === "database" && options.database ? { ...named, database: options.database } : named;
     const mutations: WorkspaceMutation[] = [{ type: "set", path: ["pages", id], value: page }];
     const parent = parentId ? document.state.pages[parentId] : null;
@@ -209,6 +224,30 @@ export function useWorkspacePageOps({
     }
 
     const rootCopyId = idByOriginal.get(pageId)!;
+    const copyParentId = options.toPersonal ? null : (source.parent_id ?? null);
+    const copySiblings = siblingsUnder(document.state.pages, copyParentId).sort(comparePages("manual"));
+    const copyWrite = mutations.find((item) => item.type === "set" && item.path.length === 2 && item.path[0] === "pages" && item.path[1] === rootCopyId);
+    if (copyWrite?.type === "set" && copyWrite.value && typeof copyWrite.value === "object") {
+      const copyPage = copyWrite.value as NotePage;
+      if (options.toPersonal) {
+        copyPage.sidebar_order = nextSidebarOrder(copySiblings, Date.now());
+      } else {
+        const afterIndex = copySiblings.findIndex((item) => item.id === pageId) + 1;
+        const plan = planSidebarReorder(copySiblings, copyPage, afterIndex > 0 ? afterIndex : copySiblings.length, {
+          currentSort: "manual",
+          now: Date.now(),
+          canOrder: (candidateId) => canOrderPageIn(document.state.pages, spacesRef.current, candidateId),
+        });
+        if (plan) {
+          copyPage.sidebar_order = plan.sidebar_order;
+          if (plan.rewrite) {
+            for (const [siblingId, order] of Object.entries(plan.rewrite)) {
+              if (siblingId !== rootCopyId) mutations.push({ type: "set", path: ["pages", siblingId, "sidebar_order"], value: order });
+            }
+          }
+        }
+      }
+    }
     // The copy's line goes right after the original's, in their parent. A
     // copy bound for the personal space has no parent there — skip the
     // back-reference entirely.
@@ -268,26 +307,69 @@ export function useWorkspacePageOps({
     return answer.id;
   }, [document, platform]);
 
-  /** Re-parents a page. Refuses to drop a page inside its own subtree, which is
-   *  the only move that could orphan a branch. */
-  const movePage = useCallback((pageId: string, parentId: string | null) => {
+  /** Re-parents and/or reorders a page in the sidebar tree. Refuses to drop a
+   *  page inside its own subtree, which is the only move that could orphan a
+   *  branch. */
+  const movePage = useCallback((pageId: string, parentId: string | null, options: MovePageOptions = {}) => {
     if (!document) return;
     const page = document.state.pages[pageId];
-    if (!page || page.parent_id === parentId || pageId === parentId) return;
+    if (!page || pageId === parentId) return;
+    const currentParentId = page.parent_id ?? null;
+    const sameParent = currentParentId === parentId;
+    if (sameParent) {
+      if (options.sidebarOrder === undefined && !options.rewriteOrders) return;
+      if (!canOrderPageIn(document.state.pages, spacesRef.current, pageId)) return;
+      const mutations: WorkspaceMutation[] = [];
+      if (options.rewriteOrders) {
+        for (const [id, order] of Object.entries(options.rewriteOrders)) {
+          if (id === pageId || canOrderPageIn(document.state.pages, spacesRef.current, id)) {
+            if (document.state.pages[id]?.sidebar_order !== order) {
+              mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
+            }
+          }
+        }
+      } else if (options.sidebarOrder !== undefined && page.sidebar_order !== options.sidebarOrder) {
+        mutations.push({ type: "set", path: ["pages", pageId, "sidebar_order"], value: options.sidebarOrder });
+      }
+      if (mutations.length) commit(mutations);
+      return;
+    }
     if (!canMovePageIn(document.state.pages, spacesRef.current, pageId, parentId)) return;
     if (parentId && descendantPageIds(document.state.pages, pageId).includes(parentId)) return;
+    const nextOrder = options.sidebarOrder ?? nextSidebarOrder(
+      siblingsUnder(document.state.pages, parentId).filter((item) => item.id !== pageId),
+      Date.now(),
+    );
     /* A move across scopes runs server-side (UC-59) so large subtrees transfer
        in SQLite without pulling all bodies/histories into the browser. */
     const crossing = spaceOfPage(document.state.pages, pageId) !== (parentId ? spaceOfPage(document.state.pages, parentId) : undefined);
     if (crossing) {
-      void document.transferPage(pageId, parentId).catch((error) => {
+      const siblingRewrites = options.rewriteOrders
+        ? Object.entries(options.rewriteOrders).filter(([id]) => id !== pageId && canOrderPageIn(document.state.pages, spacesRef.current, id))
+        : [];
+      void document.transferPage(pageId, parentId, { sidebarOrder: nextOrder }).then(() => {
+        if (!siblingRewrites.length) return;
+        const writes: WorkspaceMutation[] = siblingRewrites
+          .filter(([id, order]) => document.state.pages[id] && document.state.pages[id].sidebar_order !== order)
+          .map(([id, order]) => ({ type: "set", path: ["pages", id, "sidebar_order"], value: order }));
+        if (writes.length) commit(writes);
+      }).catch((error) => {
         if (platform) publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "页面移动失败。", writes: [] });
       });
       return;
     }
     const mutations: WorkspaceMutation[] = [
       { type: "set", path: ["pages", pageId, "parent_id"], value: parentId },
+      { type: "set", path: ["pages", pageId, "sidebar_order"], value: nextOrder },
     ];
+    if (options.rewriteOrders) {
+      for (const [id, order] of Object.entries(options.rewriteOrders)) {
+        if (id === pageId) continue;
+        if (canOrderPageIn(document.state.pages, spacesRef.current, id) && document.state.pages[id]?.sidebar_order !== order) {
+          mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
+        }
+      }
+    }
     const roots = document.state.roots.filter((id) => id !== pageId);
     mutations.push({ type: "set", path: ["roots"], value: parentId ? roots : [...roots, pageId] });
     const nextParent = parentId ? document.state.pages[parentId] : null;

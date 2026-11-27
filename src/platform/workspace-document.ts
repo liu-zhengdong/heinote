@@ -645,14 +645,18 @@ export class WorkspaceDocument {
 
   /** Moves a page tree across personal / ordinary shared scopes via server-side
    *  SQLite transfer (UC-59). */
-  async transferPage(pageId: string, targetParentId: string | null): Promise<void> {
+  async transferPage(pageId: string, targetParentId: string | null, options: { sidebarOrder?: number } = {}): Promise<void> {
     const sourceScope = spaceOfPage(this.state.pages, pageId) ?? PERSONAL;
     const targetScope = targetParentId ? (spaceOfPage(this.state.pages, targetParentId) ?? PERSONAL) : PERSONAL;
     await this.flush();
     const moved = [pageId, ...descendantPageIds(this.state.pages, pageId)];
     await request(`/api/pages/${encodeURIComponent(pageId)}/transfer`, {
       method: "POST",
-      body: JSON.stringify({ action: "move", targetParentId }),
+      body: JSON.stringify({
+        action: "move",
+        targetParentId,
+        ...(options.sidebarOrder !== undefined ? { sidebarOrder: options.sidebarOrder } : {}),
+      }),
     });
     if (sourceScope !== targetScope) {
       for (const id of moved) closeCollaborativePage(sourceScope, id, { consume: false });

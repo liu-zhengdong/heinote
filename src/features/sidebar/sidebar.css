@@ -422,8 +422,34 @@
   color: var(--ink);
 }
 
+.tree-row.is-dragging {
+  opacity: 0.45;
+}
+
 .tree-row.is-drop-target {
-  box-shadow: inset 0 0 0 2px var(--blue);
+  background: var(--blue-tint);
+  box-shadow: inset 0 0 0 1.5px var(--blue);
+}
+
+.tree-row.is-drop-before::before,
+.tree-row.is-drop-after::after {
+  position: absolute;
+  z-index: 2;
+  right: 6px;
+  left: calc(var(--tree-inset) + var(--drop-depth, var(--depth, 0)) * var(--tree-indent));
+  height: 2px;
+  border-radius: 1px;
+  background: var(--blue);
+  content: "";
+  pointer-events: none;
+}
+
+.tree-row.is-drop-before::before {
+  top: -1px;
+}
+
+.tree-row.is-drop-after::after {
+  bottom: -1px;
 }
 
 /* A row's mark: its icon at rest, and — when it holds anything — the arrow

@@ -22,7 +22,7 @@ export function KnowledgeBaseHome({ pageId }: { pageId: string }) {
   const pages = useWorkspaceState((state) => isHome && spaceId ? pagesInSpace(state.pages, spaces, spaceId) : null);
   const tree = useMemo(() => {
     const available = Object.fromEntries(Object.entries(pages ?? {}).filter(([id]) => id !== pageId && !inTrash(pages ?? {}, id)));
-    return buildTree(available, metadata?.sort ?? "name");
+    return buildTree(available, metadata?.sort ?? "manual");
   }, [metadata?.sort, pageId, pages]);
   const recent = useMemo(() => tree.roots.concat([...tree.children.values()].flat())
     .toSorted((left, right) => (right.updated_at ?? right.created_at ?? "").localeCompare(left.updated_at ?? left.created_at ?? ""))

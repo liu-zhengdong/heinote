@@ -151,6 +151,25 @@ export function canMovePage(
   return true;
 }
 
+/** Whether a member may change `pageId`'s `sidebar_order` among its current
+ *  siblings. Any editable non-trashed page qualifies except a knowledge base's
+ *  sole home page and an ordinary shared root owned by someone else. */
+export function canOrderPage(
+  pages: Record<string, NotePage>,
+  spaces: Record<string, PermissionSpace>,
+  pageId: string,
+): boolean {
+  const page = pages[pageId];
+  if (!page || inTrash(pages, pageId)) return false;
+  const spaceId = spaceOfPage(pages, pageId);
+  if (!spaceId) return true;
+  const space = spaces[spaceId];
+  if (!space || space.role === "viewer" || space.knowledgeBase?.archived) return false;
+  if (space.knowledgeBase?.homePageId === pageId) return false;
+  if (page.share_space_id) return space.role === "owner";
+  return true;
+}
+
 /** Whether a member may move a page to the trash: anything they can edit,
  *  except an ordinary shared root belongs to its owner only — it is gone for
  *  everyone it is shared with. One rule for the window and for agents. */

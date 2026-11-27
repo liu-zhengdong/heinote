@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canDeletePage, canMovePage, canRestorePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
+import { canDeletePage, canMovePage, canOrderPage, canRestorePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, pageHolders, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
 import type { NotePage, WorkspaceState } from "./types";
 import { emptyWorkspace } from "./workspace-state";
 
@@ -203,5 +203,34 @@ describe("UC-57: multi-level trash, purging state, and descendant counts", () =>
     ).pages;
     expect(canRestorePage(trashedChildOnly, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
     expect(canRestorePage(trashedChildOnly, { space_s: { role: "viewer" } }, "sharedChild")).toBe(false);
+  });
+
+  it("checks sidebar sibling reorder permissions across personal, shared, and knowledge base scopes", () => {
+    const pages = workspace(
+      page("mine"),
+      page("trashed", { archived: true }),
+      page("sharedRoot", { share_space_id: "space_s" }),
+      page("sharedChild", { parent_id: "sharedRoot" }),
+      page("kbHome", { share_space_id: "space_kb" }),
+      page("kbChild", { parent_id: "kbHome" }),
+    ).pages;
+
+    expect(canOrderPage(pages, {}, "mine")).toBe(true);
+    expect(canOrderPage(pages, {}, "trashed")).toBe(false);
+
+    expect(canOrderPage(pages, { space_s: { role: "owner" } }, "sharedRoot")).toBe(true);
+    expect(canOrderPage(pages, { space_s: { role: "editor" } }, "sharedRoot")).toBe(false);
+    expect(canOrderPage(pages, { space_s: { role: "viewer" } }, "sharedRoot")).toBe(false);
+    expect(canOrderPage(pages, { space_s: { role: "owner" } }, "sharedChild")).toBe(true);
+    expect(canOrderPage(pages, { space_s: { role: "editor" } }, "sharedChild")).toBe(true);
+    expect(canOrderPage(pages, { space_s: { role: "viewer" } }, "sharedChild")).toBe(false);
+
+    const activeKb = { space_kb: { role: "editor", knowledgeBase: { homePageId: "kbHome", archived: false } } };
+    const viewerKb = { space_kb: { role: "viewer", knowledgeBase: { homePageId: "kbHome", archived: false } } };
+    const archivedKb = { space_kb: { role: "owner", knowledgeBase: { homePageId: "kbHome", archived: true } } };
+    expect(canOrderPage(pages, activeKb, "kbHome")).toBe(false);
+    expect(canOrderPage(pages, activeKb, "kbChild")).toBe(true);
+    expect(canOrderPage(pages, viewerKb, "kbChild")).toBe(false);
+    expect(canOrderPage(pages, archivedKb, "kbChild")).toBe(false);
   });
 });

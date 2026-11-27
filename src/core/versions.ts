@@ -22,12 +22,13 @@ function sameContent(left: PageVersion["snapshot"], right: PageVersion["snapshot
  *  is shared into, which Move to, the trash and Share change, never a
  *  restore. */
 export function restoredPage(snapshot: PageVersion["snapshot"], current: PageVersion["snapshot"]): PageVersion["snapshot"] {
-  const { parent_id: _parent, row_order: _order, archived: _trashed, archived_at: _when, share_space_id: _space, ...said } = structuredClone(snapshot);
-  const { parent_id, row_order, archived, archived_at, share_space_id } = structuredClone(current);
+  const { parent_id: _parent, row_order: _order, sidebar_order: _sidebarOrder, archived: _trashed, archived_at: _when, share_space_id: _space, ...said } = structuredClone(snapshot);
+  const { parent_id, row_order, sidebar_order, archived, archived_at, share_space_id } = structuredClone(current);
   return {
     ...said,
     parent_id,
     ...(row_order === undefined ? {} : { row_order }),
+    ...(sidebar_order === undefined ? {} : { sidebar_order }),
     ...(archived === undefined ? {} : { archived }),
     ...(archived_at === undefined ? {} : { archived_at }),
     ...(share_space_id === undefined ? {} : { share_space_id }),

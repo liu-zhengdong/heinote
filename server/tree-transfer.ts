@@ -4,7 +4,7 @@ import { fail, type Actor, type Row, type Store } from "./store.ts";
 export const transferSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("share"), spaceId: z.string().min(1).max(256) }).strict(),
   z.object({ action: z.literal("stop-share") }).strict(),
-  z.object({ action: z.literal("move"), targetParentId: z.string().min(1).max(256).nullable() }).strict(),
+  z.object({ action: z.literal("move"), targetParentId: z.string().min(1).max(256).nullable(), sidebarOrder: z.number().finite().optional() }).strict(),
 ]);
 
 export type TransferInput = z.infer<typeof transferSchema>;
@@ -218,6 +218,7 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
       if (input.targetParentId === null) delete nextRoot.parent_id;
       else nextRoot.parent_id = input.targetParentId;
       if (targetParent?.kind === "database") nextRoot.row_order = Date.now();
+      if (input.sidebarOrder !== undefined) nextRoot.sidebar_order = input.sidebarOrder;
       store.put(sourceScope, "pages", pageId, nextRoot);
       if (sourceScope === personalScope) updatePersonalRoots(input.targetParentId === null ? "add" : "remove", pageId);
       store.validatePlane(actor, sourceScope, {
@@ -246,6 +247,7 @@ export function transferPageTree(store: Store, actor: Actor, pageId: string, inp
     if (input.targetParentId === null) delete movedRoot.parent_id;
     else movedRoot.parent_id = input.targetParentId;
     if (targetParent?.kind === "database") movedRoot.row_order = Date.now();
+    if (input.sidebarOrder !== undefined) movedRoot.sidebar_order = input.sidebarOrder;
 
     const descendants = subtreeIds.slice(1);
     store.put(targetScope, "pages", pageId, movedRoot);

@@ -56,9 +56,9 @@ export const VIEW_KINDS = ["table", "board", "list", "gallery", "calendar"] as c
 /** The member's colour schemes: the system's, or one held. */
 export const THEMES = ["system", "light", "dark"] as const;
 
-/** The page list's four views and the file tree's six orders. */
+/** The page list's views and the file tree's orders. */
 export const SIDEBAR_VIEWS = ["files", "favorites", "shared", "graph", "trash"] as const;
-export const SIDEBAR_SORTS = ["name", "name-desc", "modified", "modified-asc", "created", "created-asc"] as const;
+export const SIDEBAR_SORTS = ["manual", "name", "name-desc", "modified", "modified-asc", "created", "created-asc"] as const;
 
 /** How much history a page keeps: the host retires what is past them. */
 export const HISTORY_LIMIT = 20;
@@ -334,6 +334,9 @@ export default schema({
         /** Where it stands among its database's rows, as a moment in
          *  milliseconds; unset, the moment it was made. */
         row_order: t.number().optional(),
+        /** Where it stands among its siblings in the sidebar's manual order;
+         *  unset falls back to creation time. */
+        sidebar_order: t.number().optional(),
         /** The space it was shared into, on the page shared there. */
         share_space_id: t.string().optional(),
         /** A gradient, or a picture from the member's computer, which wins

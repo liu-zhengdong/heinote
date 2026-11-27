@@ -19,7 +19,7 @@ import type {
   SpaceSummary,
   WorkspacePreferences,
 } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
 import {
   WorkspaceHistory,
   type HistoryFocus,
@@ -45,10 +45,10 @@ import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
 import { useWorkspaceHistory } from "./workspace-history-hook";
-import { useWorkspacePageOps, type CreatePageOptions, type PagePatch } from "./workspace-page-ops";
+import { useWorkspacePageOps, type CreatePageOptions, type MovePageOptions, type PagePatch } from "./workspace-page-ops";
 import { useWorkspaceSpaces } from "./workspace-spaces-hook";
 
-export type { CreatePageOptions, PagePatch };
+export type { CreatePageOptions, MovePageOptions, PagePatch };
 
 /** Stable workspace actions — separated so action-only consumers do not need
  *  to re-render on selection, preference, or roster changes. */
@@ -82,8 +82,8 @@ export interface WorkspaceActionsValue {
   /** Copies a page and its subtree into another document page — or, with
    *  `parentId` null, to the top level of the member's own space. */
   copyPageTo(pageId: string, parentId: string | null): Promise<string | null>;
-  /** Moves a page to another folder: every link to it stays where it is. */
-  movePage(pageId: string, parentId: string | null): void;
+  /** Moves a page to another folder and/or updates its manual sidebar order. */
+  movePage(pageId: string, parentId: string | null, options?: MovePageOptions): void;
   applyBlockMutations(pageId: string, mutations: BlockMutation[]): void;
   /** Writes a change already worked out as writes — the editor's, sent to
    *  the pages holding what it touched. `record: false` keeps it out of undo. */
@@ -118,6 +118,8 @@ export interface WorkspaceActionsValue {
    *  anywhere) — the one rule behind dragging a page in the list and "Move
    *  to". */
   canMovePage(pageId: string, targetId?: string | null): boolean;
+  /** Whether this member may reorder a page among its current siblings. */
+  canOrderPage(pageId: string): boolean;
   /** Whether this member may move a page to the trash (`canTrashPage`). */
   canTrashPage(pageId: string): boolean;
   canRestorePage(pageId: string): boolean;
@@ -548,6 +550,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [spaces, store],
   );
 
+  const canOrderPage = useCallback(
+    (pageId: string) => canOrderPageIn(store.getState().pages, spaces, pageId),
+    [spaces, store],
+  );
+
   const canTrashPage = useCallback(
     (pageId: string) => canTrashPageIn(store.getState().pages, spaces, pageId),
     [spaces, store],
@@ -607,6 +614,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     spaceOf,
     canEdit,
     canMovePage,
+    canOrderPage,
     canTrashPage,
     canRestorePage,
     canDeletePage,
@@ -652,6 +660,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     spaceOf,
     canEdit,
     canMovePage,
+    canOrderPage,
     canTrashPage,
     canRestorePage,
     canDeletePage,

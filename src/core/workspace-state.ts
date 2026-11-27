@@ -19,7 +19,7 @@ export const DEFAULT_PREFERENCES: WorkspacePreferences = {
   database_views: {},
   favorites: [],
   sidebar_view: "files",
-  sidebar_sort: "name",
+  sidebar_sort: "manual",
   graph: DEFAULT_GRAPH_SETTINGS,
 };
 

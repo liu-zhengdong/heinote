@@ -46,7 +46,7 @@ import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
 import { descendantPageIds, inTrash, isPurging, pageAncestry, spaceOfPage } from "../../core/page-tree";
-import { buildTree, countTree, flattenTree, linkedFromOutside, sameListing, SORT_LABELS, type PageTree } from "./tree";
+import { buildTree, countTree, flattenTree, linkedFromOutside, planSidebarReorder, sameListing, SORT_LABELS, type PageTree } from "./tree";
 import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
@@ -67,6 +67,7 @@ import {
   TreeRow,
   writeExpanded,
   type TreeActions,
+  type TreeDropPosition,
   type TreeTarget,
 } from "./TreeRow";
 import "./sidebar.css";
@@ -106,6 +107,7 @@ export function Sidebar() {
     updatePage,
     canEdit,
     canMovePage,
+    canOrderPage,
     canTrashPage,
     canDeletePage,
     deletePage,
@@ -136,6 +138,9 @@ export function Sidebar() {
   const [resizing, setResizing] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(readExpanded);
   const [rootDrop, setRootDrop] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const draggingIdRef = useRef<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<{ pageId: string; position: TreeDropPosition; depth: number } | null>(null);
 
   const me = platform?.bootstrap.user.id;
   /* The pages as the list shows them: a new state of the workspace is taken
@@ -430,10 +435,57 @@ export function Sidebar() {
      (personal <-> their own shared space); pages shared by others stay in
      their own tree, and content transfers across ownership via Copy to. */
 
-  /** Opens a target in the list — a page, or a block — so what was dropped
-   *  there can be seen. */
-  const reveal = (target: TreeTarget) => {
-    if (target) updateExpanded((current) => new Set([...current, target.pageId]));
+  /** Opens a parent page in the list so what was dropped inside can be seen. */
+  const revealParent = (parentId: string | null) => {
+    if (parentId) updateExpanded((current) => new Set([...current, parentId]));
+  };
+
+  const switchToManualSort = () => {
+    if (sidebarSort === "manual" || !writable) return;
+    void setSidebarSort("manual").catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法保存排序，请重试。", "error"));
+  };
+
+  /** Translates a row/root drop target into its destination parent, sibling
+   *  insertion index, and indicator indent depth. */
+  const resolveDropPlacement = (target: TreeTarget, draggedPageId: string | null, rowDepth = 0) => {
+    const libraryHomeId = activeSpace?.knowledgeBase?.homePageId ?? null;
+    if (!target) {
+      const targetParentId = libraryHomeId;
+      const siblings = targetParentId ? (tree.children.get(targetParentId) ?? []) : tree.roots;
+      const rest = draggedPageId ? siblings.filter((item) => item.id !== draggedPageId) : siblings;
+      return { targetParentId, siblings, insertIndex: rest.length, indicatorDepth: 0, revealId: targetParentId, explicitOrder: true };
+    }
+    const targetPage = pages[target.pageId];
+    if (!targetPage) return null;
+    const targetChildren = tree.children.get(targetPage.id) ?? [];
+    const targetCanHold = targetPage.kind === "document" && canEdit(targetPage.id);
+    if (target.position === "inside") {
+      const rest = draggedPageId ? targetChildren.filter((item) => item.id !== draggedPageId) : targetChildren;
+      return { targetParentId: targetPage.id, siblings: targetChildren, insertIndex: rest.length, indicatorDepth: rowDepth, revealId: targetPage.id, explicitOrder: false };
+    }
+    if (target.position === "after" && expanded.has(targetPage.id) && targetChildren.length > 0 && targetCanHold) {
+      return { targetParentId: targetPage.id, siblings: targetChildren, insertIndex: 0, indicatorDepth: rowDepth + 1, revealId: targetPage.id, explicitOrder: true };
+    }
+    const targetParentId = targetPage.parent_id ?? null;
+    const siblings = targetParentId ? (tree.children.get(targetParentId) ?? []) : tree.roots;
+    const rest = draggedPageId ? siblings.filter((item) => item.id !== draggedPageId) : siblings;
+    const index = rest.findIndex((item) => item.id === targetPage.id);
+    if (index < 0) return null;
+    return {
+      targetParentId,
+      siblings,
+      insertIndex: target.position === "before" ? index : index + 1,
+      indicatorDepth: rowDepth,
+      revealId: targetParentId,
+      explicitOrder: true,
+    };
+  };
+
+  const clearDrag = () => {
+    draggingIdRef.current = null;
+    setDraggingId(null);
+    setDropIndicator(null);
+    setRootDrop(false);
   };
 
   /* The row actions, one object for the list's whole life (see TreeActions),
@@ -463,38 +515,132 @@ export function Sidebar() {
         updateExpanded((current) => new Set([...current, pageId]));
         afterNavigate();
       },
-      dragOver: (target, event) => {
-        if (!writable || !event.dataTransfer.types.includes(PAGE_DRAG)) return false;
-        // What is dragged is not readable until the drop; the move rule is
-        // asked then. Here the target only has to be able to hold it.
-        const page = target ? pages[target.pageId] : null;
-        if (page && (page.kind === "database" || page.kind === "app" || !canEdit(page.id))) return false;
+      dragStart: (pageId) => {
+        draggingIdRef.current = pageId;
+        setDraggingId(pageId);
+      },
+      dragEnd: () => clearDrag(),
+      dragOver: (target, depth, event) => {
+        if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) {
+          setDropIndicator(null);
+          return;
+        }
+        setRootDrop(false);
+        const activeId = draggingIdRef.current;
+        if (!target) {
+          setDropIndicator(null);
+          return;
+        }
+        const targetPage = pages[target.pageId];
+        if (!targetPage || targetPage.id === activeId) {
+          setDropIndicator(null);
+          return;
+        }
+        if (activeId && pageAncestry(pages, targetPage.id).some((ancestor) => ancestor.id === activeId)) {
+          setDropIndicator(null);
+          return;
+        }
+        const placement = resolveDropPlacement(target, activeId, depth);
+        if (!placement) {
+          setDropIndicator(null);
+          return;
+        }
+        if (inLibrary && placement.targetParentId === null) {
+          setDropIndicator(null);
+          return;
+        }
+        if (target.position === "inside") {
+          if (targetPage.kind === "database" || targetPage.kind === "app" || !canEdit(targetPage.id)) {
+            setDropIndicator(null);
+            return;
+          }
+          // Allow drop even across unauthorized spaces so onDrop surfaces the clear toast hint.
+          event.preventDefault();
+          const allowed = !activeId || canMovePage(activeId, placement.targetParentId);
+          setDropIndicator(allowed ? { pageId: target.pageId, position: "inside", depth } : null);
+          return;
+        }
+        const activePage = activeId ? pages[activeId] : undefined;
+        const sameParent = activePage ? (activePage.parent_id ?? null) === placement.targetParentId : false;
+        const allowed = !activeId
+          ? true
+          : sameParent
+            ? canOrderPage(activeId)
+            : canMovePage(activeId, placement.targetParentId);
+        if (!allowed) {
+          setDropIndicator(null);
+          return;
+        }
         event.preventDefault();
-        return true;
+        setDropIndicator((current) => (
+          current && current.pageId === target.pageId && current.position === target.position && current.depth === placement.indicatorDepth
+            ? current
+            : { pageId: target.pageId, position: target.position, depth: placement.indicatorDepth }
+        ));
+      },
+      dragLeave: (pageId) => {
+        setDropIndicator((current) => (current?.pageId === pageId ? null : current));
       },
       drop: (target, event) => {
         event.preventDefault();
-        const draggedId = event.dataTransfer.getData(PAGE_DRAG);
-        if (!draggedId) return;
-        const targetId = target?.pageId ?? null;
-        if (!canMovePage(draggedId, targetId)) {
-          const dragged = pages[draggedId];
-          if (dragged && (dragged.parent_id ?? null) !== targetId && dragged.id !== targetId) {
-            const fromSpace = spaceOfPage(pages, draggedId);
-            const toSpace = targetId ? spaceOfPage(pages, targetId) : undefined;
-            const message = dragged.share_space_id
-              ? "已共享的根页面不能直接移动位置"
-              : toSpace && fromSpace !== toSpace && spaces[toSpace]?.role !== "owner"
-                ? "不能将页面移入他人共享的空间，请使用「拷贝到…」"
-                : fromSpace && fromSpace !== toSpace && spaces[fromSpace]?.role !== "owner"
-                  ? "不能将他人共享空间中的页面移出，请使用「拷贝到…」"
-                  : "无法将页面移动到此处";
-            toast(message, "info");
+        const draggedId = event.dataTransfer.getData(PAGE_DRAG) || draggingIdRef.current || "";
+        clearDrag();
+        if (!draggedId || !writable || view !== "files") return;
+        const dragged = pages[draggedId];
+        if (!dragged) return;
+        if (target && target.pageId === draggedId) return;
+        const placement = resolveDropPlacement(target, draggedId);
+        if (!placement) return;
+        if (inLibrary && placement.targetParentId === null) return;
+        const currentParentId = dragged.parent_id ?? null;
+        const sameParent = currentParentId === placement.targetParentId;
+        if (!sameParent) {
+          if (!canMovePage(draggedId, placement.targetParentId)) {
+            if (dragged.id !== placement.targetParentId) {
+              const fromSpace = spaceOfPage(pages, draggedId);
+              const toSpace = placement.targetParentId ? spaceOfPage(pages, placement.targetParentId) : undefined;
+              const message = dragged.share_space_id
+                ? "已共享的根页面不能直接移动位置"
+                : toSpace && fromSpace !== toSpace && spaces[toSpace]?.role !== "owner"
+                  ? "不能将页面移入他人共享的空间，请使用「拷贝到…」"
+                  : fromSpace && fromSpace !== toSpace && spaces[fromSpace]?.role !== "owner"
+                    ? "不能将他人共享空间中的页面移出，请使用「拷贝到…」"
+                    : "无法将页面移动到此处";
+              toast(message, "info");
+            }
+            return;
           }
+        } else if (!canOrderPage(draggedId)) {
           return;
         }
-        movePage(draggedId, targetId);
-        reveal(target);
+        const plan = planSidebarReorder(placement.siblings, dragged, placement.insertIndex, {
+          currentSort: sort,
+          now: Date.now(),
+          canOrder: canOrderPage,
+        });
+        if (sameParent && !plan) return;
+        movePage(draggedId, placement.targetParentId, plan ? { sidebarOrder: plan.sidebar_order, rewriteOrders: plan.rewrite } : {});
+        if (placement.explicitOrder) switchToManualSort();
+        revealParent(placement.revealId);
+      },
+      stepOrder: (pageId, delta) => {
+        if (!writable || view !== "files" || !canOrderPage(pageId)) return;
+        const page = pages[pageId];
+        if (!page) return;
+        const parentId = page.parent_id ?? null;
+        const siblings = parentId ? (tree.children.get(parentId) ?? []) : tree.roots;
+        const currentIndex = siblings.findIndex((item) => item.id === pageId);
+        if (currentIndex < 0) return;
+        const targetIndex = currentIndex + delta;
+        if (targetIndex < 0 || targetIndex >= siblings.length) return;
+        const plan = planSidebarReorder(siblings, page, targetIndex, {
+          currentSort: sort,
+          now: Date.now(),
+          canOrder: canOrderPage,
+        });
+        if (!plan) return;
+        movePage(pageId, parentId, { sidebarOrder: plan.sidebar_order, rewriteOrders: plan.rewrite });
+        switchToManualSort();
       },
     };
   });
@@ -505,8 +651,12 @@ export function Sidebar() {
     rename: (id) => handlers.current?.rename(id),
     finishRename: (pageId, name) => handlers.current?.finishRename(pageId, name),
     createInside: (pageId) => handlers.current?.createInside(pageId),
-    dragOver: (target, event) => handlers.current?.dragOver(target, event) ?? false,
+    dragStart: (pageId) => handlers.current?.dragStart(pageId),
+    dragEnd: () => handlers.current?.dragEnd(),
+    dragOver: (target, depth, event) => handlers.current?.dragOver(target, depth, event),
+    dragLeave: (pageId) => handlers.current?.dragLeave(pageId),
     drop: (target, event) => handlers.current?.drop(target, event),
+    stepOrder: (pageId, delta) => handlers.current?.stepOrder(pageId, delta),
   }), []);
 
   const winStart = Math.max(0, scrollBucket - TREE_OVERSCAN);
@@ -556,6 +706,10 @@ export function Sidebar() {
           menuOpen={rowMenu?.pageId === page.id}
           editable={canEdit(page.id)}
           movable={canMovePage(page.id, undefined)}
+          reorderable={view === "files" && canOrderPage(page.id)}
+          dragging={draggingId === page.id}
+          dropPosition={dropIndicator?.pageId === page.id ? dropIndicator.position : null}
+          dropDepth={dropIndicator?.pageId === page.id ? dropIndicator.depth : depth}
           linked={linkedPage(page)}
           people={page.share_space_id ? rosters[page.share_space_id]?.members : undefined}
           me={me}
@@ -609,6 +763,10 @@ export function Sidebar() {
         menuOpen={rowMenu?.pageId === page.id}
         editable={canEdit(page.id)}
         movable={false}
+        reorderable={false}
+        dragging={false}
+        dropPosition={null}
+        dropDepth={0}
         linked={linkedPage(page)}
         people={page.share_space_id ? rosters[page.share_space_id]?.members : undefined}
         me={me}
@@ -762,6 +920,7 @@ export function Sidebar() {
           onDragOver={(event) => {
             if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
             event.preventDefault();
+            setDropIndicator(null);
             setRootDrop(true);
           }}
           onDragLeave={(event) => {
@@ -985,7 +1144,7 @@ export function Sidebar() {
         <MenuList label="Sort" autoFocus>
           {SORTS.map((sort, index) => (
             <div key={sort}>
-              {index === 2 || index === 4 ? <MenuDivider /> : null}
+              {index === 1 || index === 3 || index === 5 ? <MenuDivider /> : null}
               <MenuItem
                 label={SORT_LABELS[sort]}
                 selected={sidebarSort === sort}

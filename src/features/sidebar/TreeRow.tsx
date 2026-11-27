@@ -1,5 +1,5 @@
 import { ChevronRight, Link, MoreHorizontal, Plus } from "lucide-react";
-import { memo, useState, type CSSProperties, type DragEvent } from "react";
+import { memo, type CSSProperties, type DragEvent } from "react";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
 import { pageName } from "../../core/block-tree";
@@ -47,11 +47,32 @@ export function People({ members, me }: { members: SpaceMember[]; me?: string })
   );
 }
 
-/** Where something dragged in the list lands: on a page — a block is a
- *  page — or, null, the top level. */
-export type TreeTarget = { pageId: string } | null;
+export type TreeDropPosition = "before" | "inside" | "after";
+
+/** Where something dragged in the list lands: before/inside/after a page, or
+ *  null for the list's trailing blank area (root level / KB home). */
+export type TreeTarget = { pageId: string; position: TreeDropPosition } | null;
 
 export const PAGE_DRAG = "text/x-notes-page";
+
+/** Resolves which drop zone of a tree row a pointer sits in. Synthetic drag
+ *  events with no coordinates (0, 0) default to `inside` when the row accepts
+ *  children so programmatic drops on a row preserve container semantics. */
+export function resolveRowDropPosition(
+  clientX: number,
+  clientY: number,
+  rect: Pick<DOMRect, "top" | "height">,
+  canDropInside: boolean,
+): TreeDropPosition {
+  if (clientX === 0 && clientY === 0) return canDropInside ? "inside" : "after";
+  const ratio = (clientY - rect.top) / Math.max(rect.height, 1);
+  if (canDropInside) {
+    if (ratio < 0.25) return "before";
+    if (ratio > 0.75) return "after";
+    return "inside";
+  }
+  return ratio < 0.5 ? "before" : "after";
+}
 
 /** What a row asks of the list. One stable object for the list's whole
  *  life, so a row is drawn again only when its own page (or how it is shown)
@@ -63,8 +84,12 @@ export interface TreeActions {
   rename(id: string): void;
   finishRename(pageId: string, name: string | null): void;
   createInside(pageId: string): void;
-  dragOver(target: TreeTarget, event: DragEvent<HTMLElement>): boolean;
+  dragStart(pageId: string): void;
+  dragEnd(): void;
+  dragOver(target: TreeTarget, depth: number, event: DragEvent<HTMLElement>): void;
+  dragLeave(pageId: string): void;
   drop(target: TreeTarget, event: DragEvent<HTMLElement>): void;
+  stepOrder(pageId: string, delta: -1 | 1): void;
 }
 
 export const TreeRow = memo(function TreeRow({
@@ -77,6 +102,10 @@ export const TreeRow = memo(function TreeRow({
   menuOpen,
   editable,
   movable,
+  reorderable,
+  dragging,
+  dropPosition,
+  dropDepth,
   linked,
   people,
   me,
@@ -92,6 +121,10 @@ export const TreeRow = memo(function TreeRow({
   menuOpen: boolean;
   editable: boolean;
   movable: boolean;
+  reorderable: boolean;
+  dragging: boolean;
+  dropPosition: TreeDropPosition | null;
+  dropDepth: number;
   /** Something outside it links to it: a link mark follows its name. */
   linked: boolean;
   /** Who the page is shared with — given for the page that is shared, not
@@ -100,32 +133,45 @@ export const TreeRow = memo(function TreeRow({
   me?: string;
   actions: TreeActions;
 }) {
-  const [dropping, setDropping] = useState(false);
   const label = pageName(page);
+  const canDropInside = editable && page.kind === "document";
+  const canDrag = (movable || reorderable) && !renaming;
   return (
     <div
       className={[
         "tree-row",
         selected ? "is-selected" : "",
-        dropping ? "is-drop-target" : "",
+        dragging ? "is-dragging" : "",
+        dropPosition === "inside" ? "is-drop-target" : "",
+        dropPosition === "before" ? "is-drop-before" : "",
+        dropPosition === "after" ? "is-drop-after" : "",
         menuOpen ? "is-menu-open" : "",
       ].filter(Boolean).join(" ")}
-      style={{ "--depth": depth } as CSSProperties}
+      style={{ "--depth": depth, "--drop-depth": dropDepth } as CSSProperties}
       data-page-id={page.id}
-      draggable={movable && !renaming}
+      draggable={canDrag}
       onDragStart={(event) => {
+        if (!canDrag) {
+          event.preventDefault();
+          return;
+        }
         event.dataTransfer.setData(PAGE_DRAG, page.id);
         event.dataTransfer.effectAllowed = "move";
+        actions.dragStart(page.id);
       }}
+      onDragEnd={() => actions.dragEnd()}
       onDragOver={(event) => {
         event.stopPropagation();
-        setDropping(actions.dragOver({ pageId: page.id }, event));
+        const position = resolveRowDropPosition(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), canDropInside);
+        actions.dragOver({ pageId: page.id, position }, depth, event);
       }}
-      onDragLeave={() => setDropping(false)}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) actions.dragLeave(page.id);
+      }}
       onDrop={(event) => {
         event.stopPropagation();
-        setDropping(false);
-        actions.drop({ pageId: page.id }, event);
+        const position = resolveRowDropPosition(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), canDropInside);
+        actions.drop({ pageId: page.id, position }, event);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -170,6 +216,16 @@ export const TreeRow = memo(function TreeRow({
           aria-current={selected ? "page" : undefined}
           onClick={() => actions.select(page.id)}
           onDoubleClick={() => { if (editable) actions.rename(page.id); }}
+          onKeyDown={(event) => {
+            if (!reorderable || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || imeComposing(event)) return;
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              actions.stepOrder(page.id, -1);
+            } else if (event.key === "ArrowDown") {
+              event.preventDefault();
+              actions.stepOrder(page.id, 1);
+            }
+          }}
         >
           <span className="tree-row__label">{label}</span>
           {linked ? <Link className="tree-row__linked" size={11} aria-label="Has backlinks" /> : null}
