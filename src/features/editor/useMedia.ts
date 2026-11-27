@@ -67,8 +67,9 @@ export function useMedia(editor: Editor) {
    *  that started it may be behind. */
   const latestTree = useCallback(() => {
     const live = workspace?.state.pages;
-    return live ? composeTree(live, live[page.id] ?? page, showInPlace).tree : tree;
-  }, [page, showInPlace, tree, workspace]);
+    if (live && live[page.id]) return composeTree(live, live[page.id], showInPlace).tree;
+    return editor.latestTree?.current ?? tree;
+  }, [editor.latestTree, page, showInPlace, tree, workspace]);
 
   /** Swaps in a block's file as stored — its page copy made, or its bytes
    *  moved to a shared space — unless the block has moved on: deleted,

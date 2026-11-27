@@ -15,6 +15,7 @@ import {
   type ComponentProps,
   type CSSProperties,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -263,12 +264,22 @@ function forwarded<T>(latest: RefObject<T | null>, names: Partial<Record<keyof T
   ])) as T;
 }
 
+export interface StandaloneEditorOptions {
+  onTreeChange(nextTree: BlockTree): void;
+  autoFocus?: boolean;
+  compact?: boolean;
+  onBlurOutside?(): void;
+  onShortcut?(event: ReactKeyboardEvent): boolean;
+  onFollowLink?(pageId: string, full: boolean): void;
+}
+
 export function DocumentEditor({
   page,
   readOnly = false,
   historical = false,
   properties,
   embed,
+  standalone,
   surfaceContainer = "main",
 }: {
   page: NotePage;
@@ -286,6 +297,9 @@ export function DocumentEditor({
    *  the page being read, and the pages already shown around this one — never
    *  shown again inside it. */
   embed?: EmbedOptions;
+  /** Runs the full block editor over a caller-owned `BlockTree` (used by Memos)
+   *  without chrome, title fields, or workspace OT side effects. */
+  standalone?: StandaloneEditorOptions;
   surfaceContainer?: "main" | "peek";
 }) {
   const {
@@ -374,6 +388,10 @@ export function DocumentEditor({
   const savedCaretRef = useRef<{ blockId: string; start: number; end: number } | null>(null);
   const savedFormatRef = useRef<FormatState | null>(null);
   const mountDocRef = useRef<HTMLDivElement | null>(null);
+  const standaloneUndoRef = useRef<BlockTree[]>([]);
+  const standaloneRedoRef = useRef<BlockTree[]>([]);
+  const standaloneRef = useRef(standalone);
+  standaloneRef.current = standalone;
   const [dragIds, setDragIds] = useState<string[] | null>(null);
   const [drop, setDrop] = useState<DropState | null>(null);
   const [picker, setPicker] = useState<PickerOpen | null>(null);
@@ -408,12 +426,12 @@ export function DocumentEditor({
   const { rows, items } = useMemo(() => layout(tree), [tree]);
   const [renderWindow, setRenderWindow] = useState<{ pageId: string; count: number }>(() => ({
     pageId: page.id,
-    count: !embed && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY,
+    count: !embed && !standalone && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY,
   }));
   const effectiveLimit = renderWindow.pageId === page.id
     ? renderWindow.count
-    : (!embed && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY);
-  const visibleCount = embed ? items.length : Math.min(items.length, effectiveLimit);
+    : (!embed && !standalone && items.length > PROGRESSIVE_INITIAL ? PROGRESSIVE_INITIAL : Number.POSITIVE_INFINITY);
+  const visibleCount = embed || standalone ? items.length : Math.min(items.length, effectiveLimit);
   const hasMoreItems = visibleCount < items.length;
   const tailSentinelRef = useRef<HTMLDivElement | null>(null);
   const progressiveRef = useRef({ pageId: page.id, hasMore: hasMoreItems });
@@ -576,7 +594,7 @@ export function DocumentEditor({
      notes does not immediately raise the soft keyboard. */
   const caretClaimed = useRef(false);
   useEffect(() => {
-    if (readOnly || embed || page.title || sharePageId || !page.block_tree) return;
+    if (readOnly || embed || standalone || page.title || sharePageId || !page.block_tree) return;
     if (caretClaimed.current) return;
     if (mobile && !consumeFresh(page.id)) return;
     const blocks = Object.values(page.block_tree.by_id);
@@ -599,6 +617,53 @@ export function DocumentEditor({
      is on its way somewhere else. A block is at least one paragraph, so
      whatever leaves one empty takes it out too. All read against the pages as
      they are now, not as this render saw them. */
+  useEffect(() => {
+    standaloneUndoRef.current = [];
+    standaloneRedoRef.current = [];
+  }, [page.id]);
+
+  useEffect(() => {
+    if (!standalone?.autoFocus || readOnly) return;
+    const frame = requestAnimationFrame(() => {
+      const first = orderedBlocks(latestTree.current)[0];
+      if (!first) return;
+      const element = editableWithin(blocksRef.current, first.id);
+      if (element) focusAtEnd(element);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [page.id, readOnly, standalone?.autoFocus]);
+
+  const effectiveCanUndo = useCallback(
+    () => (standaloneRef.current ? standaloneUndoRef.current.length > 0 : canUndo()),
+    [canUndo],
+  );
+  const effectiveCanRedo = useCallback(
+    () => (standaloneRef.current ? standaloneRedoRef.current.length > 0 : canRedo()),
+    [canRedo],
+  );
+  const effectiveUndo = useCallback(() => {
+    if (!standaloneRef.current) return undo();
+    const prev = standaloneUndoRef.current.pop();
+    if (!prev) return false;
+    standaloneRedoRef.current.push(latestTree.current);
+    latestTree.current = prev;
+    const first = orderedBlocks(prev)[0];
+    if (first) pendingFocus.current = { id: first.id, start: inlinePlainText(first.content).length, force: true };
+    standaloneRef.current.onTreeChange(prev);
+    return true;
+  }, [undo]);
+  const effectiveRedo = useCallback(() => {
+    if (!standaloneRef.current) return redo();
+    const next = standaloneRedoRef.current.pop();
+    if (!next) return false;
+    standaloneUndoRef.current.push(latestTree.current);
+    latestTree.current = next;
+    const first = orderedBlocks(next)[0];
+    if (first) pendingFocus.current = { id: first.id, start: inlinePlainText(first.content).length, force: true };
+    standaloneRef.current.onTreeChange(next);
+    return true;
+  }, [redo]);
+
   const write = useCallback((change: EditorTransaction, options: {
     cut?: readonly string[];
     record?: boolean;
@@ -606,6 +671,23 @@ export function DocumentEditor({
     /** Writes that go with the change, in the same step — pages it makes. */
     extra?: readonly WorkspaceMutation[];
   } = {}): EditorTransaction | null => {
+    if (standaloneRef.current) {
+      const base = latestTree.current;
+      let nextTree = applyEditorTransaction(base, change);
+      if (!Object.keys(nextTree.by_id).length) {
+        const blankId = createId("block");
+        nextTree = { by_id: { [blankId]: createBlock(blankId) } };
+        if (pendingFocus.current) pendingFocus.current = { id: blankId, start: 0, force: true };
+      }
+      if (options.record !== false) {
+        standaloneUndoRef.current.push(base);
+        if (standaloneUndoRef.current.length > 40) standaloneUndoRef.current.shift();
+        standaloneRedoRef.current = [];
+      }
+      latestTree.current = nextTree;
+      standaloneRef.current.onTreeChange(nextTree);
+      return change;
+    }
     if (!platform) return null;
     const live = workspace?.state.pages ?? pages;
     const current = composeTree(live, live[page.id] ?? page, showInPlace);
@@ -903,11 +985,11 @@ export function DocumentEditor({
       marks: format ? format.marks : caretMarks,
       link: format?.link,
       color: format?.color ?? block?.color,
-      canUndo: canUndo(),
-      canRedo: canRedo(),
+      canUndo: effectiveCanUndo(),
+      canRedo: effectiveCanRedo(),
       subOverlayOpen: subOverlayOpenRef.current,
-      undo,
-      redo,
+      undo: effectiveUndo,
+      redo: effectiveRedo,
       done: () => mobileSurfaceActions.current.done(),
       toggleMark: (mark) => mobileSurfaceActions.current.toggleMark(mark),
       turnInto: (kind) => mobileSurfaceActions.current.turnInto(kind),
@@ -917,10 +999,26 @@ export function DocumentEditor({
       setColor: (color) => mobileSurfaceActions.current.setColor(color),
       setSubOverlayOpen: (open) => mobileSurfaceActions.current.setSubOverlayOpen(open),
     });
-  }, [canRedo, canUndo, caretMarks, editingMode, focusedBlockId, format, mobile, page.id, readOnly, redo, surfaceContainer, surfaceId, tree, undo]);
+  }, [caretMarks, editingMode, effectiveCanRedo, effectiveCanUndo, effectiveRedo, effectiveUndo, focusedBlockId, format, mobile, page.id, readOnly, surfaceContainer, surfaceId, tree]);
 
   const handleContainerBlur = useCallback(() => {
-    if (!mobile || readOnly) return;
+    if (readOnly) return;
+    if (standaloneRef.current) {
+      if (standaloneRef.current.onBlurOutside) {
+        requestAnimationFrame(() => {
+          if (subOverlayOpenRef.current) return;
+          const active = document.activeElement;
+          const root = mountDocRef.current;
+          if (active instanceof Element && (
+            root?.contains(active)
+            || active.closest(".popover, .overlay, .format-bar, .menu, .slash, .mobile-edit-bar, .bottom-sheet, .memo-entry__actions, .memo-inline-edit__foot")
+          )) return;
+          standaloneRef.current?.onBlurOutside?.();
+        });
+      }
+      return;
+    }
+    if (!mobile) return;
     requestAnimationFrame(() => {
       if (subOverlayOpenRef.current) return;
       const active = document.activeElement;
@@ -1440,7 +1538,7 @@ export function DocumentEditor({
     page, pages, pagesRef, tree, rows, embed, readOnly, platform, workspace, blocksRef, caretX,
     slash, setSlash, slashIndex, setSlashIndex, slashDismissed, commands,
     mention, setMention, mentionIndex, setMentionIndex, mentionDismissed, mentionOptions,
-    setFormat, resume, pendingTextSelection, blockSelection, setBlockSelection, selectedIds, setBlockMenu,
+    setFormat, resume, pendingTextSelection, latestTree, undo: effectiveUndo, redo: effectiveRedo, canUndo: effectiveCanUndo, canRedo: effectiveCanRedo, blockSelection, setBlockSelection, selectedIds, setBlockMenu,
     showInPlace, ownerOf, titleOf, anchorFor, createPage, checkpointHistory, annotateHistory,
     write, execute, executeOnBlocks, runReplace, replaceSelection, selectBlocks, deleteSelected, duplicateSelected,
     openMoveTo, closeMenus, applyMarkToBlocks, openLink, pastedBlocks, adoptCutPages, offerCard, toast,
@@ -1463,6 +1561,10 @@ export function DocumentEditor({
    *  opens it full-page instead — a block as a page of its own. */
   const followLink = useCallback((pageId: string, full = false) => {
     if (!pagesRef.current[pageId]) return;
+    if (standaloneRef.current?.onFollowLink) {
+      standaloneRef.current.onFollowLink(pageId, full);
+      return;
+    }
     if (full) selectPage(pageId);
     else openPeek(pageId);
   }, [openPeek, selectPage]);
@@ -2123,7 +2225,32 @@ export function DocumentEditor({
      their words — in the page holding the table. A change that would take
      the table past its budget is refused, and the reader told. */
   const writeTable = useCallback((block: Block, writes: readonly TableWrite[]): boolean => {
-    if (readOnly || !platform || !writes.length) return false;
+    if (readOnly || !writes.length) return false;
+    if (standaloneRef.current) {
+      const current = latestTree.current;
+      const stored = current.by_id[block.id];
+      if (stored?.kind !== "table") return false;
+      const before = stored.table ?? normalizeSimpleTable(undefined);
+      const afterTable = applyTableWrites(before, writes);
+      const size = tableBytes(afterTable);
+      if (size > TABLE_BYTE_BUDGET && size > tableBytes(before)) {
+        toast("This table is full — turn it into a database to keep adding to it.", "error");
+        return false;
+      }
+      const nextTree: BlockTree = {
+        by_id: {
+          ...current.by_id,
+          [block.id]: { ...stored, table: afterTable },
+        },
+      };
+      standaloneUndoRef.current.push(current);
+      if (standaloneUndoRef.current.length > 40) standaloneUndoRef.current.shift();
+      standaloneRedoRef.current = [];
+      latestTree.current = nextTree;
+      standaloneRef.current.onTreeChange(nextTree);
+      return true;
+    }
+    if (!platform) return false;
     const live = workspace?.state.pages ?? pages;
     const owner = ownerOf(block.id);
     const stored = live[owner]?.block_tree?.by_id[block.id];
@@ -2375,8 +2502,8 @@ export function DocumentEditor({
   // A cover or icon uploaded before the page was shared moves to where its
   // readers can reach it — the page's own editor sees to it, never a page
   // shown here.
-  useHomedCovers(embed || readOnly ? [] : [page], spaceOfPage(pages, page.id));
-  useHomedIcons(embed || readOnly ? [] : [page], spaceOfPage(pages, page.id));
+  useHomedCovers(embed || readOnly || standalone ? [] : [page], spaceOfPage(pages, page.id));
+  useHomedIcons(embed || readOnly || standalone ? [] : [page], spaceOfPage(pages, page.id));
 
   // What the words here are set in: this page's font — or, shown inside
   // another page, that page's, which sets the font for everything it shows.
@@ -2619,7 +2746,7 @@ export function DocumentEditor({
       key={row.block.id}
       {...renderMounts(row.block)}
       block={row.block}
-      owningPageId={historical ? undefined : ownerOf(row.block.id)}
+      owningPageId={historical || standalone ? undefined : ownerOf(row.block.id)}
       depth={row.depth}
       index={row.index}
       lineMarks={lineMarks}
@@ -2727,7 +2854,7 @@ export function DocumentEditor({
   });
 
   const renderDocumentItems = (): ReactNode[] => {
-    if (embed || items.length <= PROGRESSIVE_INITIAL) {
+    if (embed || standalone || items.length <= PROGRESSIVE_INITIAL) {
       return renderItems(items, embed && !page.title ? 1 : 0);
     }
     const firstEnd = Math.min(PROGRESSIVE_INITIAL, visibleCount);
@@ -3215,6 +3342,35 @@ export function DocumentEditor({
       })() : null}
     </>
   );
+
+  if (standalone) {
+    return (
+      <div
+        ref={mountDocRef}
+        className={`memo-doc ${standalone.compact ? "memo-doc--compact" : ""}`}
+        data-page-id={page.id}
+        onKeyDownCapture={(event) => {
+          if (imeComposing(event)) return;
+          if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.shiftKey) effectiveRedo();
+            else effectiveUndo();
+            return;
+          }
+          if (slash || mention || cardOffer || blockMenu || pageMenu || linkedPick) return;
+          if (standalone.onShortcut?.(event)) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+        onBlurCapture={handleContainerBlur}
+      >
+        {blocksContainer}
+        {overlays}
+      </div>
+    );
+  }
 
   /* Shown in another page: the block and what editing it needs — no cover
      or foot, and no font of its own: the page around it sets that, as for

@@ -58,17 +58,27 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
   await memoRailTab(page).click();
   await expect(page.getByRole("main", { name: "闪念卡片流", exact: true })).toBeVisible();
 
-  const composer = page.getByLabel("闪念输入框", { exact: true });
-  await composer.fill("较早闪念 咖啡豆实验 #灵感 #工作/咖啡");
-  await composer.press("Meta+Enter");
+  const composer = page.locator('.memo-composer .block__editable[contenteditable="true"]').first();
+  await composer.click();
+  await page.keyboard.type("较早闪念 咖啡豆实验 #灵感 #工作/咖啡");
+  await page.keyboard.press("Meta+Enter");
   await expect(page.locator(".memo-entry")).toHaveCount(1);
 
-  await composer.fill("最新闪念 界面打磨 #工作/设计\n- [ ] 检查排版间距");
+  await composer.click();
+  await page.keyboard.type("最新闪念 **粗体亮点** #工作/设计");
+  await page.keyboard.press("Enter");
+  await page.keyboard.type("/");
+  await expect(page.getByRole("listbox", { name: "Blocks", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("[] 检查排版间距");
   await page.locator(".memo-composer__foot").getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.locator(".memo-entry")).toHaveCount(2);
 
-  // Newest card is first.
+  // Newest card is first and preserves live Markdown formatting + todo checkbox.
   await expect(page.locator(".memo-entry").nth(0)).toContainText("最新闪念");
+  await expect(page.locator(".memo-entry").nth(0).locator("strong")).toContainText("粗体亮点");
+  await expect(page.locator(".memo-entry").nth(0).locator(".checkbox")).toHaveCount(1);
   await expect(page.locator(".memo-entry").nth(1)).toContainText("较早闪念");
 
   // Parent tag filter matches both children; child tag narrows to 1.
@@ -102,20 +112,31 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
 
   // Click-to-edit on memo body + auto-save on blur (and Escape cancel); tags still filter on click.
   const latestCard = page.locator(".memo-entry").nth(0);
-  await latestCard.locator(".memo-body").click();
-  const inlineMemoInput = latestCard.getByLabel("编辑闪念", { exact: true });
-  await expect(inlineMemoInput).toBeFocused();
-  await inlineMemoInput.fill("误操作取消测试 #工作/设计");
-  await inlineMemoInput.press("Escape");
-  await expect(inlineMemoInput).toHaveCount(0);
-  await expect(latestCard).toContainText("最新闪念 界面打磨");
+  await latestCard.locator(".memo-tag-chip", { hasText: "#工作/设计" }).click();
+  await expect(page.locator(".memo-entry")).toHaveCount(1);
+  await latestCard.locator(".memo-tag-chip", { hasText: "#工作/设计" }).click();
+  await expect(page.locator(".memo-entry")).toHaveCount(2);
 
   await latestCard.locator(".memo-body").click();
-  const inlineMemoInput2 = latestCard.getByLabel("编辑闪念", { exact: true });
-  await inlineMemoInput2.fill("最新闪念 界面打磨 点击即改 #工作/设计\n- [ ] 检查排版间距");
+  const inlineMemoBox = latestCard.getByLabel("编辑闪念", { exact: true });
+  const inlineMemoEditable = inlineMemoBox.locator('.block__editable[contenteditable="true"]').first();
+  await expect(inlineMemoEditable).toBeFocused();
+  await page.keyboard.type("误操作取消测试 ");
+  await page.keyboard.press("Escape");
+  await expect(inlineMemoBox).toHaveCount(0);
+  await expect(latestCard).not.toContainText("误操作取消测试");
+  await expect(latestCard).toContainText("最新闪念");
+
+  await latestCard.locator(".memo-body").click();
+  const inlineMemoBox2 = latestCard.getByLabel("编辑闪念", { exact: true });
+  const inlineMemoEditable2 = inlineMemoBox2.locator('.block__editable[contenteditable="true"]').first();
+  await expect(inlineMemoEditable2).toBeFocused();
+  await page.keyboard.press("End");
+  await page.keyboard.type(" 点击即改");
   await page.locator(".memo-head__title").click();
-  await expect(inlineMemoInput2).toHaveCount(0);
+  await expect(inlineMemoBox2).toHaveCount(0);
   await expect(latestCard).toContainText("点击即改");
+  await expect(latestCard.locator("strong")).toContainText("粗体亮点");
 
   // Comment on older memo -> stays below newer memo, and comment body also supports click-to-edit + blur save.
   const olderCard = page.locator(".memo-entry").nth(1);
@@ -126,11 +147,13 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
   await expect(olderCard).toContainText("老卡片的独有批注");
 
   await olderCard.locator(".memo-comment-item__body").click();
-  const inlineCommentInput = olderCard.getByLabel("编辑批注内容", { exact: true });
-  await expect(inlineCommentInput).toBeFocused();
-  await inlineCommentInput.fill("老卡片的独有批注关键词");
+  const inlineCommentBox = olderCard.getByLabel("编辑批注内容", { exact: true });
+  const inlineCommentEditable = inlineCommentBox.locator('.block__editable[contenteditable="true"]').first();
+  await expect(inlineCommentEditable).toBeFocused();
+  await page.keyboard.press("End");
+  await page.keyboard.type("关键词");
   await page.locator(".memo-head__title").click();
-  await expect(inlineCommentInput).toHaveCount(0);
+  await expect(inlineCommentBox).toHaveCount(0);
   await expect(olderCard).toContainText("老卡片的独有批注关键词");
   await expect(page.locator(".memo-entry").nth(0)).toContainText("最新闪念");
   await expect(page.locator(".memo-entry").nth(1)).toContainText("较早闪念");
@@ -209,9 +232,9 @@ test("UC-64 mobile (390px): MobileDock memo pill & + focus with zero horizontal 
 
   // Tapping + in Memos view focuses composer instead of opening New sheet.
   await dock.getByRole("button", { name: "新建", exact: true }).click();
-  const composer = page.getByLabel("闪念输入框", { exact: true });
+  const composer = page.locator('.memo-composer .block__editable[contenteditable="true"]').first();
   await expect(composer).toBeFocused();
-  await composer.fill("手机随手记一条 #移动端");
+  await page.keyboard.type("手机随手记一条 #移动端");
   await page.locator(".memo-composer__foot").getByRole("button", { name: "发送", exact: true }).click();
   await expect(page.locator(".memo-entry").first()).toContainText("手机随手记一条");
 

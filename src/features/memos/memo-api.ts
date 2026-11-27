@@ -1,6 +1,6 @@
 import type { MemoQuickFilter } from "../../app/ui-context";
 import type { MemoTagNode } from "../../core/memos";
-import type { StoredFile } from "../../core/types";
+import type { BlockTree, StoredFile } from "../../core/types";
 import { request } from "../../platform/http";
 
 export interface MemoCommentDto {
@@ -8,6 +8,7 @@ export interface MemoCommentDto {
   parentId: string;
   text: string;
   markdown: string;
+  blockTree: BlockTree;
   tags: string[];
   attachments: StoredFile[];
   createdAt: string;
@@ -19,6 +20,7 @@ export interface MemoDto {
   parentId: null;
   text: string;
   markdown: string;
+  blockTree: BlockTree;
   summary: string;
   tags: string[];
   pinned: boolean;
@@ -79,6 +81,7 @@ export function listMemoTags(signal?: AbortSignal): Promise<MemoTagsResponse> {
 export function createMemo(input: {
   text?: string;
   markdown?: string;
+  blockTree?: BlockTree;
   parentId?: string;
   pinned?: boolean;
   attachments?: StoredFile[];
@@ -95,6 +98,7 @@ export function updateMemo(
   input: {
     text?: string;
     markdown?: string;
+    blockTree?: BlockTree;
     pinned?: boolean;
     attachments?: StoredFile[];
     mentionPageIds?: string[];

@@ -24,6 +24,7 @@ export interface MemoCommentDto {
   parentId: string;
   text: string;
   markdown: string;
+  blockTree: BlockTree;
   tags: string[];
   attachments: StoredFile[];
   createdAt: string;
@@ -35,6 +36,7 @@ export interface MemoDto {
   parentId: null;
   text: string;
   markdown: string;
+  blockTree: BlockTree;
   summary: string;
   tags: string[];
   pinned: boolean;
@@ -164,6 +166,7 @@ function serializeComment(row: Row, tree: BlockTree, titleOf: (pageId: string) =
     parentId: String(row.parent_id),
     text,
     markdown,
+    blockTree: tree,
     tags,
     attachments: attachmentsFromTree(tree),
     createdAt: String(row.created_at),
@@ -186,6 +189,7 @@ function serializeMemo(
     parentId: null,
     text,
     markdown,
+    blockTree: tree,
     summary: memoSummaryTitle(text || markdown),
     tags,
     pinned: Boolean(row.pinned),
@@ -411,9 +415,50 @@ function appendCommentBlocks(
   }
 }
 
+function hasMemoTreeContent(tree: BlockTree): boolean {
+  return Object.values(tree.by_id).some((block) => (
+    block.kind === "divider"
+    || (block.kind === "file" && Boolean(block.file))
+    || (block.kind === "embed" && Boolean(block.embed))
+    || block.kind === "table"
+    || block.content.some((run) => Boolean(run.mention) || Boolean(run.text.trim()))
+  ));
+}
+
+function validateMemoBlockTree(
+  store: Store,
+  who: Actor,
+  scope: string,
+  rawTree: { by_id: Record<string, unknown> },
+): BlockTree {
+  const normalized = normalizeBlockTree(rawTree);
+  const nextById: Record<string, Block> = {};
+  for (const [blockId, block] of Object.entries(normalized.by_id)) {
+    const file = block.kind === "file" && block.file
+      ? checkedStoredFile(store, who, scope, block.file, false)
+      : block.file;
+    const content = block.content.map((run) => {
+      if (run.mention?.kind !== "image") return run;
+      const verified = checkedStoredFile(store, who, scope, run.mention.file, true);
+      return { ...run, mention: { ...run.mention, file: verified } };
+    });
+    nextById[blockId] = {
+      ...block,
+      content,
+      ...(file ? { file } : {}),
+    };
+  }
+  const tree: BlockTree = { by_id: nextById };
+  if (!hasMemoTreeContent(tree)) fail(400, "闪念内容不能为空。", "bad_request");
+  return tree;
+}
+
+const rawBlockTreeSchema = z.object({ by_id: z.record(z.string(), z.unknown()) }).strict();
+
 const createMemoSchema = z.object({
   text: z.string().max(100000).optional(),
   markdown: z.string().max(100000).optional(),
+  blockTree: rawBlockTreeSchema.optional(),
   parentId: z.string().min(1).max(256).optional(),
   pinned: z.boolean().optional(),
   attachments: z.array(storedFileSchema).max(20).optional(),
@@ -425,6 +470,7 @@ const createMemoSchema = z.object({
 const updateMemoSchema = z.object({
   text: z.string().max(100000).optional(),
   markdown: z.string().max(100000).optional(),
+  blockTree: rawBlockTreeSchema.optional(),
   pinned: z.boolean().optional(),
   attachments: z.array(storedFileSchema).max(20).optional(),
   mentionPageIds: z.array(z.string().min(1).max(256)).max(50).optional(),
@@ -673,15 +719,16 @@ export function attachMemos(app: Express, store: Store, actor: (req: Request) =>
   app.post("/api/v1/memos", (req, res) => {
     const who = actor(req);
     const input = createMemoSchema.parse(req.body ?? {});
-    if (input.text !== undefined && input.markdown !== undefined) {
-      fail(400, "text 与 markdown 只能提供一个。", "bad_request");
+    const bodyFormats = [input.text, input.markdown, input.blockTree].filter((v) => v !== undefined).length;
+    if (bodyFormats > 1) {
+      fail(400, "text、markdown 与 blockTree 只能提供一个。", "bad_request");
     }
     if (input.scope && input.spaceId && input.scope !== input.spaceId) {
       fail(400, "指定空间不一致。", "bad_request");
     }
     const scope = requirePersonalScope(store, who, true, input.scope ?? input.spaceId);
     const rawBody = (input.markdown ?? input.text ?? "").trimEnd();
-    if (!rawBody.trim() && !(input.attachments?.length)) {
+    if (!input.blockTree && !rawBody.trim() && !(input.attachments?.length)) {
       fail(400, "请输入闪念内容或附加图片。", "bad_request");
     }
 
@@ -697,7 +744,9 @@ export function attachMemos(app: Express, store: Store, actor: (req: Request) =>
 
       const nowIso = currentTime();
       const memoId = id();
-      const tree = buildMemoBlockTree(store, who, scope, rawBody, input.attachments, input.mentionPageIds);
+      const tree = input.blockTree
+        ? validateMemoBlockTree(store, who, scope, input.blockTree)
+        : buildMemoBlockTree(store, who, scope, rawBody, input.attachments, input.mentionPageIds);
       const page = newPage(memoId, "memo", input.parentId ?? null, { author: who.user.id, now: nowIso }, id());
       page.block_tree = tree;
       page.tags = extractTagsFromBlockTree(tree);
@@ -708,7 +757,7 @@ export function attachMemos(app: Express, store: Store, actor: (req: Request) =>
       recordTokenEvent(store.db, who.tokenId, {
         action: "create",
         pageId: memoId,
-        pageTitle: memoSummaryTitle(rawBody || "闪念"),
+        pageTitle: memoSummaryTitle(plainTextOfTree(tree, titleOf) || "闪念"),
       });
       return input.parentId
         ? serializeComment(savedRow, tree, titleOf)
@@ -723,10 +772,11 @@ export function attachMemos(app: Express, store: Store, actor: (req: Request) =>
     const scope = requirePersonalScope(store, who, true);
     const memoId = String(req.params.id);
     const input = updateMemoSchema.parse(req.body ?? {});
-    if (input.text !== undefined && input.markdown !== undefined) {
-      fail(400, "text 与 markdown 只能提供一个。", "bad_request");
+    const bodyFormats = [input.text, input.markdown, input.blockTree].filter((v) => v !== undefined).length;
+    if (bodyFormats > 1) {
+      fail(400, "text、markdown 与 blockTree 只能提供一个。", "bad_request");
     }
-    if (input.text === undefined && input.markdown === undefined && input.pinned === undefined && input.attachments === undefined) {
+    if (input.text === undefined && input.markdown === undefined && input.blockTree === undefined && input.pinned === undefined && input.attachments === undefined) {
       fail(400, "没有要修改的内容。", "bad_request");
     }
 
@@ -740,7 +790,9 @@ export function attachMemos(app: Express, store: Store, actor: (req: Request) =>
 
       const currentTrees = loadBlockTrees(store, scope, [memoId]);
       let nextTree = currentTrees.get(memoId)!;
-      if (input.markdown !== undefined || input.text !== undefined || input.attachments !== undefined) {
+      if (input.blockTree !== undefined) {
+        nextTree = validateMemoBlockTree(store, who, scope, input.blockTree);
+      } else if (input.markdown !== undefined || input.text !== undefined || input.attachments !== undefined) {
         const nextText = input.markdown !== undefined
           ? input.markdown.trimEnd()
           : input.text !== undefined

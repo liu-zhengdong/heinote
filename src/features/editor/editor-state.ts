@@ -99,6 +99,10 @@ export interface Editor {
   resume: RefObject<(TypingResume & { blockId: string }) | null>;
   pendingTextSelection: RefObject<PendingTextSelection | null>;
   latestTree?: RefObject<BlockTree>;
+  undo?: () => boolean;
+  redo?: () => boolean;
+  canUndo?: () => boolean;
+  canRedo?: () => boolean;
   blockSelection: { anchor: string; focus: string } | null;
   setBlockSelection: Dispatch<SetStateAction<{ anchor: string; focus: string } | null>>;
   selectedIds: readonly string[];

@@ -215,7 +215,7 @@ POST /api/v1/pages/:id/copy
 创建与筛选要点：
 
 - `GET /memos` 的 `filter` 可选 `all`、`pinned`、`commented`、`untagged`、`trashed`；传 `tag=parent` 会同时匹配 `#parent` 与 `#parent/...`；传 `around=<memoId>` 返回能包含该卡片的窗口结果。默认按 `pinned DESC, created_at DESC` 排序。
-- `POST /memos` 接受 `markdown` 或 `text`（互斥，可与 `attachments` 并存）、可选 `parentId`（仅允许指向顶层闪念，不可嵌套）、可选 `pinned` 与 `mentionPageIds`。
+- `POST /memos` 接受 `markdown`、`text` 或无损 `blockTree`（三者互斥；可与 `attachments` 并存）、可选 `parentId`（仅允许指向顶层闪念，不可嵌套）、可选 `pinned` 与 `mentionPageIds`。`PATCH /memos/:id` 同样支持传入 `blockTree`，响应始终附带 `blockTree`。
 - 闪念与 `#tag`（含多级 `#工作/设计`）自动从正文提取并索引；添加或删除批注不会改变父闪念的 `created_at` 排序位置。
 - `GET /pages` 与 `/api/records/personal/pages` 不返回 `kind: "memo"` 记录。
 

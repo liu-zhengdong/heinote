@@ -15,31 +15,32 @@ import {
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent,
-  type KeyboardEvent,
-  type ReactNode,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { useUi, type MemoQuickFilter } from "../../app/ui-context";
 import { useWorkspace } from "../../app/workspace-context";
 import { useWorkspaceState } from "../../app/workspace-store";
 import { Modal } from "../../components/Modal";
-import { pageName } from "../../core/block-tree";
+import { BLOCK_ORDER_STEP, createBlock, orderedBlocks, pageName } from "../../core/block-tree";
+import { createId } from "../../core/ids";
+import { MENTION_CHAR } from "../../core/inline-content";
 import { imeComposing } from "../../core/keyboard";
-import { memoSummaryTitle, normalizeMemoTag, type MemoTagNode } from "../../core/memos";
+import { memoSummaryTitle, type MemoTagNode } from "../../core/memos";
 import { inTrash, isPurging, isShelved } from "../../core/page-tree";
 import { pagesInSpace } from "../../core/space-navigation";
-import type { NotePage, StoredFile } from "../../core/types";
+import type { Block, BlockTree, InlineContent, LoadedNotePage, NotePage, StoredFile } from "../../core/types";
+import { DocumentEditor } from "../editor/DocumentEditor";
+import { editableWithin, focusAtEnd } from "../editor/selection";
+import { MemoBlocksView } from "./MemoBlocksView";
 import {
   createMemo,
   listMemos,
   listMemoTags,
   memoFileUrl,
   promoteMemo,
-  restoreMemo,
   trashMemo,
   updateMemo,
   uploadMemoImage,
@@ -50,17 +51,6 @@ import {
 import "./memos.css";
 
 const EMPTY_COUNTS: MemoCounts = { all: 0, pinned: 0, commented: 0, untagged: 0, trashed: 0 };
-
-const TAG_TONES = ["blue", "green", "purple", "orange", "yellow", "pink", "gray"] as const;
-
-function tagTone(tag: string): (typeof TAG_TONES)[number] {
-  const root = tag.split("/")[0] || tag;
-  let hash = 0;
-  for (let i = 0; i < root.length; i++) {
-    hash = (hash * 31 + root.charCodeAt(i)) | 0;
-  }
-  return TAG_TONES[Math.abs(hash) % TAG_TONES.length];
-}
 
 function fullTimestamp(iso: string): string {
   const date = new Date(iso);
@@ -92,173 +82,79 @@ function flattenTagPaths(nodes: MemoTagNode[], out: string[] = []): string[] {
   return out;
 }
 
-const IMAGE_LINE_RE = /^!\[[^\]]*\]\([^)]*\)\s*$/;
-
-function stripAttachmentLines(markdown: string): string {
-  return markdown
-    .split("\n")
-    .filter((line) => !IMAGE_LINE_RE.test(line.trim()))
-    .join("\n")
-    .trim();
+function freshBlankTree(): BlockTree {
+  const id = createId("block");
+  return { by_id: { [id]: createBlock(id) } };
 }
 
-function caretOffsetFromClick(
-  container: HTMLElement,
-  clientX: number,
-  clientY: number,
-  rawText: string,
-  lineElement: HTMLElement | null,
-): number {
-  const lines = rawText.split("\n");
-  if (!lineElement) return rawText.length;
-  const lineIndex = Number(lineElement.dataset.lineIndex);
-  if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return rawText.length;
-  let lineStart = 0;
-  for (let i = 0; i < lineIndex; i++) lineStart += lines[i].length + 1;
-  const lineLength = lines[lineIndex].length;
+function makeStandalonePage(id: string, tree: BlockTree): LoadedNotePage {
+  const now = new Date().toISOString();
+  return {
+    id,
+    kind: "document",
+    icon: "",
+    title: "",
+    title_content: [],
+    parent_id: null,
+    created_at: now,
+    updated_at: now,
+    created_by: "",
+    updated_by: "",
+    block_tree: tree,
+  };
+}
 
-  try {
-    const doc = container.ownerDocument;
-    let node: Node | null = null;
-    let offset = 0;
-    const anyDoc = doc as Document & {
-      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+function hasTreeContent(tree: BlockTree): boolean {
+  return Object.values(tree.by_id).some((block) => (
+    block.kind === "divider"
+    || (block.kind === "file" && Boolean(block.file))
+    || (block.kind === "embed" && Boolean(block.embed))
+    || block.kind === "table"
+    || block.content.some((run) => Boolean(run.mention) || Boolean(run.text.trim()))
+  ));
+}
+
+function treeSignature(tree: BlockTree): string {
+  return JSON.stringify(orderedBlocks(tree));
+}
+
+function appendInlineToLastBlock(tree: BlockTree, runs: InlineContent): { tree: BlockTree; focusId: string } {
+  const roots = orderedBlocks(tree, null);
+  const last = roots.at(-1);
+  if (last && last.kind !== "code" && last.kind !== "divider" && last.kind !== "file" && last.kind !== "table" && last.kind !== "embed") {
+    const nextBlock: Block = {
+      ...last,
+      content: [...last.content, ...runs],
     };
-    if (typeof anyDoc.caretPositionFromPoint === "function") {
-      const pos = anyDoc.caretPositionFromPoint(clientX, clientY);
-      if (pos) { node = pos.offsetNode; offset = pos.offset; }
-    } else if (typeof doc.caretRangeFromPoint === "function") {
-      const range = doc.caretRangeFromPoint(clientX, clientY);
-      if (range) { node = range.startContainer; offset = range.startOffset; }
-    }
-    if (node && lineElement.contains(node)) {
-      const probe = doc.createRange();
-      probe.setStart(lineElement, 0);
-      probe.setEnd(node, offset);
-      const within = Math.min(lineLength, probe.toString().length);
-      return lineStart + within;
-    }
-  } catch {
-    // Fallback to end of clicked line if range calculation is unavailable.
+    return {
+      tree: { by_id: { ...tree.by_id, [last.id]: nextBlock } },
+      focusId: last.id,
+    };
   }
-  return lineStart + lineLength;
+  const blockId = createId("block");
+  const order = (last?.order ?? 0) + BLOCK_ORDER_STEP;
+  return {
+    tree: { by_id: { ...tree.by_id, [blockId]: createBlock(blockId, "text", { order, content: runs }) } },
+    focusId: blockId,
+  };
 }
 
-function SeamlessInlineEditor({
-  initialValue,
-  initialCaret,
-  ariaLabel,
-  variant = "memo",
-  allowEmpty = false,
-  emptyMessage,
-  onSave,
-  onCancel,
-}: {
-  initialValue: string;
-  initialCaret: number | null;
-  ariaLabel: string;
-  variant?: "memo" | "comment";
-  allowEmpty?: boolean;
-  emptyMessage: string;
-  onSave(nextValue: string): Promise<boolean>;
-  onCancel(): void;
-}) {
-  const [value, setValue] = useState(initialValue);
-  const ref = useRef<HTMLTextAreaElement | null>(null);
-  const doneRef = useRef(false);
-  const savingRef = useRef(false);
-
-  const resize = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${el.scrollHeight}px`;
-  }, []);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    resize();
-    el.focus({ preventScroll: true });
-    const caret = initialCaret === null ? el.value.length : Math.max(0, Math.min(el.value.length, initialCaret));
-    el.setSelectionRange(caret, caret);
-  }, [initialCaret, resize]);
-
-  const commit = useCallback(async () => {
-    if (doneRef.current || savingRef.current) return;
-    if (value === initialValue) {
-      doneRef.current = true;
-      onCancel();
-      return;
-    }
-    if (!value.trim() && !allowEmpty) {
-      doneRef.current = true;
-      onCancel();
-      return;
-    }
-    savingRef.current = true;
-    try {
-      const ok = await onSave(value);
-      if (ok) doneRef.current = true;
-    } finally {
-      savingRef.current = false;
-    }
-  }, [allowEmpty, initialValue, onCancel, onSave, value]);
-
-  return (
-    <div className={`memo-inline-edit ${variant === "comment" ? "memo-inline-edit--comment" : ""}`}>
-      <textarea
-        ref={ref}
-        className={`memo-seamless-input ${variant === "comment" ? "memo-seamless-input--comment" : ""}`}
-        aria-label={ariaLabel}
-        rows={1}
-        value={value}
-        placeholder={emptyMessage}
-        onChange={(event) => {
-          setValue(event.target.value);
-          resize();
-        }}
-        onBlur={() => { void commit(); }}
-        onKeyDown={(event) => {
-          if (imeComposing(event)) return;
-          if (event.key === "Escape") {
-            event.preventDefault();
-            doneRef.current = true;
-            onCancel();
-            return;
-          }
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-            event.preventDefault();
-            void commit();
-          }
-        }}
-      />
-      <div className="memo-inline-edit__foot">
-        <span className="memo-inline-edit__hint">Esc 取消 · 失焦自动保存</span>
-        <div className="memo-inline-edit__actions">
-          <button
-            type="button"
-            className="btn"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => {
-              doneRef.current = true;
-              onCancel();
-            }}
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => { void commit(); }}
-          >
-            完成
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+function appendBlockKindToTree(tree: BlockTree, kind: "todo", extra?: Partial<Block>): { tree: BlockTree; focusId: string } {
+  const roots = orderedBlocks(tree, null);
+  const last = roots.at(-1);
+  if (last && last.kind === "text" && last.content.length === 0) {
+    const converted: Block = { ...last, kind, checked: false, ...extra };
+    return {
+      tree: { by_id: { ...tree.by_id, [last.id]: converted } },
+      focusId: last.id,
+    };
+  }
+  const blockId = createId("block");
+  const order = (last?.order ?? 0) + BLOCK_ORDER_STEP;
+  return {
+    tree: { by_id: { ...tree.by_id, [blockId]: createBlock(blockId, kind, { order, checked: false, ...extra }) } },
+    focusId: blockId,
+  };
 }
 
 export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement | null) => void }) {
@@ -292,31 +188,45 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
   const [streamQuery, setStreamQuery] = useState("");
   const [allTagPaths, setAllTagPaths] = useState<string[]>([]);
 
-  // Composer state
-  const [composerText, setComposerText] = useState("");
-  const [composerFiles, setComposerFiles] = useState<StoredFile[]>([]);
-  const [composerMentions, setComposerMentions] = useState<Map<string, string>>(() => new Map());
+  // Composer state powered by DocumentEditor standalone
+  const [composerEpoch, setComposerEpoch] = useState(1);
+  const [composerTree, setComposerTree] = useState<BlockTree>(() => freshBlankTree());
+  const composerTreeRef = useRef(composerTree);
+  composerTreeRef.current = composerTree;
   const [submitting, setSubmitting] = useState(false);
   const [composerShake, setComposerShake] = useState(false);
-  const [tagSuggest, setTagSuggest] = useState<{ start: number; items: string[]; index: number } | null>(null);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const composerWrapRef = useRef<HTMLElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Card states
+  const composerPage = useMemo(
+    () => makeStandalonePage(`memo-composer-${composerEpoch}`, composerTree),
+    [composerEpoch, composerTree],
+  );
+
+  // Card & comment inline DocumentEditor states
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [expandedLong, setExpandedLong] = useState<Record<string, boolean>>({});
-  const [editingMemo, setEditingMemo] = useState<{ id: string; text: string; caret: number | null } | null>(null);
+  const [editingMemo, setEditingMemo] = useState<{ memo: MemoDto; tree: BlockTree; baseSig: string } | null>(null);
+  const editingMemoRef = useRef(editingMemo);
+  editingMemoRef.current = editingMemo;
+  const savingMemoIdRef = useRef<string | null>(null);
+
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
-  const [editingComment, setEditingComment] = useState<{ memoId: string; commentId: string; text: string; caret: number | null } | null>(null);
+  const [editingComment, setEditingComment] = useState<{ memoId: string; comment: MemoCommentDto; tree: BlockTree; baseSig: string } | null>(null);
+  const editingCommentRef = useRef(editingComment);
+  editingCommentRef.current = editingComment;
+  const savingCommentIdRef = useRef<string | null>(null);
+
   const [promoteTarget, setPromoteTarget] = useState<MemoDto | null>(null);
   const [promoteTitle, setPromoteTitle] = useState("");
   const [promoting, setPromoting] = useState(false);
   const [previewFile, setPreviewFile] = useState<StoredFile | null>(null);
   const [flashMemoId, setFlashMemoId] = useState<string | null>(null);
   const [flashCommentId, setFlashCommentId] = useState<string | null>(null);
-  const hasLoadedRef = useRef(false);
 
+  const loadedOnceRef = useRef(false);
   const surfaceRef = useRef<HTMLElement | null>(null);
   const attachSurface = useCallback((el: HTMLElement | null) => {
     surfaceRef.current = el;
@@ -325,7 +235,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
 
   const loadStream = useCallback((aroundId?: string) => {
     const controller = new AbortController();
-    if (!hasLoadedRef.current) setLoading(true);
+    if (!loadedOnceRef.current) setLoading(true);
     void Promise.all([
       listMemos({
         limit: 30,
@@ -339,7 +249,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     ])
       .then(([listRes, tagRes]) => {
         if (controller.signal.aborted) return;
-        hasLoadedRef.current = true;
+        loadedOnceRef.current = true;
         setMemos(listRes.memos);
         setCounts(listRes.counts);
         setNextCursor(listRes.nextCursor);
@@ -349,6 +259,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
       })
       .catch((reason) => {
         if (controller.signal.aborted) return;
+        loadedOnceRef.current = true;
         setLoading(false);
         toast(reason instanceof Error ? reason.message : "加载闪念失败。", "error");
       });
@@ -357,18 +268,21 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
 
   useEffect(() => loadStream(memoTarget?.memoId), [loadStream, memoRefreshNonce, memoTarget?.memoId]);
 
-  useEffect(() => {
-    const el = composerRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
-  }, [composerText]);
+  const focusComposerBlock = useCallback((blockId?: string) => {
+    window.setTimeout(() => {
+      const container = composerWrapRef.current?.querySelector<HTMLElement>(".blocks") ?? null;
+      const targetId = blockId ?? orderedBlocks(composerTreeRef.current, null)[0]?.id;
+      const editable = (targetId ? editableWithin(container, targetId) : null)
+        ?? composerWrapRef.current?.querySelector<HTMLElement>(".block__editable");
+      if (editable) focusAtEnd(editable);
+    }, 30);
+  }, []);
 
   useEffect(() => {
     if (!memoFocusNonce) return;
     surfaceRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-    window.setTimeout(() => composerRef.current?.focus(), 60);
-  }, [memoFocusNonce]);
+    focusComposerBlock();
+  }, [focusComposerBlock, memoFocusNonce]);
 
   useEffect(() => {
     if (!memoTarget) return;
@@ -389,6 +303,17 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
       window.clearTimeout(clearTimer);
     };
   }, [memoTarget, memos.length]);
+
+  const handleFollowLink = useCallback((pageId: string) => {
+    if (!pageId || !allPages[pageId]) return;
+    selectPage(pageId);
+    setPreference("sidebar_view", "files");
+  }, [allPages, selectPage, setPreference]);
+
+  const handleToggleTag = useCallback((tag: string) => {
+    setMemoTagFilter(memoTagFilter === tag ? null : tag);
+    setMemoQuickFilter("all");
+  }, [memoTagFilter, setMemoQuickFilter, setMemoTagFilter]);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore) return;
@@ -414,90 +339,30 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
   };
 
-  // Resolve `@PageTitle` placeholders back into `[[page:<id>]]` tokens on save.
-  const prepareMarkdownForSave = (raw: string, mentionMap: ReadonlyMap<string, string>): { markdown: string; mentionPageIds: string[] } => {
-    let out = raw;
-    const ids: string[] = [];
-    const entries = [...mentionMap.entries()].sort((left, right) => right[0].length - left[0].length);
-    for (const [title, pageId] of entries) {
-      const token = `@${title}`;
-      if (!out.includes(token)) continue;
-      out = out.split(token).join(`[[page:${pageId}]]`);
-      ids.push(pageId);
-    }
-    return { markdown: out, mentionPageIds: ids };
-  };
-
-  const updateTagSuggest = (text: string, caret: number) => {
-    const before = text.slice(0, caret);
-    const match = before.match(/(?:^|[\s(（])#([^\s#]*)$/);
-    if (!match) { setTagSuggest(null); return; }
-    const needle = match[1].toLowerCase();
-    const start = before.length - match[1].length - 1;
-    const items = allTagPaths.filter((path) => path.toLowerCase().includes(needle));
-    if (!items.length) { setTagSuggest(null); return; }
-    setTagSuggest({ start, items, index: 0 });
-  };
-
-  const applyTagSuggest = (tag: string) => {
-    const textarea = composerRef.current;
-    if (!textarea || !tagSuggest) return;
-    const caret = textarea.selectionStart;
-    const next = composerText.slice(0, tagSuggest.start) + `#${tag} ` + composerText.slice(caret);
-    setComposerText(next);
-    setTagSuggest(null);
-    const nextPos = tagSuggest.start + tag.length + 2;
-    requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.setSelectionRange(nextPos, nextPos);
-    });
-  };
-
-  const insertSnippet = (snippet: string) => {
-    const textarea = composerRef.current;
-    if (!textarea) {
-      setComposerText((prev) => prev + snippet);
-      return;
-    }
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const next = composerText.slice(0, start) + snippet + composerText.slice(end);
-    setComposerText(next);
-    const nextPos = start + snippet.length;
-    requestAnimationFrame(() => {
-      textarea.focus();
-      textarea.setSelectionRange(nextPos, nextPos);
-      updateTagSuggest(next, nextPos);
-    });
-  };
-
   const handleUploadFiles = async (files: FileList | File[]) => {
     for (const file of files) {
       if (!file.type.startsWith("image/")) continue;
       try {
         const stored = await uploadMemoImage(file);
-        setComposerFiles((prev) => [...prev, stored]);
+        const roots = orderedBlocks(composerTreeRef.current, null);
+        const last = roots.at(-1);
+        const blockId = createId("block");
+        const order = (last?.order ?? 0) + BLOCK_ORDER_STEP;
+        const imgBlock = createBlock(blockId, "text", {
+          order,
+          content: [{ text: MENTION_CHAR, mention: { kind: "image", file: stored } }],
+        });
+        setComposerTree((prev) => ({ by_id: { ...prev.by_id, [blockId]: imgBlock } }));
       } catch (reason) {
         toast(reason instanceof Error ? reason.message : "图片上传失败。", "error");
       }
     }
   };
 
-  const handleComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
-    const files = event.clipboardData?.files;
-    if (files?.length) {
-      const images = [...files].filter((file) => file.type.startsWith("image/"));
-      if (images.length) {
-        event.preventDefault();
-        void handleUploadFiles(images);
-      }
-    }
-  };
-
-  const submitComposer = async () => {
+  const submitComposer = useCallback(async () => {
     if (submitting) return;
-    const trimmed = composerText.trim();
-    if (!trimmed && !composerFiles.length) {
+    const latest = composerTreeRef.current;
+    if (!hasTreeContent(latest)) {
       setComposerShake(false);
       requestAnimationFrame(() => setComposerShake(true));
       toast("请输入闪念内容或附加图片", "info");
@@ -505,16 +370,11 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
     setSubmitting(true);
     try {
-      const { markdown, mentionPageIds } = prepareMarkdownForSave(composerText, composerMentions);
-      const created = await createMemo({
-        markdown,
-        ...(composerFiles.length ? { attachments: composerFiles } : {}),
-        ...(mentionPageIds.length ? { mentionPageIds } : {}),
-      }) as MemoDto;
-      setComposerText("");
-      setComposerFiles([]);
-      setComposerMentions(new Map());
-      setTagSuggest(null);
+      const created = await createMemo({ blockTree: latest }) as MemoDto;
+      setComposerTree(freshBlankTree());
+      setComposerEpoch((epoch) => epoch + 1);
+      setTagPickerOpen(false);
+      setMentionPickerOpen(false);
       setFlashMemoId(created.id);
       window.setTimeout(() => setFlashMemoId(null), 1400);
       bumpMemoRefresh();
@@ -523,74 +383,86 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [bumpMemoRefresh, submitting, toast]);
 
-  const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (imeComposing(event)) return;
-    if (tagSuggest) {
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setTagSuggest((prev) => (prev ? { ...prev, index: (prev.index + 1) % prev.items.length } : null));
-        return;
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setTagSuggest((prev) => (prev ? { ...prev, index: (prev.index - 1 + prev.items.length) % prev.items.length } : null));
-        return;
-      }
-      if (event.key === "Enter" && !event.metaKey && !event.ctrlKey) {
-        event.preventDefault();
-        applyTagSuggest(tagSuggest.items[tagSuggest.index]);
-        return;
-      }
-      if (event.key === "Escape") {
-        setTagSuggest(null);
-        return;
-      }
-    }
+  const handleComposerShortcut = useCallback((event: ReactKeyboardEvent) => {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-      event.preventDefault();
       void submitComposer();
+      return true;
     }
-  };
+    return false;
+  }, [submitComposer]);
 
   const togglePinMemo = async (memo: MemoDto) => {
     try {
-      await updateMemo(memo.id, { pinned: !memo.pinned });
+      const updated = await updateMemo(memo.id, { pinned: !memo.pinned }) as MemoDto;
+      setMemos((prev) => prev.map((item) => (item.id === memo.id ? updated : item)));
       bumpMemoRefresh();
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "更新置顶状态失败。", "error");
     }
   };
 
-  const saveEditMemo = async (memo: MemoDto, nextText: string): Promise<boolean> => {
-    const clean = nextText.trim();
-    if (!clean && !memo.attachments.length) {
-      toast("闪念内容不能为空。", "error");
-      return false;
+  const startEditMemo = useCallback((memo: MemoDto) => {
+    setExpandedLong((prev) => (prev[memo.id] ? prev : { ...prev, [memo.id]: true }));
+    const cloned = structuredClone(memo.blockTree);
+    setEditingMemo({ memo, tree: cloned, baseSig: treeSignature(cloned) });
+  }, []);
+
+  const commitEditMemo = useCallback(async () => {
+    const current = editingMemoRef.current;
+    if (!current || savingMemoIdRef.current === current.memo.id) return;
+    const nextSig = treeSignature(current.tree);
+    if (nextSig === current.baseSig) {
+      setEditingMemo((curr) => (curr?.memo.id === current.memo.id ? null : curr));
+      return;
     }
+    if (!hasTreeContent(current.tree)) {
+      setEditingMemo((curr) => (curr?.memo.id === current.memo.id ? null : curr));
+      toast("闪念内容不能为空。", "error");
+      return;
+    }
+    savingMemoIdRef.current = current.memo.id;
+    setEditingMemo((curr) => (curr?.memo.id === current.memo.id ? null : curr));
     try {
-      const updated = await updateMemo(memo.id, { markdown: nextText, attachments: memo.attachments }) as MemoDto;
-      setMemos((prev) => prev.map((item) => (item.id === memo.id ? updated : item)));
-      setEditingMemo((curr) => (curr?.id === memo.id ? null : curr));
+      const updated = await updateMemo(current.memo.id, { blockTree: current.tree }) as MemoDto;
+      setMemos((prev) => prev.map((item) => (item.id === current.memo.id ? updated : item)));
       bumpMemoRefresh();
-      return true;
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "保存修改失败。", "error");
-      return false;
+    } finally {
+      if (savingMemoIdRef.current === current.memo.id) savingMemoIdRef.current = null;
     }
-  };
+  }, [bumpMemoRefresh, toast]);
 
-  const toggleTodoLine = async (memo: MemoDto, lineIndex: number, nextChecked: boolean) => {
-    const lines = stripAttachmentLines(memo.markdown).split("\n");
-    const line = lines[lineIndex];
-    if (!line) return;
-    lines[lineIndex] = nextChecked
-      ? line.replace(/^(\s*[-*+]\s+)\[[ xX]\]/, "$1[x]")
-      : line.replace(/^(\s*[-*+]\s+)\[[ xX]\]/, "$1[ ]");
-    const nextMarkdown = lines.join("\n");
+  const handleEditMemoShortcut = useCallback((event: ReactKeyboardEvent) => {
+    if (event.key === "Escape") {
+      setEditingMemo(null);
+      return true;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      void commitEditMemo();
+      return true;
+    }
+    return false;
+  }, [commitEditMemo]);
+
+  const editingMemoPage = useMemo(
+    () => (editingMemo ? makeStandalonePage(`memo-edit-${editingMemo.memo.id}`, editingMemo.tree) : null),
+    [editingMemo],
+  );
+
+  const toggleTodoBlock = async (memo: MemoDto, blockId: string, nextChecked: boolean) => {
+    const existingBlock = memo.blockTree.by_id[blockId];
+    if (!existingBlock || existingBlock.kind !== "todo") return;
+    const nextTree: BlockTree = {
+      by_id: {
+        ...memo.blockTree.by_id,
+        [blockId]: { ...existingBlock, checked: nextChecked },
+      },
+    };
     try {
-      const updated = await updateMemo(memo.id, { markdown: nextMarkdown, attachments: memo.attachments }) as MemoDto;
+      const updated = await updateMemo(memo.id, { blockTree: nextTree }) as MemoDto;
       setMemos((prev) => prev.map((item) => (item.id === memo.id ? updated : item)));
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "更新待办状态失败。", "error");
@@ -627,23 +499,56 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
   };
 
-  const saveEditComment = async (memoId: string, commentId: string, nextText: string): Promise<boolean> => {
-    const trimmed = nextText.trim();
-    if (!trimmed) return false;
+  const startEditComment = useCallback((memoId: string, comment: MemoCommentDto) => {
+    const cloned = structuredClone(comment.blockTree);
+    setEditingComment({ memoId, comment, tree: cloned, baseSig: treeSignature(cloned) });
+  }, []);
+
+  const commitEditComment = useCallback(async () => {
+    const current = editingCommentRef.current;
+    if (!current || savingCommentIdRef.current === current.comment.id) return;
+    const nextSig = treeSignature(current.tree);
+    if (nextSig === current.baseSig) {
+      setEditingComment((curr) => (curr?.comment.id === current.comment.id ? null : curr));
+      return;
+    }
+    if (!hasTreeContent(current.tree)) {
+      setEditingComment((curr) => (curr?.comment.id === current.comment.id ? null : curr));
+      toast("批注内容不能为空。", "error");
+      return;
+    }
+    savingCommentIdRef.current = current.comment.id;
+    setEditingComment((curr) => (curr?.comment.id === current.comment.id ? null : curr));
     try {
-      const updated = await updateMemo(commentId, { markdown: trimmed }) as MemoCommentDto;
-      setMemos((prev) => prev.map((item) => (item.id === memoId ? {
+      const updated = await updateMemo(current.comment.id, { blockTree: current.tree }) as MemoCommentDto;
+      setMemos((prev) => prev.map((item) => (item.id === current.memoId ? {
         ...item,
-        comments: item.comments.map((c) => (c.id === commentId ? updated : c)),
+        comments: item.comments.map((c) => (c.id === current.comment.id ? updated : c)),
       } : item)));
-      setEditingComment((curr) => (curr?.commentId === commentId ? null : curr));
       bumpMemoRefresh();
-      return true;
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : "更新批注失败。", "error");
-      return false;
+    } finally {
+      if (savingCommentIdRef.current === current.comment.id) savingCommentIdRef.current = null;
     }
-  };
+  }, [bumpMemoRefresh, toast]);
+
+  const handleEditCommentShortcut = useCallback((event: ReactKeyboardEvent) => {
+    if (event.key === "Escape") {
+      setEditingComment(null);
+      return true;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      void commitEditComment();
+      return true;
+    }
+    return false;
+  }, [commitEditComment]);
+
+  const editingCommentPage = useMemo(
+    () => (editingComment ? makeStandalonePage(`memo-comment-edit-${editingComment.comment.id}`, editingComment.tree) : null),
+    [editingComment],
+  );
 
   const removeComment = async (memoId: string, commentId: string) => {
     try {
@@ -676,96 +581,6 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     }
   };
 
-  const renderInlineSegment = (segment: string, mentions: ReadonlyArray<{ pageId: string; title: string }>): ReactNode[] => {
-    const out: ReactNode[] = [];
-    const tagRe = /(^|[\s(（\[【])#([^\s#.,，。!?！？:：;；)）\]】`'"\\]{1,40})/g;
-    let cursor = 0;
-    let match: RegExpExecArray | null;
-    let keyIndex = 0;
-
-    const pushWithMentions = (plain: string) => {
-      if (!mentions.length || !plain) {
-        if (plain) out.push(plain);
-        return;
-      }
-      // Match page titles inserted via @mention.
-      const matchedMention = mentions.find((m) => plain.includes(m.title));
-      if (!matchedMention) {
-        out.push(plain);
-        return;
-      }
-      const idx = plain.indexOf(matchedMention.title);
-      if (idx > 0) pushWithMentions(plain.slice(0, idx));
-      out.push(
-        <button
-          key={`mention-${keyIndex++}`}
-          type="button"
-          className="memo-mention-chip"
-          onClick={(event) => {
-            event.stopPropagation();
-            selectPage(matchedMention.pageId);
-            setPreference("sidebar_view", "files");
-          }}
-        >
-          {matchedMention.title}
-        </button>,
-      );
-      if (idx + matchedMention.title.length < plain.length) {
-        pushWithMentions(plain.slice(idx + matchedMention.title.length));
-      }
-    };
-
-    while ((match = tagRe.exec(segment)) !== null) {
-      const prefix = match[1];
-      const tag = normalizeMemoTag(match[2]);
-      if (!tag) continue;
-      if (match.index > cursor) pushWithMentions(segment.slice(cursor, match.index));
-      if (prefix) pushWithMentions(prefix);
-      out.push(
-        <button
-          key={`tag-${keyIndex++}`}
-          type="button"
-          className={`memo-tag-chip memo-tag-chip--${tagTone(tag)}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            setMemoTagFilter(tag);
-            setMemoQuickFilter("all");
-          }}
-        >
-          #{tag}
-        </button>,
-      );
-      cursor = match.index + match[0].length;
-    }
-    if (cursor < segment.length) pushWithMentions(segment.slice(cursor));
-    return out;
-  };
-
-  const renderBody = (memo: MemoDto, markdown: string, isComment = false) => {
-    const bodyText = stripAttachmentLines(markdown);
-    const lines = bodyText.split("\n");
-    return lines.map((line, lineIdx) => {
-      const todoMatch = !isComment ? line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/) : null;
-      if (todoMatch) {
-        const checked = todoMatch[1].toLowerCase() === "x";
-        return (
-          <div key={lineIdx} data-line-index={lineIdx} className={`memo-todo ${checked ? "is-done" : ""}`}>
-            <input
-              type="checkbox"
-              checked={checked}
-              aria-label={todoMatch[2]}
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => void toggleTodoLine(memo, lineIdx, event.target.checked)}
-            />
-            <span>{renderInlineSegment(todoMatch[2], memo.mentions)}</span>
-          </div>
-        );
-      }
-      if (!line.trim()) return <div key={lineIdx} data-line-index={lineIdx} className="memo-line" />;
-      return <div key={lineIdx} data-line-index={lineIdx} className="memo-line">{renderInlineSegment(line, memo.mentions)}</div>;
-    });
-  };
-
   const filterTabs: Array<{ id: MemoQuickFilter; label: string; count: number }> = [
     { id: "all", label: "全部", count: counts.all },
     { id: "pinned", label: "已置顶", count: counts.pinned },
@@ -773,10 +588,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
     { id: "untagged", label: "无标签", count: counts.untagged },
   ];
 
-  // Ensure restore helper stays reachable if needed from other modules; reference to avoid unused warning.
-  void restoreMemo;
-
-  const hasComposerContent = Boolean(composerText.trim() || composerFiles.length);
+  const composerHasContent = hasTreeContent(composerTree);
 
   return (
     <div className="memo-stream-shell">
@@ -819,56 +631,57 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
             ) : null}
           </div>
 
-          <section className={`memo-composer ${composerShake ? "is-shake" : ""}`} aria-label="闪念速记框">
-            <textarea
-              ref={composerRef}
-              className="memo-composer__textarea"
-              placeholder="写下此刻的想法…"
-              aria-label="闪念输入框"
-              value={composerText}
-              onChange={(event) => {
-                setComposerText(event.target.value);
-                updateTagSuggest(event.target.value, event.target.selectionStart);
+          <section
+            ref={composerWrapRef}
+            className={`memo-composer ${composerShake ? "is-shake" : ""}`}
+            aria-label="闪念速记框"
+          >
+            <DocumentEditor
+              key={`composer-${composerEpoch}`}
+              page={composerPage}
+              standalone={{
+                compact: true,
+                onTreeChange: setComposerTree,
+                onShortcut: handleComposerShortcut,
+                onFollowLink: handleFollowLink,
               }}
-              onKeyDown={handleComposerKeyDown}
-              onPaste={handleComposerPaste}
             />
-            {composerFiles.length ? (
-              <div className="memo-composer__attachments">
-                {composerFiles.map((file) => (
-                  <div key={file.path} className="memo-attach-chip">
-                    <img src={memoFileUrl(file)} alt={file.name} />
-                    <button
-                      type="button"
-                      className="memo-attach-chip__rm"
-                      aria-label={`移除 ${file.name}`}
-                      onClick={() => setComposerFiles((prev) => prev.filter((item) => item.path !== file.path))}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : null}
 
-            {tagSuggest ? (
+            {tagPickerOpen ? (
               <div className="memo-suggest-pop" role="listbox" aria-label="已有标签补全">
-                <div className="menu__section-title">已有标签</div>
-                {tagSuggest.items.map((tag, idx) => (
+                <div className="menu__section-title">插入标签</div>
+                {allTagPaths.length ? allTagPaths.map((tag) => (
                   <button
                     key={tag}
                     type="button"
                     role="option"
-                    aria-selected={idx === tagSuggest.index}
-                    className={`menu__item ${idx === tagSuggest.index ? "is-active" : ""}`}
+                    aria-selected={false}
+                    className="menu__item"
                     onMouseDown={(event) => {
                       event.preventDefault();
-                      applyTagSuggest(tag);
+                      const res = appendInlineToLastBlock(composerTreeRef.current, [{ text: ` #${tag} ` }]);
+                      setComposerTree(res.tree);
+                      setTagPickerOpen(false);
+                      focusComposerBlock(res.focusId);
                     }}
                   >
                     #{tag}
                   </button>
-                ))}
+                )) : (
+                  <button
+                    type="button"
+                    className="menu__item"
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      const res = appendInlineToLastBlock(composerTreeRef.current, [{ text: " #" }]);
+                      setComposerTree(res.tree);
+                      setTagPickerOpen(false);
+                      focusComposerBlock(res.focusId);
+                    }}
+                  >
+                    输入 #新标签
+                  </button>
+                )}
               </div>
             ) : null}
 
@@ -884,9 +697,13 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                       className="menu__item"
                       onMouseDown={(event) => {
                         event.preventDefault();
-                        setComposerMentions((prev) => new Map(prev).set(title, page.id));
-                        insertSnippet(`@${title} `);
+                        const res = appendInlineToLastBlock(composerTreeRef.current, [
+                          { text: MENTION_CHAR, mention: { kind: "page", page_id: page.id } },
+                          { text: " " },
+                        ]);
+                        setComposerTree(res.tree);
                         setMentionPickerOpen(false);
+                        focusComposerBlock(res.focusId);
                       }}
                     >
                       <span className="menu__label">{title}</span>
@@ -910,26 +727,44 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
 
             <div className="memo-composer__foot">
               <div className="memo-composer__tools">
-                <button type="button" className="btn" onClick={() => insertSnippet("#")}>
+                <button
+                  type="button"
+                  className="btn"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setMentionPickerOpen(false);
+                    setTagPickerOpen((open) => !open);
+                  }}
+                >
                   <Hash size={13} /><span>标签</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => insertSnippet(`${composerText && !composerText.endsWith("\n") ? "\n" : ""}- [ ] `)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    const res = appendBlockKindToTree(composerTreeRef.current, "todo");
+                    setComposerTree(res.tree);
+                    focusComposerBlock(res.focusId);
+                  }}
                 >
                   <CheckSquare size={13} /><span>待办</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => setMentionPickerOpen((open) => !open)}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setTagPickerOpen(false);
+                    setMentionPickerOpen((open) => !open);
+                  }}
                 >
                   <AtSign size={13} /><span>引用</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <ImageIcon size={13} /><span>图片</span>
@@ -939,8 +774,9 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                 <kbd className="memo-kbd" aria-hidden="true">⌘↵</kbd>
                 <button
                   type="button"
-                  className={`btn btn--primary ${hasComposerContent ? "" : "is-idle"}`}
+                  className={`btn btn--primary ${composerHasContent ? "" : "is-idle"}`}
                   disabled={submitting}
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => void submitComposer()}
                 >
                   发送
@@ -1015,9 +851,9 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
           ) : memos.length ? (
             <div className="memo-feed">
               {memos.map((memo) => {
-                const bodyText = stripAttachmentLines(memo.markdown);
-                const isEditing = editingMemo?.id === memo.id;
-                const isLong = bodyText.split("\n").length > 6 || bodyText.length > 260;
+                const isEditing = editingMemo?.memo.id === memo.id;
+                const blockCount = orderedBlocks(memo.blockTree).length;
+                const isLong = blockCount > 6 || memo.text.length > 260;
                 const isLongExpanded = Boolean(expandedLong[memo.id]);
                 const isCommentsOpen = Boolean(expandedComments[memo.id]);
 
@@ -1063,8 +899,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                           className="icon-btn icon-btn--sm"
                           aria-label="编辑"
                           title="编辑"
-                          onMouseDown={(event) => event.preventDefault()}
-                          onClick={() => setEditingMemo({ id: memo.id, text: bodyText, caret: bodyText.length })}
+                          onClick={() => startEditMemo(memo)}
                         >
                           <Pencil size={14} />
                         </button>
@@ -1075,7 +910,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                           title="转为正式页面"
                           onClick={() => {
                             setPromoteTarget(memo);
-                            setPromoteTitle(memo.summary || memoSummaryTitle(bodyText));
+                            setPromoteTitle(memo.summary || memoSummaryTitle(memo.text));
                           }}
                         >
                           <ArrowUpRight size={14} />
@@ -1092,31 +927,61 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                       </div>
                     </div>
 
-                    {isEditing && editingMemo ? (
-                      <SeamlessInlineEditor
-                        initialValue={editingMemo.text}
-                        initialCaret={editingMemo.caret}
-                        ariaLabel="编辑闪念"
-                        allowEmpty={memo.attachments.length > 0}
-                        emptyMessage="写点什么…"
-                        onSave={(nextText) => saveEditMemo(memo, nextText)}
-                        onCancel={() => setEditingMemo((curr) => (curr?.id === memo.id ? null : curr))}
-                      />
+                    {isEditing && editingMemoPage ? (
+                      <div className="memo-inline-edit" aria-label="编辑闪念">
+                        <DocumentEditor
+                          page={editingMemoPage}
+                          standalone={{
+                            compact: true,
+                            autoFocus: true,
+                            onTreeChange: (nextTree) => {
+                              setEditingMemo((prev) => (prev && prev.memo.id === memo.id ? { ...prev, tree: nextTree } : prev));
+                            },
+                            onBlurOutside: () => { void commitEditMemo(); },
+                            onShortcut: handleEditMemoShortcut,
+                            onFollowLink: handleFollowLink,
+                          }}
+                        />
+                        <div className="memo-inline-edit__foot">
+                          <span className="memo-inline-edit__hint">Esc 取消 · 支持 / 命令与 Markdown · 失焦自动保存</span>
+                          <div className="memo-inline-edit__actions">
+                            <button
+                              type="button"
+                              className="btn"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => setEditingMemo(null)}
+                            >
+                              取消
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn--primary"
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => void commitEditMemo()}
+                            >
+                              完成
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     ) : (
                       <>
                         <div
-                          className={`memo-body memo-body--editable ${isLong && !isLongExpanded ? "is-collapsed" : ""}`}
+                          className={`memo-body ${isLong && !isLongExpanded ? "is-collapsed" : ""}`}
                           onClick={(event) => {
-                            const target = event.target as HTMLElement;
-                            if (target.closest("button, a, input, [role='button']")) return;
                             if (window.getSelection()?.toString()) return;
-                            const lineEl = target.closest<HTMLElement>("[data-line-index]");
-                            const caret = caretOffsetFromClick(event.currentTarget, event.clientX, event.clientY, bodyText, lineEl);
-                            setExpandedLong((prev) => (prev[memo.id] ? prev : { ...prev, [memo.id]: true }));
-                            setEditingMemo({ id: memo.id, text: bodyText, caret });
+                            if ((event.target as HTMLElement).closest("button, a, input")) return;
+                            startEditMemo(memo);
                           }}
                         >
-                          {renderBody(memo, memo.markdown)}
+                          <MemoBlocksView
+                            tree={memo.blockTree}
+                            pages={allPages}
+                            onToggleTag={handleToggleTag}
+                            onFollowLink={handleFollowLink}
+                            onPreviewImage={setPreviewFile}
+                            onToggleTodo={(blockId, checked) => void toggleTodoBlock(memo, blockId, checked)}
+                          />
                         </div>
                         {isLong ? (
                           <button
@@ -1129,22 +994,6 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                         ) : null}
                       </>
                     )}
-
-                    {memo.attachments.length ? (
-                      <div className="memo-media">
-                        {memo.attachments.map((file) => (
-                          <button
-                            key={file.path}
-                            type="button"
-                            className="memo-thumb"
-                            title="查看大图"
-                            onClick={() => setPreviewFile(file)}
-                          >
-                            <img src={memoFileUrl(file)} alt={file.name} />
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
 
                     {memo.comments.length > 0 && !isCommentsOpen ? (
                       <button
@@ -1171,12 +1020,12 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                           </button>
                         </div>
                         {memo.comments.map((comment) => {
-                          const isEditingC = editingComment?.commentId === comment.id;
+                          const isEditingC = editingComment?.comment.id === comment.id;
                           return (
                             <div
                               key={comment.id}
                               id={`memo-comment-${comment.id}`}
-                              className={`memo-comment-item ${flashCommentId === comment.id ? "history-flash" : ""}`}
+                              className={`memo-comment-item ${isEditingC ? "is-editing" : ""} ${flashCommentId === comment.id ? "history-flash" : ""}`}
                             >
                               <div className="memo-comment-item__top">
                                 <time dateTime={comment.createdAt} title={fullTimestamp(comment.createdAt)}>{formatTimestamp(comment.createdAt)}</time>
@@ -1185,8 +1034,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                                     type="button"
                                     className="icon-btn icon-btn--sm"
                                     aria-label="编辑批注"
-                                    onMouseDown={(event) => event.preventDefault()}
-                                    onClick={() => setEditingComment({ memoId: memo.id, commentId: comment.id, text: comment.markdown, caret: comment.markdown.length })}
+                                    onClick={() => startEditComment(memo.id, comment)}
                                   >
                                     <Pencil size={12} />
                                   </button>
@@ -1200,29 +1048,61 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                                   </button>
                                 </span>
                               </div>
-                              {isEditingC && editingComment ? (
-                                <SeamlessInlineEditor
-                                  initialValue={editingComment.text}
-                                  initialCaret={editingComment.caret}
-                                  ariaLabel="编辑批注内容"
-                                  variant="comment"
-                                  emptyMessage="写下批注…"
-                                  onSave={(nextText) => saveEditComment(memo.id, comment.id, nextText)}
-                                  onCancel={() => setEditingComment((curr) => (curr?.commentId === comment.id ? null : curr))}
-                                />
+                              {isEditingC && editingCommentPage ? (
+                                <div className="memo-inline-edit memo-inline-edit--comment" aria-label="编辑批注内容">
+                                  <DocumentEditor
+                                    page={editingCommentPage}
+                                    standalone={{
+                                      compact: true,
+                                      autoFocus: true,
+                                      onTreeChange: (nextTree) => {
+                                        setEditingComment((prev) => (prev && prev.comment.id === comment.id ? { ...prev, tree: nextTree } : prev));
+                                      },
+                                      onBlurOutside: () => { void commitEditComment(); },
+                                      onShortcut: handleEditCommentShortcut,
+                                      onFollowLink: handleFollowLink,
+                                    }}
+                                  />
+                                  <div className="memo-inline-edit__foot">
+                                    <span className="memo-inline-edit__hint">Esc 取消 · 失焦保存</span>
+                                    <div className="memo-inline-edit__actions">
+                                      <button
+                                        type="button"
+                                        className="btn"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => setEditingComment(null)}
+                                      >
+                                        取消
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="btn btn--primary"
+                                        onMouseDown={(event) => event.preventDefault()}
+                                        onClick={() => void commitEditComment()}
+                                      >
+                                        完成
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
                               ) : (
                                 <div
-                                  className="memo-comment-item__body memo-body--editable"
+                                  className="memo-comment-item__body"
                                   onClick={(event) => {
-                                    const target = event.target as HTMLElement;
-                                    if (target.closest("button, a, input, [role='button']")) return;
                                     if (window.getSelection()?.toString()) return;
-                                    const lineEl = target.closest<HTMLElement>("[data-line-index]");
-                                    const caret = caretOffsetFromClick(event.currentTarget, event.clientX, event.clientY, comment.markdown, lineEl);
-                                    setEditingComment({ memoId: memo.id, commentId: comment.id, text: comment.markdown, caret });
+                                    if ((event.target as HTMLElement).closest("button, a, input")) return;
+                                    startEditComment(memo.id, comment);
                                   }}
                                 >
-                                  {renderBody(memo, comment.markdown, true)}
+                                  <MemoBlocksView
+                                    tree={comment.blockTree}
+                                    pages={allPages}
+                                    compact
+                                    interactiveTodo={false}
+                                    onToggleTag={handleToggleTag}
+                                    onFollowLink={handleFollowLink}
+                                    onPreviewImage={setPreviewFile}
+                                  />
                                 </div>
                               )}
                             </div>

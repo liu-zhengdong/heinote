@@ -61,6 +61,44 @@
   transition: box-shadow var(--t-fast) var(--e-out), background var(--t-fast) var(--e-out);
 }
 
+.memo-composer .memo-doc {
+  --read: 15px;
+  --lead: 1.65;
+}
+
+.memo-composer .memo-doc .blocks {
+  min-height: 54px;
+}
+
+/* Strip full-page chrome inside compact memo editors */
+.memo-doc--compact .blocks {
+  padding: 0;
+  margin: 0;
+}
+
+.memo-doc--compact .block {
+  margin: 2px 0;
+}
+
+.memo-doc--compact .block__gutter,
+.memo-doc--compact .block__add,
+.memo-doc--compact .block__handle {
+  display: none;
+}
+
+.memo-composer .memo-doc .block.is-lonely > .block__content .block__editable[data-blank]::before {
+  content: "写下此刻的想法…（支持 Markdown、#标签 与 / 命令）";
+}
+
+.memo-entry.is-editing .memo-doc .block.is-lonely > .block__content .block__editable[data-blank]::before {
+  content: "写点什么，或输入 / 插入格式块…";
+}
+
+.memo-doc--compact .block.block--image img,
+.memo-blocks-view .block--image img {
+  max-height: 220px;
+}
+
 .memo-composer:focus-within {
   box-shadow: 0 2px 10px rgba(15, 15, 15, 0.08), 0 0 0 1.5px var(--blue);
 }
@@ -458,6 +496,88 @@
   line-height: 1.65;
   overflow-wrap: anywhere;
   cursor: text;
+}
+
+.memo-blocks-view {
+  --read: 15px;
+  --lead: 1.65;
+  padding: 0;
+  margin: 0;
+}
+
+.memo-blocks-view--compact {
+  --read: 14px;
+  --lead: 1.55;
+}
+
+.memo-blocks-view .block {
+  margin: 2px 0;
+}
+
+.memo-blocks-view .block__content {
+  min-height: 1.45em;
+}
+
+.memo-code-wrap {
+  position: relative;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--fill);
+}
+
+.memo-code-lang {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.memo-file-chip,
+.memo-embed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.memo-file-chip:hover,
+.memo-embed-chip:hover {
+  background: var(--fill-hover);
+}
+
+.memo-date-chip {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.memo-table-wrap {
+  overflow-x: auto;
+  margin: 4px 0;
+}
+
+.memo-table {
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.memo-table th,
+.memo-table td {
+  min-width: 72px;
+  padding: 5px 10px;
+  border: 1px solid var(--hairline-strong);
+  text-align: left;
+}
+
+.memo-table th {
+  background: var(--fill);
+  font-weight: 600;
 }
 
 .memo-body.is-collapsed {

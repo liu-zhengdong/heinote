@@ -273,3 +273,75 @@ test("UC-64 tag tree, pin/rename/delete tags, trash/restore/purge & promote pres
   ok(await agent.request(`/memos/${m2.id}?permanent=true`, { method: "DELETE" }));
   assert.equal(ok(await agent.request("/memos?filter=trashed")).memos.length, 0);
 });
+
+test("UC-64 lossless blockTree round-trip preserves headings, inline marks, todos & promote", async (t) => {
+  const { owner, agent } = await fixture(t);
+
+  const tree = {
+    by_id: {
+      h1: {
+        id: "h1",
+        parent_id: null,
+        order: 1024,
+        kind: "heading2",
+        content: [{ text: "结构化闪念标题" }],
+      },
+      b1: {
+        id: "b1",
+        parent_id: null,
+        order: 2048,
+        kind: "text",
+        content: [
+          { text: "含 " },
+          { text: "粗体重点", marks: { bold: true } },
+          { text: " 与 " },
+          { text: "行内代码", marks: { code: true } },
+          { text: " #产品/架构" },
+        ],
+      },
+      t1: {
+        id: "t1",
+        parent_id: null,
+        order: 3072,
+        kind: "todo",
+        content: [{ text: "确认无损持久" }],
+        checked: true,
+      },
+    },
+  };
+
+  const created = ok(await agent.request("/memos", { method: "POST", body: { blockTree: tree } }), 201);
+  assert.equal(created.blockTree.by_id.h1.kind, "heading2");
+  assert.deepEqual(created.blockTree.by_id.b1.content[1], { text: "粗体重点", marks: { bold: true } });
+  assert.equal(created.blockTree.by_id.t1.checked, true);
+  assert.deepEqual(created.tags, ["产品/架构"]);
+
+  const listed = ok(await agent.request("/memos"));
+  const fetched = listed.memos.find((m: Json) => m.id === created.id);
+  assert.equal(fetched.blockTree.by_id.h1.kind, "heading2");
+  assert.deepEqual(fetched.blockTree.by_id.b1.content[3], { text: "行内代码", marks: { code: true } });
+  assert.equal(fetched.blockTree.by_id.t1.checked, true);
+
+  // Patching blockTree updates both structured tree and derived markdown/tags.
+  const patchedTree = {
+    by_id: {
+      ...tree.by_id,
+      t1: { ...tree.by_id.t1, checked: false, content: [{ text: "确认更新 #已修改" }] },
+    },
+  };
+  const patched = ok(await agent.request(`/memos/${created.id}`, {
+    method: "PATCH",
+    body: { blockTree: patchedTree },
+  }));
+  assert.equal(patched.blockTree.by_id.t1.checked, false);
+  assert.deepEqual(patched.tags, ["产品/架构", "已修改"]);
+
+  // Promote preserves headings, inline marks, and todo blocks.
+  const promoted = ok(await agent.request(`/memos/${created.id}/promote`, { method: "POST", body: {} }));
+  assert.equal(promoted.page.title, "结构化闪念标题");
+  const allBlockRows = ok(await owner.request("/api/records/personal/blocks")) as { value: Json }[];
+  const pageBlocks = allBlockRows.map((r) => r.value).filter((b) => b.page === promoted.page.id);
+  assert.equal(pageBlocks.some((b) => b.kind === "heading2"), true);
+  assert.equal(pageBlocks.some((b) => b.kind === "todo" && b.checked === false), true);
+  assert.equal(pageBlocks.some((b) => b.content?.some((r: Json) => r.text === "粗体重点" && r.marks?.bold === true)), true);
+});
