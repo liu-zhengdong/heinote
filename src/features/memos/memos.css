@@ -1,6 +1,7 @@
 /* ============================================================================
-   Memo Stream (UC-64) — aligned 1:1 with HeiNote's paper, hairlines,
-   Notion-blue primary action, soft tag pills, and quote-rule comments.
+   Memo Stream (UC-64) — Notion-native soft surfaces, no wireframe card
+   strokes, flush database tabs, borderless auto-growing composer, and
+   floating compact hover actions.
    ========================================================================== */
 
 .memo-stream-shell {
@@ -12,7 +13,7 @@
 }
 
 .memo-page-surface {
-  padding-bottom: 72px;
+  padding-bottom: 84px;
 }
 
 .memo-col {
@@ -21,156 +22,56 @@
   padding: 0 var(--gutter);
 }
 
+/* ── Page Header ─────────────────────────────────────────────────────────── */
+
 .memo-head {
-  padding-top: 22px;
-  padding-bottom: 10px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 36px 0 18px;
 }
 
 .memo-head__title {
   margin: 0;
   color: var(--ink);
-  font-size: 32px;
+  font-size: 36px;
   font-weight: 700;
-  line-height: 1.2;
-  letter-spacing: -0.015em;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
-/* Database-style horizontal filter toolbar */
-.memo-toolbar {
-  display: flex;
-  min-height: 34px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid var(--hairline);
-  margin-bottom: 18px;
-}
-
-.memo-toolbar__tabs {
-  display: flex;
-  align-items: center;
-  align-self: stretch;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.memo-toolbar__tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.memo-tab {
-  position: relative;
-  display: inline-flex;
-  height: 26px;
-  flex: none;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border-radius: var(--r-sm);
+.memo-head__count {
   color: var(--ink-3);
   font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.memo-tab:hover {
-  background: var(--fill-hover);
-  color: var(--ink-2);
-}
-
-.memo-tab.is-active {
-  color: var(--ink);
-}
-
-.memo-tab.is-active::after {
-  position: absolute;
-  right: 6px;
-  bottom: -4px;
-  left: 6px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--ink);
-  content: "";
-}
-
-.memo-tab__num {
-  color: var(--ink-4);
-  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
-}
-
-.memo-search {
-  display: flex;
-  height: 26px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 6px;
-  border-radius: var(--r-sm);
-  color: var(--ink-3);
-}
-
-.memo-search:focus-within {
-  background: var(--fill);
-  color: var(--ink);
-}
-
-.memo-search input {
-  width: 136px;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--ink);
-  font-size: 13px;
-}
-
-.memo-search input::placeholder {
-  color: var(--ink-4);
-}
-
-/* Mobile horizontal tag pills */
-.memo-mobile-tags {
-  display: none;
-  gap: 6px;
-  margin-bottom: 12px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.memo-mobile-tags::-webkit-scrollbar {
-  display: none;
-}
-
-.memo-mobile-tag-pill {
-  flex: none;
-  padding: 3px 9px;
-  border-radius: var(--r-sm);
-  background: var(--fill);
-  color: var(--ink-2);
-  font-size: 12.5px;
   white-space: nowrap;
 }
 
-.memo-mobile-tag-pill.is-active {
-  background: var(--fill-active);
-  color: var(--ink);
-  font-weight: 550;
-}
+/* ── Borderless Lifted Composer ──────────────────────────────────────────── */
 
-/* Paper-integrated Composer */
 .memo-composer {
   position: relative;
-  padding: 11px 13px 8px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-md);
-  margin-bottom: 10px;
-  background: var(--paper);
-  transition: border-color var(--t-fast) var(--e-out), box-shadow var(--t-fast) var(--e-out);
+  padding: 14px 16px 10px;
+  border: 0;
+  border-radius: var(--r-lg);
+  margin-bottom: 22px;
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
+  transition: box-shadow var(--t-fast) var(--e-out), background var(--t-fast) var(--e-out);
 }
 
 .memo-composer:focus-within {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 2px var(--blue-tint);
+  box-shadow: 0 2px 10px rgba(15, 15, 15, 0.08), 0 0 0 1.5px var(--blue);
+}
+
+:root[data-theme="dark"] .memo-composer {
+  background: var(--elevated);
+  box-shadow: rgba(0, 0, 0, 0.32) 0 2px 6px, rgba(255, 255, 255, 0.06) 0 0 0 1px;
+}
+
+:root[data-theme="dark"] .memo-composer:focus-within {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.42), 0 0 0 1.5px var(--blue);
 }
 
 .memo-composer.is-shake {
@@ -185,15 +86,17 @@
 
 .memo-composer__textarea {
   width: 100%;
-  min-height: 64px;
-  max-height: 240px;
+  min-height: 54px;
+  max-height: 260px;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--ink);
-  font-size: 15.5px;
-  line-height: 1.6;
-  resize: vertical;
+  font-size: 15px;
+  line-height: 1.65;
+  resize: none;
+  overflow-y: auto;
 }
 
 .memo-composer__textarea::placeholder {
@@ -204,16 +107,16 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 8px 0 4px;
+  margin: 10px 0 4px;
 }
 
 .memo-attach-chip {
   position: relative;
   width: 108px;
   height: 76px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-sm);
+  border-radius: var(--r-md);
   background: var(--fill);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
 }
 
@@ -242,9 +145,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding-top: 6px;
-  border-top: 1px solid var(--hairline);
-  margin-top: 6px;
+  padding-top: 2px;
+  margin-top: 8px;
 }
 
 .memo-composer__tools {
@@ -252,6 +154,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+  margin-left: -6px;
 }
 
 .memo-composer__tools .btn {
@@ -261,12 +164,42 @@
   font-size: 12.5px;
 }
 
-/* Autocomplete & Mention Pickers */
+.memo-composer__tools .btn:hover {
+  color: var(--ink);
+}
+
+.memo-composer__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.memo-kbd {
+  color: var(--ink-4);
+  font-family: inherit;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.memo-composer__submit .btn--primary {
+  min-height: 28px;
+  padding: 0 12px;
+  font-size: 13px;
+  transition: opacity var(--t-fast) var(--e-out), background-color var(--t-tap) var(--e-out);
+}
+
+.memo-composer__submit .btn--primary.is-idle {
+  opacity: 0.72;
+}
+
+/* ── Autocomplete & Mention Pickers ──────────────────────────────────────── */
+
 .memo-suggest-pop {
   position: absolute;
   z-index: 40;
   top: calc(100% - 36px);
-  left: 12px;
+  left: 14px;
   min-width: 220px;
   max-width: 300px;
   max-height: 220px;
@@ -277,20 +210,174 @@
   overflow-y: auto;
 }
 
-/* Hairline-separated Memo Stream */
+/* ── Flush Database-Style Filter Toolbar ─────────────────────────────────── */
+
+.memo-toolbar {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 14px;
+}
+
+.memo-toolbar__tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.memo-toolbar__tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.memo-tab {
+  position: relative;
+  display: inline-flex;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.memo-tab:hover {
+  background: var(--fill-hover);
+  color: var(--ink-2);
+}
+
+.memo-tab.is-active {
+  color: var(--ink);
+}
+
+.memo-tab.is-active::after {
+  position: absolute;
+  right: 6px;
+  bottom: -1px;
+  left: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--ink);
+  content: "";
+}
+
+.memo-tab__num {
+  color: var(--ink-4);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.memo-search {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  transition: background var(--t-fast) var(--e-out), color var(--t-fast) var(--e-out);
+}
+
+.memo-search:hover {
+  background: var(--fill);
+}
+
+.memo-search:focus-within {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.memo-search input {
+  width: 116px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  transition: width var(--t-fast) var(--e-out);
+}
+
+.memo-search input:focus,
+.memo-search input:not(:placeholder-shown) {
+  width: 168px;
+}
+
+.memo-search input::placeholder {
+  color: var(--ink-4);
+}
+
+/* ── Mobile Horizontal Tag Pills ─────────────────────────────────────────── */
+
+.memo-mobile-tags {
+  display: none;
+  gap: 6px;
+  margin-bottom: 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.memo-mobile-tags::-webkit-scrollbar {
+  display: none;
+}
+
+.memo-mobile-tag-pill {
+  flex: none;
+  padding: 3px 9px;
+  border-radius: var(--r-sm);
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.memo-mobile-tag-pill.is-active {
+  background: var(--fill-active);
+  color: var(--ink);
+  font-weight: 550;
+}
+
+/* ── Borderless Soft-Surface Memo Feed ───────────────────────────────────── */
+
 .memo-feed {
   display: flex;
   flex-direction: column;
+  gap: 10px;
 }
 
 .memo-entry {
-  padding: 18px 2px;
-  border-bottom: 1px solid var(--hairline);
-  transition: background var(--t-base) var(--e-out);
+  position: relative;
+  padding: 14px 16px 15px;
+  border: 0;
+  border-radius: var(--r-lg);
+  background: rgba(55, 53, 47, 0.028);
+  transition: background var(--t-fast) var(--e-out);
+}
+
+.memo-entry:hover {
+  background: rgba(55, 53, 47, 0.05);
+}
+
+:root[data-theme="dark"] .memo-entry {
+  background: var(--sidebar);
+}
+
+:root[data-theme="dark"] .memo-entry:hover {
+  background: var(--elevated);
 }
 
 .memo-entry__head {
   display: flex;
+  min-height: 24px;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -310,37 +397,54 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  color: var(--yellow);
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--tag-yellow-bg);
+  color: var(--tag-yellow-ink);
+  font-size: 11px;
   font-weight: 500;
 }
 
+/* Floating compact Notion action bar */
 .memo-entry__actions {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
+  padding: 2px;
+  border-radius: var(--r-md);
+  background: var(--elevated);
+  box-shadow: var(--shadow-card);
   opacity: 0;
-  transition: opacity var(--t-fast) var(--e-out);
+  pointer-events: none;
+  transform: translateY(-1px);
+  transition: opacity var(--t-fast) var(--e-out), transform var(--t-fast) var(--e-out);
 }
 
 .memo-entry:hover .memo-entry__actions,
 .memo-entry:focus-within .memo-entry__actions {
   opacity: 1;
+  pointer-events: auto;
+  transform: none;
 }
 
-.memo-entry__actions .btn {
-  min-height: 24px;
-  padding: 0 6px;
-  color: var(--ink-3);
-  font-size: 12px;
+.memo-entry__actions .icon-btn--sm {
+  width: 24px;
+  height: 24px;
+  color: var(--ink-2);
 }
 
-.memo-entry__actions .btn.is-on {
+.memo-entry__actions .icon-btn--sm.is-on {
   color: var(--yellow);
+}
+
+.memo-entry__actions .icon-btn--sm.is-danger:hover:not(:disabled) {
+  background: var(--danger-tint);
+  color: var(--danger);
 }
 
 .memo-body {
   color: var(--ink);
-  font-size: 15.5px;
+  font-size: 15px;
   line-height: 1.65;
   overflow-wrap: anywhere;
 }
@@ -361,13 +465,13 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 3px 0;
+  margin: 4px 0;
 }
 
 .memo-todo input[type="checkbox"] {
   width: 15px;
   height: 15px;
-  margin-top: 6px;
+  margin-top: 5px;
   accent-color: var(--blue);
   cursor: pointer;
 }
@@ -377,23 +481,37 @@
   text-decoration: line-through;
 }
 
+/* Deterministic Notion multi-tint tag pills */
 .memo-tag-chip {
   display: inline-flex;
   align-items: center;
   padding: 0 6px;
   border-radius: var(--r-sm);
-  margin: 0 1px;
+  margin: 0 2px;
   background: var(--tag-default-bg);
   color: var(--tag-default-ink);
   font-size: 13px;
   font-weight: 500;
   line-height: 1.55;
   cursor: pointer;
+  transition: filter var(--t-tap) var(--e-out);
 }
 
 .memo-tag-chip:hover {
-  filter: brightness(0.95);
+  filter: brightness(0.92);
 }
+
+:root[data-theme="dark"] .memo-tag-chip:hover {
+  filter: brightness(1.15);
+}
+
+.memo-tag-chip--blue   { background: var(--tag-blue-bg);   color: var(--tag-blue-ink); }
+.memo-tag-chip--green  { background: var(--tag-green-bg);  color: var(--tag-green-ink); }
+.memo-tag-chip--purple { background: var(--tag-purple-bg); color: var(--tag-purple-ink); }
+.memo-tag-chip--orange { background: var(--tag-orange-bg); color: var(--tag-orange-ink); }
+.memo-tag-chip--yellow { background: var(--tag-yellow-bg); color: var(--tag-yellow-ink); }
+.memo-tag-chip--pink   { background: var(--tag-pink-bg);   color: var(--tag-pink-ink); }
+.memo-tag-chip--gray   { background: var(--tag-gray-bg);   color: var(--tag-gray-ink); }
 
 .memo-mention-chip {
   display: inline-flex;
@@ -413,7 +531,7 @@
 }
 
 .memo-expand-toggle {
-  margin-top: 4px;
+  margin-top: 6px;
   color: var(--ink-3);
   font-size: 13px;
   font-weight: 500;
@@ -433,9 +551,9 @@
 .memo-thumb {
   max-width: 240px;
   max-height: 180px;
-  border: 1px solid var(--hairline);
   border-radius: var(--r-md);
   background: var(--fill);
+  box-shadow: var(--shadow-card);
   overflow: hidden;
   cursor: zoom-in;
 }
@@ -450,13 +568,16 @@
 .memo-inline-edit textarea {
   width: 100%;
   min-height: 84px;
-  padding: 8px 10px;
-  border: 1.5px solid var(--blue);
+  padding: 9px 11px;
+  border: 0;
   border-radius: var(--r-sm);
   background: var(--paper);
+  box-shadow: 0 0 0 1.5px var(--blue);
+  color: var(--ink);
   outline: 0;
-  font-size: 15.5px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.65;
+  resize: vertical;
 }
 
 .memo-inline-edit__bar {
@@ -466,15 +587,16 @@
   margin-top: 8px;
 }
 
-/* Left-Border Quote-Style Comment Thread */
+/* ── Left-Border Quote-Style Comment Thread ──────────────────────────────── */
+
 .memo-comment-summary {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 7px;
+  padding: 2px 8px;
   border-radius: var(--r-sm);
-  margin-top: 8px;
-  margin-left: -7px;
+  margin-top: 10px;
+  margin-left: -8px;
   color: var(--ink-3);
   font-size: 12.5px;
 }
@@ -500,14 +622,14 @@
 }
 
 .memo-comment-item {
-  padding: 5px 6px;
+  padding: 5px 8px;
   border-radius: var(--r-sm);
   margin-bottom: 4px;
-  margin-left: -6px;
+  margin-left: -8px;
 }
 
 .memo-comment-item:hover {
-  background: var(--fill);
+  background: var(--fill-hover);
 }
 
 .memo-comment-item__top {
@@ -548,10 +670,12 @@
   flex: 1;
   min-height: 32px;
   max-height: 100px;
-  padding: 5px 9px;
-  border: 1px solid var(--hairline);
+  padding: 6px 10px;
+  border: 0;
   border-radius: var(--r-sm);
-  background: var(--fill);
+  background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  color: var(--ink);
   outline: 0;
   font-size: 13.5px;
   line-height: 1.45;
@@ -559,9 +683,10 @@
 }
 
 .memo-comment-composer textarea:focus {
-  border-color: var(--blue);
-  background: var(--paper);
+  box-shadow: 0 0 0 1.5px var(--blue);
 }
+
+/* ── Load More, Empty State & Modals ─────────────────────────────────────── */
 
 .memo-load-more {
   display: flex;
@@ -570,9 +695,14 @@
 }
 
 .memo-empty {
-  padding: 44px 16px;
+  padding: 56px 16px;
   color: var(--ink-3);
+  font-size: 14px;
   text-align: center;
+}
+
+.memo-empty p {
+  margin: 4px 0;
 }
 
 .memo-modal {
@@ -631,9 +761,11 @@
   border-radius: var(--r-sm);
 }
 
-/* Sidebar Tag Tree */
+/* ── Sidebar Tag Tree ────────────────────────────────────────────────────── */
+
 .memo-tag-row .tree-row__actions {
   right: 4px;
+  z-index: 2;
 }
 
 .memo-tag-row:hover .tree-row__main {
@@ -644,6 +776,8 @@
   .memo-entry__actions,
   .memo-comment-item__actions {
     opacity: 1;
+    pointer-events: auto;
+    transform: none;
   }
 }
 
@@ -653,22 +787,42 @@
   }
 
   .memo-head {
-    padding-top: 10px;
+    padding: 14px 0 12px;
   }
 
   .memo-head__title {
-    font-size: 26px;
+    font-size: 28px;
+  }
+
+  .memo-composer {
+    padding: 12px 13px 8px;
+    margin-bottom: 16px;
+  }
+
+  .memo-composer__tools .btn span,
+  .memo-kbd {
+    display: none;
   }
 
   .memo-mobile-tags {
     display: flex;
   }
 
-  .memo-entry__actions .btn span {
-    display: none;
+  .memo-entry {
+    padding: 12px 13px 13px;
+  }
+
+  .memo-entry__actions {
+    background: transparent;
+    box-shadow: none;
   }
 
   .memo-search input {
-    width: 104px;
+    width: 92px;
+  }
+
+  .memo-search input:focus,
+  .memo-search input:not(:placeholder-shown) {
+    width: 124px;
   }
 }

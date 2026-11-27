@@ -81,21 +81,28 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
   await expect(page.locator(".memo-entry")).toHaveCount(2);
 
   // Pin, rename, and delete tag from left tag tree.
-  await page.getByRole("button", { name: "置顶标签 工作", exact: true }).click();
+  const workTagRow = page.locator(".memo-tag-row", { hasText: /^工作/ }).first();
+  await workTagRow.hover();
+  await workTagRow.getByRole("button", { name: "置顶标签 工作", exact: true }).click();
   await expect(page.getByLabel("置顶标签", { exact: true })).toContainText("工作");
 
-  await page.getByRole("button", { name: "重命名标签 灵感", exact: true }).click();
+  const ideaTagRow = page.locator(".memo-tag-row", { hasText: /^灵感/ }).first();
+  await ideaTagRow.hover();
+  await ideaTagRow.getByRole("button", { name: "重命名标签 灵感", exact: true }).click();
   const renameModal = page.getByRole("dialog", { name: "重命名标签", exact: true });
   await renameModal.locator("input").fill("好点子");
   await renameModal.getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.locator(".memo-entry").nth(1)).toContainText("#好点子");
 
-  await page.getByRole("button", { name: "移除标签 好点子", exact: true }).click();
+  const renamedTagRow = page.locator(".memo-tag-row", { hasText: /^好点子/ }).first();
+  await renamedTagRow.hover();
+  await renamedTagRow.getByRole("button", { name: "移除标签 好点子", exact: true }).click();
   await expect(page.locator(".memo-entry").nth(1)).toContainText("较早闪念 咖啡豆实验");
   await expect(page.locator(".memo-entry").nth(1)).not.toContainText("#好点子");
 
   // Comment on older memo -> stays below newer memo across reload.
   const olderCard = page.locator(".memo-entry").nth(1);
+  await olderCard.hover();
   await olderCard.getByRole("button", { name: "批注", exact: true }).click();
   await olderCard.getByLabel("添加批注", { exact: true }).fill("老卡片的独有批注关键词");
   await olderCard.locator(".memo-comment-composer").getByRole("button", { name: "发送", exact: true }).click();
@@ -124,21 +131,27 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
 
   // Promote older memo (with comment) to formal page -> preserves content & appends 批注记录.
   const promoteSource = page.locator(".memo-entry", { hasText: "较早闪念 咖啡豆实验" });
+  await promoteSource.hover();
   await promoteSource.getByRole("button", { name: "转为正式页面", exact: true }).click();
   const promoteModal = page.getByRole("dialog", { name: "转为正式页面", exact: true });
   await promoteModal.getByRole("button", { name: "确认转正", exact: true }).click();
-  await expect(page.getByLabel("Page title", { exact: true })).toHaveValue(/较早闪念 咖啡豆实验/);
+  await expect(page.getByLabel("Page title", { exact: true })).toHaveText(/较早闪念 咖啡豆实验/);
   await expect(page.getByRole("main")).toContainText("批注记录");
   await expect(page.getByRole("main")).toContainText("老卡片的独有批注关键词");
 
   // Back to Memos -> trash & restore remaining memo through Trash view.
   await memoRailTab(page).click();
   await expect(page.locator(".memo-entry")).toHaveCount(1);
-  await page.locator(".memo-entry").first().getByRole("button", { name: "删除", exact: true }).click();
+  const lastCard = page.locator(".memo-entry").first();
+  await lastCard.hover();
+  await lastCard.getByRole("button", { name: "删除", exact: true }).click();
   await expect(page.locator(".memo-entry")).toHaveCount(0);
 
   await page.getByRole("navigation", { name: "HeiNote navigation", exact: true })
     .getByRole("tab", { name: "Trash", exact: true }).click();
+  const trashedMemoRow = page.getByRole("listbox", { name: "Pages in the trash", exact: true }).getByRole("option", { name: /最新闪念/ });
+  await expect(trashedMemoRow).toBeVisible();
+  await trashedMemoRow.hover();
   await expect(page.getByRole("button", { name: /恢复闪念 .*最新闪念/ })).toBeVisible();
   await page.getByRole("button", { name: /恢复闪念 .*最新闪念/ }).click();
   await memoRailTab(page).click();
@@ -146,7 +159,7 @@ test("UC-64 desktop: memos capture, nested #tags, comment stability, promote, Qu
 
   // Create team KB -> switching into KB hides the Memos tab automatically.
   const kbRes = await page.request.post(`${server.url}/api/knowledge-bases`, {
-    data: { requestId: crypto.randomUUID(), name: "团队知识库" },
+    data: { requestId: crypto.randomUUID(), name: "研发知识库" },
     headers: { Origin: server.url },
   });
   expect(kbRes.status()).toBe(201);

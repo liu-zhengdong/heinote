@@ -10,6 +10,7 @@ import {
   Search,
   Trash2,
   X,
+  Zap,
 } from "lucide-react";
 import {
   useCallback,
@@ -49,11 +50,37 @@ import "./memos.css";
 
 const EMPTY_COUNTS: MemoCounts = { all: 0, pinned: 0, commented: 0, untagged: 0, trashed: 0 };
 
-function formatTimestamp(iso: string): string {
+const TAG_TONES = ["blue", "green", "purple", "orange", "yellow", "pink", "gray"] as const;
+
+function tagTone(tag: string): (typeof TAG_TONES)[number] {
+  const root = tag.split("/")[0] || tag;
+  let hash = 0;
+  for (let i = 0; i < root.length; i++) {
+    hash = (hash * 31 + root.charCodeAt(i)) | 0;
+  }
+  return TAG_TONES[Math.abs(hash) % TAG_TONES.length];
+}
+
+function fullTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso.slice(0, 16).replace("T", " ");
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatTimestamp(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso.slice(0, 16).replace("T", " ");
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const hm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfToday - startOfDate) / 86_400_000);
+  if (dayDiff === 0) return `今天 ${hm}`;
+  if (dayDiff === 1) return `昨天 ${hm}`;
+  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth() + 1}月${date.getDate()}日 ${hm}`;
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${hm}`;
 }
 
 function flattenTagPaths(nodes: MemoTagNode[], out: string[] = []): string[] {
@@ -168,6 +195,13 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
   }, [memoQuickFilter, memoTagFilter, streamQuery, toast]);
 
   useEffect(() => loadStream(memoTarget?.memoId), [loadStream, memoRefreshNonce, memoTarget?.memoId]);
+
+  useEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+  }, [composerText]);
 
   useEffect(() => {
     if (!memoFocusNonce) return;
@@ -525,7 +559,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
         <button
           key={`tag-${keyIndex++}`}
           type="button"
-          className="memo-tag-chip"
+          className={`memo-tag-chip memo-tag-chip--${tagTone(tag)}`}
           onClick={() => {
             setMemoTagFilter(tag);
             setMemoQuickFilter("all");
@@ -574,15 +608,18 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
   // Ensure restore helper stays reachable if needed from other modules; reference to avoid unused warning.
   void restoreMemo;
 
+  const hasComposerContent = Boolean(composerText.trim() || composerFiles.length);
+
   return (
     <div className="memo-stream-shell">
       <header className="topbar">
         <div className="topbar__crumbs">
           <button
             type="button"
-            className="crumb is-current"
+            className={`crumb ${!memoTagFilter ? "is-current" : ""}`}
             onClick={() => { setMemoTagFilter(null); setMemoQuickFilter("all"); }}
           >
+            <span className="crumb__icon" aria-hidden="true"><Zap size={14} /></span>
             <span className="crumb__label">闪念</span>
           </button>
           {memoTagFilter ? (
@@ -590,7 +627,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
               <span className="crumb__sep">/</span>
               <button
                 type="button"
-                className="crumb"
+                className="crumb is-current"
                 title="清除标签筛选"
                 onClick={() => setMemoTagFilter(null)}
               >
@@ -600,77 +637,25 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
             </>
           ) : null}
         </div>
-        <div className="topbar__actions">
-          <span style={{ fontSize: 12, color: "var(--ink-3)", paddingRight: 4 }}>⌘+Enter 发送</span>
-        </div>
+        <div className="topbar__actions" />
       </header>
 
       <main ref={attachSurface} className="page-surface scroller memo-page-surface" aria-label="闪念卡片流">
         <div className="memo-col">
           <div className="memo-head">
             <h1 className="memo-head__title">{memoTagFilter ? `#${memoTagFilter}` : "闪念"}</h1>
+            {memoTagFilter || memoQuickFilter !== "all" || streamQuery.trim() ? (
+              <span className="memo-head__count">共 {memos.length} 条</span>
+            ) : counts.all > 0 ? (
+              <span className="memo-head__count">{counts.all} 条</span>
+            ) : null}
           </div>
-
-          <div className="memo-toolbar" role="toolbar" aria-label="闪念筛选">
-            <div className="memo-toolbar__tabs" role="tablist">
-              {filterTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={memoQuickFilter === tab.id}
-                  className={`memo-tab ${memoQuickFilter === tab.id ? "is-active" : ""}`}
-                  onClick={() => setMemoQuickFilter(tab.id)}
-                >
-                  <span>{tab.label}</span>
-                  <span className="memo-tab__num">{tab.count}</span>
-                </button>
-              ))}
-            </div>
-            <div className="memo-search">
-              <Search size={13} aria-hidden="true" />
-              <input
-                type="text"
-                value={streamQuery}
-                placeholder="过滤闪念…"
-                aria-label="过滤闪念"
-                onChange={(event) => setStreamQuery(event.target.value)}
-              />
-              {streamQuery ? (
-                <button type="button" className="icon-btn icon-btn--sm" aria-label="清除搜索" onClick={() => setStreamQuery("")}>
-                  <X size={12} />
-                </button>
-              ) : null}
-            </div>
-          </div>
-
-          {allTagPaths.length ? (
-            <div className="memo-mobile-tags" aria-label="移动端标签筛选">
-              <button
-                type="button"
-                className={`memo-mobile-tag-pill ${!memoTagFilter ? "is-active" : ""}`}
-                onClick={() => setMemoTagFilter(null)}
-              >
-                全部标签
-              </button>
-              {allTagPaths.map((path) => (
-                <button
-                  key={path}
-                  type="button"
-                  className={`memo-mobile-tag-pill ${memoTagFilter === path ? "is-active" : ""}`}
-                  onClick={() => setMemoTagFilter(memoTagFilter === path ? null : path)}
-                >
-                  #{path}
-                </button>
-              ))}
-            </div>
-          ) : null}
 
           <section className={`memo-composer ${composerShake ? "is-shake" : ""}`} aria-label="闪念速记框">
             <textarea
               ref={composerRef}
               className="memo-composer__textarea"
-              placeholder="现在的想法是…（支持 #多级标签、- [ ] 待办、直接粘贴图片，⌘+Enter 发送）"
+              placeholder="写下此刻的想法…"
               aria-label="闪念输入框"
               value={composerText}
               onChange={(event) => {
@@ -758,40 +743,100 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
             <div className="memo-composer__foot">
               <div className="memo-composer__tools">
                 <button type="button" className="btn" onClick={() => insertSnippet("#")}>
-                  <Hash size={13} /> 标签
+                  <Hash size={13} /><span>标签</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
                   onClick={() => insertSnippet(`${composerText && !composerText.endsWith("\n") ? "\n" : ""}- [ ] `)}
                 >
-                  <CheckSquare size={13} /> 待办
+                  <CheckSquare size={13} /><span>待办</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
                   onClick={() => setMentionPickerOpen((open) => !open)}
                 >
-                  <AtSign size={13} /> 引用
+                  <AtSign size={13} /><span>引用</span>
                 </button>
                 <button
                   type="button"
                   className="btn"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <ImageIcon size={13} /> 图片
+                  <ImageIcon size={13} /><span>图片</span>
                 </button>
               </div>
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={submitting}
-                onClick={() => void submitComposer()}
-              >
-                发送
-              </button>
+              <div className="memo-composer__submit">
+                <kbd className="memo-kbd" aria-hidden="true">⌘↵</kbd>
+                <button
+                  type="button"
+                  className={`btn btn--primary ${hasComposerContent ? "" : "is-idle"}`}
+                  disabled={submitting}
+                  onClick={() => void submitComposer()}
+                >
+                  发送
+                </button>
+              </div>
             </div>
           </section>
+
+          <div className="memo-toolbar" role="toolbar" aria-label="闪念筛选">
+            <div className="memo-toolbar__tabs" role="tablist">
+              {filterTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={memoQuickFilter === tab.id}
+                  className={`memo-tab ${memoQuickFilter === tab.id ? "is-active" : ""}`}
+                  onClick={() => setMemoQuickFilter(tab.id)}
+                >
+                  <span>{tab.label}</span>
+                  {(tab.id === "all" || tab.count > 0) ? (
+                    <span className="memo-tab__num">{tab.count}</span>
+                  ) : null}
+                </button>
+              ))}
+            </div>
+            <div className="memo-search">
+              <Search size={13} aria-hidden="true" />
+              <input
+                type="text"
+                value={streamQuery}
+                placeholder="搜索闪念…"
+                aria-label="过滤闪念"
+                onChange={(event) => setStreamQuery(event.target.value)}
+              />
+              {streamQuery ? (
+                <button type="button" className="icon-btn icon-btn--sm" aria-label="清除搜索" onClick={() => setStreamQuery("")}>
+                  <X size={12} />
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          {allTagPaths.length ? (
+            <div className="memo-mobile-tags" aria-label="移动端标签筛选">
+              <button
+                type="button"
+                className={`memo-mobile-tag-pill ${!memoTagFilter ? "is-active" : ""}`}
+                onClick={() => setMemoTagFilter(null)}
+              >
+                全部标签
+              </button>
+              {allTagPaths.map((path) => (
+                <button
+                  key={path}
+                  type="button"
+                  className={`memo-mobile-tag-pill ${memoTagFilter === path ? "is-active" : ""}`}
+                  onClick={() => setMemoTagFilter(memoTagFilter === path ? null : path)}
+                >
+                  #{path}
+                </button>
+              ))}
+            </div>
+          ) : null}
 
           {loading ? (
             <div className="page-loading" aria-busy="true">
@@ -812,66 +857,71 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                   <article
                     key={memo.id}
                     id={`memo-card-${memo.id}`}
-                    className={`memo-entry ${flashMemoId === memo.id ? "history-flash" : ""}`}
+                    className={`memo-entry ${memo.pinned ? "is-pinned" : ""} ${flashMemoId === memo.id ? "history-flash" : ""}`}
                   >
                     <div className="memo-entry__head">
                       <div className="memo-entry__meta">
-                        <time dateTime={memo.createdAt}>{formatTimestamp(memo.createdAt)}</time>
+                        <time dateTime={memo.createdAt} title={fullTimestamp(memo.createdAt)}>{formatTimestamp(memo.createdAt)}</time>
                         {memo.pinned ? (
                           <span className="memo-pin-mark">
-                            <Pin size={12} /> 置顶
+                            <Pin size={11} /> 置顶
                           </span>
                         ) : null}
                       </div>
                       <div className="memo-entry__actions">
                         <button
                           type="button"
-                          className="btn"
+                          className="icon-btn icon-btn--sm"
+                          aria-label="批注"
                           title="批注"
                           onClick={() => {
                             setExpandedComments((prev) => ({ ...prev, [memo.id]: true }));
                             requestAnimationFrame(() => document.getElementById(`memo-comment-input-${memo.id}`)?.focus());
                           }}
                         >
-                          <MessageSquare size={13} /><span>批注</span>
+                          <MessageSquare size={14} />
                         </button>
                         <button
                           type="button"
-                          className={`btn ${memo.pinned ? "is-on" : ""}`}
+                          className={`icon-btn icon-btn--sm ${memo.pinned ? "is-on" : ""}`}
+                          aria-label={memo.pinned ? "已置顶" : "置顶"}
                           title={memo.pinned ? "取消置顶" : "置顶"}
                           onClick={() => void togglePinMemo(memo)}
                         >
-                          <Pin size={13} /><span>{memo.pinned ? "已置顶" : "置顶"}</span>
+                          <Pin size={14} />
                         </button>
                         <button
                           type="button"
-                          className="btn"
+                          className="icon-btn icon-btn--sm"
+                          aria-label="编辑"
                           title="编辑"
                           onClick={() => {
                             setEditingMemoId(memo.id);
                             setEditingMemoText(bodyText);
                           }}
                         >
-                          <Pencil size={13} /><span>编辑</span>
+                          <Pencil size={14} />
                         </button>
                         <button
                           type="button"
-                          className="btn"
+                          className="icon-btn icon-btn--sm"
+                          aria-label="转为正式页面"
                           title="转为正式页面"
                           onClick={() => {
                             setPromoteTarget(memo);
                             setPromoteTitle(memo.summary || memoSummaryTitle(bodyText));
                           }}
                         >
-                          <ArrowUpRight size={13} /><span>转为正式页面</span>
+                          <ArrowUpRight size={14} />
                         </button>
                         <button
                           type="button"
-                          className="btn btn--danger"
+                          className="icon-btn icon-btn--sm is-danger"
+                          aria-label="删除"
                           title="移入回收站"
                           onClick={() => void handleTrashMemo(memo)}
                         >
-                          <Trash2 size={13} /><span>删除</span>
+                          <Trash2 size={14} />
                         </button>
                       </div>
                     </div>
@@ -938,7 +988,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                       >
                         <MessageSquare size={12} />
                         <span>
-                          {memo.comments.length} 条批注 · 最近 {formatTimestamp(memo.comments[memo.comments.length - 1].createdAt).slice(5)}
+                          {memo.comments.length} 条批注 · {formatTimestamp(memo.comments[memo.comments.length - 1].createdAt)}
                         </span>
                       </button>
                     ) : isCommentsOpen ? (
@@ -963,7 +1013,7 @@ export function MemoStream({ onSurfaceRef }: { onSurfaceRef?: (el: HTMLElement |
                               className={`memo-comment-item ${flashCommentId === comment.id ? "history-flash" : ""}`}
                             >
                               <div className="memo-comment-item__top">
-                                <time dateTime={comment.createdAt}>{formatTimestamp(comment.createdAt)}</time>
+                                <time dateTime={comment.createdAt} title={fullTimestamp(comment.createdAt)}>{formatTimestamp(comment.createdAt)}</time>
                                 <span className="memo-comment-item__actions">
                                   <button
                                     type="button"
