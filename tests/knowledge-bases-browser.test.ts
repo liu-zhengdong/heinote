@@ -32,7 +32,7 @@ function files(page: Page) { return page.getByRole("tree", { name: "Files", exac
 function sidebar(page: Page) {
   return page.getByRole("complementary", { name: "Pages", exact: true }).or(page.getByRole("dialog", { name: "Pages", exact: true }));
 }
-function newPageButton(page: Page) { return sidebar(page).getByRole("button", { name: "新建", exact: true }); }
+function newPageButton(page: Page) { return page.getByRole("button", { name: "新建", exact: true }); }
 function title(page: Page) { return page.getByRole("textbox", { name: "Page title", exact: true }); }
 function body(page: Page) { return page.getByRole("main").getByRole("textbox", { name: "Text", exact: true }).and(page.locator('[contenteditable="true"]')).first(); }
 async function api(page: Page, app: App, path: string, method = "GET", data?: unknown, status = 200): Promise<Json> {

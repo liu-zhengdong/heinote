@@ -20,6 +20,10 @@
 .space-switcher__current { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space-switcher__user { font-size: 13.5px; font-weight: 500; line-height: 18px; }
 .space-switcher__current { color: var(--ink-2); font-size: 12.5px; line-height: 16px; }
+.space-switcher--header { min-height: 34px; padding: 3px 6px; gap: 7px; border-radius: var(--r-md); }
+.space-switcher--header .space-switcher__copy { gap: 0; }
+.space-switcher--header .space-switcher__current { color: var(--ink); font-size: 13.5px; font-weight: 600; line-height: 17px; }
+.space-switcher--header .space-switcher__user { color: var(--ink-3); font-size: 11px; font-weight: 400; line-height: 14px; }
 .space-switcher__chevron { color: var(--ink-3); }
 .space-switcher--compact { width: 32px; min-height: 32px; flex: none; justify-content: center; padding: 5px; }
 .space-switcher--compact .space-switcher__copy,

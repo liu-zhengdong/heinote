@@ -46,16 +46,20 @@ async function waitPageSaved(page: Page, title: string) {
   }).toBe(true);
 }
 
+function bodyEditor(page: Page) {
+  return page.getByRole("main").getByRole("textbox", { name: "Text", exact: true }).and(page.locator('[contenteditable="true"]')).first();
+}
+
 async function createRootDocument(page: Page, title: string, body?: string) {
-  await page.locator(".sidebar__topbar").getByRole("button", { name: "新建", exact: true }).click();
+  await page.getByRole("button", { name: "新建", exact: true }).click();
   await page.locator('.menu[role="menu"][aria-label="新建"]').getByRole("menuitem", { name: "页面", exact: true }).click();
   const titleInput = page.getByLabel("Page title", { exact: true });
   await expect(titleInput).toBeEmpty();
   await titleInput.fill(title);
   if (body) {
-    const editor = page.locator(".doc__body .block__input").first();
+    const editor = bodyEditor(page);
     await editor.click();
-    await page.keyboard.type(body);
+    await editor.fill(body);
   }
   await waitPageSaved(page, title);
 }
@@ -71,14 +75,14 @@ function rowByTitle(page: Page, title: string): Locator {
 async function createChildDocument(page: Page, parentTitle: string, title: string, body?: string) {
   const parentRow = rowByTitle(page, parentTitle);
   await parentRow.hover();
-  await parentRow.getByRole("button", { name: "New page inside", exact: true }).click();
+  await parentRow.getByRole("button", { name: `New page inside ${parentTitle}`, exact: true }).click();
   const titleInput = page.getByLabel("Page title", { exact: true });
   await expect(titleInput).toBeEmpty();
   await titleInput.fill(title);
   if (body) {
-    const editor = page.locator(".doc__body .block__input").first();
+    const editor = bodyEditor(page);
     await editor.click();
-    await page.keyboard.type(body);
+    await editor.fill(body);
   }
   await waitPageSaved(page, title);
 }
@@ -98,7 +102,7 @@ test("UC-63: archive project subtree into collapsible sidebar group, keep editab
   // Archive the finished project via sidebar row menu.
   const oldProjectRow = rowByTitle(page, "历史项目 Alpha");
   await oldProjectRow.hover();
-  await oldProjectRow.getByRole("button", { name: "Page actions", exact: true }).click();
+  await oldProjectRow.getByRole("button", { name: "Actions for 历史项目 Alpha", exact: true }).click();
   await page.locator('.menu[role="menu"][aria-label="Page actions"]').getByRole("menuitem", { name: "归档", exact: true }).click();
 
   // Active sidebar drops the archived subtree; bottom collapsed "已归档" section appears with count 1.
@@ -115,7 +119,7 @@ test("UC-63: archive project subtree into collapsible sidebar group, keep editab
   await expect(archivedProjectRow).toBeVisible();
   const childRowInArchive = tree.locator(".sidebar__archived-list .tree-row").filter({ hasText: "UC-01 认证登录" }).first();
   if (!(await childRowInArchive.isVisible())) {
-    await archivedProjectRow.locator(".tree-row__toggle").click();
+    await archivedProjectRow.locator(".tree-row__mark").click();
   }
   await childRowInArchive.click();
 
@@ -123,18 +127,17 @@ test("UC-63: archive project subtree into collapsible sidebar group, keep editab
   const banner = page.locator(".shelved-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("随「历史项目 Alpha」已归档");
-  const editor = page.locator(".doc__body .block__input").first();
+  const editor = bodyEditor(page);
   await editor.click();
   await page.keyboard.press("End");
   await page.keyboard.type(" · 补充备注");
   await expect(editor).toContainText("旧账本独有记录 · 补充备注");
 
   // Wait for save and verify state + edit survive full reload.
-  await page.keyboard.press("Meta+s");
-  await expect(page.getByText("已保存")).toBeVisible();
+  await expect(page.getByRole("status", { name: "All changes saved", exact: true })).toHaveCount(1);
   await page.reload();
   await expect(page.locator(".shelved-banner")).toContainText("随「历史项目 Alpha」已归档");
-  await expect(page.locator(".doc__body .block__input").first()).toContainText("补充备注");
+  await expect(bodyEditor(page)).toContainText("补充备注");
   await expect(tree.locator(".sidebar__archived-toggle")).toHaveAttribute("aria-expanded", "false");
 
   // Open Quick Find (⌘K): empty query recent list excludes archived pages.
@@ -178,5 +181,7 @@ test("UC-63: archive project subtree into collapsible sidebar group, keep editab
   await page.locator(".sidebar__search").click();
   await qf.getByLabel("Search pages", { exact: true }).fill("认证");
   await expect(qf.locator(".quickfind__archived-toggle")).toHaveCount(0);
-  await expect(qf.locator('[role="option"]')).toHaveCount(2);
+  await expect(qf.locator(".quickfind__item--archived")).toHaveCount(0);
+  await expect(qf.locator('[role="option"]').filter({ hasText: "活跃项目 认证方案" }).first()).toBeVisible();
+  await expect(qf.locator('[role="option"]').filter({ hasText: "UC-01 认证登录" }).first()).toBeVisible();
 });

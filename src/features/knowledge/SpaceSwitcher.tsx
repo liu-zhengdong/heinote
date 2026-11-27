@@ -5,13 +5,23 @@ import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import type { SpaceRole } from "../../core/types";
-import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import { rectOf, type AnchorRect, type Placement } from "../../hooks/useAnchoredPosition";
 import { KnowledgeBaseDialog } from "./KnowledgeBaseDialog";
 import "./knowledge-base.css";
 
 const ROLE_LABELS: Record<SpaceRole, string> = { owner: "所有者", admin: "管理员", editor: "可编辑", viewer: "只读" };
 
-export function SpaceSwitcher({ compact = false, onSwitch }: { compact?: boolean; onSwitch?(): void }) {
+export function SpaceSwitcher({
+  compact = false,
+  header = false,
+  placement,
+  onSwitch,
+}: {
+  compact?: boolean;
+  header?: boolean;
+  placement?: Placement;
+  onSwitch?(): void;
+}) {
   const { platform, spaces, activeSpaceId, activeSpace, switchSpace } = useWorkspace();
   const user = platform?.bootstrap.user;
   const trigger = useRef<HTMLButtonElement>(null);
@@ -21,6 +31,7 @@ export function SpaceSwitcher({ compact = false, onSwitch }: { compact?: boolean
   const group = `knowledge-spaces-${id}`;
   const teams = Object.values(spaces).filter((space) => space.knowledgeBase);
   const currentName = activeSpace?.name ?? "个人空间";
+  const resolvedPlacement: Placement = placement ?? (header ? "bottom-start" : compact ? "right-start" : "top-start");
 
   if (!user) return null;
   const focusTrigger = () => {
@@ -34,15 +45,27 @@ export function SpaceSwitcher({ compact = false, onSwitch }: { compact?: boolean
   };
 
   return <>
-    <button ref={trigger} type="button" className={`space-switcher${compact ? " space-switcher--compact" : ""}${anchor ? " is-active" : ""}`}
+    <button ref={trigger} type="button" className={`space-switcher${compact ? " space-switcher--compact" : ""}${header ? " space-switcher--header" : ""}${anchor ? " is-active" : ""}`}
       aria-label="切换空间" aria-haspopup="menu" aria-expanded={Boolean(anchor)} aria-controls={anchor ? `${id}-menu` : undefined}
       title={`${personName(user)} · ${currentName}`} data-pop-group={group}
       onClick={(event) => { const rect = rectOf(event.currentTarget); setAnchor((current) => current ? null : rect); }}>
-      <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={22} />
-      <span className="space-switcher__copy"><span className="space-switcher__user">{personName(user)}</span><span className="space-switcher__current">{currentName}</span></span>
+      <ProfileAvatar src={user.avatarUrl} name={personName(user)} size={header ? 20 : 22} />
+      <span className="space-switcher__copy">
+        {header ? (
+          <>
+            <span className="space-switcher__current">{currentName}</span>
+            <span className="space-switcher__user">{personName(user)}</span>
+          </>
+        ) : (
+          <>
+            <span className="space-switcher__user">{personName(user)}</span>
+            <span className="space-switcher__current">{currentName}</span>
+          </>
+        )}
+      </span>
       <ChevronDown className="space-switcher__chevron" size={12} aria-hidden="true" />
     </button>
-    <Popover open={Boolean(anchor)} anchor={anchor} placement="top-start" role="presentation" label="切换空间"
+    <Popover open={Boolean(anchor)} anchor={anchor} placement={resolvedPlacement} role="presentation" label="切换空间"
       className="space-switcher-popover" group={group} mobileSheet={{ title: "切换空间" }}
       onDismiss={(reason) => { setAnchor(null); if (reason === "escape") focusTrigger(); }}>
       <div id={`${id}-menu`}>

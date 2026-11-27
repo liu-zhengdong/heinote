@@ -38,11 +38,10 @@ import { BottomSheet } from "../../components/BottomSheet";
 import { MenuDivider, MenuItem, MenuList } from "../../components/Menu";
 import { Popover } from "../../components/Popover";
 import { Tooltip } from "../../components/Tooltip";
-import { imeComposing } from "../../core/keyboard";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useFold } from "../../hooks/useFold";
 import { SIDEBAR_SORTS, SIDEBAR_VIEWS } from "../../../schema";
-import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH } from "../../core/workspace-state";
+import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_RAIL_WIDTH } from "../../core/workspace-state";
 import type { NotePage, PageKind, SidebarSort, SidebarView } from "../../core/types";
 import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
@@ -54,7 +53,6 @@ import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
 import { capitalized } from "../../core/title";
-import { pageGlyph } from "../editor/block-registry";
 import { EmptyTrashConfirm, TrashView } from "./TrashView";
 import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
@@ -225,7 +223,6 @@ export function Sidebar() {
 
   const mobile = folded;
   const railed = !mobile && preferences.sidebar_collapsed;
-  const drawered = !mobile && railed && drawerOpen;
   const rowHeight = mobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
   const [scrollBucket, setScrollBucket] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(800);
@@ -241,7 +238,7 @@ export function Sidebar() {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [railed, drawered, view]);
+  }, [railed, view]);
 
   const prevScopeViewRef = useRef(`${activeSpaceId}:${view}`);
 
@@ -280,37 +277,6 @@ export function Sidebar() {
       strip.classList.remove("more-start", "more-end");
     };
   }, [mobile, drawerOpen, visibleViews.length]);
-
-  useEffect(() => {
-    if (!drawered) return;
-    const aside = asideRef.current;
-    if (!aside) return;
-    const trigger = document.querySelector<HTMLButtonElement>('.rail [aria-label="All pages"]');
-    const controls = () => [...aside.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), a[href], [tabindex="0"]')]
-      .filter((element) => element.tabIndex >= 0 && element.getClientRects().length && !element.closest("[inert]"));
-    const frame = requestAnimationFrame(() => {
-      if (!document.querySelector('.overlay [role="dialog"]')) controls()[0]?.focus({ preventScroll: true });
-    });
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || imeComposing(event)) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setDrawerOpen(false);
-      } else if (event.key === "Tab") {
-        const items = controls();
-        const first = items[0]; const last = items.at(-1);
-        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
-      }
-    };
-    // Native listeners leave portalled menus and modals in control of their keys.
-    aside.addEventListener("keydown", onKeyDown);
-    return () => {
-      cancelAnimationFrame(frame);
-      aside.removeEventListener("keydown", onKeyDown);
-      if (trigger?.getClientRects().length && !document.querySelector('.overlay [role="dialog"]')) trigger.focus({ preventScroll: true });
-    };
-  }, [drawered, setDrawerOpen]);
 
   useEffect(() => {
     setNewMenu(null);
@@ -381,7 +347,7 @@ export function Sidebar() {
     if (!aside || !shell) return;
     const startX = event.clientX;
     const startWidth = aside.getBoundingClientRect().width;
-    const ceiling = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, window.innerWidth - 280));
+    const ceiling = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, window.innerWidth - SIDEBAR_RAIL_WIDTH - 280));
     let width = startWidth;
     setResizing(true);
     shell.classList.add("is-resizing");
@@ -782,90 +748,97 @@ export function Sidebar() {
     </div>
   );
 
+  const selectSidebarView = (nextView: SidebarView) => {
+    setPreference("sidebar_view", nextView);
+    if (railed) setPreference("sidebar_collapsed", false);
+  };
+
+  const sectionCount = viewCounts[view];
+
   const list = (
     <>
-      <div className="sidebar__head">
-        <div className="sidebar__topbar">
-          <button type="button" className="sidebar__search" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
-            <Search size={15} aria-hidden="true" />
-            <span>搜索或跳转…</span>
-            {!mobile ? <kbd>⌘K</kbd> : null}
-          </button>
-          <Tooltip label="新建页面或数据库">
-            <button
-              type="button"
-              className={`sidebar__new ${newMenu ? "is-active" : ""}`}
-              aria-label="新建"
-              disabled={!writable}
-              title={!writable ? "当前空间只读" : undefined}
-              aria-haspopup="menu"
-              aria-expanded={Boolean(newMenu)}
-              data-pop-group="sidebar-new"
-              onClick={(event) => toggleNewMenu(event.currentTarget)}
-            >
-              <SquarePen size={15} aria-hidden="true" />
+      {mobile ? (
+        <div className="sidebar__head">
+          <div className="sidebar__topbar">
+            <button type="button" className="sidebar__search" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
+              <Search size={15} aria-hidden="true" />
+              <span>搜索或跳转…</span>
             </button>
-          </Tooltip>
-          {!folded ? (
-            <Tooltip label="Collapse to rail" hint="⌘\">
+            <Tooltip label="新建页面或数据库">
               <button
                 type="button"
-                className="icon-btn sidebar__collapse"
-                aria-label="Collapse to rail"
-                onClick={() => setPreference("sidebar_collapsed", true)}
+                className={`sidebar__new ${newMenu ? "is-active" : ""}`}
+                aria-label="新建"
+                disabled={!writable}
+                title={!writable ? "当前空间只读" : undefined}
+                aria-haspopup="menu"
+                aria-expanded={Boolean(newMenu)}
+                data-pop-group="sidebar-new"
+                onClick={(event) => toggleNewMenu(event.currentTarget)}
               >
-                <PanelLeft size={15} />
+                <SquarePen size={15} aria-hidden="true" />
               </button>
             </Tooltip>
-          ) : null}
-        </div>
-        <div ref={viewsRef} className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation={mobile ? "horizontal" : "vertical"}>
-          {visibleViews.map((value) => {
-            const Icon = VIEW_ICONS[value];
-            const count = viewCounts[value];
-            return (
-              <button
-                key={value}
-                type="button"
-                role="tab"
-                aria-selected={view === value}
-                aria-label={capitalized(value)}
-                tabIndex={view === value ? 0 : -1}
-                className={`sidebar__view ${view === value ? "is-active" : ""}`}
-                onClick={() => setPreference("sidebar_view", value)}
-                onKeyDown={(event) => {
-                  const index = visibleViews.indexOf(value);
-                  if (index < 0) return;
-                  const nextKey = mobile ? "ArrowRight" : "ArrowDown";
-                  const prevKey = mobile ? "ArrowLeft" : "ArrowUp";
-                  const next = event.key === nextKey ? (index + 1) % visibleViews.length
-                    : event.key === prevKey ? (index + visibleViews.length - 1) % visibleViews.length
-                    : event.key === "Home" ? 0
-                    : event.key === "End" ? visibleViews.length - 1
-                    : null;
-                  if (next === null) return;
-                  event.preventDefault();
-                  setPreference("sidebar_view", visibleViews[next]);
-                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
-                }}
-              >
-                <span className={`sidebar__view-icon sidebar__view-icon--${value}`}><Icon size={15} aria-hidden="true" /></span>
-                <span className="sidebar__view-label">{mobile ? MOBILE_VIEW_LABELS[value] : VIEW_LABELS[value]}</span>
-                {!mobile ? (
-                  count !== undefined ? (
+          </div>
+          <div ref={viewsRef} className="sidebar__views" role="tablist" aria-label="Page list" aria-orientation="horizontal">
+            {visibleViews.map((value) => {
+              const Icon = VIEW_ICONS[value];
+              const count = viewCounts[value];
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === value}
+                  aria-label={capitalized(value)}
+                  tabIndex={view === value ? 0 : -1}
+                  className={`sidebar__view ${view === value ? "is-active" : ""}`}
+                  onClick={() => selectSidebarView(value)}
+                  onKeyDown={(event) => {
+                    const index = visibleViews.indexOf(value);
+                    if (index < 0) return;
+                    const next = event.key === "ArrowRight" ? (index + 1) % visibleViews.length
+                      : event.key === "ArrowLeft" ? (index + visibleViews.length - 1) % visibleViews.length
+                      : event.key === "Home" ? 0
+                      : event.key === "End" ? visibleViews.length - 1
+                      : null;
+                    if (next === null) return;
+                    event.preventDefault();
+                    selectSidebarView(visibleViews[next]);
+                    event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                  }}
+                >
+                  <span className={`sidebar__view-icon sidebar__view-icon--${value}`}><Icon size={15} aria-hidden="true" /></span>
+                  <span className="sidebar__view-label">{MOBILE_VIEW_LABELS[value]}</span>
+                  {count !== undefined && count > 0 ? (
                     <span className="sidebar__view-count" aria-hidden="true">{count}</span>
-                  ) : <span className="sidebar__view-dot" aria-hidden="true" />
-                ) : count !== undefined && count > 0 ? (
-                  <span className="sidebar__view-count" aria-hidden="true">{count}</span>
-                ) : null}
-              </button>
-            );
-          })}
+                  ) : null}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="sidebar__head sidebar__head--pane">
+          <SpaceSwitcher header placement="bottom-start" onSwitch={afterNavigate} />
+          <Tooltip label="Collapse to rail" hint="⌘\">
+            <button
+              type="button"
+              className="icon-btn sidebar__collapse"
+              aria-label="Collapse to rail"
+              onClick={() => setPreference("sidebar_collapsed", true)}
+            >
+              <PanelLeft size={15} />
+            </button>
+          </Tooltip>
+        </div>
+      )}
 
       <div className="sidebar__tools" role="toolbar" aria-label={capitalized(view)}>
-        <span className="sidebar__section-title">{SECTION_LABELS[view]}</span>
+        <span className="sidebar__section-title">
+          <span>{SECTION_LABELS[view]}</span>
+          {sectionCount !== undefined ? <span className="sidebar__section-count">{sectionCount}</span> : null}
+        </span>
         {view === "trash" ? (
           <span className="sidebar__section-actions">
             <Tooltip label="Empty trash">
@@ -1019,7 +992,7 @@ export function Sidebar() {
         </div>
       )}
 
-      {!railed || folded ? <footer className="sidebar__foot">{accountFoot(false)}</footer> : null}
+      {mobile ? <footer className="sidebar__foot">{accountFoot(false)}</footer> : null}
     </>
   );
 
@@ -1043,67 +1016,91 @@ export function Sidebar() {
 
   return (
     <>
-      {railed ? (
-        <nav className="rail" aria-label="HeiNote navigation">
-          <div className="rail__group">
-            <Tooltip label={folded ? "All pages" : "Show the list"} hint={folded ? undefined : "⌘\\"} placement="right-start">
+      {!mobile ? (
+        <nav className={`rail ${railed ? "rail--collapsed" : ""}`} aria-label="HeiNote navigation">
+          <div className="rail__group rail__group--verbs">
+            <Tooltip label={writable ? "新建页面或数据库" : "当前空间只读"} placement="right-start">
               <button
                 type="button"
-                className={`icon-btn rail__btn ${drawered ? "is-on" : ""}`}
-                aria-label="All pages"
-                aria-expanded={folded ? drawered : undefined}
-                onClick={showList}
-              >
-                <PanelLeft size={17} />
-              </button>
-            </Tooltip>
-            <Tooltip label="Search" hint="⌘K" placement="right-start">
-              <button type="button" className="icon-btn rail__btn" aria-label="Search" onClick={() => setQuickFindOpen(true)}>
-                <Search size={17} />
-              </button>
-            </Tooltip>
-            <Tooltip label="新建" placement="right-start">
-              <button
-                type="button"
-                className={`icon-btn rail__btn ${newMenu ? "is-active" : ""}`}
+                className={`sidebar__new rail__new ${newMenu ? "is-active" : ""}`}
                 aria-label="新建"
                 disabled={!writable}
+                title={!writable ? "当前空间只读" : undefined}
                 aria-haspopup="menu"
                 aria-expanded={Boolean(newMenu)}
                 data-pop-group="sidebar-new"
                 onClick={(event) => toggleNewMenu(event.currentTarget)}
               >
-                <Plus size={17} aria-hidden="true" />
+                <SquarePen size={15} aria-hidden="true" />
+              </button>
+            </Tooltip>
+            <Tooltip label="搜索或跳转…" hint="⌘K" placement="right-start">
+              <button
+                type="button"
+                className="icon-btn rail__btn sidebar__search"
+                aria-label="Search"
+                onClick={() => setQuickFindOpen(true)}
+              >
+                <Search size={16} aria-hidden="true" />
               </button>
             </Tooltip>
           </div>
 
-          {/* A rail of identical file marks would be no navigation at all, so
-              it carries the pages that were named on purpose: the starred
-              ones. Everything else is one press away in the drawer. */}
-          {favorites.length ? (
-            <div className="rail__group rail__group--pages scroller">
-              {favorites.map((page) => {
-                const label = pageName(page);
-                const current = selectedPageId === page.id;
-                return (
-                  <Tooltip key={page.id} label={label} placement="right-start">
-                    <button
-                      type="button"
-                      className={`icon-btn rail__btn ${current ? "is-current" : ""}`}
-                      aria-label={label}
-                      aria-current={current ? "page" : undefined}
-                      onClick={() => { actions.select(page.id); }}
-                    >
-                      {pageGlyph(page, 17)}
-                    </button>
-                  </Tooltip>
-                );
-              })}
-            </div>
-          ) : <div className="rail__group rail__group--pages" />}
+          <div className="rail__group rail__group--views" role="tablist" aria-label="Page list" aria-orientation="vertical">
+            {visibleViews.map((value) => {
+              const Icon = VIEW_ICONS[value];
+              const count = viewCounts[value];
+              const tip = count !== undefined ? `${VIEW_LABELS[value]} · ${count}` : VIEW_LABELS[value];
+              return (
+                <Tooltip key={value} label={tip} placement="right-start">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={view === value}
+                    aria-label={capitalized(value)}
+                    tabIndex={view === value ? 0 : -1}
+                    data-count={count}
+                    className={`icon-btn rail__btn rail__tab rail__tab--${value} ${view === value ? "is-active" : ""}`}
+                    onClick={() => selectSidebarView(value)}
+                    onKeyDown={(event) => {
+                      const index = visibleViews.indexOf(value);
+                      if (index < 0) return;
+                      const next = event.key === "ArrowDown" ? (index + 1) % visibleViews.length
+                        : event.key === "ArrowUp" ? (index + visibleViews.length - 1) % visibleViews.length
+                        : event.key === "Home" ? 0
+                        : event.key === "End" ? visibleViews.length - 1
+                        : null;
+                      if (next === null) return;
+                      event.preventDefault();
+                      selectSidebarView(visibleViews[next]);
+                      event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                    }}
+                  >
+                    <span className={`sidebar__view-icon sidebar__view-icon--${value}`}><Icon size={16} aria-hidden="true" /></span>
+                  </button>
+                </Tooltip>
+              );
+            })}
+          </div>
 
-          {!folded ? <div className="rail__group rail__group--foot">{accountFoot(true)}</div> : null}
+          <div className="rail__group rail__group--foot">
+            {railed ? (
+              <>
+                <Tooltip label="Show the list" hint="⌘\" placement="right-start">
+                  <button
+                    type="button"
+                    className="icon-btn rail__btn"
+                    aria-label="All pages"
+                    onClick={showList}
+                  >
+                    <PanelLeft size={16} />
+                  </button>
+                </Tooltip>
+                <SpaceSwitcher compact placement="right-start" onSwitch={afterNavigate} />
+              </>
+            ) : null}
+            <AccountSettingsButton onOpen={beforeAccountSettings} />
+          </div>
         </nav>
       ) : null}
 
@@ -1119,42 +1116,27 @@ export function Sidebar() {
         >
           {list}
         </BottomSheet>
-      ) : (
+      ) : !railed ? (
         <aside
           ref={asideRef}
-          className={[
-            "sidebar",
-            railed ? "sidebar--drawer" : "",
-            drawered ? "is-open" : "",
-            resizing ? "is-resizing" : "",
-          ].filter(Boolean).join(" ")}
+          className={["sidebar", resizing ? "is-resizing" : ""].filter(Boolean).join(" ")}
           aria-label="Pages"
-          role={drawered ? "dialog" : undefined}
-          aria-modal={drawered ? true : undefined}
-          aria-hidden={railed && !drawered ? true : undefined}
-          inert={railed && !drawered ? true : undefined}
         >
           {list}
-          {!railed ? (
-            <div
-              className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
-              role="separator"
-              aria-label="Resize the page list"
-              aria-orientation="vertical"
-              onPointerDown={onResizeStart}
-            />
-          ) : null}
+          <div
+            className={`sidebar__resize ${resizing ? "is-dragging" : ""}`}
+            role="separator"
+            aria-label="Resize the page list"
+            aria-orientation="vertical"
+            onPointerDown={onResizeStart}
+          />
         </aside>
-      )}
-
-      {drawered ? (
-        <button type="button" tabIndex={-1} className="sidebar__scrim is-shown" aria-label="Close the page list" onClick={() => setDrawerOpen(false)} />
       ) : null}
 
       <Popover
         open={Boolean(newMenu)}
         anchor={newMenu}
-        placement="bottom-start"
+        placement={mobile ? "bottom-start" : "right-start"}
         role="presentation"
         group="sidebar-new"
         mobileSheet={{ title: "新建" }}

@@ -81,7 +81,7 @@ function newMenu(page: Page) {
 }
 
 function createButton(page: Page) {
-  return page.locator(".sidebar__topbar").getByRole("button", { name: "新建", exact: true });
+  return page.getByRole("button", { name: "新建", exact: true });
 }
 
 const views = [
@@ -115,70 +115,93 @@ async function expectNavigationLayout(page: Page) {
   const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   const sidebar = page.locator(".sidebar");
   await sidebar.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
-  const topbar = sidebar.locator(".sidebar__topbar");
-  const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
-  await expect(tabs).toHaveAttribute("aria-orientation", mobile ? "horizontal" : "vertical");
-  await expect(tabs.getByRole("tab")).toHaveCount(5);
-  await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
-  await expect(topbar.locator("kbd")).toHaveCount(mobile ? 0 : 1);
-  await expect(createButton(page)).toBeVisible();
-  await expect(createButton(page)).toHaveText("");
-  await expect(createButton(page).locator("svg")).toHaveCount(1);
-  const searchStyle = await topbar.getByRole("button", { name: "Search", exact: true }).evaluate((button) => {
-    const style = getComputedStyle(button);
-    return { text: button.textContent, border: style.borderTopWidth, shadow: style.boxShadow };
-  });
-  expect(searchStyle.text?.trim()).toBeTruthy();
-  expect(searchStyle.border).toBe("0px");
-  expect(searchStyle.shadow).toBe("none");
-  const top = await topbar.boundingBox();
-  expect(top).not.toBeNull();
-  const topBottom = top!.y + top!.height;
-  let previousBottom = topBottom;
-  let previousRight: number | undefined;
-  let firstY: number | undefined;
-  let previousX: number | undefined;
-  for (const view of views) {
-    const tab = tabs.getByRole("tab", { name: view.name, exact: true });
-    await expect(tab).toContainText(mobile ? view.mobileLabel : view.label);
-    const box = await tab.boundingBox();
-    expect(box).not.toBeNull();
-    if (mobile) {
+  if (mobile) {
+    const topbar = sidebar.locator(".sidebar__topbar");
+    const tabs = sidebar.getByRole("tablist", { name: "Page list", exact: true });
+    await expect(tabs).toHaveAttribute("aria-orientation", "horizontal");
+    await expect(tabs.getByRole("tab")).toHaveCount(5);
+    await expect(topbar.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+    await expect(topbar.locator("kbd")).toHaveCount(0);
+    await expect(createButton(page)).toBeVisible();
+    await expect(createButton(page)).toHaveText("");
+    await expect(createButton(page).locator("svg")).toHaveCount(1);
+    const top = await topbar.boundingBox();
+    expect(top).not.toBeNull();
+    const topBottom = top!.y + top!.height;
+    let previousRight: number | undefined;
+    let firstY: number | undefined;
+    for (const view of views) {
+      const tab = tabs.getByRole("tab", { name: view.name, exact: true });
+      await expect(tab).toContainText(view.mobileLabel);
+      const box = await tab.boundingBox();
+      expect(box).not.toBeNull();
       expect(box!.y).toBeGreaterThanOrEqual(topBottom - 1);
       expect(box!.height).toBeGreaterThanOrEqual(42);
       if (firstY !== undefined) expect(Math.abs(box!.y - firstY)).toBeLessThanOrEqual(1);
       else firstY = box!.y;
       if (previousRight !== undefined) expect(box!.x).toBeGreaterThanOrEqual(previousRight - 1);
       previousRight = box!.x + box!.width;
-    } else {
-      expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
-      expect(Math.abs(box!.height - 32)).toBeLessThanOrEqual(1);
-      if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
-      previousX = box!.x;
-      previousBottom = box!.y + box!.height;
     }
-  }
-  const tabsBox = await tabs.boundingBox();
-  expect(tabsBox).not.toBeNull();
-  if (mobile) expect(tabsBox!.height).toBeLessThanOrEqual(52);
-  const bar = await filesToolbar(page).boundingBox();
-  expect(bar).not.toBeNull();
-  expect(bar!.y).toBeGreaterThanOrEqual(mobile ? tabsBox!.y + tabsBox!.height - 1 : previousBottom - 1);
-  // The resize handle extends 3px beyond the sidebar by design. Check the
-  // content regions and control bounds, rather than that intentional handle.
-  const sidebarBox = await sidebar.boundingBox();
-  expect(sidebarBox).not.toBeNull();
-  for (const region of mobile ? [sidebar.locator(".sidebar__head"), topbar] : [sidebar.locator(".sidebar__head"), topbar, tabs]) {
-    expect(await region.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-  }
-  for (const region of [sidebar.locator(".sidebar__head"), topbar, tabs]) {
-    const bounds = await region.boundingBox();
-    expect(bounds!.x).toBeGreaterThanOrEqual(sidebarBox!.x);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
-  }
-  if (mobile) {
+    const tabsBox = await tabs.boundingBox();
+    expect(tabsBox).not.toBeNull();
+    expect(tabsBox!.height).toBeLessThanOrEqual(52);
+    const bar = await filesToolbar(page).boundingBox();
+    expect(bar).not.toBeNull();
+    expect(bar!.y).toBeGreaterThanOrEqual(tabsBox!.y + tabsBox!.height - 1);
+    const sidebarBox = await sidebar.boundingBox();
+    expect(sidebarBox).not.toBeNull();
+    for (const region of [sidebar.locator(".sidebar__head"), topbar]) {
+      expect(await region.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+    }
+    for (const region of [sidebar.locator(".sidebar__head"), topbar, tabs]) {
+      const bounds = await region.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(sidebarBox!.x);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(sidebarBox!.x + sidebarBox!.width);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await expectToolbarLayout(filesToolbar(page));
+    return;
   }
+
+  // Desktop B3-A dual-track floating island: stationary left verb rail + docked directory pane.
+  const rail = page.getByRole("navigation", { name: "HeiNote navigation", exact: true });
+  await expect(rail).toBeVisible();
+  const tabs = rail.getByRole("tablist", { name: "Page list", exact: true });
+  await expect(tabs).toHaveAttribute("aria-orientation", "vertical");
+  await expect(tabs.getByRole("tab")).toHaveCount(5);
+  await expect(rail.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+  await expect(createButton(page)).toBeVisible();
+  await expect(createButton(page)).toHaveText("");
+  await expect(createButton(page).locator("svg")).toHaveCount(1);
+
+  const railBox = await rail.boundingBox();
+  const sidebarBox = await sidebar.boundingBox();
+  expect(railBox).not.toBeNull();
+  expect(sidebarBox).not.toBeNull();
+  expect(sidebarBox!.x).toBeGreaterThanOrEqual(railBox!.x + railBox!.width - 1);
+
+  let previousBottom = 0;
+  let previousX: number | undefined;
+  for (const view of views) {
+    const tab = tabs.getByRole("tab", { name: view.name, exact: true });
+    const box = await tab.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(previousBottom - 1);
+    expect(Math.abs(box!.height - 30)).toBeLessThanOrEqual(2);
+    if (previousX !== undefined) expect(Math.abs(box!.x - previousX)).toBeLessThanOrEqual(1);
+    previousX = box!.x;
+    previousBottom = box!.y + box!.height;
+  }
+
+  const head = sidebar.locator(".sidebar__head--pane");
+  await expect(head.getByRole("button", { name: "切换空间", exact: true })).toBeVisible();
+  await expect(head.getByRole("button", { name: "Collapse to rail", exact: true })).toBeVisible();
+  expect(await head.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const headBox = await head.boundingBox();
+  const bar = await filesToolbar(page).boundingBox();
+  expect(headBox).not.toBeNull();
+  expect(bar).not.toBeNull();
+  expect(bar!.y).toBeGreaterThanOrEqual(headBox!.y + headBox!.height - 1);
   await expectToolbarLayout(filesToolbar(page));
 }
 
@@ -346,13 +369,14 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   const files = tabs.getByRole("tab", { name: "Files", exact: true });
   const favorites = tabs.getByRole("tab", { name: "Favorites", exact: true });
   const shared = tabs.getByRole("tab", { name: "Shared", exact: true });
-  await expect(files).toHaveText(/全部页面\s*2$/);
-  await expect(favorites).toHaveText(/收藏夹\s*0$/);
-  await expect(shared).toHaveText(/已分享\s*0$/);
+  await expect(files).toHaveAttribute("data-count", "2");
+  await expect(favorites).toHaveAttribute("data-count", "0");
+  await expect(shared).toHaveAttribute("data-count", "0");
+  await expect(filesToolbar(page).locator(".sidebar__section-count")).toHaveText("2");
   await page.getByRole("tree", { name: "Files", exact: true }).getByRole("button", { name: "Alpha reference", exact: true }).hover();
   await page.getByRole("button", { name: "Actions for Alpha reference", exact: true }).click();
   await page.getByRole("menuitem", { name: "Add to favorites", exact: true }).click();
-  await expect(favorites).toHaveText(/收藏夹\s*1$/);
+  await expect(favorites).toHaveAttribute("data-count", "1");
   await expectNavigationLayout(page);
   const rowHeights = await page.locator(".sidebar .tree-row").evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().height));
   expect(rowHeights).toHaveLength(2);
@@ -379,7 +403,7 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   await expect(files).toHaveAttribute("aria-selected", "true");
   await expect(tabs.locator('[role="tab"][tabindex="0"]')).toHaveCount(1);
 
-  await page.locator(".sidebar__topbar").getByRole("button", { name: "Search", exact: true }).click();
+  await page.getByRole("navigation", { name: "HeiNote navigation", exact: true }).getByRole("button", { name: "Search", exact: true }).click();
   const search = page.getByRole("dialog", { name: "Search pages", exact: true });
   const input = search.getByRole("textbox", { name: "Search pages", exact: true });
   await expect(input).toBeFocused();
@@ -394,8 +418,8 @@ test("vertical navigation keeps live counts, keyboard selection, and search", as
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await attachLayout(page, testInfo, "dark-populated");
   await page.reload();
-  await expect(files).toHaveText(/全部页面\s*2$/);
-  await expect(favorites).toHaveText(/收藏夹\s*1$/);
+  await expect(files).toHaveAttribute("data-count", "2");
+  await expect(favorites).toHaveAttribute("data-count", "1");
 });
 
 test("topbar creation works from every view and from the desktop rail", async ({ page }) => {
@@ -436,7 +460,15 @@ test("topbar creation works from every view and from the desktop rail", async ({
   await expect(rail).toBeVisible();
   await expect(page.getByLabel("Page title", { exact: true })).toHaveText("Rail document");
   await rail.getByRole("button", { name: "All pages", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toBeVisible();
   await expect(createButton(page)).toBeVisible();
+
+  // Collapsing again and clicking a rail view tab directly expands the docked pane to that view.
+  await page.getByRole("button", { name: "Collapse to rail", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toHaveCount(0);
+  await rail.getByRole("tab", { name: "Favorites", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Pages", exact: true })).toBeVisible();
+  await expect(rail.getByRole("tab", { name: "Favorites", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 async function effectiveOpacity(locator: Locator) {
@@ -593,7 +625,7 @@ test("trash tab lists archived pages and asks before deleting permanently", asyn
   await files.getByRole("button", { name: "Disposable note", exact: true }).hover();
   await page.getByRole("button", { name: "Actions for Disposable note", exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
-  await expect(trashTab).toContainText("1");
+  await expect(trashTab).toHaveAttribute("data-count", "1");
   await expect(files.getByRole("button", { name: "Disposable note", exact: true })).toHaveCount(0);
 
   await trashTab.click();
@@ -610,7 +642,7 @@ test("trash tab lists archived pages and asks before deleting permanently", asyn
   await list.getByRole("option", { name: /Disposable note/ }).hover();
   await list.getByRole("button", { name: "Restore Disposable note", exact: true }).click();
   await expect(list).toHaveText(/Trash is empty/);
-  await expect(trashTab).not.toContainText(/[1-9]/);
+  await expect(trashTab).toHaveAttribute("data-count", "0");
   await expect.poll(async () => (await savedPages(page)).map((row) => row.title).sort()).toEqual(["Disposable note", "Keep forever"]);
 
   // Delete permanently asks first; canceling changes nothing, confirming removes it.
@@ -680,15 +712,15 @@ test("UC-57: multi-level trashed subpages are excluded from page count and purge
   await page.getByRole("button", { name: "New page inside Grandchild B", exact: true }).click();
   await page.getByLabel("Page title", { exact: true }).fill("Great-grandchild C");
 
-  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("5");
+  await expect(filesTab).toHaveAttribute("data-count", "5");
 
   // Move Parent folder to trash: All pages drops immediately to 1 (no ghost descendants).
   await files.locator(".tree-row", { hasText: "Parent folder" }).hover();
   await page.getByRole("button", { name: "Actions for Parent folder", exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
 
-  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
-  await expect(trashTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect(filesTab).toHaveAttribute("data-count", "1");
+  await expect(trashTab).toHaveAttribute("data-count", "1");
   await expect(files.locator(".tree-row")).toHaveCount(1);
 
   // Trash row shows descendant count; Delete permanently confirm shows total pages.
@@ -703,11 +735,11 @@ test("UC-57: multi-level trashed subpages are excluded from page count and purge
   await confirm.getByRole("button", { name: "Delete permanently", exact: true }).click();
 
   await expect(list).toHaveText(/Trash is empty/);
-  await expect(trashTab).not.toContainText(/[1-9]/);
+  await expect(trashTab).toHaveAttribute("data-count", "0");
 
   // Reload and verify only Keep active survives.
   await page.reload();
-  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect(filesTab).toHaveAttribute("data-count", "1");
   await expect.poll(async () => (await savedPages(page)).map((row) => row.title)).toEqual(["Keep active"]);
 
   // Also verify Empty trash dialog displays total count including descendants.
@@ -718,7 +750,7 @@ test("UC-57: multi-level trashed subpages are excluded from page count and purge
   await files.locator(".tree-row", { hasText: "Empty root" }).hover();
   await page.getByRole("button", { name: "Actions for Empty root", exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to trash", exact: true }).click();
-  await expect(filesTab.locator(".sidebar__view-count")).toHaveText("1");
+  await expect(filesTab).toHaveAttribute("data-count", "1");
 
   await trashTab.click();
   await page.getByRole("button", { name: "Empty trash", exact: true }).click();
@@ -746,7 +778,7 @@ test("the shared view lists public links and shares pages at once", async ({ pag
   const tree = page.getByRole("tree", { name: "Shared", exact: true });
   await expect(tree.getByRole("heading", { name: "公开链接", exact: true })).toBeVisible();
   await expect(tree.getByRole("button", { name: "Published notes", exact: true })).toHaveCount(1);
-  await expect(sharedTab).toHaveText(/已分享\s*1$/);
+  await expect(sharedTab).toHaveAttribute("data-count", "1");
 
   // "新建共享页面" makes the page a shared root at once — the page must not
   // stay private until somebody is invited.
@@ -756,7 +788,7 @@ test("the shared view lists public links and shares pages at once", async ({ pag
   await created.getByRole("button", { name: "Close sharing", exact: true }).click();
   await expect(tree.getByRole("heading", { name: "我共享的" })).toBeVisible();
   await expect.poll(async () => JSON.stringify(await (await page.request.get(`${server.url}/api/records/personal/pages`)).json())).toContain("share_space_id");
-  await expect(sharedTab).toHaveText(/已分享\s*2$/);
+  await expect(sharedTab).toHaveAttribute("data-count", "2");
   expect(errors).toEqual([]);
 });
 

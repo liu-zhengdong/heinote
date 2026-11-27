@@ -11,6 +11,10 @@
    ========================================================================== */
 
 .app-shell--peek .app-main {
+  margin-right: calc(var(--peek-w) + 16px);
+}
+
+.app-shell--mobile.app-shell--peek .app-main {
   margin-right: var(--peek-w);
 }
 
@@ -35,10 +39,22 @@
   transform: none;
 }
 
-/* Docked: a hairline between the two pages, as between the list and the
-   page. */
+/* Docked: a sibling floating island beside the document canvas on desktop. */
 .side-peek--docked {
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
   width: var(--peek-w);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-island);
+  overflow: hidden;
+}
+
+.app-shell--mobile .side-peek--docked {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 0;
   box-shadow: inset 1px 0 0 var(--hairline);
 }
 

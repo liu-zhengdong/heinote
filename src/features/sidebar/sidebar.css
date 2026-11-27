@@ -2,8 +2,9 @@
    Sidebar
    ========================================================================== */
 
-/* The list: Notion's warm grey pane, set against the white page by its
-   colour and a seam you only notice when it is missing. */
+/* Desktop dual-track floating island: the warm grey tray holds both the
+   stationary 46px verb rail (col 1) and the resizable directory pane (col 2)
+   with no harsh vertical divider between them. */
 .sidebar {
   position: relative;
   z-index: 1;
@@ -11,16 +12,19 @@
   min-width: 0;
   min-height: 0;
   flex-direction: column;
-  grid-area: 1 / 1;
-  background: var(--sidebar);
-  box-shadow: inset -1px 0 0 rgba(55, 53, 47, 0.06);
+  grid-area: 1 / 2;
+  background: transparent;
   font-size: 14px;
 }
 
-/* The rail is the list folded: the same pane, 46px of it. Search, the list
-   itself, and one new page; then the pages that were named on purpose; then
-   the account's own controls at the foot. It sits ABOVE the drawer so the
-   drawer can slide out from behind it. */
+.sidebar--sheet {
+  grid-area: auto;
+  background: var(--sidebar);
+}
+
+/* Stationary left verb rail on desktop: Create + Search at the top, view tabs
+   down the middle (with Trash anchored to the foot), and account controls at
+   the bottom. */
 .rail {
   position: relative;
   z-index: var(--z-rail);
@@ -28,10 +32,10 @@
   min-height: 0;
   flex-direction: column;
   align-items: center;
-  padding: 5px 0 6px;
+  padding: 10px 0 10px 2px;
+  gap: 2px;
   grid-area: 1 / 1;
-  background: var(--sidebar);
-  box-shadow: inset -1px 0 0 rgba(55, 53, 47, 0.06);
+  background: transparent;
 }
 
 .rail__group {
@@ -39,80 +43,104 @@
   width: 100%;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
+  gap: 3px;
 }
 
-.rail__group--pages {
+.rail__group--verbs {
+  padding-bottom: 8px;
+}
+
+.rail__group--verbs::after {
+  width: 20px;
+  height: 1px;
+  margin-top: 5px;
+  background: var(--hairline);
+  content: "";
+}
+
+.rail__group--views {
   min-height: 0;
   flex: 1;
-  padding: 5px 0;
-  margin-top: 5px;
-  overflow-y: auto;
-  scrollbar-width: none;
-  box-shadow: inset 0 0.5px 0 var(--hairline);
-}
-
-.rail__group--pages::-webkit-scrollbar {
-  display: none;
-}
-
-/* Nothing starred yet: a hairline around an empty band reads as a section
-   that failed to load, so with nothing in it the band is just space. */
-.rail__group--pages:empty {
-  margin-top: 0;
-  box-shadow: none;
+  padding: 2px 0 4px;
+  gap: 2px;
 }
 
 .rail__group--foot {
-  padding-top: 5px;
-  box-shadow: inset 0 0.5px 0 var(--hairline);
+  padding-top: 6px;
+  gap: 3px;
+}
+
+.rail__group--foot::before {
+  width: 20px;
+  height: 1px;
+  margin-bottom: 3px;
+  background: var(--hairline);
+  content: "";
 }
 
 .rail__btn {
   width: 32px;
   height: 30px;
+  border-radius: var(--r-md);
+  color: var(--ink-3);
 }
 
-/* The page you are on, in the same grey a selected row wears in the list, so
-   the rail and the list agree about what "here" looks like. */
-.rail__btn.is-current,
-.rail__btn.is-current:hover {
+.rail__new {
+  width: 30px;
+  height: 30px;
+}
+
+.rail__tab {
+  color: var(--ink-3);
+}
+
+.rail__tab--trash {
+  margin-top: auto;
+}
+
+.rail__tab.is-active,
+.rail__tab.is-active:hover {
   background: var(--fill-active);
   color: var(--ink);
 }
 
-/* The drawer: the same list, raised over the page beside the rail for as long
-   as it is being read, and gone the moment a page is chosen — Notion's hover
-   sidebar, but on a press rather than a reach for the edge. */
-.sidebar--drawer {
-  position: absolute;
-  z-index: var(--z-drawer);
-  top: 0;
-  bottom: 0;
-  left: var(--sidebar-rail);
-  width: var(--sidebar-drawer);
-  max-width: calc(100% - var(--sidebar-rail) - 40px);
-  background: var(--sidebar);
-  box-shadow: var(--shadow-pop);
-  transform: translateX(-100%);
-  visibility: hidden;
-  transition: transform var(--t-base) var(--e-out), visibility 0s linear var(--t-base);
+.rail--collapsed .rail__tab.is-active {
+  background: transparent;
 }
 
-.sidebar--drawer.is-open {
-  transform: none;
-  visibility: visible;
-  transition: transform var(--t-base) var(--e-out), visibility 0s;
+.rail--collapsed .rail__tab.is-active:hover {
+  background: var(--fill-hover);
 }
 
-/* The seam. It is the list's right edge, and it is draggable — the width of
-   the navigator is the one layout decision that is genuinely the reader's. */
+.rail__tab.is-active .sidebar__view-icon--files { color: var(--blue); }
+.rail__tab.is-active .sidebar__view-icon--favorites { color: var(--yellow); }
+.rail__tab.is-active .sidebar__view-icon--shared { color: var(--green); }
+.rail__tab.is-active .sidebar__view-icon--graph { color: var(--text-purple); }
+.rail__tab.is-active .sidebar__view-icon--trash { color: var(--danger); }
+
+.rail .sidebar__search {
+  width: 32px;
+  height: 30px;
+  flex: none;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--r-md);
+  color: var(--ink-2);
+}
+
+.rail .sidebar__search:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+/* The seam. It sits in the quiet gutter between the directory pane and the
+   floating document island — draggable so the reader controls directory width. */
 .sidebar__resize {
   position: absolute;
   z-index: 2;
-  top: 0;
+  top: 8px;
   right: -3px;
-  bottom: 0;
+  bottom: 8px;
   width: 6px;
   cursor: col-resize;
   touch-action: none;
@@ -124,6 +152,7 @@
   bottom: 0;
   left: 2px;
   width: 2px;
+  border-radius: 1px;
   background: var(--blue);
   content: "";
   opacity: 0;
@@ -146,6 +175,18 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px 10px 6px;
+}
+
+.sidebar__head--pane {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 8px 6px 4px;
+}
+
+.sidebar__head--pane > .space-switcher {
+  flex: 1;
+  min-width: 0;
 }
 
 .sidebar__topbar {
@@ -321,15 +362,23 @@
   flex: none;
   align-items: center;
   justify-content: space-between;
-  margin: 6px 10px 0;
-  padding: 0 4px 0 8px;
+  margin: 2px 8px 0 4px;
+  padding: 0 2px 0 8px;
 }
 
 .sidebar__section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: var(--ink-3);
   font-size: 11.5px;
   font-weight: 500;
   letter-spacing: 0.02em;
+}
+
+.sidebar__section-count {
+  color: var(--ink-4);
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar__section-actions {
@@ -371,8 +420,12 @@
   flex: 1;
   flex-direction: column;
   gap: 1px;
-  padding: 4px 10px 24px;
+  padding: 4px 8px 20px 4px;
   border-radius: var(--r-sm);
+}
+
+.sidebar--sheet .sidebar__scroll {
+  padding: 4px 10px 24px;
 }
 
 /* Dropped here, a page goes to the top of the tree. */
@@ -759,25 +812,6 @@
   place-items: center;
 }
 
-/* The scrim starts where the rail ends. The rail is never behind it, because
-   the rail is what you press to put the drawer away. */
-.sidebar__scrim {
-  position: absolute;
-  z-index: calc(var(--z-drawer) - 1);
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: var(--sidebar-rail);
-  border: 0;
-  background: var(--scrim);
-  opacity: 0;
-  animation: scrim-in var(--t-base) var(--e-out) forwards;
-}
-
-@keyframes scrim-in {
-  to { opacity: 1; }
-}
-
 @media (max-width: 559.98px) {
   .sidebar__collapse {
     display: none;
@@ -788,7 +822,8 @@
 .sidebar__foot > .space-switcher { flex: 1; }
 .sidebar__foot > .icon-btn { flex: none; }
 .sidebar :is(.icon-btn, .rail-invite, .sidebar__new):disabled,
-.rail .icon-btn:disabled { cursor: default; opacity: .4; }
+.rail :is(.icon-btn, .sidebar__new):disabled { cursor: default; opacity: .4; }
+.sidebar__head--pane .space-switcher:focus-visible,
 .sidebar__foot .space-switcher:focus-visible,
 .rail__group--foot .space-switcher:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
 

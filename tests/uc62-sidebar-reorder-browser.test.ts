@@ -38,7 +38,7 @@ async function register(page: Page, handle: string) {
 }
 
 async function createDocument(page: Page, title: string, spaceScope = "personal") {
-  await page.locator(".sidebar__topbar").getByRole("button", { name: "新建", exact: true }).click();
+  await page.getByRole("button", { name: "新建", exact: true }).click();
   await page.locator('.menu[role="menu"][aria-label="新建"]').getByRole("menuitem", { name: "页面", exact: true }).click();
   const titleInput = page.getByLabel("Page title", { exact: true });
   await expect(titleInput).toBeEmpty();
