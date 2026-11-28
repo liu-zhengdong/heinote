@@ -225,3 +225,44 @@ test("UC-65: pasting single-line & multi-line Markdown with math renders KaTeX f
   await expect(card.locator(".memo-math-inline .katex")).toHaveCount(1, { timeout: 15000 });
   await expect(card.locator(".memo-math-block .katex-display")).toHaveCount(2, { timeout: 15000 });
 });
+
+test("UC-65: inline equation still renders KaTeX (no $ wrapper) after a block equation loaded KaTeX first", async ({ page }) => {
+  await register(page, "uc65_order");
+
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  await expect(page).toHaveURL(/page=/);
+
+  // Create a block equation first on a fresh page so MathView loads KaTeX before any inline token exists.
+  const firstEditable = page.locator('.block__editable[contenteditable="true"]').first();
+  await firstEditable.click();
+  await page.keyboard.type("$$");
+  await page.keyboard.press("Enter");
+  const popover = page.locator(".equation-popover");
+  await expect(popover).toBeVisible();
+  await popover.getByLabel("LaTeX 公式", { exact: true }).fill("x^2");
+  await popover.getByLabel("LaTeX 公式", { exact: true }).press("Meta+Enter");
+  await expect(popover).toBeHidden();
+  await expect(page.locator(".block__equation .katex-display")).toHaveCount(1, { timeout: 15000 });
+
+  // Add a paragraph below and type an inline equation -> must render KaTeX without fallback $...$
+  await page.locator(".doc__pad").click();
+  const textEditable = page.locator('.block--text .block__editable[contenteditable="true"]').last();
+  await textEditable.click();
+  await page.keyboard.type("结论 $E = mc^2$ 成立");
+
+  await expect.poll(async () => (
+    page.evaluate(() => {
+      const el = document.querySelector('.mention[data-mention="equation"]');
+      if (!el?.shadowRoot) return null;
+      return {
+        hasKatex: Boolean(el.shadowRoot.querySelector(".katex")),
+        hasFallback: Boolean(el.shadowRoot.querySelector(".math-inline-fallback")),
+        hasDollar: (el.shadowRoot.textContent ?? "").includes("$"),
+      };
+    })
+  ), { timeout: 15000 }).toEqual({
+    hasKatex: true,
+    hasFallback: false,
+    hasDollar: false,
+  });
+});

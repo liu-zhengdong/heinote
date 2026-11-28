@@ -52,11 +52,16 @@ export function useInlineEquations(root: RefObject<HTMLElement | null>): void {
   useEffect(() => {
     const element = root.current;
     if (!element) return;
+    let cancelReady: (() => void) | null = null;
 
     const paint = () => {
+      const isReady = mathReady();
       const tokens = element.querySelectorAll<HTMLElement>(TOKEN_SELECTOR);
-      if (tokens.length && !mathReady()) {
-        whenMathReady(() => setReady(true));
+      if (tokens.length && !isReady && !cancelReady) {
+        cancelReady = whenMathReady(() => {
+          cancelReady = null;
+          setReady(true);
+        });
       }
       const katexSheet = mathStyleSheet();
       const baseSheet = hostSheet();
@@ -80,7 +85,7 @@ export function useInlineEquations(root: RefObject<HTMLElement | null>): void {
           shadow.append(host);
         }
 
-        const key = `${ready ? "1" : "0"}:${expr}`;
+        const key = `${isReady ? "1" : "0"}:${expr}`;
         if (host.dataset.renderedKey === key) continue;
         host.dataset.renderedKey = key;
 
@@ -90,12 +95,12 @@ export function useInlineEquations(root: RefObject<HTMLElement | null>): void {
           continue;
         }
 
-        if (!ready) {
+        if (!isReady) {
           host.classList.remove("is-error");
           host.innerHTML = "";
           const fallback = document.createElement("span");
           fallback.className = "math-inline-fallback";
-          fallback.textContent = `$${expr}$`;
+          fallback.textContent = expr;
           host.append(fallback);
           continue;
         }
@@ -111,7 +116,7 @@ export function useInlineEquations(root: RefObject<HTMLElement | null>): void {
           host.innerHTML = "";
           const fallback = document.createElement("span");
           fallback.className = "math-inline-fallback";
-          fallback.textContent = `$${expr}$`;
+          fallback.textContent = expr;
           host.append(fallback);
         }
       }
@@ -125,6 +130,9 @@ export function useInlineEquations(root: RefObject<HTMLElement | null>): void {
       attributes: true,
       attributeFilter: ["data-expression"],
     });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      cancelReady?.();
+    };
   }, [ready, root]);
 }

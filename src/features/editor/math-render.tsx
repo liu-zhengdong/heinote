@@ -87,6 +87,10 @@ export const MathView = memo(function MathView({
 
   useEffect(() => {
     if (ready) return;
+    if (mathReady()) {
+      setReady(true);
+      return;
+    }
     return whenMathReady(() => setReady(true));
   }, [ready]);
 
@@ -106,7 +110,7 @@ export const MathView = memo(function MathView({
   if (!ready || !rendered.html) {
     return (
       <code className={`math-fallback ${className}`.trim()}>
-        {display ? `$$${expression}$$` : `$${expression}$`}
+        {expression}
       </code>
     );
   }
