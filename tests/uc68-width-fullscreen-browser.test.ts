@@ -124,7 +124,8 @@ test("UC-68 AC-01: global default full-width preference + per-page TopBar overri
   const fullInnerWidth = await page.getByRole("main").locator(".doc__inner").evaluate((el) => el.getBoundingClientRect().width);
   expect(fullInnerWidth).toBeGreaterThan(900);
 
-  await page.getByRole("button", { name: "切换为标准宽度", exact: true }).click();
+  await page.getByRole("button", { name: "More page actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Full width", exact: true }).click();
   await expect(page.getByRole("main").locator("article.doc")).not.toHaveClass(/doc--full/);
   const standardInnerWidth = await page.getByRole("main").locator(".doc__inner").evaluate((el) => el.getBoundingClientRect().width);
   expect(standardInnerWidth).toBeLessThanOrEqual(720);
@@ -175,7 +176,8 @@ test("UC-68 AC-02/03/04: App full-width unlocks 920px cap, App & Page fullscreen
   const narrowBox = await page.locator(".app-surface--grow").boundingBox();
   expect(narrowBox!.width).toBeLessThanOrEqual(922);
 
-  await page.getByRole("button", { name: "切换为全宽", exact: true }).click();
+  await page.getByRole("button", { name: "More page actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Full width", exact: true }).click();
   await expect(page.locator(".app-page")).toHaveClass(/app-page--full/);
   await expect.poll(async () => (await page.locator(".app-surface--grow").boundingBox())!.width).toBeGreaterThan(1000);
   await captureShot(page, "app-fullwidth-light.png");
@@ -214,7 +216,8 @@ test("UC-68 AC-02/03/04: App full-width unlocks 920px cap, App & Page fullscreen
 
   // AC-04: Ordinary Page fullscreen covers viewport while keeping TopBar tools accessible.
   await createRootDocument(page, "DocFullscreen", "Fullscreen document body");
-  await page.getByRole("button", { name: "全屏视图", exact: true }).click();
+  await page.getByRole("button", { name: "More page actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "全屏视图", exact: true }).click();
   await expect(page.locator(".workspace-pane--fullscreen")).toBeVisible();
   const docPaneRect = await page.locator(".workspace-pane--fullscreen").boundingBox();
   expect(docPaneRect!.width).toBeGreaterThanOrEqual(1438);

@@ -215,29 +215,16 @@ export function PageActions({
           </button>
         </Tooltip>
       ) : null}
-      {widthOption && editable && !compact && !mobile && (page.kind === "document" || page.kind === "app") ? (
-        <Tooltip label={fullWidth ? "切换为标准宽度" : "全宽显示"}>
+      {fullscreen && onToggleFullscreen && !mobile ? (
+        <Tooltip label="退出全屏 (Esc)">
           <button
             type="button"
-            className={`icon-btn ${fullWidth ? "is-active" : ""}`}
-            aria-label={fullWidth ? "切换为标准宽度" : "切换为全宽"}
-            aria-pressed={fullWidth}
-            onClick={() => updatePage(page.id, { full_width: !fullWidth })}
-          >
-            <MoveHorizontal size={16} />
-          </button>
-        </Tooltip>
-      ) : null}
-      {onToggleFullscreen && !compact && !mobile ? (
-        <Tooltip label={fullscreen ? "退出全屏 (Esc)" : "全屏视图"}>
-          <button
-            type="button"
-            className={`icon-btn ${fullscreen ? "is-active" : ""}`}
-            aria-label={fullscreen ? "退出全屏" : "全屏视图"}
-            aria-pressed={Boolean(fullscreen)}
+            className="btn topbar__share is-on"
+            aria-label="退出全屏"
             onClick={onToggleFullscreen}
           >
-            {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            <Minimize2 size={14} aria-hidden="true" />
+            退出全屏
           </button>
         </Tooltip>
       ) : null}
