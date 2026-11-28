@@ -90,6 +90,12 @@ export class Plane {
     return Boolean(this.live.get("pages")?.directoryLoading);
   }
 
+  /** True once this plane's `pages` mirror has been confirmed against the server. */
+  get directorySynced(): boolean {
+    const pages = this.live.get("pages");
+    return Boolean(pages && pages.directorySynced);
+  }
+
   /** Open any collections omitted at startup (when switching back into the
    *  personal space from a knowledge base). */
   async ensureFull(options: { seedPageId?: string } = {}): Promise<void> {

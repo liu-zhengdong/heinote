@@ -1,0 +1,224 @@
+/* ============================================================================
+   Direction A: Tray Tab Bar above Paper Island(s)
+   ========================================================================== */
+
+.tabbar {
+  display: flex;
+  height: 36px;
+  flex: none;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 4px 0;
+  background: transparent;
+  user-select: none;
+}
+
+.workspace-pane:not(.is-focused) .tabbar {
+  opacity: 0.92;
+}
+
+.tabbar__list {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabbar__list::-webkit-scrollbar {
+  display: none;
+}
+
+.pane-tab {
+  position: relative;
+  display: inline-flex;
+  height: 30px;
+  min-width: 0;
+  max-width: 196px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 9px;
+  margin-bottom: 2px;
+  border-radius: 7px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.pane-tab:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.pane-tab.is-active {
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(15, 15, 15, 0.06);
+}
+
+:root[data-theme="dark"] .pane-tab.is-active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+
+.workspace-pane:not(.is-focused) .pane-tab.is-active {
+  background: var(--fill-active);
+  color: var(--ink-2);
+  box-shadow: none;
+}
+
+.pane-tab.is-pinned {
+  max-width: 136px;
+  gap: 5px;
+  padding: 0 7px 0 8px;
+}
+
+.pane-tab.is-drop-before::before,
+.pane-tab.is-drop-after::after {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--blue);
+  content: "";
+  pointer-events: none;
+}
+
+.pane-tab.is-drop-before::before {
+  left: -1px;
+}
+
+.pane-tab.is-drop-after::after {
+  right: -1px;
+}
+
+.pane-tab__main {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pane-tab__icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-3);
+}
+
+.pane-tab.is-active .pane-tab__icon {
+  color: var(--ink-2);
+}
+
+.pane-tab__title {
+  overflow: hidden;
+  max-width: 120px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-tab.is-pinned .pane-tab__title {
+  max-width: 78px;
+}
+
+.pane-tab__pin,
+.pane-tab__close {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--r-xs);
+  color: var(--ink-3);
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out), opacity var(--t-tap) var(--e-out);
+}
+
+.pane-tab__pin {
+  opacity: 0;
+}
+
+.pane-tab.is-pinned .pane-tab__pin {
+  opacity: 0.9;
+  color: var(--blue);
+}
+
+.pane-tab:hover .pane-tab__pin,
+.pane-tab.is-active .pane-tab__pin,
+.pane-tab:focus-within .pane-tab__pin {
+  opacity: 0.72;
+}
+
+.pane-tab__pin:hover {
+  opacity: 1 !important;
+  background: var(--fill-active);
+  color: var(--blue);
+}
+
+.pane-tab__close {
+  opacity: 0;
+}
+
+.pane-tab:hover .pane-tab__close,
+.pane-tab.is-active .pane-tab__close,
+.pane-tab:focus-within .pane-tab__close {
+  opacity: 0.72;
+}
+
+.pane-tab__close:hover {
+  opacity: 1 !important;
+  background: var(--fill-active);
+  color: var(--ink);
+}
+
+.tabbar__pin-sep {
+  width: 1px;
+  height: 14px;
+  flex: none;
+  margin: 0 3px;
+  background: var(--hairline-strong);
+}
+
+.tabbar__tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  padding-left: 4px;
+  margin-bottom: 3px;
+}
+
+.tabbar__btn {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: var(--r-sm);
+  color: var(--ink-3);
+  transition: background var(--t-tap) var(--e-out), color var(--t-tap) var(--e-out);
+}
+
+.tabbar__btn:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.tabbar__btn.is-active {
+  background: var(--blue-tint);
+  color: var(--blue);
+}

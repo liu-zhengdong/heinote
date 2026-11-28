@@ -117,9 +117,14 @@ export function restoreHistoryCursor(cursor: HistoryCursor | null): boolean {
   }
 
   if (focus.kind === "field") {
-    const fields = [...document.querySelectorAll<HTMLElement>(`[data-history-field="${CSS.escape(focus.field)}"]`)]
+    const focusedPane = document.querySelector<HTMLElement>(".workspace-pane.is-focused");
+    const fields = [...(focusedPane ?? document).querySelectorAll<HTMLElement>(`[data-history-field="${CSS.escape(focus.field)}"]`)]
       .filter((field) => pageIdOf(field) === focus.pageId);
-    const field = fields.find((item) => Boolean(item.closest(".side-peek")) === focus.peek) ?? fields[0];
+    const fallbackFields = fields.length
+      ? fields
+      : [...document.querySelectorAll<HTMLElement>(`[data-history-field="${CSS.escape(focus.field)}"]`)]
+        .filter((field) => pageIdOf(field) === focus.pageId);
+    const field = fallbackFields.find((item) => Boolean(item.closest(".side-peek")) === focus.peek) ?? fallbackFields[0];
     if (!field) return false;
     field.focus({ preventScroll: true });
     if (isTextInput(field) && field.type !== "number") {
@@ -133,8 +138,10 @@ export function restoreHistoryCursor(cursor: HistoryCursor | null): boolean {
     return true;
   }
 
+  const focusedPane = document.querySelector<HTMLElement>(".workspace-pane.is-focused");
   const row = focus.blockIds[0]
-    ? document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(focus.blockIds[0])}"]`)
+    ? (focusedPane?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(focus.blockIds[0])}"]`)
+      ?? document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(focus.blockIds[0])}"]`))
     : null;
   if (!row) return false;
   row.dispatchEvent(new CustomEvent(SELECT_BLOCK_EVENT, { bubbles: true, detail: focus.blockIds }));

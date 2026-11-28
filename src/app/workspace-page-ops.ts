@@ -14,6 +14,7 @@ import { publishRecovery } from "../collaboration/recovery";
 import type { PlatformClient } from "../platform/client";
 import { ApiError, request } from "../platform/http";
 import type { WorkspaceDocument, WorkspaceMutation } from "../platform/workspace-document";
+import type { OpenPageMode, PaneId } from "../core/tab-layout";
 import { bodyPath, linkIntoParent, trashWrites } from "./page-rows";
 
 /** The fields of a page a caller may change directly; its body is the
@@ -34,6 +35,8 @@ export interface CreatePageOptions {
   /** Its name from the start — a page made from a mention is named by what
    *  was typed after the `@`. */
   title?: string;
+  pane?: PaneId;
+  openMode?: OpenPageMode;
 }
 
 export interface MovePageOptions {
@@ -84,7 +87,7 @@ export interface PageOpsDeps {
   spaces: Record<string, SpaceSummary>;
   spacesRef: MutableRefObject<Record<string, SpaceSummary>>;
   commit(mutations: WorkspaceMutation[], record?: boolean): void;
-  selectPage(pageId: string): void;
+  selectPage(pageId: string, options?: { pane?: PaneId; mode?: OpenPageMode }): void;
   setSelectedPageId: Dispatch<SetStateAction<string>>;
   setEmptySpaceId: Dispatch<SetStateAction<string>>;
 }
@@ -144,10 +147,10 @@ export function useWorkspacePageOps({
     commit(mutations);
     if (options.select !== false) {
       markFresh(id);
-      setSelectedPageId(id);
+      selectPage(id, options.pane || options.openMode ? { pane: options.pane, mode: options.openMode } : undefined);
     }
     return id;
-  }, [commit, document, platform, activeSpaceId, spacesRef, setSelectedPageId]);
+  }, [commit, document, platform, activeSpaceId, spacesRef, selectPage]);
 
   const updatePage = useCallback((pageId: string, patch: PagePatch) => {
     if (!document || !platform) return;

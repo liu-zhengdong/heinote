@@ -933,7 +933,7 @@ test("app-main isolates pane stacking, topbar sits in flex flow, and sidebar res
 
   const geometry = await page.evaluate(() => {
     const appMain = document.querySelector<HTMLElement>(".app-main");
-    const topbar = document.querySelector<HTMLElement>(".app-main > .topbar");
+    const topbar = document.querySelector<HTMLElement>(".app-main .workspace-pane .topbar");
     const surface = document.querySelector<HTMLElement>(".app-main .page-surface");
     const sidebar = document.querySelector<HTMLElement>(".sidebar");
     const handle = document.querySelector<HTMLElement>(".sidebar__resize");

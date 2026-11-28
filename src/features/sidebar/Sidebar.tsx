@@ -5,6 +5,7 @@ import {
   ArrowUpNarrowWide,
   ChevronRight,
   ChevronsDownUp,
+  Columns2,
   Copy,
   FileText,
   Files,
@@ -45,6 +46,7 @@ import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useFold } from "../../hooks/useFold";
 import { SIDEBAR_SORTS, SIDEBAR_VIEWS } from "../../../schema";
 import { SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SIDEBAR_RAIL_WIDTH } from "../../core/workspace-state";
+import { pinnedPageIdsInLayout } from "../../core/tab-layout";
 import type { NotePage, PageKind, SidebarSort, SidebarView } from "../../core/types";
 import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
@@ -115,6 +117,9 @@ export function Sidebar() {
     movePage,
     movePages,
     selectPage,
+    tabLayout,
+    openInNewTab,
+    openInRightSplit,
     setPreference,
     updatePage,
     canEdit,
@@ -650,6 +655,18 @@ export function Sidebar() {
         if (view === "memos") setPreference("sidebar_view", "files");
         afterNavigate();
       },
+      openInNewTab: (pageId) => {
+        selectImport(null);
+        openInNewTab(pageId);
+        if (view === "memos") setPreference("sidebar_view", "files");
+        afterNavigate();
+      },
+      openInRightSplit: (pageId) => {
+        selectImport(null);
+        openInRightSplit(pageId);
+        if (view === "memos") setPreference("sidebar_view", "files");
+        afterNavigate();
+      },
       toggle: (id) => updateExpanded((current) => {
         const next = new Set(current);
         if (next.has(id)) next.delete(id);
@@ -842,6 +859,8 @@ export function Sidebar() {
   });
   const actions = useMemo<TreeActions>(() => ({
     select: (pageId, event) => handlers.current?.select(pageId, event),
+    openInNewTab: (pageId) => handlers.current?.openInNewTab?.(pageId),
+    openInRightSplit: (pageId) => handlers.current?.openInRightSplit?.(pageId),
     toggle: (id) => handlers.current?.toggle(id),
     openMenu: (pageId, anchor) => handlers.current?.openMenu(pageId, anchor),
     rename: (id) => handlers.current?.rename(id),
@@ -884,6 +903,8 @@ export function Sidebar() {
     );
   };
 
+  const pinnedPageIds = useMemo(() => new Set(pinnedPageIdsInLayout(tabLayout)), [tabLayout]);
+
   /** A block's row, in the tree or in Favorites. */
   const branch = (page: NotePage, depth: number, source: PageTree, startRow?: number): ReactNode => {
     // A page holds pages — its blocks among them, a block being a page —
@@ -899,6 +920,7 @@ export function Sidebar() {
           branch={children.length > 0 || childImports.length > 0}
           open={open}
           selected={!selectedImportId && selectedPageId === page.id}
+          pinned={pinnedPageIds.has(page.id)}
           multiSelected={view === "files" && activeMultiSelected.has(page.id)}
           renaming={renaming === page.id}
           menuOpen={rowMenu?.pageId === page.id}
@@ -966,6 +988,7 @@ export function Sidebar() {
         branch={false}
         open={false}
         selected={selectedPageId === page.id}
+        pinned={pinnedPageIds.has(page.id)}
         multiSelected={false}
         renaming={renaming === page.id}
         menuOpen={rowMenu?.pageId === page.id}
@@ -1503,6 +1526,21 @@ export function Sidebar() {
       >
         {menuPage ? (
           <MenuList label="Page actions" autoFocus>
+            {!mobile ? (
+              <>
+                <MenuItem
+                  icon={<Plus size={16} />}
+                  label="在新标签页打开"
+                  onSelect={() => { selectImport(null); openInNewTab(menuPage.id); setRowMenu(null); }}
+                />
+                <MenuItem
+                  icon={<Columns2 size={16} />}
+                  label="在右侧分屏打开"
+                  onSelect={() => { selectImport(null); openInRightSplit(menuPage.id); setRowMenu(null); }}
+                />
+                <MenuDivider />
+              </>
+            ) : null}
             <MenuItem
               icon={<Star size={16} />}
               label={isFavorite(menuPage.id) ? "Remove from favorites" : "Add to favorites"}

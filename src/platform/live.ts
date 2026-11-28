@@ -796,6 +796,7 @@ export class LiveCollection<R extends object> {
   private blocksLru: string[] = [];
   private serverEpoch = "";
   private _directoryLoading = false;
+  private _directorySynced = true;
   private paused: boolean;
   private inFlight: Promise<void> | null = null;
   private queuedRefresh = false;
@@ -841,6 +842,10 @@ export class LiveCollection<R extends object> {
 
   get directoryLoading(): boolean {
     return this._directoryLoading;
+  }
+
+  get directorySynced(): boolean {
+    return this._directorySynced;
   }
 
   private touchBlocksLru(pageId: string): void {
@@ -915,7 +920,15 @@ export class LiveCollection<R extends object> {
             live.schedule();
             return live;
           }
-          void live.refresh().catch(() => undefined).finally(() => live.schedule());
+          if (name === "pages") live._directorySynced = false;
+          void live.refresh()
+            .then(() => {
+              if (live.closed || live._directorySynced) return;
+              live._directorySynced = true;
+              live.emit();
+            })
+            .catch(() => undefined)
+            .finally(() => live.schedule());
           return live;
         }
         if (!live.lazy && name === "pages" && options.seedPageId) {
@@ -930,12 +943,14 @@ export class LiveCollection<R extends object> {
             live.remote = new Map(fastDelta.rows.map((row) => [row.id, row.value]));
             live.serverEpoch = fastDelta.epoch ?? "";
             live._directoryLoading = true;
+            live._directorySynced = false;
             void fullPromise.then((fullDelta) => {
               if (live.closed) return;
               live.remote = new Map(fullDelta.rows.map((row) => [row.id, row.value]));
               live.latest = fullDelta.latest;
               live.serverEpoch = fullDelta.epoch ?? live.serverEpoch;
               live._directoryLoading = false;
+              live._directorySynced = true;
               live.persistMirror();
               live.emit();
               live.schedule();

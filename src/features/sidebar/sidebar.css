@@ -702,6 +702,12 @@
   color: var(--ink-4);
 }
 
+.tree-row__pinned {
+  flex: none;
+  color: var(--blue);
+  opacity: 0.85;
+}
+
 .tree-row--import .tree-row__glyph {
   color: var(--blue);
 }

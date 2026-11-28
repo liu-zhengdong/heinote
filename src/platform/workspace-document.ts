@@ -257,6 +257,11 @@ export class WorkspaceDocument {
     return Boolean(this.planes.get(this.activeSpaceId)?.directoryLoading);
   }
 
+  /** True once the active space's directory has completed a server sync. */
+  get directorySynced(): boolean {
+    return Boolean(this.planes.get(this.activeSpaceId)?.directorySynced);
+  }
+
   private async pullPages(
     pageIds: readonly string[],
     pull: (plane: Plane, ids: readonly string[]) => Promise<void>,

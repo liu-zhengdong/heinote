@@ -58,8 +58,9 @@ export function editableWithin(root: HTMLElement | null, blockId: string): HTMLE
  *  is not known (`null`). Answers the first block's editable, or null when a
  *  block is not on screen. */
 export function selectRanges(root: HTMLElement | null, ranges: readonly BlockTextRange[]): HTMLElement | null {
-  const editable = (blockId: string) => (root
-    ? editableWithin(root, blockId)
+  const scopedRoot = root ?? document.querySelector<HTMLElement>(".workspace-pane.is-focused");
+  const editable = (blockId: string) => (scopedRoot
+    ? (editableWithin(scopedRoot, blockId) ?? document.querySelector<HTMLElement>(editablesOf(blockId)))
     : document.querySelector<HTMLElement>(editablesOf(blockId)));
   const first = ranges[0];
   const last = ranges.at(-1);

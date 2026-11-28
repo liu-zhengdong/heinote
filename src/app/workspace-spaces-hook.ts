@@ -23,6 +23,7 @@ export interface WorkspaceSpacesDeps {
   setSpaceCatalog(list: readonly SpaceSummary[]): void;
   setEmptySpaceId: Dispatch<SetStateAction<string>>;
   selectPage(pageId: string): void;
+  restoreSpaceLayout(spaceId: string, fallbackPageId: string): string;
   setPreference<K extends keyof WorkspacePreferences>(key: K, value: WorkspacePreferences[K]): void;
 }
 
@@ -38,6 +39,7 @@ export function useWorkspaceSpaces({
   setSpaceCatalog,
   setEmptySpaceId,
   selectPage,
+  restoreSpaceLayout,
   setPreference,
 }: WorkspaceSpacesDeps) {
   const [rosters, setRosters] = useState<Record<string, SpaceRoster>>({});
@@ -143,16 +145,16 @@ export function useWorkspaceSpaces({
     if (spaceId !== "personal" && !catalog[spaceId]?.knowledgeBase) return;
     const remembered = readSpaceNavigation(platform.bootstrap.user.id);
     setEmptySpaceId(spaceId);
-    const pageId = firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]);
-    selectPage(pageId);
-    const seedPageId = pageId || remembered.pages[spaceId] || catalog[spaceId]?.knowledgeBase?.homePageId;
+    const fallbackPageId = firstPageInSpace(document.state, catalog, spaceId, remembered.pages[spaceId]);
+    const restoredPageId = restoreSpaceLayout(spaceId, fallbackPageId);
+    const seedPageId = restoredPageId || fallbackPageId || remembered.pages[spaceId] || catalog[spaceId]?.knowledgeBase?.homePageId;
     void document.activateSpace(spaceId, { seedPageId }).then(() => {
       if (selectedRef.current) return;
       const landed = firstPageInSpace(document.state, spacesRef.current, spaceId, remembered.pages[spaceId]);
       if (landed) selectPage(landed);
     }).catch(() => undefined);
     setPreference("sidebar_view", "files");
-  }, [document, platform, selectPage, setPreference, setEmptySpaceId, selectedRef, spacesRef]);
+  }, [document, platform, restoreSpaceLayout, selectPage, setPreference, setEmptySpaceId, selectedRef, spacesRef]);
 
   const unknownRequests = useRef(new Set<string>());
   const knowledgeBases = useMemo<KnowledgeBaseClient>(() => {

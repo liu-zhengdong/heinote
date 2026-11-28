@@ -1,15 +1,4 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ReactNode,
-} from "react";
+import { useCallback, useContext, createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from "react";
 import type {
   BlockMutation,
   CollaboratorPresence,
@@ -20,6 +9,28 @@ import type {
   WorkspacePreferences,
 } from "../core/types";
 import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canShelvePage as canShelvePageIn, canTrashPage as canTrashPageIn, inTrash, isPurging, spaceOfPage } from "../core/page-tree";
+import {
+  activePageOfLayout,
+  activateTabInLayout,
+  closeOtherTabsInLayout,
+  closeRightTabsInLayout,
+  closeTabInLayout,
+  emptySpaceTabLayout,
+  focusPaneInLayout,
+  moveTabInLayout,
+  normalizeSpaceTabLayout,
+  openPageInLayout,
+  pruneSpaceTabLayout,
+  readTabLayouts,
+  setSplitRatioInLayout,
+  togglePinTabInLayout,
+  toggleSplitInLayout,
+  writeTabLayouts,
+  type OpenPageMode,
+  type PaneId,
+  type SpaceTabLayout,
+  type StoredTabLayouts,
+} from "../core/tab-layout";
 import {
   WorkspaceHistory,
   type HistoryFocus,
@@ -60,7 +71,19 @@ export interface WorkspaceActionsValue {
   setSidebarSort(sort: WorkspacePreferences["sidebar_sort"]): Promise<void>;
   refreshSpaces(): Promise<void>;
   knowledgeBases: KnowledgeBaseClient;
-  selectPage(pageId: string): void;
+  selectPage(pageId: string, options?: { pane?: PaneId; mode?: OpenPageMode }): { pinProtected?: boolean } | void;
+  openInNewTab(pageId: string, pane?: PaneId): void;
+  openInRightSplit(pageId: string): void;
+  activateTab(pane: PaneId, pageId: string): void;
+  togglePinTab(pane: PaneId, pageId: string): boolean | null;
+  closeTab(pane: PaneId, pageId: string, options?: { viaShortcut?: boolean }): { blockedByPin?: boolean; collapsedSplit?: boolean };
+  closeOtherTabs(pane: PaneId, keepPageId: string): void;
+  closeRightTabs(pane: PaneId, fromPageId: string): void;
+  moveTab(fromPane: PaneId, pageId: string, toPane: PaneId, insertIndex?: number): void;
+  toggleSplit(): { split: boolean; merged?: boolean };
+  focusPane(pane: PaneId): void;
+  setSplitRatio(ratio: number): void;
+  createPageInPane(pane: PaneId): string | null;
   /** Pulls pages' bodies into the window (UC-48). Idempotent; safe to call
    *  from rendering code whenever a page is about to be shown or read. */
   loadPages(pageIds: readonly string[]): void;
@@ -155,6 +178,7 @@ export interface WorkspaceContextValue extends WorkspaceActionsValue {
   document: WorkspaceDocument | null;
   platform: PlatformClient | null;
   selectedPageId: string;
+  tabLayout: SpaceTabLayout;
   loading: boolean;
   directoryLoading: boolean;
   error: string | null;
@@ -204,11 +228,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [history] = useState(() => new WorkspaceHistory());
   const [loading, setLoading] = useState(true);
   const [directoryLoading, setDirectoryLoading] = useState(false);
+  const [directorySynced, setDirectorySynced] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SyncStatus>("saved");
   const [presence, setPresence] = useState<CollaboratorPresence[]>([]);
-  const [selectedPageId, setSelectedPageId] = useState("");
+  const [selectedPageId, setSelectedPageIdRaw] = useState("");
   const selectedRef = useRef(selectedPageId);
+  const [tabLayouts, setTabLayouts] = useState<StoredTabLayouts>({ v: 1, spaces: {} });
+  const tabLayoutsRef = useRef<StoredTabLayouts>(tabLayouts);
+  const platformRef = useRef<PlatformClient | null>(null);
+  platformRef.current = platform;
   const [spaces, setSpaces] = useState<Record<string, SpaceSummary>>({});
   const spacesRef = useRef(spaces);
   const initialSpacesRef = useRef<SpaceSummary[] | undefined>(undefined);
@@ -239,6 +268,52 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const presenceSpaceId = presenceSpaceRaw || undefined;
   const activeSpace = spaces[activeSpaceId] ?? null;
   const sidebarSort = activeSpace?.knowledgeBase?.sort ?? preferences.sidebar_sort;
+  const activeSpaceRef = useRef(activeSpaceId);
+  activeSpaceRef.current = activeSpaceId;
+
+  const tabLayout = useMemo(
+    () => tabLayouts.spaces[activeSpaceId] ?? emptySpaceTabLayout(selectedPageId),
+    [activeSpaceId, selectedPageId, tabLayouts],
+  );
+
+  const applySpaceLayout = useCallback((
+    spaceId: string,
+    updater: (prev: SpaceTabLayout) => SpaceTabLayout,
+    syncSelected = true,
+  ): SpaceTabLayout => {
+    const prev = tabLayoutsRef.current.spaces[spaceId]
+      ?? emptySpaceTabLayout(spaceId === activeSpaceRef.current ? selectedRef.current : "");
+    const nextSpace = normalizeSpaceTabLayout(updater(prev));
+    const nextAll: StoredTabLayouts = {
+      v: 1,
+      spaces: { ...tabLayoutsRef.current.spaces, [spaceId]: nextSpace },
+    };
+    tabLayoutsRef.current = nextAll;
+    setTabLayouts(nextAll);
+    if (platformRef.current) writeTabLayouts(platformRef.current.bootstrap.user.id, nextAll);
+    if (syncSelected && spaceId === activeSpaceRef.current) {
+      const nextActive = activePageOfLayout(nextSpace);
+      selectedRef.current = nextActive;
+      setSelectedPageIdRaw(nextActive);
+    }
+    return nextSpace;
+  }, []);
+
+  const setSelectedPageId = useCallback((value: SetStateAction<string>) => {
+    const nextPageId = typeof value === "function" ? value(selectedRef.current) : value;
+    const pages = store.getState().pages;
+    const targetSpaceId = nextPageId && pages[nextPageId]
+      ? navigationSpaceOf(pages, spacesRef.current, nextPageId)
+      : activeSpaceRef.current;
+    activeSpaceRef.current = targetSpaceId;
+    setEmptySpaceId(targetSpaceId);
+    if (!nextPageId) {
+      const active = selectedRef.current;
+      applySpaceLayout(targetSpaceId, (prev) => pruneSpaceTabLayout(prev, (id) => id !== active));
+      return;
+    }
+    applySpaceLayout(targetSpaceId, (prev) => openPageInLayout(prev, nextPageId, { mode: "replace" }).layout);
+  }, [applySpaceLayout, store]);
 
   useEffect(() => {
     let active = true;
@@ -258,7 +333,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (located && (located.spaceId === "personal" || catalog[located.spaceId]?.knowledgeBase)) {
           initialSpaceId = located.spaceId;
         }
-        const seedPageId = initialUrlPage ?? remembered.pages[initialSpaceId] ?? catalog[initialSpaceId]?.knowledgeBase?.homePageId;
+        const storedLayouts = readTabLayouts(client.bootstrap.user.id);
+        const savedInitialLayout = storedLayouts.spaces[initialSpaceId];
+        const savedInitialActive = savedInitialLayout ? activePageOfLayout(savedInitialLayout) : "";
+        const seedPageId = initialUrlPage ?? (savedInitialActive || remembered.pages[initialSpaceId] || catalog[initialSpaceId]?.knowledgeBase?.homePageId);
         initialSpacesRef.current = initialSpaces;
         const next = await WorkspaceDocument.open(client, initialSpaces, { activeSpaceId: initialSpaceId, seedPageId })
           .catch(async (reason: unknown) => { await client.close(); throw reason; });
@@ -268,9 +346,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           return;
         }
         opened = next;
+        platformRef.current = client;
         setPlatform(client);
         setDocument(next);
         setDirectoryLoading(next.directoryLoading);
+        setDirectorySynced(next.directorySynced);
         const stopSync = next.onSyncStatus(setSaveStatus);
         // Hidden or closing, the window saves at once rather than after the
         // usual pause; a tab closed with writes still unsaved asks first.
@@ -290,7 +370,39 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         globalThis.document.addEventListener("visibilitychange", onVisibility);
         setSpaceCatalog(initialSpaces);
         setEmptySpaceId(initialSpaceId);
-        setSelectedPageId(firstPageInSpace(next.state, catalog, initialSpaceId, initialUrlPage ?? remembered.pages[initialSpaceId]));
+        activeSpaceRef.current = initialSpaceId;
+
+        let baseLayout = savedInitialLayout ?? emptySpaceTabLayout();
+        if (!next.directoryLoading && next.directorySynced) {
+          baseLayout = pruneSpaceTabLayout(
+            baseLayout,
+            (id) => Boolean(next.state.pages[id] && !isPurging(next.state.pages, id)),
+            (id) => inTrash(next.state.pages, id),
+          );
+        }
+        const landedId = firstPageInSpace(
+          next.state,
+          catalog,
+          initialSpaceId,
+          initialUrlPage ?? (activePageOfLayout(baseLayout) || remembered.pages[initialSpaceId]),
+        );
+        const initialLayout = initialUrlPage && next.state.pages[initialUrlPage]
+          ? openPageInLayout(baseLayout, initialUrlPage, { mode: "default" }).layout
+          : (baseLayout.left.tabs.length > 0 ? baseLayout : emptySpaceTabLayout(landedId));
+        const nextStoredLayouts: StoredTabLayouts = {
+          v: 1,
+          spaces: { ...storedLayouts.spaces, [initialSpaceId]: initialLayout },
+        };
+        tabLayoutsRef.current = nextStoredLayouts;
+        setTabLayouts(nextStoredLayouts);
+        writeTabLayouts(client.bootstrap.user.id, nextStoredLayouts);
+        const initialActiveId = activePageOfLayout(initialLayout);
+        selectedRef.current = initialActiveId;
+        setSelectedPageIdRaw(initialActiveId);
+        if (initialLayout.split) {
+          const toLoad = [initialLayout.left.activePageId, initialLayout.right.activePageId].filter(Boolean);
+          if (toLoad.length) void next.loadPages(toLoad).catch(() => undefined);
+        }
         store.set(next.state);
         const stopChanges = next.onChange((nextState) => {
           // Deliberately NOT a transition. An editor keystroke that inserts or
@@ -299,9 +411,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           // replaced.
           store.set(nextState);
           setDirectoryLoading(next.directoryLoading);
+          setDirectorySynced(next.directorySynced);
           if (selectedRef.current && isPurging(nextState.pages, selectedRef.current)) {
-            setEmptySpaceId(navigationSpaceOf(nextState.pages, spacesRef.current, selectedRef.current));
-            setSelectedPageId("");
+            const purgingId = selectedRef.current;
+            const spaceKey = navigationSpaceOf(nextState.pages, spacesRef.current, purgingId);
+            activeSpaceRef.current = spaceKey;
+            setEmptySpaceId(spaceKey);
+            applySpaceLayout(spaceKey, (prev) => pruneSpaceTabLayout(prev, (id) => id !== purgingId && !isPurging(nextState.pages, id)));
           }
         });
         unsubscribe = () => {
@@ -323,7 +439,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         void opened.close().finally(() => opened?.platform.close());
       }
     };
-  }, [store, setSpaceCatalog]);
+  }, [applySpaceLayout, store, setSpaceCatalog]);
 
   useEffect(() => {
     if (!platform || !selectedPageId || !document?.state.pages[selectedPageId] || inTrash(document.state.pages, selectedPageId)) return;
@@ -331,10 +447,20 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   }, [document, platform, activeSpaceId, selectedPageId]);
 
   useEffect(() => {
-    if (!document || !selectedPageId || !selectedPageExists) return;
-    const scope = spaceOfPage(document.state.pages, selectedPageId) ?? "personal";
-    void openWhenDocument(scope, selectedPageId).catch(() => undefined);
-  }, [document, selectedPageId, selectedPageExists]);
+    if (!document) return;
+    const ids = new Set<string>();
+    if (tabLayout.left.activePageId) ids.add(tabLayout.left.activePageId);
+    if (tabLayout.split && tabLayout.right.activePageId) ids.add(tabLayout.right.activePageId);
+    if (selectedPageId && selectedPageExists) ids.add(selectedPageId);
+    const loadable: string[] = [];
+    for (const id of ids) {
+      if (!document.state.pages[id]) continue;
+      loadable.push(id);
+      const scope = spaceOfPage(document.state.pages, id) ?? "personal";
+      void openWhenDocument(scope, id).catch(() => undefined);
+    }
+    if (loadable.length) void document.loadPages(loadable).catch(() => undefined);
+  }, [document, selectedPageExists, selectedPageId, tabLayout.left.activePageId, tabLayout.right.activePageId, tabLayout.split]);
 
   useEffect(() => {
     if (!platform || !selectedPageId) {
@@ -395,17 +521,139 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [graphFor, setGraphFor] = useState<string | null>(null);
   const graphOpen = graphFor !== null && graphFor === selectedPageId;
 
-  const selectPage = useCallback((pageId: string) => {
+  const selectPage = useCallback((pageId: string, options?: { pane?: PaneId; mode?: OpenPageMode }) => {
     const pages = store.getState().pages;
+    const keepCurrentSpace = Boolean(options?.pane || options?.mode === "split-right" || options?.mode === "new-tab");
+    const targetSpaceId = !keepCurrentSpace && pages[pageId]
+      ? navigationSpaceOf(pages, spacesRef.current, pageId)
+      : activeSpaceRef.current;
+    activeSpaceRef.current = targetSpaceId;
+    setEmptySpaceId(targetSpaceId);
     if (pages[pageId]) {
-      setEmptySpaceId(navigationSpaceOf(pages, spacesRef.current, pageId));
       const scope = spaceOfPage(pages, pageId) ?? "personal";
       void openWhenDocument(scope, pageId).catch(() => undefined);
     }
     if (pageId) void document?.loadPages([pageId]).catch(() => undefined);
-    setSelectedPageId(pageId);
+    let pinProtected = false;
+    if (!pageId) {
+      applySpaceLayout(targetSpaceId, () => emptySpaceTabLayout());
+    } else {
+      applySpaceLayout(targetSpaceId, (prev) => {
+        const result = openPageInLayout(prev, pageId, options);
+        pinProtected = Boolean(result.pinProtected);
+        return result.layout;
+      });
+    }
+    if (pinProtected && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("notes:tab-pin-protected"));
+    }
     setGraphFor(null);
-  }, [store, document]);
+    return pinProtected ? { pinProtected: true } : undefined;
+  }, [applySpaceLayout, store, document]);
+
+  const openInNewTab = useCallback((pageId: string, pane?: PaneId) => {
+    selectPage(pageId, { pane, mode: "new-tab" });
+  }, [selectPage]);
+
+  const openInRightSplit = useCallback((pageId: string) => {
+    selectPage(pageId, { mode: "split-right" });
+  }, [selectPage]);
+
+  const activateTab = useCallback((pane: PaneId, pageId: string) => {
+    if (!pageId) return;
+    const pages = store.getState().pages;
+    if (pages[pageId]) {
+      const scope = spaceOfPage(pages, pageId) ?? "personal";
+      void openWhenDocument(scope, pageId).catch(() => undefined);
+    }
+    void document?.loadPages([pageId]).catch(() => undefined);
+    applySpaceLayout(activeSpaceRef.current, (prev) => activateTabInLayout(prev, pane, pageId));
+    setGraphFor(null);
+  }, [applySpaceLayout, document, store]);
+
+  const togglePinTab = useCallback((pane: PaneId, pageId: string): boolean | null => {
+    let pinned: boolean | null = null;
+    applySpaceLayout(activeSpaceRef.current, (prev) => {
+      const result = togglePinTabInLayout(prev, pane, pageId);
+      pinned = result.pinned;
+      return result.layout;
+    });
+    return pinned;
+  }, [applySpaceLayout]);
+
+  const closeTab = useCallback((
+    pane: PaneId,
+    pageId: string,
+    options?: { viaShortcut?: boolean },
+  ): { blockedByPin?: boolean; collapsedSplit?: boolean } => {
+    let outcome: { blockedByPin?: boolean; collapsedSplit?: boolean } = {};
+    const next = applySpaceLayout(activeSpaceRef.current, (prev) => {
+      const result = closeTabInLayout(prev, pane, pageId, options);
+      outcome = {
+        ...(result.blockedByPin ? { blockedByPin: true } : {}),
+        ...(result.collapsedSplit ? { collapsedSplit: true } : {}),
+      };
+      return result.layout;
+    });
+    const activeAfter = activePageOfLayout(next);
+    if (activeAfter) void document?.loadPages([activeAfter]).catch(() => undefined);
+    return outcome;
+  }, [applySpaceLayout, document]);
+
+  const closeOtherTabs = useCallback((pane: PaneId, keepPageId: string) => {
+    applySpaceLayout(activeSpaceRef.current, (prev) => closeOtherTabsInLayout(prev, pane, keepPageId));
+  }, [applySpaceLayout]);
+
+  const closeRightTabs = useCallback((pane: PaneId, fromPageId: string) => {
+    applySpaceLayout(activeSpaceRef.current, (prev) => closeRightTabsInLayout(prev, pane, fromPageId));
+  }, [applySpaceLayout]);
+
+  const moveTab = useCallback((fromPane: PaneId, pageId: string, toPane: PaneId, insertIndex?: number) => {
+    applySpaceLayout(activeSpaceRef.current, (prev) => moveTabInLayout(prev, fromPane, pageId, toPane, insertIndex));
+  }, [applySpaceLayout]);
+
+  const toggleSplit = useCallback((): { split: boolean; merged?: boolean } => {
+    let merged = false;
+    const next = applySpaceLayout(activeSpaceRef.current, (prev) => {
+      const result = toggleSplitInLayout(prev);
+      merged = Boolean(result.merged);
+      return result.layout;
+    });
+    if (next.split && next.right.activePageId) {
+      void document?.loadPages([next.right.activePageId]).catch(() => undefined);
+    }
+    return { split: next.split, ...(merged ? { merged: true } : {}) };
+  }, [applySpaceLayout, document]);
+
+  const focusPane = useCallback((pane: PaneId) => {
+    applySpaceLayout(activeSpaceRef.current, (prev) => focusPaneInLayout(prev, pane));
+  }, [applySpaceLayout]);
+
+  const setSplitRatio = useCallback((ratio: number) => {
+    applySpaceLayout(activeSpaceRef.current, (prev) => setSplitRatioInLayout(prev, ratio), false);
+  }, [applySpaceLayout]);
+
+  const restoreSpaceLayout = useCallback((spaceId: string, fallbackPageId: string): string => {
+    const saved = tabLayoutsRef.current.spaces[spaceId];
+    const pages = store.getState().pages;
+    const spaceLoaded = spaceId === "personal"
+      || Object.values(pages).some((page) => navigationSpaceOf(pages, spacesRef.current, page.id) === spaceId);
+    let nextLayout = saved && saved.left.tabs.length > 0
+      ? (spaceLoaded
+        ? pruneSpaceTabLayout(saved, (id) => Boolean(pages[id] && !isPurging(pages, id)), (id) => inTrash(pages, id))
+        : saved)
+      : emptySpaceTabLayout(fallbackPageId);
+    if (nextLayout.left.tabs.length === 0 && fallbackPageId) {
+      nextLayout = emptySpaceTabLayout(fallbackPageId);
+    }
+    activeSpaceRef.current = spaceId;
+    setEmptySpaceId(spaceId);
+    const applied = applySpaceLayout(spaceId, () => nextLayout);
+    const toLoad = [applied.left.activePageId, applied.split ? applied.right.activePageId : ""].filter(Boolean);
+    if (toLoad.length) void document?.loadPages(toLoad).catch(() => undefined);
+    setGraphFor(null);
+    return activePageOfLayout(applied);
+  }, [applySpaceLayout, document, store]);
 
   const loadPages = useCallback((pageIds: readonly string[]) => {
     void document?.loadPages(pageIds).catch(() => undefined);
@@ -446,21 +694,82 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const openGraph = useCallback(() => setGraphFor(selectedRef.current), []);
   const closeGraph = useCallback(() => setGraphFor(null), []);
 
-  /* The open page leaving the workspace — its space left, the member removed
-     from it, someone else deleting it — gives way to the member's first page,
-     before the empty pane is ever drawn. */
+  const tabHealthKey = useSyncExternalStore(store.subscribe, () => {
+    const pages = store.getState().pages;
+    const ids = new Set<string>([
+      ...tabLayout.left.tabs.map((tab) => tab.pageId),
+      ...tabLayout.right.tabs.map((tab) => tab.pageId),
+    ]);
+    return [...ids]
+      .map((id) => `${id}:${pages[id] && !isPurging(pages, id) ? (inTrash(pages, id) ? "t" : "1") : "0"}`)
+      .join(",");
+  });
+
+  /* The open page or tabs leaving the workspace — deleted, moved to trash,
+     their space left, the member removed — prune dead tabs and fall back to
+     the space's landing page before an empty pane is drawn. */
   useLayoutEffect(() => {
-    if (!selectedPageId) {
-      if (emptySpaceId === "personal" || spaces[emptySpaceId]?.knowledgeBase) return;
-    } else if (selectedPageExists) return;
-    setEmptySpaceId("personal");
-    const remembered = platform ? readSpaceNavigation(platform.bootstrap.user.id) : null;
-    setSelectedPageId(firstPageInSpace(store.getState(), spacesRef.current, "personal", remembered?.pages.personal));
-  }, [selectedPageId, selectedPageExists, emptySpaceId, spaces, store, platform]);
+    if (loading || directoryLoading || !directorySynced || !platform) return;
+    const pages = store.getState().pages;
+    const spaceAuthorized = activeSpaceId === "personal" || Boolean(spaces[activeSpaceId]?.knowledgeBase);
+    if (!spaceAuthorized) {
+      activeSpaceRef.current = "personal";
+      setEmptySpaceId("personal");
+      const remembered = readSpaceNavigation(platform.bootstrap.user.id);
+      const savedPersonal = tabLayoutsRef.current.spaces.personal;
+      const prunedPersonal = savedPersonal
+        ? pruneSpaceTabLayout(savedPersonal, (id) => Boolean(pages[id] && !isPurging(pages, id)), (id) => inTrash(pages, id))
+        : emptySpaceTabLayout();
+      const landed = prunedPersonal.left.tabs.length > 0
+        ? prunedPersonal
+        : emptySpaceTabLayout(firstPageInSpace(store.getState(), spacesRef.current, "personal", remembered.pages.personal));
+      applySpaceLayout("personal", () => landed);
+      return;
+    }
+
+    const pruned = pruneSpaceTabLayout(
+      tabLayout,
+      (id) => Boolean(pages[id] && !isPurging(pages, id)),
+      (id) => inTrash(pages, id),
+    );
+    const sameTabs = (left: typeof pruned.left, right: typeof tabLayout.left) =>
+      left.activePageId === right.activePageId
+      && left.tabs.length === right.tabs.length
+      && left.tabs.every((tab, index) => tab.pageId === right.tabs[index]?.pageId && tab.pinned === right.tabs[index]?.pinned);
+
+    if (pruned.left.tabs.length === 0) {
+      const remembered = readSpaceNavigation(platform.bootstrap.user.id);
+      const fallback = firstPageInSpace(store.getState(), spacesRef.current, activeSpaceId, remembered.pages[activeSpaceId]);
+      if (fallback) {
+        applySpaceLayout(activeSpaceId, () => emptySpaceTabLayout(fallback));
+        return;
+      }
+    }
+
+    if (
+      pruned.split !== tabLayout.split
+      || pruned.activePane !== tabLayout.activePane
+      || !sameTabs(pruned.left, tabLayout.left)
+      || !sameTabs(pruned.right, tabLayout.right)
+    ) {
+      applySpaceLayout(activeSpaceId, () => pruned);
+    }
+  }, [activeSpaceId, applySpaceLayout, directoryLoading, directorySynced, loading, platform, spaces, store, tabHealthKey, tabLayout]);
 
   useLayoutEffect(() => {
-    if (!selectedPageId && autoLandPageId) setSelectedPageId(autoLandPageId);
-  }, [selectedPageId, autoLandPageId]);
+    if (loading) return;
+    const layoutActive = activePageOfLayout(tabLayout);
+    if (layoutActive !== selectedPageId && (!layoutActive || store.getState().pages[layoutActive])) {
+      selectedRef.current = layoutActive;
+      setSelectedPageIdRaw(layoutActive);
+    }
+  }, [loading, selectedPageId, store, tabLayout]);
+
+  useLayoutEffect(() => {
+    if (!selectedPageId && autoLandPageId) {
+      applySpaceLayout(activeSpaceId, () => emptySpaceTabLayout(autoLandPageId));
+    }
+  }, [activeSpaceId, applySpaceLayout, autoLandPageId, selectedPageId]);
 
   useLayoutEffect(() => {
     selectedRef.current = selectedPageId;
@@ -533,8 +842,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setSpaceCatalog,
     setEmptySpaceId,
     selectPage,
+    restoreSpaceLayout,
     setPreference,
   });
+
+  const createPageInPane = useCallback((pane: PaneId) => {
+    return pageOps.createPage(null, "document", { pane, openMode: "new-tab" });
+  }, [pageOps]);
 
   const historyOps = useWorkspaceHistory({
     document,
@@ -601,6 +915,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     refreshSpaces: spaceOps.refreshSpaces,
     knowledgeBases: spaceOps.knowledgeBases,
     selectPage,
+    openInNewTab,
+    openInRightSplit,
+    activateTab,
+    togglePinTab,
+    closeTab,
+    closeOtherTabs,
+    closeRightTabs,
+    moveTab,
+    toggleSplit,
+    focusPane,
+    setSplitRatio,
+    createPageInPane,
     loadPages,
     loadHistory,
     saveNow,
@@ -650,6 +976,18 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     spaceOps.refreshSpaces,
     spaceOps.knowledgeBases,
     selectPage,
+    openInNewTab,
+    openInRightSplit,
+    activateTab,
+    togglePinTab,
+    closeTab,
+    closeOtherTabs,
+    closeRightTabs,
+    moveTab,
+    toggleSplit,
+    focusPane,
+    setSplitRatio,
+    createPageInPane,
     loadPages,
     loadHistory,
     saveNow,
@@ -697,6 +1035,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     document,
     platform,
     selectedPageId,
+    tabLayout,
     loading,
     directoryLoading,
     error,
@@ -712,6 +1051,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     document,
     platform,
     selectedPageId,
+    tabLayout,
     loading,
     directoryLoading,
     error,

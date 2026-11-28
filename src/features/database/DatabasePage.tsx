@@ -18,9 +18,9 @@ import { usePage } from "../../app/workspace-store";
 
 /** A database opened as a page of its own: its name, large, above the same
  *  database a document shows inline. */
-export function DatabasePage({ readOnly }: { readOnly?: boolean }) {
+export function DatabasePage({ pageId, readOnly }: { pageId?: string; readOnly?: boolean }) {
   const { selectedPageId } = useWorkspace();
-  const database = usePage(selectedPageId);
+  const database = usePage(pageId ?? selectedPageId);
   return database ? <DatabaseSheet database={database} readOnly={readOnly} /> : null;
 }
 

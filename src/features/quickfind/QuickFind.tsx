@@ -158,7 +158,7 @@ export function quickFind(allPages: Record<string, NotePage>, query: string): Hi
  *  Archived (shelved) pages and archived knowledge bases stay folded at the
  *  bottom until expanded, or expand automatically when active hits are empty. */
 export function QuickFind() {
-  const { selectPage, activateSpace, activeSpaceId, activeSpace, spaces, preferences, setPreference } = useWorkspace();
+  const { selectPage, openInNewTab, openInRightSplit, activateSpace, activeSpaceId, activeSpace, spaces, preferences, setPreference } = useWorkspace();
   const { quickFindOpen, setQuickFindOpen, openMemo } = useUi();
   // Closed, it reads nothing — and is not redrawn as pages change.
   const allPages = useWorkspaceState((state) => (quickFindOpen ? state.pages : null));
@@ -336,7 +336,7 @@ export function QuickFind() {
       ?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, entries, quickFindOpen]);
 
-  const open = (hit: Hit) => {
+  const open = (hit: Hit, mode: "default" | "new-tab" | "split-right" = "default") => {
     if (hit.page.kind === "memo") {
       const finishMemo = () => {
         setPreference("sidebar_view", "memos");
@@ -352,7 +352,9 @@ export function QuickFind() {
     }
     const finish = () => {
       if (preferences.sidebar_view === "memos") setPreference("sidebar_view", "files");
-      selectPage(hit.page.id);
+      if (mode === "new-tab") openInNewTab(hit.page.id);
+      else if (mode === "split-right") openInRightSplit(hit.page.id);
+      else selectPage(hit.page.id);
       setQuickFindOpen(false);
     };
     if (allPages?.[hit.page.id] || !hit.spaceId) { finish(); return; }
@@ -373,7 +375,19 @@ export function QuickFind() {
       aria-selected={index === activeIndex}
       className={`menu__item ${index === activeIndex ? "is-active" : ""} ${hit.archived ? "quickfind__item--archived" : ""}`}
       onPointerMove={() => setActive(index)}
-      onClick={() => open(hit)}
+      onClick={(event) => {
+        const mode = event.altKey ? "split-right" : (event.metaKey || event.ctrlKey) ? "new-tab" : "default";
+        open(hit, mode);
+      }}
+      onMouseDown={(event) => {
+        if (event.button === 1) event.preventDefault();
+      }}
+      onMouseUp={(event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          open(hit, "new-tab");
+        }
+      }}
     >
       <span className="menu__icon" aria-hidden="true">{pageGlyph(hit.page)}</span>
       <span className="menu__copy">

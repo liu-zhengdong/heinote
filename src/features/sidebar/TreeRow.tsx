@@ -1,4 +1,4 @@
-import { AlertCircle, ChevronRight, Link, Loader2, MoreHorizontal, Plus } from "lucide-react";
+import { AlertCircle, ChevronRight, Link, Loader2, MoreHorizontal, Pin, Plus } from "lucide-react";
 import { memo, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
@@ -81,6 +81,8 @@ export function resolveRowDropPosition(
  *  changes. */
 export interface TreeActions {
   select(pageId: string, event?: ReactMouseEvent<HTMLElement>): void;
+  openInNewTab?(pageId: string): void;
+  openInRightSplit?(pageId: string): void;
   toggle(id: string): void;
   openMenu(pageId: string, anchor: AnchorRect): void;
   rename(id: string): void;
@@ -100,6 +102,7 @@ export const TreeRow = memo(function TreeRow({
   branch,
   open,
   selected,
+  pinned = false,
   multiSelected = false,
   renaming,
   menuOpen,
@@ -120,6 +123,7 @@ export const TreeRow = memo(function TreeRow({
   branch: boolean;
   open: boolean;
   selected: boolean;
+  pinned?: boolean;
   multiSelected?: boolean;
   renaming: boolean;
   menuOpen: boolean;
@@ -218,7 +222,23 @@ export const TreeRow = memo(function TreeRow({
           type="button"
           className="tree-row__main"
           aria-current={selected ? "page" : undefined}
-          onClick={(event) => actions.select(page.id, event)}
+          onClick={(event) => {
+            if (event.altKey && actions.openInRightSplit) {
+              event.preventDefault();
+              actions.openInRightSplit(page.id);
+              return;
+            }
+            actions.select(page.id, event);
+          }}
+          onMouseDown={(event) => {
+            if (event.button === 1) event.preventDefault();
+          }}
+          onMouseUp={(event) => {
+            if (event.button === 1 && actions.openInNewTab) {
+              event.preventDefault();
+              actions.openInNewTab(page.id);
+            }
+          }}
           onDoubleClick={() => { if (editable) actions.rename(page.id); }}
           onKeyDown={(event) => {
             if (!reorderable || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || imeComposing(event)) return;
@@ -232,6 +252,7 @@ export const TreeRow = memo(function TreeRow({
           }}
         >
           <span className="tree-row__label">{label}</span>
+          {pinned ? <Pin className="tree-row__pinned" size={11} aria-label="已钉住页签" /> : null}
           {linked ? <Link className="tree-row__linked" size={11} aria-label="Has backlinks" /> : null}
         </button>
       )}

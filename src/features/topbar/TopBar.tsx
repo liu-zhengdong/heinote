@@ -1,5 +1,6 @@
 import { ChevronLeft, Redo2, Settings2, Undo2, Waypoints, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { PaneId } from "../../core/tab-layout";
 import { KnowledgeBaseSettings } from "../knowledge/KnowledgeBaseSettings";
 import { personName, ProfileAvatar } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
@@ -43,16 +44,30 @@ function OpenPageActions({ pageId, compact, onHistory }: { pageId: string; compa
 /* On desktop: 44px top bar with breadcrumbs, presence, proposals and actions.
    On mobile (<560px, Direction C): borderless quiet paper header showing space
    dot (or < parent back link), save state, actions, and editing Done bar. */
-export function TopBar({ onHistory }: { onHistory(): void }) {
-  const { platform, selectedPageId, selectPage, rosters, spaceOf, activeSpace, graphOpen, closeGraph } = useWorkspace();
-  const { presence, saveStatus } = useActivity();
+export function TopBar({
+  onHistory,
+  pageId,
+  paneId,
+  isFocusedPane = true,
+  showSaveStatus = true,
+  splitActive = false,
+}: {
+  onHistory(): void;
+  pageId?: string;
+  paneId?: PaneId;
+  isFocusedPane?: boolean;
+  showSaveStatus?: boolean;
+  splitActive?: boolean;
+}) {
+  const { platform, selectedPageId, selectPage, openInNewTab, rosters, spaceOf, activeSpace, graphOpen, closeGraph } = useWorkspace();
+  const effectivePageId = pageId ?? selectedPageId;
   const mobile = useFold();
   const activeSurface = useActiveEditSurface();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const trail = useWorkspaceState((state) => trailTo(state.pages, selectedPageId), sameTrail);
-  const opened = trail.length > 0 && !graphOpen;
-  const library = activeSpace?.knowledgeBase && (!opened || spaceOf(selectedPageId) === activeSpace.spaceId) ? activeSpace : null;
+  const trail = useWorkspaceState((state) => trailTo(state.pages, effectivePageId), sameTrail);
+  const opened = trail.length > 0 && !(graphOpen && isFocusedPane);
+  const library = activeSpace?.knowledgeBase && (!opened || spaceOf(effectivePageId) === activeSpace.spaceId) ? activeSpace : null;
   const canManageLibrary = library && (library.role === "owner" || library.role === "admin");
   useEffect(() => { setSettingsOpen(false); }, [library?.spaceId]);
 
@@ -64,11 +79,12 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
     ? (parentCrumb.id === library?.knowledgeBase?.homePageId ? library.name : parentCrumb.label)
     : "";
 
-  const roster = opened ? rosters[spaceOf(selectedPageId) ?? ""]?.members : undefined;
+  const roster = opened ? rosters[spaceOf(effectivePageId) ?? ""]?.members : undefined;
+  const { presence, saveStatus } = useActivity();
   const here = presence.filter(
     (item) => item.online
       && opened
-      && item.state?.pageId === selectedPageId
+      && item.state?.pageId === effectivePageId
       && item.userId !== platform?.bootstrap.user.id
       && (!roster || roster.some((member) => member.id === item.userId)),
   );
@@ -120,7 +136,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
               >
                 <Redo2 size={16} />
               </button>
-              {opened ? <OpenPageActions pageId={selectedPageId} compact onHistory={onHistory} /> : null}
+              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} /> : null}
             </div>
           </>
         ) : graphOpen ? (
@@ -168,7 +184,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                 </div>
               ) : null}
               {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${selectedPageId}`} pageId={selectedPageId} compact /> : null}
-              {opened ? <OpenPageActions pageId={selectedPageId} compact onHistory={onHistory} /> : null}
+              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} /> : null}
               {canManageLibrary ? (
                 <button
                   type="button"
@@ -187,7 +203,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
       ) : (
         <>
           <nav className="topbar__crumbs" aria-label="Breadcrumb">
-            {graphOpen ? (
+            {graphOpen && isFocusedPane ? (
               <span className="crumb__slot">
                 <span className="crumb is-current" aria-current="page">
                   <span className="crumb__icon" aria-hidden="true"><Waypoints size={14} /></span>
@@ -202,7 +218,19 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                     type="button"
                     className={`crumb ${index === crumbs.length - 1 ? "is-current" : ""}`}
                     aria-current={index === crumbs.length - 1 ? "page" : undefined}
-                    onClick={() => selectPage(crumb.id)}
+                    onClick={(event) => {
+                      if (event.metaKey || event.ctrlKey) openInNewTab(crumb.id, paneId);
+                      else selectPage(crumb.id, paneId ? { pane: paneId } : undefined);
+                    }}
+                    onMouseDown={(event) => {
+                      if (event.button === 1) event.preventDefault();
+                    }}
+                    onMouseUp={(event) => {
+                      if (event.button === 1) {
+                        event.preventDefault();
+                        openInNewTab(crumb.id, paneId);
+                      }
+                    }}
                   >
                     {crumb.icon ? <span className="crumb__icon" aria-hidden="true"><PageIconMark page={crumb.page} size={14} /></span> : null}
                     <span className="crumb__label">{crumb.id === library?.knowledgeBase?.homePageId ? library.name : crumb.label}</span>
@@ -213,15 +241,23 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
           </nav>
 
           <div className="topbar__actions">
-            <Tooltip label={saveLabel}>
-              <span
-                className={`save-state save-state--${saveStatus}`}
-                role="status"
-                aria-live="polite"
-                aria-label={saveStatus === "saved" ? "All changes saved" : saveLabel}
-                tabIndex={saveStatus === "saved" ? -1 : 0}
-              />
-            </Tooltip>
+            {splitActive && paneId ? (
+              <span className={`pane-focus-pill ${isFocusedPane ? "is-focused" : ""}`}>
+                {paneId === "left" ? "左栏" : "右栏"}
+                {isFocusedPane ? " · 当前焦点" : ""}
+              </span>
+            ) : null}
+            {showSaveStatus ? (
+              <Tooltip label={saveLabel}>
+                <span
+                  className={`save-state save-state--${saveStatus}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-label={saveStatus === "saved" ? "All changes saved" : saveLabel}
+                  tabIndex={saveStatus === "saved" ? -1 : 0}
+                />
+              </Tooltip>
+            ) : null}
 
             {here.length ? (
               <div className="avatar-stack" aria-label={`${here.length} other ${here.length === 1 ? "person" : "people"} here`}>
@@ -237,13 +273,13 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
               </div>
             ) : null}
 
-            {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${selectedPageId}`} pageId={selectedPageId} compact={false} /> : null}
-            {opened ? <OpenPageActions pageId={selectedPageId} compact={false} onHistory={onHistory} /> : null}
-            {canManageLibrary ? <Tooltip label="知识库设置">
+            {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${effectivePageId}`} pageId={effectivePageId} compact={false} /> : null}
+            {opened ? <OpenPageActions pageId={effectivePageId} compact={false} onHistory={onHistory} /> : null}
+            {canManageLibrary && isFocusedPane ? <Tooltip label="知识库设置">
               <button type="button" className="icon-btn knowledge-base-settings-entry" aria-label="知识库设置" aria-haspopup="dialog" aria-expanded={settingsOpen}
                 onClick={(event) => { event.currentTarget.focus(); setSettingsOpen(true); }}><Settings2 size={16} aria-hidden="true" /></button>
             </Tooltip> : null}
-            {graphOpen ? (
+            {graphOpen && isFocusedPane ? (
               <Tooltip label="Close graph">
                 <button type="button" className="icon-btn" aria-label="Close graph" onClick={closeGraph}>
                   <X size={16} />

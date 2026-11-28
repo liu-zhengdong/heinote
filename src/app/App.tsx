@@ -1,14 +1,11 @@
-import { Archive, CircleAlert, Clock3, Eye, FileText, NotebookPen, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { CircleAlert, NotebookPen } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { routes } from "../platform/schema";
 import { SidePeek, usePeekLayout } from "../features/database/SidePeek";
 import { DelegatedTooltip } from "../components/Tooltip";
-import { CachedDocumentPages, OpenPage } from "./CachedDocumentPages";
-import { linkedPageId } from "../features/editor/mentions";
 import { QuickFind } from "../features/quickfind/QuickFind";
 import { Sidebar } from "../features/sidebar/Sidebar";
 import { DeletePageConfirm } from "../features/sidebar/TrashView";
-import { TopBar } from "../features/topbar/TopBar";
 import { MobileDock } from "../features/mobile/MobileDock";
 import { MobileEditBar } from "../features/editor/MobileEditBar";
 import { getActiveEditSurface } from "./edit-surface";
@@ -17,40 +14,27 @@ import { useFold } from "../hooks/useFold";
 import { useVisualViewport } from "../hooks/useVisualViewport";
 import type { NotePage } from "../core/types";
 import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
+import { clampSplitRatio, SPLIT_PANE_MIN } from "../core/tab-layout";
 import { imeComposing } from "../core/keyboard";
 import { useUi } from "./ui-context";
 import { pageName } from "../core/block-tree";
-import { descendantCount, inTrash, isPurging, pageAncestry, shelvedRoot } from "../core/page-tree";
+import { descendantCount, inTrash, isPurging, pageAncestry } from "../core/page-tree";
 import { useWorkspace } from "./workspace-context";
+import { linkedPageId } from "../features/editor/mentions";
 import { usePage, useWorkspaceState, useWorkspaceStore } from "./workspace-store";
+import { WorkspacePane } from "./WorkspacePane";
 
 /* Sharing, page history, the graph, databases, apps, settings and the admin
    console are loaded the first time they are opened. */
-const DatabasePage = lazy(() => import("../features/database/DatabasePage").then((module) => ({ default: module.DatabasePage })));
-const AppPage = lazy(() => import("../features/artifact/AppPage").then((module) => ({ default: module.AppPage })));
 const AccountSettings = lazy(() => import("../features/account/AccountSettings").then((module) => ({ default: module.AccountSettings })));
 const ShareDialog = lazy(() => import("../features/share/ShareDialog").then((module) => ({ default: module.ShareDialog })));
 const HistoryPanel = lazy(() => import("../features/history/HistoryPanel").then((module) => ({ default: module.HistoryPanel })));
-const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview").then((module) => ({ default: module.SnapshotPreview })));
-const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 const MemoStream = lazy(() => import("../features/memos/MemoStream").then((module) => ({ default: module.MemoStream })));
-const ImportProgressView = lazy(() => import("../features/account/ImportProgressView").then((module) => ({ default: module.ImportProgressView })));
-
-/** An app page redrawn as the page changes — its run surface and editor. */
-function AppPageShell({ pageId }: { pageId: string }) {
-  const page = usePage(pageId);
-  if (!page) return null;
-  return (
-    <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
-      <AppPage page={page} />
-    </Suspense>
-  );
-}
 
 export function App() {
   const {
-    selectedPageId, loading, error, preferences, createPage, selectPage, openLocatedPage, setPreference, canEdit, canShelvePage, canRestorePage, canDeletePage, graphOpen, setPageShelved, restorePage, deletePage, activeSpace, activeSpaceId, switchSpace, saveNow,
+    selectedPageId, tabLayout, loading, error, preferences, activeSpace, createPage, selectPage, openLocatedPage, closeTab, setSplitRatio, setPreference, graphOpen, deletePage, saveNow,
   } = useWorkspace();
   const store = useWorkspaceStore();
   const { user, githubOutcome, clearGithubOutcome } = useSession();
@@ -61,7 +45,6 @@ export function App() {
     sharePageId,
     closeShare,
     peekPageId,
-    openPeek,
     closePeek,
     toast,
     adminOpen,
@@ -124,29 +107,22 @@ export function App() {
     if (!selectedPageId || isPurging(state.pages, selectedPageId)) return null;
     return state.pages[selectedPageId]?.kind ?? null;
   });
-  // Opened from the trash, the page is read where it is: the page in the
-  // trash, itself or above it, is the one Restore brings back.
-  const trashedAt = useWorkspaceState((state) => (
-    !selectedPageId || isPurging(state.pages, selectedPageId)
-      ? null
-      : pageAncestry(state.pages, selectedPageId).find((page) => page.archived)?.id ?? null
-  ));
-  const trashedTitle = useWorkspaceState((state) => trashedAt && state.pages[trashedAt] ? pageName(state.pages[trashedAt]) || "Untitled" : "");
-  const trashedChildCount = useWorkspaceState((state) => (trashedAt ? descendantCount(state.pages, trashedAt) : 0));
-  const shelvedBy = useWorkspaceState((state) => (
-    !selectedPageId || isPurging(state.pages, selectedPageId) ? null : shelvedRoot(state.pages, selectedPageId)
-  ));
-  const shelvedTitle = useWorkspaceState((state) => (shelvedBy && state.pages[shelvedBy.id] ? pageName(state.pages[shelvedBy.id]) || "Untitled" : ""));
   const [deleting, setDeleting] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [splittingRatio, setSplittingRatio] = useState<number | null>(null);
+  const mainContainerRef = useRef<HTMLDivElement | null>(null);
+  const trashedTitle = useWorkspaceState((state) => (deleteTargetId && state.pages[deleteTargetId] ? pageName(state.pages[deleteTargetId]) || "Untitled" : ""));
+  const trashedChildCount = useWorkspaceState((state) => (deleteTargetId ? descendantCount(state.pages, deleteTargetId) : 0));
+
   const removeTrashedPage = useCallback(async () => {
-    if (!trashedAt || deleting) return;
+    if (!deleteTargetId || deleting) return;
     setDeleting(true);
-    setConfirmDelete(false);
-    try { await deletePage(trashedAt); toast("Deleted permanently", "success"); }
+    const target = deleteTargetId;
+    setDeleteTargetId(null);
+    try { await deletePage(target); toast("Deleted permanently", "success"); }
     catch (reason) { toast(reason instanceof Error ? reason.message : "页面未删除。", "error"); }
     finally { setDeleting(false); }
-  }, [trashedAt, deleting, deletePage, toast]);
+  }, [deleteTargetId, deleting, deletePage, toast]);
   // Gone, the peek closes.
   const peekOpen = useWorkspaceState((state) => {
     const peeked = peekPageId ? state.pages[peekPageId] : undefined;
@@ -202,11 +178,34 @@ export function App() {
       if (key === "n" && event.shiftKey) {
         event.preventDefault();
         createPage(null, "document");
+        return;
+      }
+      if (key === "w" && !event.shiftKey && !mobile) {
+        const activePaneState = tabLayout[tabLayout.activePane];
+        const activeTab = activePaneState.tabs.find((tab) => tab.pageId === activePaneState.activePageId);
+        const shouldHandleInApp = Boolean(
+          tabLayout.split
+          || activePaneState.tabs.length > 1
+          || activeTab?.pinned,
+        );
+        if (!shouldHandleInApp || !activeTab) return;
+        event.preventDefault();
+        const result = closeTab(tabLayout.activePane, activeTab.pageId, { viaShortcut: true });
+        if (result.blockedByPin) toast("已钉住页签受保护，请先取消钉住再关闭", "info");
+        else if (result.collapsedSplit) toast("分屏已合并为单栏", "info");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [createPage, drawerOpen, mobile, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, toast]);
+  }, [closeTab, createPage, drawerOpen, mobile, preferences.sidebar_collapsed, saveNow, setDrawerOpen, setPreference, setQuickFindOpen, tabLayout, toast]);
+
+  useEffect(() => {
+    const onPinProtected = () => {
+      toast("当前页签已钉住，已在新页签打开", "info");
+    };
+    window.addEventListener("notes:tab-pin-protected", onPinProtected);
+    return () => window.removeEventListener("notes:tab-pin-protected", onPinProtected);
+  }, [toast]);
 
   /* A page id in the fragment opens that page — the target of every "Copy
      link" in the app, a block's too: a block is a page. So does a place
@@ -319,6 +318,45 @@ export function App() {
     if (!shareFollows) closeShare();
   }, [closeShare, shareFollows]);
 
+  const toggleHistoryPanel = useCallback(() => {
+    if (historyOpen) {
+      closeHistory();
+      return;
+    }
+    // History is read beside the page it belongs to, where the peek was.
+    closePeek();
+    setHistoryOpen(true);
+    setHistoryUsed(true);
+  }, [closeHistory, closePeek, historyOpen, setHistoryOpen]);
+
+  const liveSplitRatio = splittingRatio ?? tabLayout.splitRatio;
+
+  const startSplitResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const container = mainContainerRef.current;
+    if (!container) return;
+    event.preventDefault();
+    const rect = container.getBoundingClientRect();
+    let next = liveSplitRatio;
+    const seam = event.currentTarget;
+    seam.classList.add("is-dragging");
+    const onMove = (move: PointerEvent) => {
+      const width = Math.max(rect.width, 1);
+      const minRatio = Math.min(0.45, SPLIT_PANE_MIN / width);
+      const raw = (move.clientX - rect.left) / width;
+      next = clampSplitRatio(Math.min(1 - minRatio, Math.max(minRatio, raw)));
+      setSplittingRatio(next);
+    };
+    const onUp = () => {
+      seam.classList.remove("is-dragging");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      setSplittingRatio(null);
+      setSplitRatio(next);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }, [liveSplitRatio, setSplitRatio]);
+
   if (loading) {
     return (
       <div className="state-screen state-screen--loading" role="status" aria-label="正在打开小黑笔记">
@@ -340,135 +378,79 @@ export function App() {
   }
 
   const inMemos = !activeSpace?.knowledgeBase && preferences.sidebar_view === "memos" && !graphOpen && !adminOpen;
+  const canFitSplit = !mobile && (peek.pane === 0 || peek.pane >= SPLIT_PANE_MIN * 2 + 8);
+  const splitVisible = !mobile && !inMemos && tabLayout.split && canFitSplit;
 
   return (
     <div
       ref={setShell}
-      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && adminOpen ? "app-shell--admin" : ""} ${!mobile && !adminOpen && peekOpen && peek.docked ? "app-shell--peek" : ""}`}
+      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && adminOpen ? "app-shell--admin" : ""} ${!mobile && !adminOpen && peekOpen && peek.docked && !splitVisible ? "app-shell--peek" : ""}`}
       style={{ ["--sidebar-w" as string]: `${preferences.sidebar_width}px`, ["--peek-w" as string]: `${peek.width}px` }}
     >
       <Sidebar />
-      <div className="app-main">
+      <div ref={mainContainerRef} className={`app-main ${!mobile && !inMemos ? "app-main--tabbed" : ""}`}>
         {inMemos ? (
           <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
             <MemoStream onSurfaceRef={setSurfaceEl} />
           </Suspense>
-        ) : (
-        <>
-        <TopBar
-          onHistory={() => {
-            if (historyOpen) {
-              closeHistory();
-              return;
-            }
-            // History is read beside the page it belongs to, where the peek was.
-            closePeek();
-            setHistoryOpen(true);
-            setHistoryUsed(true);
-          }}
-        />
-        <div className="app-workspace">
-          {/* The graph, opened as a page of its own: its dots open beside
-              it, in the side peek — or in its place with ⌘/Ctrl. */}
-          {graphOpen ? (
-            <main ref={setSurfaceEl} className="page-surface page-surface--graph">
-              <Suspense fallback={<div className="graph graph--page" aria-busy="true" />}>
-                <GraphView
-                  variant="page"
-                  selectedPageId={selectedPageId || null}
-                  onOpenPage={(pageId, full) => (full ? selectPage(pageId) : openPeek(pageId))}
-                />
-              </Suspense>
-            </main>
-          ) : (
-          <main ref={setSurfaceEl} className="page-surface scroller">
-            {!selectedImportJob && historyPreview ? (
-              <div className="history-banner" role="status">
-                <Clock3 size={14} />
-                <span>You are looking at an older version.</span>
-              </div>
-            ) : !selectedImportJob && trashedAt ? (
-              <div className="history-banner trash-banner" role="status">
-                <Trash2 size={14} />
-                <span>In the trash</span>
-                <button type="button" className="btn btn--outline" disabled={deleting || !canRestorePage(trashedAt)} onClick={() => restorePage(trashedAt, { select: false })}>
-                  <RotateCcw size={13} />Restore
-                </button>
-                {canDeletePage(trashedAt) ? (
-                  <button type="button" className="btn btn--danger" disabled={deleting} onClick={() => setConfirmDelete(true)}>
-                    Delete permanently
-                  </button>
-                ) : null}
-              </div>
-            ) : !selectedImportJob && selectedKind && !canEdit(selectedPageId) ? (
-              <div className="history-banner" role="status">
-                <Eye size={14} />
-                <span>You can only view this page.</span>
-              </div>
-            ) : !selectedImportJob && shelvedBy ? (
-              <div className="history-banner shelved-banner" role="status">
-                <Archive size={14} />
-                <span>
-                  {shelvedBy.id === selectedPageId
-                    ? "此页面已归档 · 搜索中默认折叠，内容仍可编辑"
-                    : `随「${shelvedTitle}」已归档 · 搜索中默认折叠，内容仍可编辑`}
-                </span>
-                {canShelvePage(shelvedBy.id) ? (
-                  <button
-                    type="button"
-                    className="btn btn--outline"
-                    onClick={() => { setPageShelved(shelvedBy.id, false); toast("已取消归档", "success"); }}
-                  >
-                    取消归档
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
-
-            <CachedDocumentPages
-              activePageId={selectedKind === "document" && !historyPreview && !trashedAt && !selectedImportJob ? selectedPageId : null}
-              surfaceEl={surfaceEl}
-              canEdit={canEdit}
+        ) : splitVisible ? (
+          <>
+            <WorkspacePane
+              paneId="left"
+              paneState={tabLayout.left}
+              mobile={false}
+              splitActive
+              isFocused={tabLayout.activePane === "left"}
+              showSaveStatus={tabLayout.activePane === "left"}
+              historyPreview={historyPreview}
+              selectedImportJob={selectedImportJob}
+              style={{ flex: `${liveSplitRatio} 1 0%` }}
+              onHistory={toggleHistoryPanel}
+              onSurfaceRef={setSurfaceEl}
+              onConfirmPermanentDelete={setDeleteTargetId}
             />
-
-            {selectedImportJob ? (
-              <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
-                <ImportProgressView job={selectedImportJob} />
-              </Suspense>
-            ) : historyPreview && historyPreview.kind !== "document" ? (
-              /* A non-document checkpoint holds the page's definition, not
-                 a body: show what restoring it restores. */
-              <Suspense fallback={null}><SnapshotPreview page={historyPreview} /></Suspense>
-            ) : selectedKind === "database" && !historyPreview ? (
-              <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
-                <DatabasePage readOnly={Boolean(trashedAt)} />
-              </Suspense>
-            ) : selectedKind === "app" && !historyPreview ? (
-              <AppPageShell pageId={selectedPageId} />
-            ) : selectedKind && (historyPreview || trashedAt) ? (
-              <OpenPage key="page" pageId={selectedPageId} preview={historyPreview} readOnly={Boolean(historyPreview) || Boolean(trashedAt) || !canEdit(selectedPageId)} />
-            ) : selectedKind ? null : (
-              <div className="empty-page">
-                <FileText size={28} strokeWidth={1.4} />
-                <h1>{activeSpace?.knowledgeBase ? "知识库首页尚未读取" : "No page open"}</h1>
-                {activeSpace?.knowledgeBase ? (
-                  <button type="button" className="btn" onClick={() => switchSpace(activeSpaceId)}>重试打开</button>
-                ) : (
-                  <button type="button" className="btn btn--primary" onClick={() => createPage(null, "document")}>
-                    <Plus size={15} />New page
-                  </button>
-                )}
-              </div>
-            )}
-          </main>
-          )}
-        </div>
-        </>
+            <div
+              className="split-seam"
+              role="separator"
+              aria-label="调整左右分屏宽度"
+              aria-orientation="vertical"
+              onPointerDown={startSplitResize}
+            />
+            <WorkspacePane
+              paneId="right"
+              paneState={tabLayout.right}
+              mobile={false}
+              splitActive
+              isFocused={tabLayout.activePane === "right"}
+              showSaveStatus={tabLayout.activePane === "right"}
+              historyPreview={historyPreview}
+              selectedImportJob={selectedImportJob}
+              style={{ flex: `${1 - liveSplitRatio} 1 0%` }}
+              onHistory={toggleHistoryPanel}
+              onSurfaceRef={setSurfaceEl}
+              onConfirmPermanentDelete={setDeleteTargetId}
+            />
+          </>
+        ) : (
+          <WorkspacePane
+            paneId={tabLayout.split ? tabLayout.activePane : "left"}
+            paneState={tabLayout.split ? tabLayout[tabLayout.activePane] : tabLayout.left}
+            mobile={mobile}
+            splitActive={tabLayout.split}
+            isFocused
+            showSaveStatus
+            historyPreview={historyPreview}
+            selectedImportJob={selectedImportJob}
+            style={{ flex: "1 1 0%" }}
+            onHistory={toggleHistoryPanel}
+            onSurfaceRef={setSurfaceEl}
+            onConfirmPermanentDelete={setDeleteTargetId}
+          />
         )}
       </div>
 
       <SidePeek
-        docked={peek.docked}
+        docked={peek.docked && !splitVisible}
         width={peek.width}
         pane={peek.pane}
         onResize={peek.resize}
@@ -500,10 +482,10 @@ export function App() {
         </Suspense>
       ) : null}
       <DeletePageConfirm
-        open={confirmDelete}
+        open={Boolean(deleteTargetId)}
         title={trashedTitle}
         childCount={trashedChildCount}
-        onCancel={() => setConfirmDelete(false)}
+        onCancel={() => setDeleteTargetId(null)}
         onConfirm={() => void removeTrashedPage()}
       />
       <QuickFind />

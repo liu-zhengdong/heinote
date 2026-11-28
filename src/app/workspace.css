@@ -80,6 +80,112 @@
   overflow: hidden;
 }
 
+.app-main--tabbed {
+  flex-direction: row;
+  margin: 0 8px 8px 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.workspace-pane {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.pane-island {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--paper);
+  box-shadow: var(--shadow-island);
+  overflow: hidden;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.workspace-pane:not(.is-focused) .pane-island {
+  opacity: 0.97;
+}
+
+.app-shell--mobile .workspace-pane,
+.app-shell--mobile .pane-island {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.split-seam {
+  position: relative;
+  width: 8px;
+  flex: none;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.split-seam::after {
+  position: absolute;
+  top: 44px;
+  bottom: 16px;
+  left: 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+  transition: background var(--t-fast) var(--e-out);
+}
+
+.split-seam:hover::after,
+.split-seam.is-dragging::after {
+  background: var(--blue);
+}
+
+.split-drop-zone {
+  position: absolute;
+  z-index: 30;
+  top: 44px;
+  right: 12px;
+  bottom: 12px;
+  width: 34%;
+  min-width: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--blue);
+  border-radius: var(--r-lg);
+  background: var(--blue-tint);
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.pane-focus-pill {
+  display: inline-flex;
+  height: 22px;
+  flex: none;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--fill);
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.pane-focus-pill.is-focused {
+  background: var(--blue-tint);
+  color: var(--blue);
+}
+
 .app-shell--railed .app-main {
   grid-area: 1 / 2;
 }

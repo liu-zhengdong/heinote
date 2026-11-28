@@ -323,6 +323,8 @@ export function DocumentEditor({
     platform,
     movePage,
     selectPage,
+    openInNewTab,
+    openInRightSplit,
     updatePage,
     canEdit,
     canMovePage,
@@ -1571,15 +1573,16 @@ export function DocumentEditor({
    *  own id, so a block moved since it was linked is still found): beside the
    *  page, in the side peek, the way Notion opens a link. ⌘-click (Ctrl-click)
    *  opens it full-page instead — a block as a page of its own. */
-  const followLink = useCallback((pageId: string, full = false) => {
+  const followLink = useCallback((pageId: string, full: boolean | "split-right" = false) => {
     if (!pagesRef.current[pageId]) return;
     if (standaloneRef.current?.onFollowLink) {
-      standaloneRef.current.onFollowLink(pageId, full);
+      standaloneRef.current.onFollowLink(pageId, Boolean(full));
       return;
     }
-    if (full) selectPage(pageId);
+    if (full === "split-right") openInRightSplit(pageId);
+    else if (full) openInNewTab(pageId);
     else openPeek(pageId);
-  }, [openPeek, selectPage]);
+  }, [openInNewTab, openInRightSplit, openPeek]);
 
   /** Shows a page here, or folds it — on its row (`row`: a row in the tree
    *  drawn here, or a page drawn in place, whose row the drawing stands in
@@ -1892,7 +1895,7 @@ export function DocumentEditor({
       event.preventDefault();
       followHref(anchor.getAttribute("href") ?? "", event.metaKey || event.ctrlKey, (href, full) => {
         const target = linkedPageId(href, pagesRef.current);
-        if (target) followLink(target, full);
+        if (target) followLink(target, event.altKey ? "split-right" : full);
       });
       return;
     }
@@ -1948,7 +1951,7 @@ export function DocumentEditor({
     }
     if (!pageId || !pagesRef.current[pageId]) return;
     event.preventDefault();
-    followLink(pageId, event.metaKey || event.ctrlKey);
+    followLink(pageId, event.altKey ? "split-right" : (event.metaKey || event.ctrlKey));
   }, [followLink, linkAt, readOnly, retries, toggleShownAt]);
 
   /* Right-clicking an inline picture opens its dedicated context menu (copy,

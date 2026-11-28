@@ -6,9 +6,30 @@ import { DocumentEditor } from "../features/editor/DocumentEditor";
 import { useWorkspace } from "./workspace-context";
 import { sameItems, usePage, useWorkspaceState } from "./workspace-store";
 
-/** Maximum number of recently visited document pages kept warm in detached
- *  portal containers. Bounded LRU prevents memory bloat across large vaults. */
-const MAX_CACHED_PAGES = 4;
+/** Baseline number of recently visited document pages kept warm per pane.
+ *  Pinned tabs are retained above this baseline up to MAX_CACHED_CAP. */
+const BASE_CACHED_PAGES = 6;
+const MAX_CACHED_CAP = 10;
+
+function trimCachedIds(
+  current: readonly string[],
+  activePageId: string | null,
+  pinnedIds: readonly string[],
+): string[] {
+  const pinnedSet = new Set(pinnedIds);
+  const ordered = activePageId
+    ? [...current.filter((id) => id !== activePageId), activePageId]
+    : [...current];
+  const limit = Math.min(MAX_CACHED_CAP, Math.max(BASE_CACHED_PAGES, pinnedSet.size + 2));
+  if (ordered.length <= limit) return ordered;
+  const result = [...ordered];
+  for (let i = 0; i < result.length && result.length > limit;) {
+    const id = result[i];
+    if (id !== activePageId && !pinnedSet.has(id)) result.splice(i, 1);
+    else i += 1;
+  }
+  return result.length > limit ? result.slice(-limit) : result;
+}
 
 /** The open page's editor, redrawn as the page changes — the shell around it
  *  is not. A page whose body is still being pulled in (UC-48) shows a quiet
@@ -98,10 +119,12 @@ function SlotSync({
  *  DOM subtree in a single operation. */
 export function CachedDocumentPages({
   activePageId,
+  pinnedIds = [],
   surfaceEl,
   canEdit,
 }: {
   activePageId: string | null;
+  pinnedIds?: readonly string[];
   surfaceEl: HTMLElement | null;
   canEdit(pageId: string): boolean;
 }) {
@@ -111,10 +134,8 @@ export function CachedDocumentPages({
   const [lruIds, setLruIds] = useState<string[]>(() => (activePageId ? [activePageId] : []));
 
   // Maintain bounded LRU order including the active page right during render
-  // so the first frame already mounts the incoming page without an extra pass.
-  const orderedIds = activePageId
-    ? [...lruIds.filter((id) => id !== activePageId), activePageId].slice(-MAX_CACHED_PAGES)
-    : lruIds;
+  // while keeping pinned tabs warm so switching ordinary tabs never drops them.
+  const orderedIds = trimCachedIds(lruIds, activePageId, pinnedIds);
 
   // Evict cached pages that were deleted, moved to trash, purging, or converted
   // away from `document` — without re-rendering on ordinary typing.
