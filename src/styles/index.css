@@ -1007,3 +1007,69 @@ kbd {
     -webkit-tap-highlight-color: transparent;
   }
 }
+
+/* ── Fullscreen Exit Pill ─────────────────────────────────────────────── */
+
+.fullscreen-exit-pill {
+  position: fixed;
+  z-index: calc(var(--z-viewer) + 2);
+  top: max(12px, env(safe-area-inset-top, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px));
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-island);
+  opacity: 0.48;
+  transition: opacity var(--t-fast) var(--e-out);
+}
+
+.fullscreen-exit-pill:hover,
+.fullscreen-exit-pill:focus-within {
+  opacity: 1;
+}
+
+.fullscreen-exit-pill__icon,
+.fullscreen-exit-pill__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.fullscreen-exit-pill__icon {
+  width: 26px;
+  justify-content: center;
+  padding: 0;
+}
+
+.fullscreen-exit-pill__btn {
+  padding: 0 9px;
+}
+
+.fullscreen-exit-pill__icon:hover,
+.fullscreen-exit-pill__btn:hover {
+  background: var(--fill-hover);
+  color: var(--ink);
+}
+
+.fullscreen-exit-pill__btn kbd {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--fill);
+  color: var(--ink-3);
+  font-family: inherit;
+  font-size: 10.5px;
+}

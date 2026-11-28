@@ -36,9 +36,23 @@ function trailTo(pages: Record<string, NotePage>, pageId: string): Crumb[] {
 const sameTrail = (left: readonly Crumb[], right: readonly Crumb[]) => left.length === right.length
   && left.every((crumb, index) => crumb.id === right[index].id && sameIcon(crumb.icon, right[index].icon) && crumb.label === right[index].label);
 
-function OpenPageActions({ pageId, compact, onHistory }: { pageId: string; compact: boolean; onHistory(): void }) {
+function OpenPageActions({
+  pageId,
+  compact,
+  onHistory,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  pageId: string;
+  compact: boolean;
+  onHistory(): void;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}) {
   const page = usePage(pageId);
-  return page ? <PageActions page={page} compact={compact} onHistory={onHistory} widthOption moveShortcut /> : null;
+  return page
+    ? <PageActions page={page} compact={compact} onHistory={onHistory} widthOption moveShortcut fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} />
+    : null;
 }
 
 /* On desktop: 44px top bar with breadcrumbs, presence, proposals and actions.
@@ -51,6 +65,8 @@ export function TopBar({
   isFocusedPane = true,
   showSaveStatus = true,
   splitActive = false,
+  fullscreen = false,
+  onToggleFullscreen,
 }: {
   onHistory(): void;
   pageId?: string;
@@ -58,6 +74,8 @@ export function TopBar({
   isFocusedPane?: boolean;
   showSaveStatus?: boolean;
   splitActive?: boolean;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   const { platform, selectedPageId, selectPage, openInNewTab, rosters, spaceOf, activeSpace, graphOpen, closeGraph } = useWorkspace();
   const effectivePageId = pageId ?? selectedPageId;
@@ -136,7 +154,7 @@ export function TopBar({
               >
                 <Redo2 size={16} />
               </button>
-              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} /> : null}
+              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} /> : null}
             </div>
           </>
         ) : graphOpen ? (
@@ -184,7 +202,7 @@ export function TopBar({
                 </div>
               ) : null}
               {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${selectedPageId}`} pageId={selectedPageId} compact /> : null}
-              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} /> : null}
+              {opened ? <OpenPageActions pageId={effectivePageId} compact onHistory={onHistory} fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} /> : null}
               {canManageLibrary ? (
                 <button
                   type="button"
@@ -274,7 +292,7 @@ export function TopBar({
             ) : null}
 
             {opened ? <AgentProposals key={`${platform?.bootstrap.user.id}:${effectivePageId}`} pageId={effectivePageId} compact={false} /> : null}
-            {opened ? <OpenPageActions pageId={effectivePageId} compact={false} onHistory={onHistory} /> : null}
+            {opened ? <OpenPageActions pageId={effectivePageId} compact={false} onHistory={onHistory} fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} /> : null}
             {canManageLibrary && isFocusedPane ? <Tooltip label="知识库设置">
               <button type="button" className="icon-btn knowledge-base-settings-entry" aria-label="知识库设置" aria-haspopup="dialog" aria-expanded={settingsOpen}
                 onClick={(event) => { event.currentTarget.focus(); setSettingsOpen(true); }}><Settings2 size={16} aria-hidden="true" /></button>

@@ -1,5 +1,6 @@
 import { Archive, Clock3, Eye, FileText, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties, type DragEvent } from "react";
+import { FullscreenExitPill } from "../components/FullscreenExitPill";
 import { isPurging, pageAncestry, shelvedRoot } from "../core/page-tree";
 import { pageName } from "../core/block-tree";
 import type { PaneId, PaneState } from "../core/tab-layout";
@@ -19,12 +20,20 @@ const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview")
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const ImportProgressView = lazy(() => import("../features/account/ImportProgressView").then((module) => ({ default: module.ImportProgressView })));
 
-function AppPageShell({ pageId }: { pageId: string }) {
+function AppPageShell({
+  pageId,
+  fullscreen,
+  onToggleFullscreen,
+}: {
+  pageId: string;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}) {
   const page = usePage(pageId);
   if (!page) return null;
   return (
     <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
-      <AppPage page={page} />
+      <AppPage page={page} fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} />
     </Suspense>
   );
 }
@@ -35,6 +44,8 @@ export function WorkspacePane({
   mobile,
   splitActive,
   isFocused,
+  fullscreen = false,
+  onToggleFullscreen,
   showSaveStatus,
   historyPreview,
   selectedImportJob,
@@ -48,6 +59,8 @@ export function WorkspacePane({
   mobile: boolean;
   splitActive: boolean;
   isFocused: boolean;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   showSaveStatus: boolean;
   historyPreview: NotePage | null;
   selectedImportJob: ImportJobDto | null;
@@ -107,6 +120,7 @@ export function WorkspacePane({
   const showHistoryPreview = isFocused ? historyPreview : null;
   const showImportJob = isFocused ? selectedImportJob : null;
   const showGraph = isFocused && graphOpen;
+  const isAppPane = selectedKind === "app" && !showHistoryPreview && !showImportJob && !showGraph;
 
   const handleDragOverSplitZone = (event: DragEvent<HTMLDivElement>) => {
     if (mobile || splitActive) return;
@@ -145,7 +159,7 @@ export function WorkspacePane({
 
   return (
     <div
-      className={`workspace-pane ${isFocused ? "is-focused" : ""}`}
+      className={`workspace-pane ${isFocused ? "is-focused" : ""} ${fullscreen ? "workspace-pane--fullscreen" : ""} ${isAppPane ? "is-app" : ""}`}
       data-pane-id={paneId}
       style={style}
       onMouseDownCapture={() => { if (!isFocused) focusPane(paneId); }}
@@ -172,6 +186,8 @@ export function WorkspacePane({
           isFocusedPane={isFocused}
           showSaveStatus={showSaveStatus}
           splitActive={splitActive}
+          fullscreen={fullscreen}
+          onToggleFullscreen={onToggleFullscreen}
           onHistory={onHistory}
         />
         <div className="app-workspace">
@@ -257,8 +273,8 @@ export function WorkspacePane({
                 <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
                   <DatabasePage pageId={pageId} readOnly={Boolean(trashedAt)} />
                 </Suspense>
-              ) : selectedKind === "app" && !showHistoryPreview ? (
-                <AppPageShell pageId={pageId} />
+              ) : isAppPane ? (
+                <AppPageShell pageId={pageId} fullscreen={fullscreen} onToggleFullscreen={onToggleFullscreen} />
               ) : selectedKind && (showHistoryPreview || trashedAt) ? (
                 <OpenPage key="page" pageId={pageId} preview={showHistoryPreview} readOnly={Boolean(showHistoryPreview) || Boolean(trashedAt) || !canEdit(pageId)} />
               ) : selectedKind ? null : (
@@ -278,6 +294,10 @@ export function WorkspacePane({
           )}
         </div>
       </div>
+
+      {fullscreen && isAppPane && onToggleFullscreen ? (
+        <FullscreenExitPill onExit={onToggleFullscreen} />
+      ) : null}
 
       {rightDropVisible ? (
         <div className="split-drop-zone" aria-hidden="true">松开即可在右侧分屏打开</div>

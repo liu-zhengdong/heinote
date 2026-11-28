@@ -27,6 +27,7 @@ import { PageOutline } from "../../components/PageOutline";
 import { extractOutline } from "../../core/outline";
 import { pointRect, rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
 import { useWorkspace } from "../../app/workspace-context";
+import { isPageFullWidth } from "../../core/workspace-state";
 import { clearEditSurface, registerEditSurface } from "../../app/edit-surface";
 import { useUi } from "../../app/ui-context";
 import { useFold } from "../../hooks/useFold";
@@ -329,6 +330,7 @@ export function DocumentEditor({
     canEdit,
     canMovePage,
     canTrashPage,
+    preferences,
     spaces,
     undo,
     redo,
@@ -3578,6 +3580,7 @@ export function DocumentEditor({
     );
   }
 
+  const fullWidth = isPageFullWidth(page, preferences.default_full_width);
   const showOutline = !embed && surfaceContainer === "main";
   const outlineItems = useMemo(
     () => (showOutline ? extractOutline(tree, describeMention) : []),
@@ -3587,7 +3590,7 @@ export function DocumentEditor({
   return (
     <article
       ref={setArticleRef}
-      className={`doc ${cover ? "doc--covered" : ""} ${icon ? "doc--iconed" : ""} ${page.full_width ? "doc--full" : ""} ${font === "default" ? "" : `doc--font-${font}`}`}
+      className={`doc ${cover ? "doc--covered" : ""} ${icon ? "doc--iconed" : ""} ${fullWidth ? "doc--full" : ""} ${font === "default" ? "" : `doc--font-${font}`}`}
       data-page-id={page.id}
       onPointerDownCapture={claimCaret}
       onKeyDownCapture={claimCaret}

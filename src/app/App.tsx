@@ -14,8 +14,9 @@ import { useFold } from "../hooks/useFold";
 import { useVisualViewport } from "../hooks/useVisualViewport";
 import type { NotePage } from "../core/types";
 import { SIDEBAR_RAIL_WIDTH } from "../core/workspace-state";
-import { clampSplitRatio, SPLIT_PANE_MIN } from "../core/tab-layout";
+import { clampSplitRatio, SPLIT_PANE_MIN, type PaneId } from "../core/tab-layout";
 import { imeComposing } from "../core/keyboard";
+import { useLayer } from "../components/layer-stack";
 import { useUi } from "./ui-context";
 import { pageName } from "../core/block-tree";
 import { descendantCount, inTrash, isPurging, pageAncestry } from "../core/page-tree";
@@ -357,6 +358,40 @@ export function App() {
     window.addEventListener("pointerup", onUp);
   }, [liveSplitRatio, setSplitRatio]);
 
+  const inMemos = !activeSpace?.knowledgeBase && preferences.sidebar_view === "memos" && !graphOpen && !adminOpen;
+  const canFitSplit = !mobile && (peek.pane === 0 || peek.pane >= SPLIT_PANE_MIN * 2 + 8);
+  const splitVisible = !mobile && !inMemos && tabLayout.split && canFitSplit;
+  const activePaneId: PaneId = tabLayout.split ? tabLayout.activePane : "left";
+
+  const [fullscreenPane, setFullscreenPane] = useState<PaneId | null>(null);
+  const exitPaneFullscreen = useCallback(() => {
+    setFullscreenPane(null);
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  }, []);
+  const togglePaneFullscreen = useCallback((pane: PaneId) => {
+    setFullscreenPane((current) => {
+      if (current === pane) {
+        if (typeof document !== "undefined" && document.fullscreenElement) {
+          void document.exitFullscreen().catch(() => undefined);
+        }
+        return null;
+      }
+      return pane;
+    });
+  }, []);
+  useEffect(() => {
+    if (mobile || inMemos || adminOpen) {
+      exitPaneFullscreen();
+      return;
+    }
+    if (fullscreenPane === "right" && !splitVisible) {
+      setFullscreenPane(tabLayout.left.activePageId ? "left" : null);
+    }
+  }, [adminOpen, exitPaneFullscreen, fullscreenPane, inMemos, mobile, splitVisible, tabLayout.left.activePageId]);
+  useLayer(Boolean(fullscreenPane), exitPaneFullscreen, { phase: "bubble" });
+
   if (loading) {
     return (
       <div className="state-screen state-screen--loading" role="status" aria-label="正在打开小黑笔记">
@@ -377,14 +412,10 @@ export function App() {
     );
   }
 
-  const inMemos = !activeSpace?.knowledgeBase && preferences.sidebar_view === "memos" && !graphOpen && !adminOpen;
-  const canFitSplit = !mobile && (peek.pane === 0 || peek.pane >= SPLIT_PANE_MIN * 2 + 8);
-  const splitVisible = !mobile && !inMemos && tabLayout.split && canFitSplit;
-
   return (
     <div
       ref={setShell}
-      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && adminOpen ? "app-shell--admin" : ""} ${!mobile && !adminOpen && peekOpen && peek.docked && !splitVisible ? "app-shell--peek" : ""}`}
+      className={`app-shell ${mobile ? "app-shell--mobile" : ""} ${railed ? "app-shell--railed" : ""} ${!mobile && adminOpen ? "app-shell--admin" : ""} ${!mobile && !adminOpen && peekOpen && peek.docked && !splitVisible ? "app-shell--peek" : ""} ${fullscreenPane ? "app-shell--fullscreen" : ""}`}
       style={{ ["--sidebar-w" as string]: `${preferences.sidebar_width}px`, ["--peek-w" as string]: `${peek.width}px` }}
     >
       <Sidebar />
@@ -401,6 +432,8 @@ export function App() {
               mobile={false}
               splitActive
               isFocused={tabLayout.activePane === "left"}
+              fullscreen={fullscreenPane === "left"}
+              onToggleFullscreen={() => togglePaneFullscreen("left")}
               showSaveStatus={tabLayout.activePane === "left"}
               historyPreview={historyPreview}
               selectedImportJob={selectedImportJob}
@@ -422,6 +455,8 @@ export function App() {
               mobile={false}
               splitActive
               isFocused={tabLayout.activePane === "right"}
+              fullscreen={fullscreenPane === "right"}
+              onToggleFullscreen={() => togglePaneFullscreen("right")}
               showSaveStatus={tabLayout.activePane === "right"}
               historyPreview={historyPreview}
               selectedImportJob={selectedImportJob}
@@ -433,11 +468,13 @@ export function App() {
           </>
         ) : (
           <WorkspacePane
-            paneId={tabLayout.split ? tabLayout.activePane : "left"}
+            paneId={activePaneId}
             paneState={tabLayout.split ? tabLayout[tabLayout.activePane] : tabLayout.left}
             mobile={mobile}
             splitActive={tabLayout.split}
             isFocused
+            fullscreen={!mobile && fullscreenPane === activePaneId}
+            onToggleFullscreen={mobile ? undefined : () => togglePaneFullscreen(activePaneId)}
             showSaveStatus
             historyPreview={historyPreview}
             selectedImportJob={selectedImportJob}

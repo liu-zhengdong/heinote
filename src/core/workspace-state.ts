@@ -14,6 +14,7 @@ export const SIDEBAR_RAIL_WIDTH = 46;
 
 export const DEFAULT_PREFERENCES: WorkspacePreferences = {
   theme: "system",
+  default_full_width: false,
   sidebar_width: SIDEBAR_DEFAULT_WIDTH,
   sidebar_collapsed: false,
   database_views: {},
@@ -23,6 +24,14 @@ export const DEFAULT_PREFERENCES: WorkspacePreferences = {
   graph: DEFAULT_GRAPH_SETTINGS,
   pinned_memo_tags: [],
 };
+
+/** Whether a page renders full-width: explicit page override wins over the account default. */
+export function isPageFullWidth(
+  page: { full_width?: boolean } | null | undefined,
+  defaultFullWidth: boolean,
+): boolean {
+  return page?.full_width ?? defaultFullWidth;
+}
 
 /** The member's preferences as their settings record holds them — each
  *  field's shape held by schema.ts — with the default for any not set yet. */

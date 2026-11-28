@@ -24,6 +24,7 @@ const FUNCTIONAL_SPECS = [
   "uc64-memos-browser.test.ts",
   "uc65-math-browser.test.ts",
   "uc67-tabs-split-browser.test.ts",
+  "uc68-width-fullscreen-browser.test.ts",
   "account-avatar-browser.test.ts",
   "knowledge-bases-browser.test.ts",
   "import-browser.test.ts",

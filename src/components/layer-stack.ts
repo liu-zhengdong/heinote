@@ -32,15 +32,28 @@ function handleEscape(phase: LayerPhase, event: KeyboardEvent): void {
 
 const onCaptureKeyDown = (event: KeyboardEvent) => handleEscape("capture", event);
 const onBubbleKeyDown = (event: KeyboardEvent) => handleEscape("bubble", event);
+const onFrameEscape = (event: MessageEvent) => {
+  if (!event.data || typeof event.data !== "object" || (event.data as { t?: unknown }).t !== "escape") return;
+  if (typeof document === "undefined") return;
+  const fromApp = Array.from(document.querySelectorAll<HTMLIFrameElement>("iframe.app-surface__frame"))
+    .some((frame) => frame.contentWindow === event.source);
+  if (!fromApp) return;
+  if (document.querySelector('[popover="auto"]:popover-open')) return;
+  const top = topEscapeLayer();
+  if (!top) return;
+  top.dismiss();
+};
 
 function syncListeners(): void {
   if (stack.length && !listening) {
     window.addEventListener("keydown", onCaptureKeyDown, true);
     window.addEventListener("keydown", onBubbleKeyDown, false);
+    window.addEventListener("message", onFrameEscape);
     listening = true;
   } else if (!stack.length && listening) {
     window.removeEventListener("keydown", onCaptureKeyDown, true);
     window.removeEventListener("keydown", onBubbleKeyDown, false);
+    window.removeEventListener("message", onFrameEscape);
     listening = false;
   }
 }

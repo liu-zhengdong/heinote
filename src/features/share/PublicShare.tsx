@@ -1,6 +1,8 @@
-import { Globe, Menu } from "lucide-react";
+import { Globe, Maximize2, Menu } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { BottomSheet } from "../../components/BottomSheet";
+import { FullscreenExitPill } from "../../components/FullscreenExitPill";
+import { useLayer } from "../../components/layer-stack";
 import { PageOutline } from "../../components/PageOutline";
 import { layout } from "../../core/block-layout";
 import { extractOutline } from "../../core/outline";
@@ -194,6 +196,16 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
 
   const isApp = Boolean(active && active.kind === "app");
   const isDatabase = Boolean(active && active.kind === "database");
+  const [fullscreen, setFullscreen] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).get("fullscreen") === "1",
+  );
+  const exitFullscreen = useCallback(() => {
+    setFullscreen(false);
+    if (typeof window !== "undefined" && window.document.fullscreenElement) {
+      void window.document.exitFullscreen().catch(() => undefined);
+    }
+  }, []);
+  useLayer(fullscreen, exitFullscreen, { phase: "bubble" });
   const outlineItems = useMemo(
     () => (active && !isApp && !isDatabase ? extractOutline(active.block_tree, (mention) => {
       if (mention.kind === "date") return { label: mention.date };
@@ -207,7 +219,7 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
     [active, context, isApp, isDatabase],
   );
 
-  return <main ref={setReaderEl} className={`public-reader${isApp ? " public-reader--app" : ""}${isDatabase ? " public-reader--db" : ""}`}>
+  return <main ref={setReaderEl} className={`public-reader${isApp ? " public-reader--app" : ""}${isDatabase ? " public-reader--db" : ""}${fullscreen ? " public-reader--fullscreen" : ""}`}>
     <header className="public-reader__head">
       <a href="/" className="public-reader__brand">HeiNote</a>
       {isApp && active ? (
@@ -217,7 +229,19 @@ export function PublicShare({ token: tokenProp }: { token?: string } = {}) {
         </h1>
       ) : null}
       <span className="public-reader__badge"><Globe size={14} aria-hidden="true" />公开阅读</span>
+      {active ? (
+        <button
+          type="button"
+          className="public-reader__fullscreen-btn"
+          aria-label="全屏视图"
+          onClick={() => setFullscreen(true)}
+        >
+          <Maximize2 size={14} aria-hidden="true" />
+          <span>全屏</span>
+        </button>
+      ) : null}
     </header>
+    {fullscreen ? <FullscreenExitPill onExit={exitFullscreen} /> : null}
     {loading ? <p className="public-reader__status account-muted" role="status">正在加载笔记…</p>
       : error ? <section className="public-reader__status"><h1>{unavailable ? "无法打开此页" : "加载失败"}</h1><p className="account-error" role="alert">{error}</p>
         <button type="button" className="btn btn--outline" onClick={() => setRevision((current) => current + 1)}>重试</button></section>

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
-import { ChevronUp, Code2, Database, Eye, Plus, Settings2 } from "lucide-react";
+import { ChevronUp, Code2, Database, Eye, Maximize2, Minimize2, Plus, Settings2 } from "lucide-react";
 import type { NotePage } from "../../core/types";
 import { APP_SOURCE_BUDGET_BYTES } from "../../core/artifact";
+import { isPageFullWidth } from "../../core/workspace-state";
 import { AppSurface } from "./AppSurface";
 import { Select } from "../../components/Select";
 import { usePages } from "../../app/workspace-store";
@@ -17,6 +18,8 @@ import "./artifact.css";
 
 interface Props {
   page: NotePage;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }
 
 type SheetTab = "data" | "code" | "general";
@@ -96,10 +99,11 @@ function BindingDetail({
   );
 }
 
-export function AppPage({ page }: Props) {
+export function AppPage({ page, fullscreen = false, onToggleFullscreen }: Props) {
   const pages = usePages();
-  const { canEdit, updatePage, selectPage } = useWorkspace();
+  const { canEdit, updatePage, selectPage, preferences } = useWorkspace();
   const editable = canEdit(page.id);
+  const fullWidth = isPageFullWidth(page, preferences.default_full_width);
   const app = page.app ?? {};
   const [draft, setDraft] = useState(app.draft ?? "");
   const [dirty, setDirty] = useState(false);
@@ -162,7 +166,7 @@ export function AppPage({ page }: Props) {
   const status = page.app?.enabled ? (hasDraft ? "有草稿" : "已启用") : "未启用";
 
   return (
-    <div className={`app-page${sheet ? " app-page--sheet" : ""}`}>
+    <div className={`app-page${sheet ? " app-page--sheet" : ""}${fullWidth || fullscreen ? " app-page--full" : ""}${fullscreen ? " app-page--fullscreen" : ""}`}>
       <div className="app-stage">
         <AppSurface page={page} previewSource={previewing ? shown : null} grow />
       </div>
@@ -310,6 +314,17 @@ export function AppPage({ page }: Props) {
           <span className={`app-strip__dot${page.app?.enabled ? " is-on" : ""}`} />{status}
         </span>
         <span className="app-strip__spacer" />
+        {onToggleFullscreen ? (
+          <button
+            type="button"
+            className="app-editor__btn"
+            onClick={onToggleFullscreen}
+            aria-label={fullscreen ? "退出全屏" : "全屏"}
+          >
+            {fullscreen ? <Minimize2 size={13} aria-hidden="true" /> : <Maximize2 size={13} aria-hidden="true" />}
+            {fullscreen ? "退出全屏" : "全屏"}
+          </button>
+        ) : null}
         <button type="button" className="app-editor__btn" onClick={() => openSheet(sheet ?? "data")}>
           <Settings2 size={13} aria-hidden="true" />{sheet ? "收起" : "管理"}
         </button>

@@ -8,6 +8,8 @@ import {
   FileDown,
   FolderInput,
   Link,
+  Maximize2,
+  Minimize2,
   MoreHorizontal,
   MoveHorizontal,
   Redo2,
@@ -26,6 +28,7 @@ import { imeComposing } from "../../core/keyboard";
 import type { NotePage } from "../../core/types";
 import { lineLink, pageName } from "../../core/block-tree";
 import { inTrash, shelvedRoot } from "../../core/page-tree";
+import { isPageFullWidth } from "../../core/workspace-state";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { LAND_EVENT, requestLanding } from "../editor/landing";
@@ -50,6 +53,8 @@ export function PageActions({
   onHistory,
   widthOption = false,
   moveShortcut = false,
+  fullscreen = false,
+  onToggleFullscreen,
 }: {
   page: NotePage;
   /** Too narrow for the word: Share is an icon. */
@@ -62,6 +67,8 @@ export function PageActions({
   widthOption?: boolean;
   /** Answers ⌘⇧P — only the page pane's bar does. */
   moveShortcut?: boolean;
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
 }) {
   const {
     selectedPageId,
@@ -82,10 +89,12 @@ export function PageActions({
     canMovePage,
     canShelvePage,
     canTrashPage,
+    preferences,
     spaces,
     spaceOf,
     ensureAllSpaces,
   } = useWorkspace();
+  const fullWidth = isPageFullWidth(page, preferences.default_full_width);
   const { toast, sharePageId, requestShare, closeShare, closePeek } = useUi();
   const mobile = useFold();
   const [moreAnchor, setMoreAnchor] = useState<AnchorRect | null>(null);
@@ -206,6 +215,32 @@ export function PageActions({
           </button>
         </Tooltip>
       ) : null}
+      {widthOption && editable && !compact && !mobile && (page.kind === "document" || page.kind === "app") ? (
+        <Tooltip label={fullWidth ? "切换为标准宽度" : "全宽显示"}>
+          <button
+            type="button"
+            className={`icon-btn ${fullWidth ? "is-active" : ""}`}
+            aria-label={fullWidth ? "切换为标准宽度" : "切换为全宽"}
+            aria-pressed={fullWidth}
+            onClick={() => updatePage(page.id, { full_width: !fullWidth })}
+          >
+            <MoveHorizontal size={16} />
+          </button>
+        </Tooltip>
+      ) : null}
+      {onToggleFullscreen && !compact && !mobile ? (
+        <Tooltip label={fullscreen ? "退出全屏 (Esc)" : "全屏视图"}>
+          <button
+            type="button"
+            className={`icon-btn ${fullscreen ? "is-active" : ""}`}
+            aria-label={fullscreen ? "退出全屏" : "全屏视图"}
+            aria-pressed={Boolean(fullscreen)}
+            onClick={onToggleFullscreen}
+          >
+            {fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </Tooltip>
+      ) : null}
       <Tooltip label={favorite ? "Remove from favorites" : "Add to favorites"}>
         <button
           type="button"
@@ -292,13 +327,21 @@ export function PageActions({
               onSelect={() => { setMoveAnchor(moreAnchor); setMoreAnchor(null); }}
             />
           ) : null}
-          {(widthOption && editable) || onHistory ? <MenuDivider /> : null}
+          {(widthOption && editable) || onToggleFullscreen || onHistory ? <MenuDivider /> : null}
           {widthOption && editable ? (
             <MenuItem
               icon={<MoveHorizontal size={16} />}
               label="Full width"
-              selected={Boolean(page.full_width)}
-              onSelect={() => { updatePage(page.id, { full_width: !page.full_width }); setMoreAnchor(null); }}
+              selected={fullWidth}
+              onSelect={() => { updatePage(page.id, { full_width: !fullWidth }); setMoreAnchor(null); }}
+            />
+          ) : null}
+          {onToggleFullscreen ? (
+            <MenuItem
+              icon={fullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              label={fullscreen ? "退出全屏" : "全屏视图"}
+              selected={fullscreen}
+              onSelect={() => { setMoreAnchor(null); onToggleFullscreen(); }}
             />
           ) : null}
           {onHistory ? (

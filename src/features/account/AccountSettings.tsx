@@ -23,7 +23,10 @@ const sections = [
   { id: "profile", label: "我的账号", title: "账号", group: "账号", description: "管理你的资料和登录方式。", icon: null,
     fields: [{ name: "显示名 名字 资料 用户名 profile", target: "displayName" }, { name: "头像 照片 上传 更换 移除 avatar photo", target: "avatar" }, { name: "登录方式 GitHub 绑定", target: "methods" }] },
   { id: "preferences", label: "偏好", title: "偏好", group: "账号", description: "调整小黑笔记的显示方式。", icon: Settings2,
-    fields: [{ name: "外观 主题 浅色 深色 跟随系统 theme", target: "theme" }] },
+    fields: [
+      { name: "外观 主题 浅色 深色 跟随系统 theme", target: "theme" },
+      { name: "默认页面宽度 全宽 窄栏 铺满 full width", target: "default_full_width" },
+    ] },
   { id: "invitations", label: "邀请", title: "邀请", group: "功能", description: "查看和处理空间邀请。", icon: Inbox,
     fields: [{ name: "邀请 空间 接受 拒绝", target: "invitations" }] },
   { id: "tokens", label: "Agent 令牌", title: "Agent 令牌", group: "功能", description: "管理 Agent 调用小黑笔记 API 的访问凭据。", icon: KeyRound,

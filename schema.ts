@@ -402,6 +402,7 @@ export default schema({
     workspace_settings: {
       fields: {
         theme: t.choice(...THEMES).optional(),
+        default_full_width: t.bool().optional(),
         sidebar_width: t.number().optional(),
         sidebar_collapsed: t.bool().optional(),
         database_views: object().optional().describe("The view each database was last open on, by database id."),

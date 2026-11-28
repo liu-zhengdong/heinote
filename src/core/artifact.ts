@@ -75,6 +75,11 @@ export const APP_SHIM = `(() => {
     public: false,
     ready: () => new Promise((resolve) => init ? resolve(init) : window.addEventListener("notes:ready", () => resolve(init), { once: true })),
   };
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !event.defaultPrevented && !event.isComposing) {
+      window.parent.postMessage({ t: "escape" }, "*");
+    }
+  });
 })();`;
 
 /** An app's declaration of the databases it may reach. `write` implies

@@ -116,6 +116,34 @@
   opacity: 0.97;
 }
 
+.app-shell--fullscreen .app-main,
+.app-main:has(.app-surface--fullscreen) {
+  z-index: var(--z-panel);
+}
+
+.workspace-pane--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-panel);
+  flex: none;
+  margin: 0;
+  background: var(--paper);
+}
+
+.workspace-pane--fullscreen .tabbar {
+  display: none;
+}
+
+.workspace-pane--fullscreen .pane-island {
+  border-radius: 0;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.workspace-pane--fullscreen.is-app .topbar {
+  display: none;
+}
+
 .app-shell--mobile .workspace-pane,
 .app-shell--mobile .pane-island {
   border-radius: 0;

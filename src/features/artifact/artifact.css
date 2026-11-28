@@ -120,6 +120,10 @@
   flex-direction: column;
 }
 
+.app-page--fullscreen {
+  height: 100%;
+}
+
 .app-stage {
   flex: 1;
   min-height: 0;
@@ -134,9 +138,56 @@
   min-height: 0;
 }
 
+.app-page--full .app-stage {
+  padding: 8px 12px 0;
+}
+
+.app-page--full .app-stage .app-surface--grow {
+  max-width: none;
+}
+
+.app-page--fullscreen .app-stage {
+  padding: 0;
+}
+
+.app-page--fullscreen .app-stage .app-surface--grow,
+.app-page--fullscreen .app-stage .app-surface--grow .app-surface__frame {
+  max-width: none;
+  border-radius: 0;
+}
+
+.app-page--fullscreen:not(.app-page--sheet) .app-strip {
+  display: none;
+}
+
 .app-surface--grow { flex: 1; min-height: 0; }
 .app-surface--grow .app-surface__frame { flex: 1; min-height: 0; height: auto; }
 .app-surface--grow .app-surface__empty { flex: 1; justify-content: center; }
+
+.app-surface--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-viewer, 60);
+  margin: 0;
+  border-radius: 0;
+  background: var(--paper, #fff);
+}
+
+.app-surface--fullscreen .app-surface__frame {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  border-radius: 0;
+}
+
+.app-surface--fullscreen .app-surface__bar {
+  display: none;
+}
+
+.app-surface--fullscreen .app-surface__empty {
+  flex: 1;
+  justify-content: center;
+}
 
 /* Public share: the app fills the viewport stage under the share header —
  *  edge-to-edge with no card radius, so only the iframe scrolls and its

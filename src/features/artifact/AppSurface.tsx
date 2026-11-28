@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AppWindow, ChevronsDownUp, ChevronsUpDown, Database } from "lucide-react";
+import { AppWindow, ChevronsDownUp, ChevronsUpDown, Database, Maximize2 } from "lucide-react";
 import type { NotePage } from "../../core/types";
 import { appDocument } from "../../core/artifact";
+import { FullscreenExitPill } from "../../components/FullscreenExitPill";
+import { useLayer } from "../../components/layer-stack";
 import { AppBridge } from "./bridge";
 import { PublicBridge } from "./public-bridge";
 import { usePages } from "../../app/workspace-store";
@@ -78,13 +80,26 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
   const [running, setRunning] = useState(true);
   const [runKey, setRunKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const bridgeRef = useRef<AppBridge | PublicBridge | null>(null);
+
+  const exitFullscreen = () => {
+    setFullscreen(false);
+    if (typeof document !== "undefined" && document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+    }
+  };
+
+  useLayer(embedded && fullscreen, exitFullscreen, { phase: "bubble" });
 
   /* A preview (draft) never auto-runs — it is an edit scratch, not the
    *  enabled experience. */
   const preview = previewSource !== undefined && previewSource !== null;
   useEffect(() => {
-    if (preview) setRunning(false);
+    if (preview) {
+      setRunning(false);
+      setFullscreen(false);
+    }
   }, [preview]);
 
   const titleOf = (id: string) => pages[id]?.title || undefined;
@@ -92,6 +107,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
   const stop = () => {
     bridgeRef.current?.detach();
     bridgeRef.current = null;
+    setFullscreen(false);
     setRunning(false);
   };
 
@@ -130,7 +146,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
   const doc = useMemo(() => (source ? appDocument(source, theme) : ""), [source, theme]);
 
   return (
-    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}${grow ? " app-surface--grow" : ""}${fill ? " app-surface--fill" : ""}`}>
+    <div className={`app-surface${embedded ? " app-surface--embedded" : ""}${grow ? " app-surface--grow" : ""}${fill ? " app-surface--fill" : ""}${embedded && fullscreen ? " app-surface--fullscreen" : ""}`}>
       {running && source ? (
         <iframe
           key={runKey}
@@ -147,6 +163,7 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
           {source ? (preview ? "未启用 · 预览" : "已收起") : "未配置源码"}
         </div>
       )}
+      {embedded && fullscreen ? <FullscreenExitPill onExit={exitFullscreen} /> : null}
       {(embedded || preview || error || !running) && (
       <div className="app-surface__bar">
         {running && <span className="app-surface__dot" title="运行中" />}
@@ -170,6 +187,11 @@ export function AppSurface({ page, embedded = false, onOpen, previewSource, grow
         {preview && <span className="app-surface__tag">预览</span>}
         {error && <span className="app-surface__error">{error}</span>}
         <span className="app-surface__spacer" />
+        {embedded && running && source ? (
+          <button type="button" className="app-surface__action" onClick={() => setFullscreen(true)} aria-label="全屏运行">
+            <Maximize2 size={12} aria-hidden="true" />全屏
+          </button>
+        ) : null}
         {running ? (
           <button type="button" className="app-surface__action" onClick={stop}><ChevronsDownUp size={12} aria-hidden="true" />折叠</button>
         ) : source ? (
