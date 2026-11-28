@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canDeletePage, canMovePage, canOrderPage, canRestorePage, canShelvePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, isShelved, pageHolders, shelvedRoot, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
+import { canDeletePage, canMovePage, canOrderPage, canRestorePage, canShelvePage, canTrashPage, descendantCount, inTrash, isHomed, isPurging, isShelved, normalizeMovedPageIds, pageHolders, shelvedRoot, subtreeDescendantCounts, withoutUnhomed } from "./page-tree";
 import type { NotePage, WorkspaceState } from "./types";
 import { emptyWorkspace } from "./workspace-state";
 
@@ -272,5 +272,25 @@ describe("UC-57: multi-level trash, purging state, and descendant counts", () =>
     expect(canShelvePage(pages, activeKb, "kbHome")).toBe(false);
     expect(canShelvePage(pages, activeKb, "kbChild")).toBe(true);
     expect(canShelvePage(pages, archivedKb, "kbChild")).toBe(false);
+  });
+
+  it("normalizes batch-moved page IDs by deduplicating, skipping missing, and dropping descendants of selected ancestors", () => {
+    const pages = workspace(
+      page("rootA"),
+      page("childA1", { parent_id: "rootA" }),
+      page("grandA1", { parent_id: "childA1" }),
+      page("rootB"),
+      page("childB1", { parent_id: "rootB" }),
+      page("rootC"),
+    ).pages;
+
+    expect(normalizeMovedPageIds(pages, [])).toEqual([]);
+    expect(normalizeMovedPageIds(pages, ["missing", "rootA", "rootA", "childA1", "grandA1", "childB1", "rootC"])).toEqual([
+      "rootA",
+      "childB1",
+      "rootC",
+    ]);
+    // Selecting child + grandchild without their root keeps child and drops grandchild.
+    expect(normalizeMovedPageIds(pages, ["grandA1", "childA1"])).toEqual(["childA1"]);
   });
 });

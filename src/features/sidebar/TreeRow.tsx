@@ -1,5 +1,5 @@
 import { AlertCircle, ChevronRight, Link, Loader2, MoreHorizontal, Plus } from "lucide-react";
-import { memo, type CSSProperties, type DragEvent } from "react";
+import { memo, type CSSProperties, type DragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
 import { pageName } from "../../core/block-tree";
@@ -55,6 +55,7 @@ export type TreeDropPosition = "before" | "inside" | "after";
 export type TreeTarget = { pageId: string; position: TreeDropPosition } | null;
 
 export const PAGE_DRAG = "text/x-notes-page";
+export const PAGE_DRAG_MULTI = "text/x-notes-pages";
 
 /** Resolves which drop zone of a tree row a pointer sits in. Synthetic drag
  *  events with no coordinates (0, 0) default to `inside` when the row accepts
@@ -79,13 +80,13 @@ export function resolveRowDropPosition(
  *  life, so a row is drawn again only when its own page (or how it is shown)
  *  changes. */
 export interface TreeActions {
-  select(pageId: string): void;
+  select(pageId: string, event?: ReactMouseEvent<HTMLElement>): void;
   toggle(id: string): void;
   openMenu(pageId: string, anchor: AnchorRect): void;
   rename(id: string): void;
   finishRename(pageId: string, name: string | null): void;
   createInside(pageId: string): void;
-  dragStart(pageId: string): void;
+  dragStart(pageId: string, event: DragEvent<HTMLElement>): void;
   dragEnd(): void;
   dragOver(target: TreeTarget, depth: number, event: DragEvent<HTMLElement>): void;
   dragLeave(pageId: string): void;
@@ -99,6 +100,7 @@ export const TreeRow = memo(function TreeRow({
   branch,
   open,
   selected,
+  multiSelected = false,
   renaming,
   menuOpen,
   editable,
@@ -118,6 +120,7 @@ export const TreeRow = memo(function TreeRow({
   branch: boolean;
   open: boolean;
   selected: boolean;
+  multiSelected?: boolean;
   renaming: boolean;
   menuOpen: boolean;
   editable: boolean;
@@ -142,6 +145,7 @@ export const TreeRow = memo(function TreeRow({
       className={[
         "tree-row",
         selected ? "is-selected" : "",
+        multiSelected ? "is-multi-selected" : "",
         dragging ? "is-dragging" : "",
         dropPosition === "inside" ? "is-drop-target" : "",
         dropPosition === "before" ? "is-drop-before" : "",
@@ -150,15 +154,14 @@ export const TreeRow = memo(function TreeRow({
       ].filter(Boolean).join(" ")}
       style={{ "--depth": depth, "--drop-depth": dropDepth } as CSSProperties}
       data-page-id={page.id}
+      data-multi-selected={multiSelected ? "true" : undefined}
       draggable={canDrag}
       onDragStart={(event) => {
         if (!canDrag) {
           event.preventDefault();
           return;
         }
-        event.dataTransfer.setData(PAGE_DRAG, page.id);
-        event.dataTransfer.effectAllowed = "move";
-        actions.dragStart(page.id);
+        actions.dragStart(page.id, event);
       }}
       onDragEnd={() => actions.dragEnd()}
       onDragOver={(event) => {
@@ -190,7 +193,7 @@ export const TreeRow = memo(function TreeRow({
         onClick={(event) => {
           event.stopPropagation();
           if (branch) actions.toggle(page.id);
-          else actions.select(page.id);
+          else actions.select(page.id, event);
         }}
       >
         <span className="tree-row__glyph" aria-hidden="true">{pageGlyph(page, 14)}</span>
@@ -215,7 +218,7 @@ export const TreeRow = memo(function TreeRow({
           type="button"
           className="tree-row__main"
           aria-current={selected ? "page" : undefined}
-          onClick={() => actions.select(page.id)}
+          onClick={(event) => actions.select(page.id, event)}
           onDoubleClick={() => { if (editable) actions.rename(page.id); }}
           onKeyDown={(event) => {
             if (!reorderable || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || imeComposing(event)) return;
@@ -264,6 +267,7 @@ export const TREE_STEP = 10;
 export interface TreeMetrics {
   counts: Map<string, number>;
   rowIndex: Map<string, number>;
+  visibleOrder: string[];
   totalRows: number;
 }
 
@@ -325,11 +329,13 @@ export function measureTree(
 ): TreeMetrics {
   const counts = new Map<string, number>();
   const rowIndex = new Map<string, number>();
+  const visibleOrder: string[] = [];
   let cursor = 0;
   const walk = (page: NotePage): number => {
     const start = cursor;
     cursor += 1;
     rowIndex.set(page.id, start);
+    visibleOrder.push(page.id);
     let size = 1;
     if (expanded.has(page.id)) {
       const extra = extraChildren?.get(page.id) ?? 0;
@@ -344,5 +350,5 @@ export function measureTree(
     return size;
   };
   for (const root of tree.roots) walk(root);
-  return { counts, rowIndex, totalRows: cursor };
+  return { counts, rowIndex, visibleOrder, totalRows: cursor };
 }

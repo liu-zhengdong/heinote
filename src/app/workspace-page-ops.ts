@@ -5,8 +5,8 @@ import { databaseRows, newDatabaseConfig, rowKey, rowOrderAfter } from "../featu
 import { markFresh } from "../features/database/fresh";
 import { reidentify } from "../features/editor/editor-commands";
 import type { BlockMutation, BlockTree, DatabaseConfig, NotePage, PageVersion, SpaceSummary } from "../core/types";
-import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canShelvePage as canShelvePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, spaceOfPage } from "../core/page-tree";
-import { comparePages, nextSidebarOrder, planSidebarReorder } from "../features/sidebar/tree";
+import { canDeletePage as canDeletePageIn, canMovePage as canMovePageIn, canOrderPage as canOrderPageIn, canRestorePage as canRestorePageIn, canShelvePage as canShelvePageIn, canTrashPage as canTrashPageIn, descendantPageIds, inTrash, normalizeMovedPageIds, spaceOfPage } from "../core/page-tree";
+import { comparePages, nextSidebarOrder, planSidebarReorder, SIDEBAR_ORDER_STEP } from "../features/sidebar/tree";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { renamedTitle } from "../core/title";
 import { pageBasis } from "../collaboration/client";
@@ -40,6 +40,13 @@ export interface MovePageOptions {
   /** Target manual sidebar order for the moved/reordered page. */
   sidebarOrder?: number;
   /** Optional sibling re-spacing map produced by `planSidebarReorder`. */
+  rewriteOrders?: Record<string, number>;
+}
+
+export interface MovePagesOptions {
+  /** Target manual sidebar order per moved/reordered page. */
+  sidebarOrders?: Record<string, number>;
+  /** Optional sibling re-spacing map produced by `planSidebarBatchReorder`. */
   rewriteOrders?: Record<string, number>;
 }
 
@@ -311,76 +318,130 @@ export function useWorkspacePageOps({
     return answer.id;
   }, [document, platform]);
 
+  /** Re-parents and/or reorders a batch of pages atomically in the sidebar
+   *  tree. Normalizes parent+descendant selections so subtrees stay intact, and
+   *  validates every target before writing. */
+  const movePages = useCallback((pageIds: readonly string[], parentId: string | null, options: MovePagesOptions = {}) => {
+    if (!document || !pageIds.length) return;
+    const state = document.state;
+    const targets = normalizeMovedPageIds(state.pages, pageIds);
+    if (!targets.length) return;
+
+    for (const id of targets) {
+      const page = state.pages[id];
+      if (!page || id === parentId) return;
+      const sameParent = (page.parent_id ?? null) === parentId;
+      if (sameParent) {
+        if (!canOrderPageIn(state.pages, spacesRef.current, id)) return;
+      } else {
+        if (!canMovePageIn(state.pages, spacesRef.current, id, parentId)) return;
+        if (parentId && descendantPageIds(state.pages, id).includes(parentId)) return;
+      }
+    }
+
+    const allSameParent = targets.every((id) => (state.pages[id].parent_id ?? null) === parentId);
+    if (allSameParent && !options.sidebarOrders && !options.rewriteOrders) return;
+
+    const targetSet = new Set(targets);
+    const now = Date.now();
+    const baseNextOrder = nextSidebarOrder(
+      siblingsUnder(state.pages, parentId).filter((item) => !targetSet.has(item.id)),
+      now,
+    );
+    const targetSpace = parentId ? spaceOfPage(state.pages, parentId) : undefined;
+    const crossingIds: string[] = [];
+    const localIds: string[] = [];
+    for (const id of targets) {
+      const page = state.pages[id];
+      const reparented = (page.parent_id ?? null) !== parentId;
+      const crossing = reparented && spaceOfPage(state.pages, id) !== targetSpace;
+      if (crossing) crossingIds.push(id);
+      else localIds.push(id);
+    }
+
+    let fallbackIndex = 0;
+    const resolveOrder = (id: string, reparented: boolean): number | undefined => {
+      const explicit = options.rewriteOrders?.[id] ?? options.sidebarOrders?.[id];
+      if (explicit !== undefined) return explicit;
+      if (!reparented) return undefined;
+      const order = baseNextOrder + fallbackIndex * SIDEBAR_ORDER_STEP;
+      fallbackIndex += 1;
+      return order;
+    };
+
+    const resolvedOrders = new Map<string, number | undefined>();
+    for (const id of targets) {
+      const reparented = (state.pages[id].parent_id ?? null) !== parentId;
+      resolvedOrders.set(id, resolveOrder(id, reparented));
+    }
+
+    if (localIds.length) {
+      const mutations: WorkspaceMutation[] = [];
+      const reparentedLocal = new Set<string>();
+      const nextParent = parentId ? state.pages[parentId] : null;
+      for (let index = 0; index < localIds.length; index += 1) {
+        const id = localIds[index];
+        const page = state.pages[id];
+        const reparented = (page.parent_id ?? null) !== parentId;
+        if (reparented) {
+          reparentedLocal.add(id);
+          mutations.push({ type: "set", path: ["pages", id, "parent_id"], value: parentId });
+          // Into a database, they become the newest rows in selection order.
+          if (nextParent?.kind === "database") {
+            mutations.push({ type: "set", path: ["pages", id, "row_order"], value: now + index });
+          }
+        }
+        const order = resolvedOrders.get(id);
+        if (order !== undefined && page.sidebar_order !== order) {
+          mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
+        }
+      }
+      if (options.rewriteOrders && !crossingIds.length) {
+        for (const [id, order] of Object.entries(options.rewriteOrders)) {
+          if (targetSet.has(id)) continue;
+          if (canOrderPageIn(state.pages, spacesRef.current, id) && state.pages[id]?.sidebar_order !== order) {
+            mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
+          }
+        }
+      }
+      if (reparentedLocal.size) {
+        const roots = state.roots.filter((id) => !reparentedLocal.has(id));
+        const orderedReparented = localIds.filter((id) => reparentedLocal.has(id));
+        mutations.push({ type: "set", path: ["roots"], value: parentId ? roots : [...roots, ...orderedReparented] });
+      }
+      if (mutations.length) commit(mutations);
+    }
+
+    if (crossingIds.length) {
+      const siblingRewrites = options.rewriteOrders
+        ? Object.entries(options.rewriteOrders).filter(([id]) => !targetSet.has(id) && canOrderPageIn(state.pages, spacesRef.current, id))
+        : [];
+      void (async () => {
+        for (const id of crossingIds) {
+          const order = resolvedOrders.get(id);
+          await document.transferPage(id, parentId, order !== undefined ? { sidebarOrder: order } : {});
+        }
+        if (siblingRewrites.length) {
+          const writes: WorkspaceMutation[] = siblingRewrites
+            .filter(([id, order]) => document.state.pages[id] && document.state.pages[id].sidebar_order !== order)
+            .map(([id, order]) => ({ type: "set", path: ["pages", id, "sidebar_order"], value: order }));
+          if (writes.length) commit(writes);
+        }
+      })().catch((error) => {
+        if (platform) publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "页面移动失败。", writes: [] });
+      });
+    }
+  }, [commit, document, platform, spacesRef]);
+
   /** Re-parents and/or reorders a page in the sidebar tree. Refuses to drop a
    *  page inside its own subtree, which is the only move that could orphan a
    *  branch. */
   const movePage = useCallback((pageId: string, parentId: string | null, options: MovePageOptions = {}) => {
-    if (!document) return;
-    const page = document.state.pages[pageId];
-    if (!page || pageId === parentId) return;
-    const currentParentId = page.parent_id ?? null;
-    const sameParent = currentParentId === parentId;
-    if (sameParent) {
-      if (options.sidebarOrder === undefined && !options.rewriteOrders) return;
-      if (!canOrderPageIn(document.state.pages, spacesRef.current, pageId)) return;
-      const mutations: WorkspaceMutation[] = [];
-      if (options.rewriteOrders) {
-        for (const [id, order] of Object.entries(options.rewriteOrders)) {
-          if (id === pageId || canOrderPageIn(document.state.pages, spacesRef.current, id)) {
-            if (document.state.pages[id]?.sidebar_order !== order) {
-              mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
-            }
-          }
-        }
-      } else if (options.sidebarOrder !== undefined && page.sidebar_order !== options.sidebarOrder) {
-        mutations.push({ type: "set", path: ["pages", pageId, "sidebar_order"], value: options.sidebarOrder });
-      }
-      if (mutations.length) commit(mutations);
-      return;
-    }
-    if (!canMovePageIn(document.state.pages, spacesRef.current, pageId, parentId)) return;
-    if (parentId && descendantPageIds(document.state.pages, pageId).includes(parentId)) return;
-    const nextOrder = options.sidebarOrder ?? nextSidebarOrder(
-      siblingsUnder(document.state.pages, parentId).filter((item) => item.id !== pageId),
-      Date.now(),
-    );
-    /* A move across scopes runs server-side (UC-59) so large subtrees transfer
-       in SQLite without pulling all bodies/histories into the browser. */
-    const crossing = spaceOfPage(document.state.pages, pageId) !== (parentId ? spaceOfPage(document.state.pages, parentId) : undefined);
-    if (crossing) {
-      const siblingRewrites = options.rewriteOrders
-        ? Object.entries(options.rewriteOrders).filter(([id]) => id !== pageId && canOrderPageIn(document.state.pages, spacesRef.current, id))
-        : [];
-      void document.transferPage(pageId, parentId, { sidebarOrder: nextOrder }).then(() => {
-        if (!siblingRewrites.length) return;
-        const writes: WorkspaceMutation[] = siblingRewrites
-          .filter(([id, order]) => document.state.pages[id] && document.state.pages[id].sidebar_order !== order)
-          .map(([id, order]) => ({ type: "set", path: ["pages", id, "sidebar_order"], value: order }));
-        if (writes.length) commit(writes);
-      }).catch((error) => {
-        if (platform) publishRecovery(platform.bootstrap.user.id, { message: error instanceof Error ? error.message : "页面移动失败。", writes: [] });
-      });
-      return;
-    }
-    const mutations: WorkspaceMutation[] = [
-      { type: "set", path: ["pages", pageId, "parent_id"], value: parentId },
-      { type: "set", path: ["pages", pageId, "sidebar_order"], value: nextOrder },
-    ];
-    if (options.rewriteOrders) {
-      for (const [id, order] of Object.entries(options.rewriteOrders)) {
-        if (id === pageId) continue;
-        if (canOrderPageIn(document.state.pages, spacesRef.current, id) && document.state.pages[id]?.sidebar_order !== order) {
-          mutations.push({ type: "set", path: ["pages", id, "sidebar_order"], value: order });
-        }
-      }
-    }
-    const roots = document.state.roots.filter((id) => id !== pageId);
-    mutations.push({ type: "set", path: ["roots"], value: parentId ? roots : [...roots, pageId] });
-    const nextParent = parentId ? document.state.pages[parentId] : null;
-    // Into a database, it is the newest of its rows.
-    if (nextParent?.kind === "database") mutations.push({ type: "set", path: ["pages", pageId, "row_order"], value: Date.now() });
-    commit(mutations);
-  }, [commit, document, platform, spacesRef]);
+    movePages([pageId], parentId, {
+      ...(options.sidebarOrder !== undefined ? { sidebarOrders: { [pageId]: options.sidebarOrder } } : {}),
+      ...(options.rewriteOrders ? { rewriteOrders: options.rewriteOrders } : {}),
+    });
+  }, [movePages]);
 
   const applyBlockMutations = useCallback((pageId: string, mutations: BlockMutation[]) => {
     if (!document || !platform || !mutations.length) return;
@@ -511,6 +572,7 @@ export function useWorkspacePageOps({
     duplicatePage,
     copyPageTo,
     movePage,
+    movePages,
     applyBlockMutations,
     checkpointPage,
     setPageShelved,

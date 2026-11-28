@@ -21,6 +21,7 @@ import {
   UserPlus,
   Users,
   Waypoints,
+  X,
   Zap,
 } from "lucide-react";
 import {
@@ -49,8 +50,8 @@ import { pagesInSpace } from "../../core/space-navigation";
 import { useWorkspace } from "../../app/workspace-context";
 import { useUi } from "../../app/ui-context";
 import { pageName } from "../../core/block-tree";
-import { descendantPageIds, inTrash, isPurging, pageAncestry, shelvedRoot, spaceOfPage } from "../../core/page-tree";
-import { buildShelvedTree, buildTree, countTree, flattenTree, linkedFromOutside, planSidebarReorder, sameListing, SORT_LABELS, type PageTree } from "./tree";
+import { descendantPageIds, inTrash, isPurging, isShelved, normalizeMovedPageIds, pageAncestry, shelvedRoot, spaceOfPage } from "../../core/page-tree";
+import { buildShelvedTree, buildTree, countTree, flattenTree, linkedFromOutside, planSidebarBatchReorder, planSidebarReorder, sameListing, SORT_LABELS, type PageTree } from "./tree";
 import { sameItems, useWorkspaceState } from "../../app/workspace-store";
 import { useCopyPageLink } from "../../hooks/useCopyPageLink";
 import { usePublicLinks } from "../share/usePublicLinks";
@@ -66,6 +67,7 @@ import {
   ImportTreeRow,
   measureTree,
   PAGE_DRAG,
+  PAGE_DRAG_MULTI,
   readExpanded,
   ROW_HEIGHT_DESKTOP,
   ROW_HEIGHT_MOBILE,
@@ -77,6 +79,7 @@ import {
   type TreeDropPosition,
   type TreeTarget,
 } from "./TreeRow";
+import { useSidebarMarquee } from "./useSidebarMarquee";
 import "./sidebar.css";
 
 /* The graph is loaded the first time it is looked at. */
@@ -110,6 +113,7 @@ export function Sidebar() {
     copyPageTo,
     ensureShareSpace,
     movePage,
+    movePages,
     selectPage,
     setPreference,
     updatePage,
@@ -139,6 +143,7 @@ export function Sidebar() {
 
   const [rowMenu, setRowMenu] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
   const [copyPicker, setCopyPicker] = useState<{ pageId: string; anchor: AnchorRect } | null>(null);
+  const [movePicker, setMovePicker] = useState<AnchorRect | null>(null);
   useEffect(() => {
     if (copyPicker) void ensureAllSpaces();
   }, [copyPicker, ensureAllSpaces]);
@@ -150,8 +155,10 @@ export function Sidebar() {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(readExpanded);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [rootDrop, setRootDrop] = useState(false);
-  const [draggingId, setDraggingId] = useState<string | null>(null);
-  const draggingIdRef = useRef<string | null>(null);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
+  const selectionAnchorRef = useRef<string | null>(null);
+  const [draggingIds, setDraggingIds] = useState<ReadonlySet<string>>(() => new Set());
+  const draggingIdsRef = useRef<string[]>([]);
   const [dropIndicator, setDropIndicator] = useState<{ pageId: string; position: TreeDropPosition; depth: number } | null>(null);
 
   const me = platform?.bootstrap.user.id;
@@ -261,6 +268,44 @@ export function Sidebar() {
   }, [activeSpace?.knowledgeBase?.homePageId, activeSpaceId, importJobs, inLibrary, pages, spaces]);
 
   const treeMetrics = useMemo(() => measureTree(tree, expanded, extraImportCounts), [tree, expanded, extraImportCounts]);
+  const activeMultiSelected = useMemo(() => {
+    if (!multiSelectedIds.size) return multiSelectedIds;
+    const next = new Set<string>();
+    for (const id of multiSelectedIds) {
+      if (pages[id] && !inTrash(pages, id) && !isShelved(pages, id)) next.add(id);
+    }
+    return next.size === multiSelectedIds.size ? multiSelectedIds : next;
+  }, [multiSelectedIds, pages]);
+
+  const visibleOrderRef = useRef<readonly string[]>([]);
+  visibleOrderRef.current = treeMetrics.visibleOrder;
+  const rowIndexRef = useRef<ReadonlyMap<string, number>>(new Map());
+  rowIndexRef.current = treeMetrics.rowIndex;
+  const activeMultiSelectedRef = useRef<ReadonlySet<string>>(activeMultiSelected);
+  activeMultiSelectedRef.current = activeMultiSelected;
+
+  const clearMultiSelection = useCallback(() => {
+    setMultiSelectedIds(new Set());
+    setMovePicker(null);
+  }, []);
+
+  const marqueeEnabled = view === "files" && writable && !mobile && !renaming;
+  const {
+    marquee,
+    marqueeStartRef,
+    marqueeDraggedRef,
+    beginMarquee,
+    onMouseDown: onMarqueeMouseDown,
+  } = useSidebarMarquee({
+    enabled: marqueeEnabled,
+    scrollRef,
+    visibleOrderRef,
+    rowIndexRef,
+    rowHeight,
+    rootImportCount: rootImports.length,
+    currentSelectionRef: activeMultiSelectedRef,
+    onSelectionChange: setMultiSelectedIds,
+  });
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -316,9 +361,28 @@ export function Sidebar() {
     setNewMenu(null);
     setSortMenu(null);
     setRowMenu(null);
+    setMovePicker(null);
     setEmptyTrashConfirm(false);
     setRenaming(null);
+    setMultiSelectedIds(new Set());
+    selectionAnchorRef.current = null;
   }, [activeSpaceId]);
+
+  useEffect(() => {
+    if (view !== "files" || !writable || mobile || renaming) {
+      setMultiSelectedIds(new Set());
+      setMovePicker(null);
+    }
+  }, [mobile, renaming, view, writable]);
+
+  useEffect(() => {
+    if (!activeMultiSelected.size || movePicker || rowMenu || copyPicker || newMenu || sortMenu || emptyTrashConfirm || renaming) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") clearMultiSelection();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeMultiSelected.size, clearMultiSelection, copyPicker, emptyTrashConfirm, movePicker, newMenu, renaming, rowMenu, sortMenu]);
 
   const afterNavigate = useCallback(() => setDrawerOpen(false), [setDrawerOpen]);
 
@@ -468,12 +532,13 @@ export function Sidebar() {
 
   /** Translates a row/root drop target into its destination parent, sibling
    *  insertion index, and indicator indent depth. */
-  const resolveDropPlacement = (target: TreeTarget, draggedPageId: string | null, rowDepth = 0) => {
+  const resolveDropPlacement = (target: TreeTarget, draggedIds: readonly string[], rowDepth = 0) => {
     const libraryHomeId = activeSpace?.knowledgeBase?.homePageId ?? null;
+    const draggedSet = new Set(draggedIds);
     if (!target) {
       const targetParentId = libraryHomeId;
       const siblings = targetParentId ? (tree.children.get(targetParentId) ?? []) : tree.roots;
-      const rest = draggedPageId ? siblings.filter((item) => item.id !== draggedPageId) : siblings;
+      const rest = draggedSet.size ? siblings.filter((item) => !draggedSet.has(item.id)) : siblings;
       return { targetParentId, siblings, insertIndex: rest.length, indicatorDepth: 0, revealId: targetParentId, explicitOrder: true };
     }
     const targetPage = pages[target.pageId];
@@ -481,7 +546,7 @@ export function Sidebar() {
     const targetChildren = tree.children.get(targetPage.id) ?? shelvedTree.children.get(targetPage.id) ?? [];
     const targetCanHold = targetPage.kind === "document" && canEdit(targetPage.id);
     if (target.position === "inside") {
-      const rest = draggedPageId ? targetChildren.filter((item) => item.id !== draggedPageId) : targetChildren;
+      const rest = draggedSet.size ? targetChildren.filter((item) => !draggedSet.has(item.id)) : targetChildren;
       return { targetParentId: targetPage.id, siblings: targetChildren, insertIndex: rest.length, indicatorDepth: rowDepth, revealId: targetPage.id, explicitOrder: false };
     }
     if (target.position === "after" && expanded.has(targetPage.id) && targetChildren.length > 0 && targetCanHold) {
@@ -489,7 +554,7 @@ export function Sidebar() {
     }
     const targetParentId = targetPage.parent_id ?? null;
     const siblings = targetParentId ? (tree.children.get(targetParentId) ?? shelvedTree.children.get(targetParentId) ?? []) : tree.roots;
-    const rest = draggedPageId ? siblings.filter((item) => item.id !== draggedPageId) : siblings;
+    const rest = draggedSet.size ? siblings.filter((item) => !draggedSet.has(item.id)) : siblings;
     const index = rest.findIndex((item) => item.id === targetPage.id);
     if (index < 0) return null;
     return {
@@ -502,9 +567,40 @@ export function Sidebar() {
     };
   };
 
+  const orderedSelectionIds = useCallback((selected: ReadonlySet<string>): string[] => {
+    if (!selected.size) return [];
+    const ordered: string[] = [];
+    const seen = new Set<string>();
+    for (const id of treeMetrics.visibleOrder) {
+      if (selected.has(id)) {
+        ordered.push(id);
+        seen.add(id);
+      }
+    }
+    for (const id of selected) {
+      if (!seen.has(id)) ordered.push(id);
+    }
+    return normalizeMovedPageIds(pages, ordered);
+  }, [pages, treeMetrics.visibleOrder]);
+
+  const moveBlockedMessage = useCallback((pageId: string, targetParentId: string | null): string => {
+    const dragged = pages[pageId];
+    if (!dragged) return "无法将页面移动到此处";
+    const fromSpace = spaceOfPage(pages, pageId);
+    const toSpace = targetParentId ? spaceOfPage(pages, targetParentId) : undefined;
+    if (dragged.share_space_id) return "已共享的根页面不能直接移动位置";
+    if (toSpace && fromSpace !== toSpace && spaces[toSpace]?.role !== "owner") {
+      return "不能将页面移入他人共享的空间，请使用「拷贝到…」";
+    }
+    if (fromSpace && fromSpace !== toSpace && spaces[fromSpace]?.role !== "owner") {
+      return "不能将他人共享空间中的页面移出，请使用「拷贝到…」";
+    }
+    return "无法将页面移动到此处";
+  }, [pages, spaces]);
+
   const clearDrag = () => {
-    draggingIdRef.current = null;
-    setDraggingId(null);
+    draggingIdsRef.current = [];
+    setDraggingIds(new Set());
     setDropIndicator(null);
     setRootDrop(false);
   };
@@ -514,7 +610,41 @@ export function Sidebar() {
   const handlers = useRef<TreeActions | null>(null);
   useLayoutEffect(() => {
     handlers.current = {
-      select: (pageId) => {
+      select: (pageId, event) => {
+        if (marqueeDraggedRef.current) return;
+        const canMultiSelect = view === "files" && writable && !mobile && treeMetrics.rowIndex.has(pageId);
+        if (canMultiSelect && event?.shiftKey) {
+          event.preventDefault();
+          const order = treeMetrics.visibleOrder;
+          const anchor = selectionAnchorRef.current && treeMetrics.rowIndex.has(selectionAnchorRef.current)
+            ? selectionAnchorRef.current
+            : selectedPageId && treeMetrics.rowIndex.has(selectedPageId)
+              ? selectedPageId
+              : pageId;
+          const from = order.indexOf(anchor);
+          const to = order.indexOf(pageId);
+          if (from >= 0 && to >= 0) {
+            const [lo, hi] = from <= to ? [from, to] : [to, from];
+            const range = order.slice(lo, hi + 1);
+            const next = event.metaKey || event.ctrlKey ? new Set([...activeMultiSelected, ...range]) : new Set(range);
+            setMultiSelectedIds(next);
+            setMovePicker(null);
+            if (!selectionAnchorRef.current) selectionAnchorRef.current = anchor;
+            return;
+          }
+        }
+        if (canMultiSelect && (event?.metaKey || event?.ctrlKey)) {
+          event.preventDefault();
+          const next = new Set(activeMultiSelected);
+          if (next.has(pageId)) next.delete(pageId);
+          else next.add(pageId);
+          setMultiSelectedIds(next);
+          setMovePicker(null);
+          selectionAnchorRef.current = pageId;
+          return;
+        }
+        if (activeMultiSelected.size) clearMultiSelection();
+        selectionAnchorRef.current = pageId;
         selectImport(null);
         selectPage(pageId);
         if (view === "memos") setPreference("sidebar_view", "files");
@@ -539,9 +669,33 @@ export function Sidebar() {
         updateExpanded((current) => new Set([...current, pageId]));
         afterNavigate();
       },
-      dragStart: (pageId) => {
-        draggingIdRef.current = pageId;
-        setDraggingId(pageId);
+      dragStart: (pageId, event) => {
+        if (marqueeStartRef.current) {
+          event.preventDefault();
+          return;
+        }
+        const batch = activeMultiSelected.has(pageId) && activeMultiSelected.size > 1;
+        const movingIds = batch ? orderedSelectionIds(activeMultiSelected) : [pageId];
+        const visualDragging = batch ? new Set(activeMultiSelected) : new Set([pageId]);
+        if (!batch && activeMultiSelected.size) clearMultiSelection();
+        draggingIdsRef.current = movingIds;
+        setDraggingIds(visualDragging);
+        event.dataTransfer.setData(PAGE_DRAG, movingIds[0]);
+        event.dataTransfer.setData(PAGE_DRAG_MULTI, JSON.stringify(movingIds));
+        event.dataTransfer.effectAllowed = "move";
+        if (movingIds.length > 1 && typeof event.dataTransfer.setDragImage === "function") {
+          const ghost = document.createElement("div");
+          ghost.className = "sidebar__drag-ghost";
+          const badge = document.createElement("span");
+          badge.className = "sidebar__drag-ghost-count";
+          badge.textContent = String(movingIds.length);
+          const label = document.createElement("span");
+          label.textContent = `移动 ${movingIds.length} 个页面`;
+          ghost.append(badge, label);
+          document.body.appendChild(ghost);
+          event.dataTransfer.setDragImage(ghost, -12, -12);
+          requestAnimationFrame(() => ghost.remove());
+        }
       },
       dragEnd: () => clearDrag(),
       dragOver: (target, depth, event) => {
@@ -550,21 +704,17 @@ export function Sidebar() {
           return;
         }
         setRootDrop(false);
-        const activeId = draggingIdRef.current;
+        const activeIds = draggingIdsRef.current;
         if (!target) {
           setDropIndicator(null);
           return;
         }
         const targetPage = pages[target.pageId];
-        if (!targetPage || targetPage.id === activeId) {
+        if (!targetPage || activeIds.some((id) => id === targetPage.id || pageAncestry(pages, targetPage.id).some((ancestor) => ancestor.id === id))) {
           setDropIndicator(null);
           return;
         }
-        if (activeId && pageAncestry(pages, targetPage.id).some((ancestor) => ancestor.id === activeId)) {
-          setDropIndicator(null);
-          return;
-        }
-        const placement = resolveDropPlacement(target, activeId, depth);
+        const placement = resolveDropPlacement(target, activeIds, depth);
         if (!placement) {
           setDropIndicator(null);
           return;
@@ -573,6 +723,19 @@ export function Sidebar() {
           setDropIndicator(null);
           return;
         }
+        if (
+          placement.targetParentId !== null
+          && activeIds.some((id) => id === placement.targetParentId || pageAncestry(pages, placement.targetParentId!).some((ancestor) => ancestor.id === id))
+        ) {
+          setDropIndicator(null);
+          return;
+        }
+        const allAllowed = activeIds.length === 0 || activeIds.every((id) => {
+          const activePage = pages[id];
+          if (!activePage) return false;
+          const sameParent = (activePage.parent_id ?? null) === placement.targetParentId;
+          return sameParent ? canOrderPage(id) : canMovePage(id, placement.targetParentId);
+        });
         if (target.position === "inside") {
           if (targetPage.kind === "database" || targetPage.kind === "app" || !canEdit(targetPage.id)) {
             setDropIndicator(null);
@@ -580,18 +743,10 @@ export function Sidebar() {
           }
           // Allow drop even across unauthorized spaces so onDrop surfaces the clear toast hint.
           event.preventDefault();
-          const allowed = !activeId || canMovePage(activeId, placement.targetParentId);
-          setDropIndicator(allowed ? { pageId: target.pageId, position: "inside", depth } : null);
+          setDropIndicator(allAllowed ? { pageId: target.pageId, position: "inside", depth } : null);
           return;
         }
-        const activePage = activeId ? pages[activeId] : undefined;
-        const sameParent = activePage ? (activePage.parent_id ?? null) === placement.targetParentId : false;
-        const allowed = !activeId
-          ? true
-          : sameParent
-            ? canOrderPage(activeId)
-            : canMovePage(activeId, placement.targetParentId);
-        if (!allowed) {
+        if (!allAllowed) {
           setDropIndicator(null);
           return;
         }
@@ -607,45 +762,62 @@ export function Sidebar() {
       },
       drop: (target, event) => {
         event.preventDefault();
-        const draggedId = event.dataTransfer.getData(PAGE_DRAG) || draggingIdRef.current || "";
-        clearDrag();
-        if (!draggedId || !writable || view !== "files") return;
-        const dragged = pages[draggedId];
-        if (!dragged) return;
-        if (target && target.pageId === draggedId) return;
-        const placement = resolveDropPlacement(target, draggedId);
-        if (!placement) return;
-        if (inLibrary && placement.targetParentId === null) return;
-        const currentParentId = dragged.parent_id ?? null;
-        const sameParent = currentParentId === placement.targetParentId;
-        if (!sameParent) {
-          if (!canMovePage(draggedId, placement.targetParentId)) {
-            if (dragged.id !== placement.targetParentId) {
-              const fromSpace = spaceOfPage(pages, draggedId);
-              const toSpace = placement.targetParentId ? spaceOfPage(pages, placement.targetParentId) : undefined;
-              const message = dragged.share_space_id
-                ? "已共享的根页面不能直接移动位置"
-                : toSpace && fromSpace !== toSpace && spaces[toSpace]?.role !== "owner"
-                  ? "不能将页面移入他人共享的空间，请使用「拷贝到…」"
-                  : fromSpace && fromSpace !== toSpace && spaces[fromSpace]?.role !== "owner"
-                    ? "不能将他人共享空间中的页面移出，请使用「拷贝到…」"
-                    : "无法将页面移动到此处";
-              toast(message, "info");
-            }
-            return;
+        let rawIds: string[] = [];
+        const multiRaw = event.dataTransfer.getData(PAGE_DRAG_MULTI);
+        if (multiRaw) {
+          try {
+            const parsed: unknown = JSON.parse(multiRaw);
+            if (Array.isArray(parsed)) rawIds = parsed.filter((id): id is string => typeof id === "string");
+          } catch {
+            // Fall back to active drag state or single PAGE_DRAG below.
           }
-        } else if (!canOrderPage(draggedId)) {
+        }
+        if (!rawIds.length && draggingIdsRef.current.length) rawIds = [...draggingIdsRef.current];
+        if (!rawIds.length) {
+          const single = event.dataTransfer.getData(PAGE_DRAG);
+          if (single) rawIds = [single];
+        }
+        clearDrag();
+        if (!rawIds.length || !writable || view !== "files") return;
+        const movingIds = normalizeMovedPageIds(pages, rawIds);
+        if (!movingIds.length) return;
+        if (target && movingIds.some((id) => id === target.pageId || pageAncestry(pages, target.pageId).some((ancestor) => ancestor.id === id))) {
           return;
         }
-        const plan = planSidebarReorder(placement.siblings, dragged, placement.insertIndex, {
+        const placement = resolveDropPlacement(target, movingIds);
+        if (!placement) return;
+        if (inLibrary && placement.targetParentId === null) return;
+        if (
+          placement.targetParentId !== null
+          && movingIds.some((id) => id === placement.targetParentId || pageAncestry(pages, placement.targetParentId!).some((ancestor) => ancestor.id === id))
+        ) {
+          return;
+        }
+        for (const id of movingIds) {
+          const dragged = pages[id];
+          if (!dragged) return;
+          const sameParent = (dragged.parent_id ?? null) === placement.targetParentId;
+          if (!sameParent) {
+            if (!canMovePage(id, placement.targetParentId)) {
+              if (id !== placement.targetParentId) toast(moveBlockedMessage(id, placement.targetParentId), "info");
+              return;
+            }
+          } else if (!canOrderPage(id)) {
+            return;
+          }
+        }
+        const draggedPages = movingIds.map((id) => pages[id]);
+        const plan = planSidebarBatchReorder(placement.siblings, draggedPages, placement.insertIndex, {
           currentSort: sort,
           now: Date.now(),
           canOrder: canOrderPage,
         });
-        if (sameParent && !plan) return;
-        movePage(draggedId, placement.targetParentId, plan ? { sidebarOrder: plan.sidebar_order, rewriteOrders: plan.rewrite } : {});
+        const allSameParent = draggedPages.every((page) => (page.parent_id ?? null) === placement.targetParentId);
+        if (allSameParent && !plan) return;
+        movePages(movingIds, placement.targetParentId, plan ? { sidebarOrders: plan.orders, rewriteOrders: plan.rewrite } : {});
         if (placement.explicitOrder) switchToManualSort();
         revealParent(placement.revealId);
+        clearMultiSelection();
       },
       stepOrder: (pageId, delta) => {
         if (!writable || view !== "files" || !canOrderPage(pageId)) return;
@@ -669,13 +841,13 @@ export function Sidebar() {
     };
   });
   const actions = useMemo<TreeActions>(() => ({
-    select: (pageId) => handlers.current?.select(pageId),
+    select: (pageId, event) => handlers.current?.select(pageId, event),
     toggle: (id) => handlers.current?.toggle(id),
     openMenu: (pageId, anchor) => handlers.current?.openMenu(pageId, anchor),
     rename: (id) => handlers.current?.rename(id),
     finishRename: (pageId, name) => handlers.current?.finishRename(pageId, name),
     createInside: (pageId) => handlers.current?.createInside(pageId),
-    dragStart: (pageId) => handlers.current?.dragStart(pageId),
+    dragStart: (pageId, event) => handlers.current?.dragStart(pageId, event),
     dragEnd: () => handlers.current?.dragEnd(),
     dragOver: (target, depth, event) => handlers.current?.dragOver(target, depth, event),
     dragLeave: (pageId) => handlers.current?.dragLeave(pageId),
@@ -727,12 +899,13 @@ export function Sidebar() {
           branch={children.length > 0 || childImports.length > 0}
           open={open}
           selected={!selectedImportId && selectedPageId === page.id}
+          multiSelected={view === "files" && activeMultiSelected.has(page.id)}
           renaming={renaming === page.id}
           menuOpen={rowMenu?.pageId === page.id}
           editable={canEdit(page.id)}
           movable={canMovePage(page.id, undefined)}
           reorderable={view === "files" && canOrderPage(page.id)}
-          dragging={draggingId === page.id}
+          dragging={draggingIds.has(page.id)}
           dropPosition={dropIndicator?.pageId === page.id ? dropIndicator.position : null}
           dropDepth={dropIndicator?.pageId === page.id ? dropIndicator.depth : depth}
           linked={linkedPage(page)}
@@ -793,6 +966,7 @@ export function Sidebar() {
         branch={false}
         open={false}
         selected={selectedPageId === page.id}
+        multiSelected={false}
         renaming={renaming === page.id}
         menuOpen={rowMenu?.pageId === page.id}
         editable={canEdit(page.id)}
@@ -951,13 +1125,21 @@ export function Sidebar() {
       ) : (
         <div
           ref={scrollRef}
-          className={`sidebar__scroll scroller ${rootDrop ? "is-drop-target" : ""}`}
+          className={`sidebar__scroll scroller ${rootDrop ? "is-drop-target" : ""} ${marquee ? "is-marquee" : ""}`}
           role={view === "trash" ? undefined : "tree"}
           aria-label={capitalized(view)}
           onScroll={(event) => {
             if (view !== "files") return;
             const next = Math.floor(event.currentTarget.scrollTop / (rowHeight * TREE_STEP)) * TREE_STEP;
             setScrollBucket((current) => (current === next ? current : next));
+          }}
+          onPointerDown={beginMarquee}
+          onMouseDown={onMarqueeMouseDown}
+          onClick={(event) => {
+            if (marqueeDraggedRef.current) return;
+            if (activeMultiSelected.size && !(event.target as Element | null)?.closest(".tree-row")) {
+              clearMultiSelection();
+            }
           }}
           onDragOver={(event) => {
             if (!writable || view !== "files" || !event.dataTransfer.types.includes(PAGE_DRAG)) return;
@@ -973,6 +1155,13 @@ export function Sidebar() {
             if (view === "files") actions.drop(null, event);
           }}
         >
+          {marquee ? (
+            <div
+              className="sidebar__marquee"
+              style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }}
+              aria-hidden="true"
+            />
+          ) : null}
           {view === "files" ? (
             <>
               {rootImports.map((job) => (
@@ -1068,6 +1257,30 @@ export function Sidebar() {
         </div>
       )}
 
+      {view === "files" && writable && !mobile && activeMultiSelected.size > 0 ? (
+        <div className="sidebar__selection-bar" role="region" aria-label="批量操作">
+          <span className="sidebar__selection-count">已选 {activeMultiSelected.size} 项</span>
+          <button
+            type="button"
+            className="sidebar__selection-action"
+            aria-haspopup="dialog"
+            aria-expanded={Boolean(movePicker)}
+            onClick={(event) => setMovePicker(rectOf(event.currentTarget))}
+          >
+            <FolderInput size={12} aria-hidden="true" />
+            <span>移动到…</span>
+          </button>
+          <button
+            type="button"
+            className="icon-btn sidebar__selection-clear"
+            aria-label="取消多选"
+            onClick={clearMultiSelection}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      ) : null}
+
       {mobile ? <footer className="sidebar__foot">{accountFoot(false)}</footer> : null}
     </>
   );
@@ -1089,6 +1302,22 @@ export function Sidebar() {
       : null),
     (left, right) => (left && right ? sameItems(left, right) : left === right),
   );
+  const moveSelectionIds = useMemo(
+    () => (movePicker ? orderedSelectionIds(activeMultiSelected) : []),
+    [activeMultiSelected, movePicker, orderedSelectionIds],
+  );
+  const moveTargets = useMemo(() => {
+    if (!movePicker || !moveSelectionIds.length) return [];
+    return Object.values(pages).filter(
+      (candidate) =>
+        candidate.kind === "document"
+        && !inTrash(pages, candidate.id)
+        && !isShelved(pages, candidate.id)
+        && moveSelectionIds.every((id) => canMovePage(id, candidate.id)),
+    );
+  }, [canMovePage, movePicker, moveSelectionIds, pages]);
+  const topTargetId = activeSpace?.knowledgeBase?.homePageId ?? null;
+  const canMoveAllToTop = moveSelectionIds.length > 0 && moveSelectionIds.every((id) => canMovePage(id, topTargetId));
 
   return (
     <>
@@ -1351,6 +1580,31 @@ export function Sidebar() {
             }).catch((reason: unknown) => toast(reason instanceof Error ? reason.message : "无法拷贝此页面", "error"));
           }}
           onClose={() => setCopyPicker(null)}
+        />
+      ) : null}
+
+      {/* "移动到…": moves the currently multi-selected pages under a target page
+          or back to top level. */}
+      {movePicker && moveSelectionIds.length > 0 ? (
+        <MoveToMenu
+          anchor={movePicker}
+          pages={moveTargets}
+          count={moveSelectionIds.length}
+          label="移动到…"
+          placeholder={`将 ${moveSelectionIds.length} 个页面移动到…`}
+          onMove={(targetId) => {
+            setMovePicker(null);
+            movePages(moveSelectionIds, targetId);
+            revealParent(targetId);
+            clearMultiSelection();
+          }}
+          onMoveToTop={canMoveAllToTop ? () => {
+            setMovePicker(null);
+            movePages(moveSelectionIds, topTargetId);
+            revealParent(topTargetId);
+            clearMultiSelection();
+          } : undefined}
+          onClose={() => setMovePicker(null)}
         />
       ) : null}
 

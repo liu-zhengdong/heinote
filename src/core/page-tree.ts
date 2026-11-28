@@ -88,6 +88,22 @@ export function descendantPageIds(pages: Record<string, NotePage>, rootId: strin
   return ids;
 }
 
+/** Deduplicates `pageIds` in order, keeping only existing pages, and drops any
+ *  page whose ancestor is also selected so moving a parent + child keeps the
+ *  subtree intact instead of flattening it. */
+export function normalizeMovedPageIds(pages: Record<string, NotePage>, pageIds: readonly string[]): string[] {
+  const validIds: string[] = [];
+  const seen = new Set<string>();
+  for (const id of pageIds) {
+    if (!id || seen.has(id) || !pages[id]) continue;
+    seen.add(id);
+    validIds.push(id);
+  }
+  if (validIds.length <= 1) return validIds;
+  const selected = new Set(validIds);
+  return validIds.filter((id) => !pageAncestry(pages, id).slice(0, -1).some((ancestor) => selected.has(ancestor.id)));
+}
+
 /** The space a page lives in: its own share space, or its nearest shared
  *  ancestor's. None for a private page. */
 export function spaceOfPage(pages: Record<string, NotePage>, pageId: string | null | undefined): string | undefined {

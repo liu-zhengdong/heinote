@@ -287,3 +287,149 @@ test("UC-62 shared spaces: knowledge base and ordinary shared tree sync custom o
     await carolCtx.close();
   }
 });
+
+async function dragBatchFromRow(
+  page: Page,
+  sourceTitle: string,
+  target: { title: string; zone: "before" | "inside" | "after" } | "root",
+  options: { assertIndicator?: boolean } = {},
+) {
+  const sourceRow = rowByTitle(page, sourceTitle);
+  const transfer = await page.evaluateHandle(() => new DataTransfer());
+  await sourceRow.dispatchEvent("dragstart", { dataTransfer: transfer });
+
+  if (target === "root") {
+    const scroller = page.getByRole("tree", { name: "Files", exact: true });
+    await scroller.dispatchEvent("dragover", { dataTransfer: transfer });
+    if (options.assertIndicator) await expect(scroller).toHaveClass(/is-drop-target/);
+    await scroller.dispatchEvent("drop", { dataTransfer: transfer });
+  } else {
+    const targetRow = rowByTitle(page, target.title);
+    const box = (await targetRow.boundingBox())!;
+    expect(box).toBeTruthy();
+    const ratio = target.zone === "before" ? 0.1 : target.zone === "after" ? 0.9 : 0.5;
+    const clientX = box.x + box.width * 0.5;
+    const clientY = box.y + box.height * ratio;
+    await targetRow.dispatchEvent("dragover", { dataTransfer: transfer, clientX, clientY });
+    if (options.assertIndicator) {
+      const cls = target.zone === "before" ? /is-drop-before/ : target.zone === "after" ? /is-drop-after/ : /is-drop-target/;
+      await expect(targetRow).toHaveClass(cls);
+    }
+    await targetRow.dispatchEvent("drop", { dataTransfer: transfer, clientX, clientY });
+  }
+  await sourceRow.dispatchEvent("dragend", { dataTransfer: transfer });
+}
+
+test("UC-62 multi-select: marquee box-select, modifier clicks, batch drag/drop, MoveToMenu, and atomic undo", async ({ page }) => {
+  await register(page, "uc62_batch");
+  await createDocument(page, "Folder");
+  await createDocument(page, "Note A");
+  await createDocument(page, "Note B");
+  await createDocument(page, "Note C");
+
+  const tree = page.getByRole("tree", { name: "Files", exact: true });
+  const rootLabels = tree.locator(":scope > .tree-branch > .tree-row .tree-row__label");
+  await expect(rootLabels).toHaveText(["Folder", "Note A", "Note B", "Note C"]);
+
+  const childLabels = (parentTitle: string) =>
+    rowByTitle(page, parentTitle)
+      .locator("xpath=ancestor::div[contains(@class,'tree-branch')][1]")
+      .locator(":scope > .tree-children > .tree-branch > .tree-row .tree-row__label");
+
+  // 1. Marquee box-select starting in empty area below Note C and dragging up to Note A.
+  const noteABox = (await rowByTitle(page, "Note A").boundingBox())!;
+  const noteCBox = (await rowByTitle(page, "Note C").boundingBox())!;
+  const startX = noteCBox.x + noteCBox.width * 0.5;
+  const startY = noteCBox.y + noteCBox.height + 24;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(noteABox.x + noteABox.width * 0.5, noteABox.y + noteABox.height * 0.5, { steps: 8 });
+  await expect(tree.locator(".sidebar__marquee")).toBeVisible();
+  await page.mouse.up();
+
+  const selectionBar = page.getByRole("region", { name: "批量操作", exact: true });
+  await expect(selectionBar).toContainText("已选 3 项");
+  await expect(rowByTitle(page, "Folder")).not.toHaveClass(/is-multi-selected/);
+  for (const title of ["Note A", "Note B", "Note C"]) {
+    await expect(rowByTitle(page, title)).toHaveClass(/is-multi-selected/);
+  }
+
+  // Drag one of the selected rows onto Folder (inside) -> all 3 move into Folder in order.
+  await dragBatchFromRow(page, "Note B", { title: "Folder", zone: "inside" }, { assertIndicator: true });
+  await expect(rootLabels).toHaveText(["Folder"]);
+  await expect(childLabels("Folder")).toHaveText(["Note A", "Note B", "Note C"]);
+  await expect(selectionBar).toBeHidden();
+
+  // Persist across reload.
+  await page.reload();
+  await expect(rootLabels).toHaveText(["Folder"]);
+  await expect(childLabels("Folder")).toHaveText(["Note A", "Note B", "Note C"]);
+
+  // 2. Shift+Click range selection + drop to blank scroll area moves selected pages back to root.
+  await rowByTitle(page, "Note A").locator(".tree-row__main").click();
+  await rowByTitle(page, "Note C").locator(".tree-row__main").click({ modifiers: ["Shift"] });
+  await expect(selectionBar).toContainText("已选 3 项");
+  await dragBatchFromRow(page, "Note A", "root", { assertIndicator: true });
+  await expect(rootLabels).toHaveText(["Folder", "Note A", "Note B", "Note C"]);
+  await expect(selectionBar).toBeHidden();
+
+  // Single Cmd/Ctrl+Z undo reverts the batch move back under Folder atomically.
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(rootLabels).toHaveText(["Folder"]);
+  await expect(childLabels("Folder")).toHaveText(["Note A", "Note B", "Note C"]);
+
+  // 3. Cmd/Ctrl+Click toggle selection + batch "before" reorder inside Folder.
+  await rowByTitle(page, "Note B").locator(".tree-row__main").click({ modifiers: ["ControlOrMeta"] });
+  await rowByTitle(page, "Note C").locator(".tree-row__main").click({ modifiers: ["ControlOrMeta"] });
+  await expect(selectionBar).toContainText("已选 2 项");
+  await dragBatchFromRow(page, "Note C", { title: "Note A", zone: "before" }, { assertIndicator: true });
+  await expect(childLabels("Folder")).toHaveText(["Note B", "Note C", "Note A"]);
+
+  // 4. Left-gutter marquee over expanded parent + child + sibling preserves subtree nesting.
+  await createDocument(page, "Target");
+  await dragBatchFromRow(page, "Note C", { title: "Folder", zone: "before" });
+  await dragBatchFromRow(page, "Note A", { title: "Folder", zone: "before" });
+  await dragBatchFromRow(page, "Note B", { title: "Note A", zone: "inside" });
+  await expect(rootLabels).toHaveText(["Note C", "Note A", "Folder", "Target"]);
+  await expect(childLabels("Note A")).toHaveText(["Note B"]);
+
+  const noteBBox = (await rowByTitle(page, "Note B").boundingBox())!;
+  const noteCBox2 = (await rowByTitle(page, "Note C").boundingBox())!;
+  // Start inside Note B's depth-1 left indent gutter and sweep up through Note C.
+  await page.mouse.move(noteBBox.x + 8, noteBBox.y + noteBBox.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(noteCBox2.x + 8, noteCBox2.y + noteCBox2.height * 0.5, { steps: 8 });
+  await page.mouse.up();
+  await expect(selectionBar).toContainText("已选 3 项");
+
+  await dragBatchFromRow(page, "Note A", { title: "Target", zone: "inside" }, { assertIndicator: true });
+  await expect(rootLabels).toHaveText(["Folder", "Target"]);
+  await expect(childLabels("Target")).toHaveText(["Note C", "Note A"]);
+  await expect(childLabels("Note A")).toHaveText(["Note B"]);
+
+  // 5. Selection bar "移动到…" picker + Escape / empty-space clear.
+  await rowByTitle(page, "Note C").locator(".tree-row__main").click();
+  await rowByTitle(page, "Note A").locator(".tree-row__main").click({ modifiers: ["Shift"] });
+  await expect(selectionBar).toContainText("已选 2 项");
+  await page.keyboard.press("Escape");
+  await expect(selectionBar).toBeHidden();
+
+  await rowByTitle(page, "Note C").locator(".tree-row__main").click();
+  await rowByTitle(page, "Note A").locator(".tree-row__main").click({ modifiers: ["Shift"] });
+  await expect(selectionBar).toContainText("已选 2 项");
+  await selectionBar.getByRole("button", { name: "移动到…", exact: true }).click();
+  const moveDialog = page.getByRole("dialog", { name: "移动到…", exact: true });
+  await expect(moveDialog).toBeVisible();
+  await moveDialog.getByRole("option", { name: /Folder/ }).click();
+  await expect(childLabels("Folder")).toHaveText(["Note C", "Note A"]);
+  await expect(childLabels("Note A")).toHaveText(["Note B"]);
+  await expect(selectionBar).toBeHidden();
+
+  // Clicking empty area clears multi-selection.
+  await rowByTitle(page, "Folder").locator(".tree-row__main").click({ modifiers: ["ControlOrMeta"] });
+  await rowByTitle(page, "Target").locator(".tree-row__main").click({ modifiers: ["ControlOrMeta"] });
+  await expect(selectionBar).toContainText("已选 2 项");
+  const targetBox = (await rowByTitle(page, "Target").boundingBox())!;
+  await page.mouse.click(targetBox.x + targetBox.width * 0.5, targetBox.y + targetBox.height + 24);
+  await expect(selectionBar).toBeHidden();
+});

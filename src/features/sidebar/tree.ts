@@ -47,6 +47,101 @@ export interface SidebarReorderPlan {
   rewrite?: Record<string, number>;
 }
 
+export interface SidebarBatchReorderPlan {
+  orders: Record<string, number>;
+  /** Present when sibling keys need re-spacing (precision exhaustion or switching
+   *  from an automatic sort to manual while preserving the visible order). */
+  rewrite?: Record<string, number>;
+}
+
+/** Computes the `sidebar_order` update(s) needed to place `dragged` pages (in
+ *  their target order) at `insertIndex` (0..rest.length) among `siblings`
+ *  (ordered as currently shown). Returns null when the drop leaves manual
+ *  order unchanged. */
+export function planSidebarBatchReorder(
+  siblings: readonly NotePage[],
+  dragged: readonly NotePage[],
+  insertIndex: number,
+  options: {
+    currentSort: SidebarSort;
+    now: number;
+    canOrder?: (pageId: string) => boolean;
+  },
+): SidebarBatchReorderPlan | null {
+  if (!dragged.length) return null;
+  const { currentSort, now, canOrder = () => true } = options;
+  const draggedIds = new Set(dragged.map((page) => page.id));
+  const rest = siblings.filter((item) => !draggedIds.has(item.id));
+  const at = Math.max(0, Math.min(rest.length, insertIndex));
+  const sequence = [...rest.slice(0, at), ...dragged, ...rest.slice(at)];
+  if (
+    currentSort === "manual"
+    && siblings.length === sequence.length
+    && sequence.every((page, index) => siblings[index]?.id === page.id)
+  ) {
+    return null;
+  }
+
+  const before = rest[at - 1];
+  const after = rest[at];
+  const lo = before ? manualOrderKey(before) : undefined;
+  const hi = after ? manualOrderKey(after) : undefined;
+  const count = dragged.length;
+  const needsRewrite = currentSort !== "manual"
+    || (lo !== undefined && hi !== undefined && (hi - lo) / (count + 1) < SIDEBAR_ORDER_EPSILON);
+
+  if (!needsRewrite) {
+    const orders: Record<string, number> = {};
+    for (let index = 0; index < count; index += 1) {
+      const page = dragged[index];
+      orders[page.id] = lo === undefined && hi === undefined ? now + index * SIDEBAR_ORDER_STEP
+        : lo === undefined ? hi! - (count - index) * SIDEBAR_ORDER_STEP
+        : hi === undefined ? lo + (index + 1) * SIDEBAR_ORDER_STEP
+        : lo + ((hi - lo) * (index + 1)) / (count + 1);
+    }
+    return { orders };
+  }
+
+  const rewrite: Record<string, number> = {};
+  const movable = (page: NotePage) => draggedIds.has(page.id) || canOrder(page.id);
+  const hasFixedAnchor = sequence.some((page) => !movable(page));
+
+  if (!hasFixedAnchor) {
+    sequence.forEach((page, index) => { rewrite[page.id] = (index + 1) * SIDEBAR_ORDER_STEP; });
+  } else {
+    // Keep non-editable anchors (e.g. another user's shared root) untouched and
+    // space editable runs cleanly between their surrounding anchor keys.
+    for (let start = 0; start < sequence.length;) {
+      if (!movable(sequence[start])) {
+        start += 1;
+        continue;
+      }
+      let end = start;
+      while (end + 1 < sequence.length && movable(sequence[end + 1])) end += 1;
+      const leftAnchor = start > 0 ? manualOrderKey(sequence[start - 1]) : undefined;
+      const rightAnchor = end + 1 < sequence.length ? manualOrderKey(sequence[end + 1]) : undefined;
+      const runLength = end - start + 1;
+      for (let offset = 0; offset < runLength; offset += 1) {
+        const page = sequence[start + offset];
+        if (leftAnchor !== undefined && rightAnchor !== undefined && rightAnchor > leftAnchor) {
+          rewrite[page.id] = leftAnchor + ((rightAnchor - leftAnchor) * (offset + 1)) / (runLength + 1);
+        } else if (rightAnchor !== undefined && leftAnchor === undefined) {
+          rewrite[page.id] = rightAnchor - (runLength - offset) * SIDEBAR_ORDER_STEP;
+        } else if (leftAnchor !== undefined) {
+          rewrite[page.id] = leftAnchor + (offset + 1) * SIDEBAR_ORDER_STEP;
+        } else {
+          rewrite[page.id] = (start + offset + 1) * SIDEBAR_ORDER_STEP;
+        }
+      }
+      start = end + 1;
+    }
+  }
+
+  const orders: Record<string, number> = {};
+  for (const page of dragged) orders[page.id] = rewrite[page.id];
+  return { orders, rewrite };
+}
+
 /** Computes the `sidebar_order` update(s) needed to place `dragged` at
  *  `insertIndex` (0..rest.length) among `siblings` (ordered as currently shown).
  *  Returns null when the drop leaves manual order unchanged. */
@@ -60,64 +155,12 @@ export function planSidebarReorder(
     canOrder?: (pageId: string) => boolean;
   },
 ): SidebarReorderPlan | null {
-  const { currentSort, now, canOrder = () => true } = options;
-  const oldIndex = siblings.findIndex((item) => item.id === dragged.id);
-  const rest = oldIndex >= 0 ? siblings.filter((item) => item.id !== dragged.id) : [...siblings];
-  const at = Math.max(0, Math.min(rest.length, insertIndex));
-  if (currentSort === "manual" && oldIndex >= 0 && oldIndex === at) return null;
-
-  const before = rest[at - 1];
-  const after = rest[at];
-  const lo = before ? manualOrderKey(before) : undefined;
-  const hi = after ? manualOrderKey(after) : undefined;
-  const needsRewrite = currentSort !== "manual"
-    || (lo !== undefined && hi !== undefined && hi - lo < SIDEBAR_ORDER_EPSILON);
-
-  if (!needsRewrite) {
-    const sidebar_order = lo === undefined && hi === undefined ? now
-      : lo === undefined ? hi! - SIDEBAR_ORDER_STEP
-      : hi === undefined ? lo + SIDEBAR_ORDER_STEP
-      : lo + (hi - lo) / 2;
-    return { sidebar_order };
-  }
-
-  const sequence = [...rest.slice(0, at), dragged, ...rest.slice(at)];
-  const rewrite: Record<string, number> = {};
-  const movable = (page: NotePage) => page.id === dragged.id || canOrder(page.id);
-  const hasFixedAnchor = sequence.some((page) => !movable(page));
-
-  if (!hasFixedAnchor) {
-    sequence.forEach((page, index) => { rewrite[page.id] = (index + 1) * SIDEBAR_ORDER_STEP; });
-    return { sidebar_order: rewrite[dragged.id], rewrite };
-  }
-
-  // Keep non-editable anchors (e.g. another user's shared root) untouched and
-  // space editable runs cleanly between their surrounding anchor keys.
-  for (let start = 0; start < sequence.length;) {
-    if (!movable(sequence[start])) {
-      start += 1;
-      continue;
-    }
-    let end = start;
-    while (end + 1 < sequence.length && movable(sequence[end + 1])) end += 1;
-    const leftAnchor = start > 0 ? manualOrderKey(sequence[start - 1]) : undefined;
-    const rightAnchor = end + 1 < sequence.length ? manualOrderKey(sequence[end + 1]) : undefined;
-    const count = end - start + 1;
-    for (let offset = 0; offset < count; offset += 1) {
-      const page = sequence[start + offset];
-      if (leftAnchor !== undefined && rightAnchor !== undefined && rightAnchor > leftAnchor) {
-        rewrite[page.id] = leftAnchor + ((rightAnchor - leftAnchor) * (offset + 1)) / (count + 1);
-      } else if (rightAnchor !== undefined && leftAnchor === undefined) {
-        rewrite[page.id] = rightAnchor - (count - offset) * SIDEBAR_ORDER_STEP;
-      } else if (leftAnchor !== undefined) {
-        rewrite[page.id] = leftAnchor + (offset + 1) * SIDEBAR_ORDER_STEP;
-      } else {
-        rewrite[page.id] = (start + offset + 1) * SIDEBAR_ORDER_STEP;
-      }
-    }
-    start = end + 1;
-  }
-  return { sidebar_order: rewrite[dragged.id], rewrite };
+  const plan = planSidebarBatchReorder(siblings, [dragged], insertIndex, options);
+  if (!plan) return null;
+  return {
+    sidebar_order: plan.orders[dragged.id],
+    ...(plan.rewrite ? { rewrite: plan.rewrite } : {}),
+  };
 }
 
 /** Manual order plus Obsidian's automatic orders. */

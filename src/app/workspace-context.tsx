@@ -45,10 +45,10 @@ import { useSession } from "../features/account/AuthGate";
 import { firstPageInSpace, navigationSpaceOf } from "../core/space-navigation";
 import { readSpaceNavigation, rememberSpacePage } from "./space-navigation-state";
 import { useWorkspaceHistory } from "./workspace-history-hook";
-import { useWorkspacePageOps, type CreatePageOptions, type MovePageOptions, type PagePatch } from "./workspace-page-ops";
+import { useWorkspacePageOps, type CreatePageOptions, type MovePageOptions, type MovePagesOptions, type PagePatch } from "./workspace-page-ops";
 import { useWorkspaceSpaces } from "./workspace-spaces-hook";
 
-export type { CreatePageOptions, MovePageOptions, PagePatch };
+export type { CreatePageOptions, MovePageOptions, MovePagesOptions, PagePatch };
 
 /** Stable workspace actions — separated so action-only consumers do not need
  *  to re-render on selection, preference, or roster changes. */
@@ -84,6 +84,8 @@ export interface WorkspaceActionsValue {
   copyPageTo(pageId: string, parentId: string | null): Promise<string | null>;
   /** Moves a page to another folder and/or updates its manual sidebar order. */
   movePage(pageId: string, parentId: string | null, options?: MovePageOptions): void;
+  /** Moves multiple pages atomically to another folder and/or updates their manual sidebar order. */
+  movePages(pageIds: readonly string[], parentId: string | null, options?: MovePagesOptions): void;
   applyBlockMutations(pageId: string, mutations: BlockMutation[]): void;
   /** Writes a change already worked out as writes — the editor's, sent to
    *  the pages holding what it touched. `record: false` keeps it out of undo. */
@@ -609,6 +611,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     duplicatePage: pageOps.duplicatePage,
     copyPageTo: pageOps.copyPageTo,
     movePage: pageOps.movePage,
+    movePages: pageOps.movePages,
     applyBlockMutations: pageOps.applyBlockMutations,
     commitWrites: commit,
     commitPageOps,
@@ -657,6 +660,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     pageOps.duplicatePage,
     pageOps.copyPageTo,
     pageOps.movePage,
+    pageOps.movePages,
     pageOps.applyBlockMutations,
     commit,
     commitPageOps,

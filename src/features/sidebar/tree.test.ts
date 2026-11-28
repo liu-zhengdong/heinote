@@ -4,7 +4,7 @@ import { restoredPage } from "../../core/versions";
 import { mentionDescriber, mentionItems, referenceIndex } from "../editor/mentions";
 import { quickFindBuckets } from "../quickfind/QuickFind";
 import { buildGraph, graphAnchor } from "./graph";
-import { buildShelvedTree, buildTree, countTree, flattenTree, manualOrderKey, nextSidebarOrder, planSidebarReorder, sameListing, SIDEBAR_ORDER_STEP } from "./tree";
+import { buildShelvedTree, buildTree, countTree, flattenTree, manualOrderKey, nextSidebarOrder, planSidebarBatchReorder, planSidebarReorder, sameListing, SIDEBAR_ORDER_STEP } from "./tree";
 import { resolveRowDropPosition } from "./TreeRow";
 
 function page(id: string, options: Partial<NotePage> = {}): NotePage {
@@ -141,6 +141,58 @@ describe("UC-62: manual sidebar sorting, reorder planning, and drop zone resolut
       sidebar_order: 2048,
       rewrite: { t1: 1024, t3: 2048, t2: 3072 },
     });
+  });
+
+  it("plans multi-page batch reorders at head, mid, tail, no-op, exhausted gaps, and auto-sort with fixed anchors", () => {
+    const a = page("a", { sidebar_order: 1024 });
+    const b = page("b", { sidebar_order: 2048 });
+    const c = page("c", { sidebar_order: 3072 });
+    const d = page("d", { sidebar_order: 4096 });
+    const siblings = [a, b, c, d];
+
+    // No-op when [b, c] is dropped right back between a and d in manual sort.
+    expect(planSidebarBatchReorder(siblings, [b, c], 1, { currentSort: "manual", now: 9999 })).toBeNull();
+
+    // Move [c, d] to head (before a): evenly spaced below 1024.
+    const toHead = planSidebarBatchReorder(siblings, [c, d], 0, { currentSort: "manual", now: 9999 });
+    expect(toHead).toEqual({
+      orders: { c: 1024 - 2 * SIDEBAR_ORDER_STEP, d: 1024 - SIDEBAR_ORDER_STEP },
+    });
+
+    // Move [a, d] between b (2048) and c (3072): splits the gap in thirds.
+    const toMid = planSidebarBatchReorder(siblings, [a, d], 1, { currentSort: "manual", now: 9999 });
+    expect(toMid?.rewrite).toBeUndefined();
+    expect(toMid!.orders.a).toBeGreaterThan(2048);
+    expect(toMid!.orders.a).toBeLessThan(toMid!.orders.d);
+    expect(toMid!.orders.d).toBeLessThan(3072);
+
+    // Move [a, b] to tail (after d).
+    const toTail = planSidebarBatchReorder(siblings, [a, b], 2, { currentSort: "manual", now: 9999 });
+    expect(toTail).toEqual({
+      orders: { a: 4096 + SIDEBAR_ORDER_STEP, b: 4096 + 2 * SIDEBAR_ORDER_STEP },
+    });
+
+    // Exhausted gap triggers clean respace across the whole sibling list.
+    const tight1 = page("tight1", { sidebar_order: 100 });
+    const tight2 = page("tight2", { sidebar_order: 100 });
+    const tightPlan = planSidebarBatchReorder([tight1, tight2], [a, b], 1, { currentSort: "manual", now: 9999 });
+    expect(tightPlan).toEqual({
+      orders: { a: 2048, b: 3072 },
+      rewrite: { tight1: 1024, a: 2048, b: 3072, tight2: 4096 },
+    });
+
+    // Materializes visible order when dragging from an automatic sort while preserving non-editable anchors.
+    const foreign = page("foreign", { title: "Bravo", share_space_id: "other_space", sidebar_order: 10000 });
+    const autoPlan = planSidebarBatchReorder([a, foreign, c, d], [c, d], 0, {
+      currentSort: "name",
+      now: 9999,
+      canOrder: (id) => id !== "foreign",
+    });
+    expect(autoPlan?.rewrite).toBeDefined();
+    expect(autoPlan?.rewrite?.foreign).toBeUndefined();
+    expect(autoPlan!.orders.c).toBeLessThan(autoPlan!.orders.d);
+    expect(autoPlan!.orders.d).toBeLessThan(autoPlan!.rewrite!.a);
+    expect(autoPlan!.rewrite!.a).toBeLessThan(10000);
   });
 
   it("materializes visible order when dragging from an automatic sort while preserving non-editable anchors", () => {
