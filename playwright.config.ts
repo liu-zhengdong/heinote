@@ -1,9 +1,59 @@
 import { defineConfig } from "@playwright/test";
 
+const FUNCTIONAL_SPECS = [
+  "browser.test.ts",
+  "collaboration-browser.test.ts",
+  "sidebar-browser.test.ts",
+  "mobile-ui-browser.test.ts",
+  "media-insert-browser.test.ts",
+  "select-browser.test.ts",
+  "github-browser.test.ts",
+  "github-notice-browser.test.ts",
+  "account-settings-browser.test.ts",
+  "account-settings-recovery-browser.test.ts",
+  "account-settings-zoom-browser.test.ts",
+  "agent-databases-browser.test.ts",
+  "agent-apps-browser.test.ts",
+  "uc22-database-browser.test.ts",
+  "uc44-columns-reorder-browser.test.ts",
+  "uc53-row-reorder-browser.test.ts",
+  "uc45-image-viewer-browser.test.ts",
+  "uc61-image-ops-browser.test.ts",
+  "uc62-sidebar-reorder-browser.test.ts",
+  "uc63-page-archive-browser.test.ts",
+  "uc64-memos-browser.test.ts",
+  "uc65-math-browser.test.ts",
+  "account-avatar-browser.test.ts",
+  "knowledge-bases-browser.test.ts",
+  "import-browser.test.ts",
+  "import-base-browser.test.ts",
+  "admin-console-browser.test.ts",
+  "share-popover-browser.test.ts",
+  "public-nav-browser.test.ts",
+  "public-reader-browser.test.ts",
+  "outline-browser.test.ts",
+  "simple-table-browser.test.ts",
+  "mermaid-browser.test.ts",
+  "selection-marks-browser.test.ts",
+  "save-shortcut-browser.test.ts",
+  "export-browser.test.ts",
+  "table-scroll-edges-browser.test.ts",
+  "embed-browser.test.ts",
+];
+
+const PERF_SPECS = [
+  "startup-perf-browser.test.ts",
+  "long-page-perf-browser.test.ts",
+];
+
 export default defineConfig({
   testDir: "./tests",
-  testMatch: ["browser.test.ts", "collaboration-browser.test.ts", "sidebar-browser.test.ts", "mobile-ui-browser.test.ts", "media-insert-browser.test.ts", "select-browser.test.ts", "github-browser.test.ts", "github-notice-browser.test.ts", "account-settings-browser.test.ts", "account-settings-recovery-browser.test.ts", "account-settings-zoom-browser.test.ts", "agent-databases-browser.test.ts", "agent-apps-browser.test.ts", "uc22-database-browser.test.ts", "uc44-columns-reorder-browser.test.ts", "uc53-row-reorder-browser.test.ts", "uc45-image-viewer-browser.test.ts", "uc61-image-ops-browser.test.ts", "uc62-sidebar-reorder-browser.test.ts", "uc63-page-archive-browser.test.ts", "uc64-memos-browser.test.ts", "uc65-math-browser.test.ts", "account-avatar-browser.test.ts", "knowledge-bases-browser.test.ts", "import-browser.test.ts", "import-base-browser.test.ts", "admin-console-browser.test.ts", "share-popover-browser.test.ts", "public-nav-browser.test.ts", "public-reader-browser.test.ts", "outline-browser.test.ts", "simple-table-browser.test.ts", "startup-perf-browser.test.ts", "mermaid-browser.test.ts", "selection-marks-browser.test.ts", "save-shortcut-browser.test.ts", "export-browser.test.ts", "table-scroll-edges-browser.test.ts", "embed-browser.test.ts", "long-page-perf-browser.test.ts"],
-  workers: 1,
+  fullyParallel: false,
+  workers: process.env.PW_WORKERS ? Number(process.env.PW_WORKERS) : (process.env.CI ? 2 : 4),
   timeout: 45000,
   use: { headless: true, viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2, trace: "retain-on-failure" },
+  projects: [
+    { name: "functional", testMatch: FUNCTIONAL_SPECS },
+    { name: "perf", testMatch: PERF_SPECS },
+  ],
 });

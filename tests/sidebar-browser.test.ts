@@ -115,6 +115,9 @@ async function expectToolbarLayout(toolbar: Locator) {
 async function expectNavigationLayout(page: Page) {
   const mobile = (page.viewportSize()?.width ?? 1280) < 560;
   const sidebar = page.locator(".sidebar");
+  if (mobile) {
+    await expect(page.locator(".bottom-sheet.is-shown")).toBeVisible();
+  }
   await sidebar.evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))));
   if (mobile) {
     const topbar = sidebar.locator(".sidebar__topbar");

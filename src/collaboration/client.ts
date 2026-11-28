@@ -842,6 +842,7 @@ function connect(): void {
     if (authRequestListeners.size > 0) {
       wsSend({ type: "subscribe_auth_requests" });
     }
+    for (const listener of [...importUpdateListeners]) listener();
   };
   socket.onmessage = (event) => {
     if (socket !== link) return;

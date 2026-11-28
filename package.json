@@ -11,7 +11,7 @@
     "dev": "tsx watch --env-file-if-exists=.env server/index.ts --dev",
     "start": "node --env-file-if-exists=.env --import tsx server/index.ts",
     "backup": "node --env-file-if-exists=.env scripts/backup.mjs",
-    "test:e2e": "playwright test",
+    "test:e2e": "playwright test --project=functional && playwright test --project=perf --workers=1",
     "test:container": "node tests/container-smoke.mjs",
     "gen:onboarding": "node scripts/gen-agent-onboarding.mjs",
     "build": "npm run gen:onboarding && npm run typecheck && vite build",

@@ -146,7 +146,8 @@ test("UC-66：侧边栏展示导入中虚拟占位条目，点击看实时进度
   await titleField.fill("父页A");
   await expect.poll(() => new URL(page.url()).searchParams.get("page")).not.toBeNull();
   const parentId = new URL(page.url()).searchParams.get("page")!;
-  await page.waitForTimeout(400);
+  await expect(page.locator(".tree-row__label", { hasText: "父页A" })).toBeVisible();
+  await expect(page.getByRole("status", { name: "All changes saved", exact: true })).toHaveCount(1);
 
   const tokRes = await page.request.post(`${app.url}/api/tokens`, {
     data: { name: "SyncAgent", access: "write", displayName: "SyncAgent" },
