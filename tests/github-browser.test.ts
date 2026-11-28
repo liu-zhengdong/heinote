@@ -26,8 +26,15 @@ test.afterAll(async () => {
 });
 
 async function photo(page: Page, name: string) {
-  await page.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => {}))); });
-  await page.screenshot({ path: join(evidence, name), fullPage: true });
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    const finite = document.getAnimations().filter((a) => {
+      const timing = a.effect?.getComputedTiming();
+      return a.timeline === document.timeline && timing && Number.isFinite(timing.endTime as number);
+    });
+    await Promise.all(finite.map((animation) => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path: join(evidence, name), fullPage: true, animations: "disabled" });
 }
 async function expectIdentity(page: Page, displayName: string) {
   const identity = page.getByRole("button", { name: "切换空间", exact: true });
