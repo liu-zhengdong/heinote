@@ -249,7 +249,7 @@
 /* ── Landing flash & scroll-margin on heading blocks ───────────────────── */
 
 .doc .block:is(.block--heading1, .block--heading2, .block--heading3, .block--heading4, .block--heading5) {
-  scroll-margin-top: calc(var(--topbar-h) + 16px);
+  scroll-margin-top: 16px;
 }
 
 .public-reader__block:is(.public-reader__block--heading1, .public-reader__block--heading2, .public-reader__block--heading3, .public-reader__block--heading4, .public-reader__block--heading5) {

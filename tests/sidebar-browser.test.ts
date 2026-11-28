@@ -923,3 +923,62 @@ test("collaborator cannot drag or move a personal page into someone else's share
     await bobCtx.close();
   }
 });
+
+test("app-main isolates pane stacking, topbar sits in flex flow, and sidebar resize indicator clears the document island", async ({ page }) => {
+  await register(page, "sidebar_resize_layout");
+  await createDocument(page, "Layout geometry page");
+
+  const geometry = await page.evaluate(() => {
+    const appMain = document.querySelector<HTMLElement>(".app-main");
+    const topbar = document.querySelector<HTMLElement>(".app-main > .topbar");
+    const surface = document.querySelector<HTMLElement>(".app-main .page-surface");
+    const sidebar = document.querySelector<HTMLElement>(".sidebar");
+    const handle = document.querySelector<HTMLElement>(".sidebar__resize");
+    if (!appMain || !topbar || !surface || !sidebar || !handle) {
+      throw new Error("Missing expected layout elements");
+    }
+    const appMainStyle = getComputedStyle(appMain);
+    const topbarStyle = getComputedStyle(topbar);
+    const sidebarStyle = getComputedStyle(sidebar);
+    const afterStyle = getComputedStyle(handle, "::after");
+    const appMainRect = appMain.getBoundingClientRect();
+    const topbarRect = topbar.getBoundingClientRect();
+    const surfaceRect = surface.getBoundingClientRect();
+    const handleRect = handle.getBoundingClientRect();
+    const afterRight = Number.parseFloat(afterStyle.right);
+    const afterWidth = Number.parseFloat(afterStyle.width);
+    const indicatorRight = handleRect.right - afterRight;
+    const indicatorLeft = indicatorRight - afterWidth;
+    return {
+      appMainIsolation: appMainStyle.isolation,
+      sidebarIsolation: sidebarStyle.isolation,
+      topbarPosition: topbarStyle.position,
+      topbarBottom: topbarRect.bottom,
+      surfaceTop: surfaceRect.top,
+      appMainLeft: appMainRect.left,
+      indicatorLeft,
+      indicatorRight,
+      sidebarWidth: sidebar.getBoundingClientRect().width,
+    };
+  });
+
+  expect(geometry.appMainIsolation).toBe("isolate");
+  expect(geometry.sidebarIsolation).toBe("isolate");
+  expect(geometry.topbarPosition).toBe("relative");
+  expect(geometry.topbarBottom).toBeLessThanOrEqual(geometry.surfaceTop + 0.5);
+  expect(geometry.indicatorRight).toBeLessThanOrEqual(geometry.appMainLeft);
+  expect(geometry.indicatorLeft).toBeLessThan(geometry.indicatorRight);
+
+  const separator = page.getByRole("separator", { name: "Resize the page list", exact: true });
+  const box = await separator.boundingBox();
+  expect(box).not.toBeNull();
+  const startX = box!.x + box!.width / 2;
+  const startY = box!.y + box!.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + 48, startY, { steps: 4 });
+  await expect(separator).toHaveClass(/is-dragging/);
+  await page.mouse.up();
+
+  await expect.poll(async () => page.locator(".sidebar").evaluate((el) => el.getBoundingClientRect().width)).toBeGreaterThan(geometry.sidebarWidth + 30);
+});

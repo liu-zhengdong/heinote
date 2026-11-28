@@ -151,7 +151,6 @@
   --topbar-h: 44px;
 
   /* Global stacking layers — local z-index (1–6) stays inside its own context. */
-  --z-topbar: 30;
   --z-dock: 32;
   --z-peek: 35;
   --z-drawer: 40;

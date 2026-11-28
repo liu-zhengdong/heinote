@@ -52,8 +52,7 @@
 }
 
 .app-shell--mobile .page-surface {
-  padding-top: calc(46px + env(safe-area-inset-top, 0px));
-  scroll-padding-top: calc(54px + env(safe-area-inset-top, 0px));
+  scroll-padding-top: 8px;
   scroll-padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
 }
 
@@ -68,6 +67,7 @@
 
 .app-main {
   position: relative;
+  isolation: isolate;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -90,17 +90,15 @@
   flex: 1;
 }
 
-/* The page scrolls under the top bar, which is opaque paper like Notion's; its
-   height is paid as padding here so the first line still starts below it. */
+/* The page sits in flex below `.topbar` and scrolls independently inside `.app-main`. */
 .page-surface {
   position: relative;
   min-width: 0;
   flex: 1;
-  padding-top: var(--topbar-h);
   overflow: auto;
   background: var(--paper);
   container: page / inline-size;
-  scroll-padding-top: calc(var(--topbar-h) + 8px);
+  scroll-padding-top: 8px;
 }
 
 .empty-page {
@@ -124,15 +122,12 @@
    Top bar
    ========================================================================== */
 
-/* The page bar matches Notion's 44px height. */
+/* The page bar matches Notion's 44px height and stays pinned above `.page-surface` via flex flow. */
 .topbar {
-  position: absolute;
-  z-index: var(--z-topbar);
-  top: 0;
-  right: 0;
-  left: 0;
+  position: relative;
   display: flex;
   height: var(--topbar-h);
+  flex: none;
   align-items: center;
   gap: 3px;
   padding: 0 12px;

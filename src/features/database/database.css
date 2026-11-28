@@ -69,14 +69,14 @@
 }
 
 /* On a database's own page the toolbar stays in reach while the rows scroll.
-   It sticks under the top bar, not to the scrollport's edge, because the bar
-   floats over the page and would otherwise cover it. Inline in a document it
-   scrolls away with the database it belongs to — a toolbar parked at the top
-   of a meeting note, for a table you scrolled past, belongs to nothing. */
+   It sticks directly to the top of `.page-surface`, which sits below `.topbar`
+   in flex flow. Inline in a document it scrolls away with the database it belongs
+   to — a toolbar parked at the top of a meeting note, for a table you scrolled
+   past, belongs to nothing. */
 .dbv--page > .db__toolbar {
   position: sticky;
   z-index: 12;
-  top: var(--topbar-h);
+  top: 0;
 }
 
 /* The strip scrolls sideways when there are more views than room, and a

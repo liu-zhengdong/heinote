@@ -3748,8 +3748,8 @@ export function DocumentEditor({
         <PageOutline
           items={outlineItems}
           contentRoot={articleEl}
-          topOffset={44}
-          pinnedTopOffset={68}
+          topOffset={0}
+          pinnedTopOffset={24}
           onEnsureBlock={ensureAllRendered}
           renderRevision={visibleCount}
         />
