@@ -194,7 +194,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                   <span className="crumb__label">Graph</span>
                 </span>
               </span>
-            ) : crumbs.map((crumb, index) => (
+            ) : trail.length > 1 ? crumbs.map((crumb, index) => (
               <span key={crumb?.id ?? `gap-${index}`} className="crumb__slot">
                 {index ? <span className="crumb__sep" aria-hidden="true">/</span> : null}
                 {crumb ? (
@@ -209,7 +209,7 @@ export function TopBar({ onHistory }: { onHistory(): void }) {
                   </button>
                 ) : <span className="crumb__sep">…</span>}
               </span>
-            ))}
+            )) : null}
           </nav>
 
           <div className="topbar__actions">
