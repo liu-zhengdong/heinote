@@ -343,5 +343,5 @@ test("Windows Chinese IME composition does not duplicate pinyin when naming data
   await page.waitForTimeout(300);
   await page.reload();
   await expect(page.locator(".db--page .doc__title")).toHaveText("任务");
-  await expect(page.getByRole("tab", { name: "任务" })).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Views" }).getByRole("tab", { name: "任务" })).toBeVisible();
 });

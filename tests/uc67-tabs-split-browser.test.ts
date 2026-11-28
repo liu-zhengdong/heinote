@@ -13,7 +13,7 @@ test.use({ colorScheme: "light", deviceScaleFactor: 2, viewport: { width: 1440, 
 
 test.beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), "notes-uc67-tabs-"));
-  server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", github: null });
+  server = await startServer({ dataDir: directory, port: 0, host: "127.0.0.1", github: null, dev: process.env.HEINOTE_TEST_DEV === "1" });
   if (SHOT_DIR) await mkdir(SHOT_DIR, { recursive: true }).catch(() => undefined);
 });
 
@@ -155,6 +155,8 @@ test("UC-67 AC-01/02/05: single-pane tabs, pin protection, shortcut guard & cont
 });
 
 test("UC-67 AC-03/04: split panes, same-page dual view isolation, seam resize, drag reorder/cross-pane & lossless merge", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
   await register(page, "uc67_split_2");
   const longLines = Array.from({ length: 40 }, (_, i) => `Line ${i + 1}: reference paragraph for scroll isolation`).join("\n");
   await createRootDocument(page, "SharedDoc", longLines);
@@ -215,6 +217,9 @@ test("UC-67 AC-03/04: split panes, same-page dual view isolation, seam resize, d
   await expect(page.locator(".workspace-pane")).toHaveCount(2);
   await paneLocator(page, "right").locator(".pane-tab__close").first().click();
   await expect(page.locator(".workspace-pane")).toHaveCount(1);
+  await expect(page.getByText("Something went wrong")).toHaveCount(0);
+  const appErrors = errors.filter((message) => !(process.env.HEINOTE_TEST_DEV === "1" && message === "WebSocket closed without opened."));
+  expect(appErrors).toEqual([]);
 });
 
 test("UC-67 AC-06/08: per-space persistence across reload, trash cleanup & corrupt storage recovery", async ({ page }) => {

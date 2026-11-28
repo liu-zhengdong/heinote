@@ -1,5 +1,5 @@
 import { Archive, Clock3, Eye, FileText, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { lazy, Suspense, useCallback, useState, type CSSProperties, type DragEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type CSSProperties, type DragEvent } from "react";
 import { isPurging, pageAncestry, shelvedRoot } from "../core/page-tree";
 import { pageName } from "../core/block-tree";
 import type { PaneId, PaneState } from "../core/tab-layout";
@@ -78,12 +78,14 @@ export function WorkspacePane({
   const [rightDropVisible, setRightDropVisible] = useState(false);
 
   const pageId = paneState.activePageId;
-  const pinnedIds = paneState.tabs.filter((tab) => tab.pinned).map((tab) => tab.pageId);
+  const pinnedIds = useMemo(
+    () => paneState.tabs.filter((tab) => tab.pinned).map((tab) => tab.pageId),
+    [paneState.tabs],
+  );
 
-  const setSurface = useCallback((element: HTMLElement | null) => {
-    setSurfaceEl(element);
-    if (isFocused) onSurfaceRef?.(element);
-  }, [isFocused, onSurfaceRef]);
+  useEffect(() => {
+    if (isFocused) onSurfaceRef?.(surfaceEl);
+  }, [isFocused, onSurfaceRef, surfaceEl]);
 
   const selectedKind = useWorkspaceState((state) => {
     if (!pageId || isPurging(state.pages, pageId)) return null;
@@ -105,7 +107,6 @@ export function WorkspacePane({
   const showHistoryPreview = isFocused ? historyPreview : null;
   const showImportJob = isFocused ? selectedImportJob : null;
   const showGraph = isFocused && graphOpen;
-  const SurfaceTag = isFocused ? "main" : "section";
 
   const handleDragOverSplitZone = (event: DragEvent<HTMLDivElement>) => {
     if (mobile || splitActive) return;
@@ -175,7 +176,12 @@ export function WorkspacePane({
         />
         <div className="app-workspace">
           {showGraph ? (
-            <SurfaceTag ref={(el: HTMLElement | null) => setSurface(el)} className="page-surface page-surface--graph">
+            <main
+              ref={setSurfaceEl}
+              className="page-surface page-surface--graph"
+              role={isFocused ? undefined : "region"}
+              aria-label={isFocused ? undefined : "分屏页面"}
+            >
               <Suspense fallback={<div className="graph graph--page" aria-busy="true" />}>
                 <GraphView
                   variant="page"
@@ -183,11 +189,12 @@ export function WorkspacePane({
                   onOpenPage={(targetId, full) => (full ? selectPage(targetId, { pane: paneId }) : openPeek(targetId))}
                 />
               </Suspense>
-            </SurfaceTag>
+            </main>
           ) : (
-            <SurfaceTag
-              ref={(el: HTMLElement | null) => setSurface(el)}
+            <main
+              ref={setSurfaceEl}
               className="page-surface scroller"
+              role={isFocused ? undefined : "region"}
               aria-label={isFocused ? undefined : "分屏页面"}
             >
               {!showImportJob && showHistoryPreview ? (
@@ -267,7 +274,7 @@ export function WorkspacePane({
                   )}
                 </div>
               )}
-            </SurfaceTag>
+            </main>
           )}
         </div>
       </div>
