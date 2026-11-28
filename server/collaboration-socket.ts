@@ -397,6 +397,23 @@ export function attachCollaborationSocket(
         if (client.authRequestsUser === userId) send(client, { type: "auth_requests", pending });
       }
     },
+    notifyImportUpdate(targetScope: string, userId: string) {
+      const external = targetScope.startsWith("user:") ? "personal" : targetScope;
+      for (const client of clients) {
+        if (client.creds.userId === userId) {
+          send(client, { type: "import_update", scope: external });
+          continue;
+        }
+        if (!targetScope.startsWith("user:") && client.spaces.has(targetScope)) {
+          try {
+            const who = resolveActor(client.creds);
+            if (store.role(who, targetScope) !== "viewer") {
+              send(client, { type: "import_update", scope: external });
+            }
+          } catch { /* ignore stale client */ }
+        }
+      }
+    },
     close() {
       clearInterval(heartbeat);
       clearInterval(safetyTimer);

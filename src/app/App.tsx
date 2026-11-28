@@ -35,6 +35,7 @@ const SnapshotPreview = lazy(() => import("../features/history/SnapshotPreview")
 const GraphView = lazy(() => import("../features/sidebar/GraphView").then((module) => ({ default: module.GraphView })));
 const AdminConsole = lazy(() => import("../features/admin/AdminConsole").then((module) => ({ default: module.AdminConsole })));
 const MemoStream = lazy(() => import("../features/memos/MemoStream").then((module) => ({ default: module.MemoStream })));
+const ImportProgressView = lazy(() => import("../features/account/ImportProgressView").then((module) => ({ default: module.ImportProgressView })));
 
 /** An app page redrawn as the page changes — its run surface and editor. */
 function AppPageShell({ pageId }: { pageId: string }) {
@@ -72,7 +73,22 @@ export function App() {
     accountSettingsNotice,
     openAccountSettings,
     closeAccountSettings,
+    importJobs,
+    selectedImportId,
+    selectImport,
   } = useUi();
+
+  const selectedImportJob = selectedImportId ? (importJobs.find((job) => job.id === selectedImportId) ?? null) : null;
+  const prevPageIdRef = useRef(selectedPageId);
+  useEffect(() => {
+    if (prevPageIdRef.current !== selectedPageId) {
+      prevPageIdRef.current = selectedPageId;
+      selectImport(null);
+    }
+  }, [selectImport, selectedPageId]);
+  useEffect(() => {
+    if (graphOpen) selectImport(null);
+  }, [graphOpen, selectImport]);
 
   useEffect(() => {
     if (!user || !githubOutcome) return;
@@ -366,12 +382,12 @@ export function App() {
             </main>
           ) : (
           <main ref={setSurfaceEl} className="page-surface scroller">
-            {historyPreview ? (
+            {!selectedImportJob && historyPreview ? (
               <div className="history-banner" role="status">
                 <Clock3 size={14} />
                 <span>You are looking at an older version.</span>
               </div>
-            ) : trashedAt ? (
+            ) : !selectedImportJob && trashedAt ? (
               <div className="history-banner trash-banner" role="status">
                 <Trash2 size={14} />
                 <span>In the trash</span>
@@ -384,12 +400,12 @@ export function App() {
                   </button>
                 ) : null}
               </div>
-            ) : selectedKind && !canEdit(selectedPageId) ? (
+            ) : !selectedImportJob && selectedKind && !canEdit(selectedPageId) ? (
               <div className="history-banner" role="status">
                 <Eye size={14} />
                 <span>You can only view this page.</span>
               </div>
-            ) : shelvedBy ? (
+            ) : !selectedImportJob && shelvedBy ? (
               <div className="history-banner shelved-banner" role="status">
                 <Archive size={14} />
                 <span>
@@ -410,12 +426,16 @@ export function App() {
             ) : null}
 
             <CachedDocumentPages
-              activePageId={selectedKind === "document" && !historyPreview && !trashedAt ? selectedPageId : null}
+              activePageId={selectedKind === "document" && !historyPreview && !trashedAt && !selectedImportJob ? selectedPageId : null}
               surfaceEl={surfaceEl}
               canEdit={canEdit}
             />
 
-            {historyPreview && historyPreview.kind !== "document" ? (
+            {selectedImportJob ? (
+              <Suspense fallback={<div className="page-loading" aria-busy="true"><span className="page-loading__line" /><span className="page-loading__line" /><span className="page-loading__line" /></div>}>
+                <ImportProgressView job={selectedImportJob} />
+              </Suspense>
+            ) : historyPreview && historyPreview.kind !== "document" ? (
               /* A non-document checkpoint holds the page's definition, not
                  a body: show what restoring it restores. */
               <Suspense fallback={null}><SnapshotPreview page={historyPreview} /></Suspense>

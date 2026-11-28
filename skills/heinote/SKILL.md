@@ -107,6 +107,10 @@ heinote upload <file> [--scope S] [--path P] [--name N] [--type T]
                                               # 上传附件，返回 StoredFile JSON
 heinote download --path P [--scope S] [--out F]
                                               # 下载附件（默认写 stdout）
+heinote import (obsidian|notion) <dir-or-zip> [--parent-id P] [--space-id S] [--concurrency N] [--no-wait]
+                                              # 自动打包、多通道并发分片上传并断点续传导入整库
+heinote imports / import-status <id> / import-cancel <id>
+                                              # 查看或取消批量导入任务
 heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 ```
 
@@ -149,6 +153,7 @@ heinote req <METHOD> <path> [--data F]        # 透传任意 /api/v1 请求
 | 改已嵌 HTML | `get-app <app> --out f.html` → 改文件 → `set-app <app> --file f.html` |
 | 手动插入嵌入块 | `ops`：`{"type":"insert_page_link","blockId":...,"index":"end","pageId":"<页>","expanded":true}` |
 | 上传附件 | `heinote upload pic.png --name "截图"`（返回 `StoredFile`） |
+| 整库迁入指定父页 | `heinote import obsidian ./MyVault --parent-id <父页ID>`（支持断点续传） |
 | 插图进段落 | `upload` 后 `ops`：`{"type":"insert_image","blockId":...,"index":"end","file":<StoredFile>}` |
 | 附件块 | `ops`：`{"type":"insert_block","text":"说明","file":<StoredFile>}`（kind 自动为 file） |
 | 条目图片属性 | `row-create --data` 的 `propertyFiles`：`{"<属性id>":[<StoredFile>]}` |

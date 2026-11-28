@@ -640,6 +640,226 @@ def cmd_req(client, a):
     emit(status, payload)
 
 
+def _put_raw(url, token, data):
+    req = urllib.request.Request(
+        url, data=data, method="PUT",
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/octet-stream"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as res:
+            return res.status, json.loads(res.read().decode() or "null")
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        try:
+            return e.code, json.loads(raw)
+        except json.JSONDecodeError:
+            return e.code, raw
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            buf = f.read(1024 * 1024)
+            if not buf:
+                break
+            h.update(buf)
+    return h.hexdigest()
+
+
+def _pack_dir_zip(directory):
+    import tempfile
+    import zipfile
+    root_abs = os.path.abspath(directory)
+    vault_name = os.path.basename(root_abs) or "vault"
+    fd, tmp_zip = tempfile.mkstemp(prefix="heinote-import-", suffix=".zip")
+    os.close(fd)
+    md_count = 0
+    try:
+        with zipfile.ZipFile(tmp_zip, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
+            for cur, dirs, files in os.walk(root_abs):
+                rel_cur = os.path.relpath(cur, root_abs)
+                in_obsidian = rel_cur == ".obsidian" or rel_cur.startswith(".obsidian" + os.sep)
+                dirs[:] = [d for d in sorted(dirs) if d == ".obsidian" or not d.startswith(".")]
+                for fn in sorted(files):
+                    if fn.startswith(".") and not in_obsidian:
+                        continue
+                    full = os.path.join(cur, fn)
+                    if not os.path.isfile(full):
+                        continue
+                    rel = os.path.relpath(full, root_abs).replace(os.sep, "/")
+                    if rel.lower().endswith(".md") and not in_obsidian:
+                        md_count += 1
+                    zf.write(full, f"{vault_name}/{rel}")
+        if md_count == 0:
+            os.remove(tmp_zip)
+            die(f"目录 {directory} 中没有找到 Markdown (.md) 笔记。")
+        return tmp_zip, vault_name
+    except Exception:
+        if os.path.exists(tmp_zip):
+            os.remove(tmp_zip)
+        raise
+
+
+def cmd_import(client, a):
+    import concurrent.futures
+    import time
+
+    source_path = os.path.expanduser(a.path)
+    if not os.path.exists(source_path):
+        die(f"路径不存在: {source_path}")
+
+    temp_zip = None
+    default_title = None
+    if os.path.isdir(source_path):
+        print(f"# 正在打包目录 {source_path} ...", file=sys.stderr)
+        temp_zip, default_title = _pack_dir_zip(source_path)
+        zip_path = temp_zip
+    else:
+        zip_path = source_path
+        default_title = os.path.splitext(os.path.basename(zip_path))[0]
+
+    cache_dir = os.path.expanduser("~/.cache/heinote/imports")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = None
+    try:
+        total_bytes = os.path.getsize(zip_path)
+        part_size = a.part_size if a.part_size is not None else 8 * 1024 * 1024
+        digest = _file_sha256(zip_path)
+        fp = hashlib.sha256(json.dumps({
+            "url": client.url,
+            "source": a.source,
+            "path": os.path.abspath(source_path),
+            "parentId": a.parent_id or "",
+            "spaceId": a.space_id or "",
+            "size": total_bytes,
+            "partSize": part_size,
+            "sha256": digest,
+        }, sort_keys=True).encode()).hexdigest()[:24]
+        cache_file = os.path.join(cache_dir, f"{fp}.json")
+
+        session = None
+        resume_id = a.resume_id
+        if not resume_id and os.path.exists(cache_file):
+            try:
+                cached = json.load(open(cache_file, encoding="utf-8"))
+                if cached.get("sha256") == digest and cached.get("totalBytes") == total_bytes and cached.get("partSize") == part_size:
+                    resume_id = cached.get("id")
+            except (OSError, json.JSONDecodeError):
+                resume_id = None
+
+        if resume_id:
+            st, existing = client.request("GET", f"/api/v1/imports/{resume_id}")
+            if st == 200 and existing and existing.get("status") == "uploading" and existing.get("totalBytes") == total_bytes and existing.get("partSize") == part_size:
+                session = existing
+                print(f"# 断点续传会话 {resume_id}（已收 {len(existing.get('receivedParts') or [])}/{existing.get('partCount')} 分片）", file=sys.stderr)
+
+        if session is None:
+            body = {
+                "source": a.source,
+                "totalBytes": total_bytes,
+                "partSize": part_size,
+                "sha256": digest,
+                "title": a.title or default_title,
+            }
+            if a.parent_id:
+                body["parentId"] = a.parent_id
+            if a.space_id:
+                body["spaceId"] = a.space_id
+            st, session = client.request("POST", "/api/v1/imports", body)
+            if st >= 400:
+                emit(st, session)
+                return
+            try:
+                with open(cache_file, "w", encoding="utf-8") as cf:
+                    json.dump({"id": session["id"], "sha256": digest, "totalBytes": total_bytes, "partSize": part_size}, cf)
+            except OSError:
+                pass
+
+        job_id = session["id"]
+        part_count = session["partCount"]
+        actual_part_size = session["partSize"]
+        done_parts = set(session.get("receivedParts") or [])
+        missing = [i for i in range(part_count) if i not in done_parts]
+
+        if missing:
+            def upload_one(idx):
+                offset = idx * actual_part_size
+                length = min(actual_part_size, total_bytes - offset)
+                with open(zip_path, "rb") as f:
+                    f.seek(offset)
+                    chunk = f.read(length)
+                url = f"{client.url}/api/v1/imports/{job_id}/parts/{idx}"
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        st_code, resp = _put_raw(url, client.token, chunk)
+                        if st_code < 400:
+                            return resp
+                        last_err = f"HTTP {st_code}: {resp}"
+                        if 400 <= st_code < 500:
+                            break
+                    except urllib.error.URLError as e:
+                        last_err = str(e.reason)
+                    time.sleep(0.3 * (attempt + 1))
+                raise RuntimeError(f"分片 {idx} 上传失败: {last_err}")
+
+            workers = max(1, min(a.concurrency, len(missing)))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(upload_one, idx) for idx in missing]
+                for fut in concurrent.futures.as_completed(futures):
+                    fut.result()
+
+        st, job = client.request("POST", f"/api/v1/imports/{job_id}/complete")
+        if st >= 400:
+            emit(st, job)
+            return
+        if cache_file and os.path.exists(cache_file):
+            try:
+                os.remove(cache_file)
+            except OSError:
+                pass
+
+        if a.no_wait:
+            emit(st, job)
+            return
+
+        last_phase = None
+        while job.get("status") not in ("done", "failed"):
+            phase_line = f"{job.get('status')}: {job.get('phase')} ({job.get('done')}/{job.get('total')})"
+            if phase_line != last_phase:
+                print(f"# {phase_line}", file=sys.stderr)
+                last_phase = phase_line
+            time.sleep(0.5)
+            st, job = client.request("GET", f"/api/v1/imports/{job_id}")
+            if st >= 400:
+                emit(st, job)
+                return
+
+        emit(200 if job.get("status") == "done" else 400, job)
+    finally:
+        if temp_zip and os.path.exists(temp_zip):
+            try:
+                os.remove(temp_zip)
+            except OSError:
+                pass
+
+
+def cmd_imports(client, _a):
+    status, payload = client.request("GET", "/api/v1/imports")
+    emit(status, payload)
+
+
+def cmd_import_status(client, a):
+    status, payload = client.request("GET", f"/api/v1/imports/{a.id}")
+    emit(status, payload)
+
+
+def cmd_import_cancel(client, a):
+    status, payload = client.request("DELETE", f"/api/v1/imports/{a.id}")
+    emit(status, payload)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="heinote", description="小黑笔记 HTTP API 命令行封装。")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -833,6 +1053,29 @@ def build_parser():
 
     sp = sub.add_parser("memo-tags", help="列出闪念多级标签树与置顶标签")
     sp.set_defaults(fn=cmd_memo_tags)
+
+    sp = sub.add_parser("import", help="分片并发导入本地 Obsidian/Notion 目录或 zip（支持断点续传与指定父页）")
+    sp.add_argument("source", choices=["obsidian", "notion"], help="导入来源")
+    sp.add_argument("path", help="本地笔记库目录或 .zip 文件路径")
+    sp.add_argument("--parent-id", help="目标父页面 ID；库顶层内容直接展开挂在该父页下")
+    sp.add_argument("--space-id", help="目标团队知识库或空间 ID")
+    sp.add_argument("--title", help="进度提示显示名（默认取目录或 zip 名）")
+    sp.add_argument("--concurrency", type=int, default=4, help="并发上传通道数，默认 4")
+    sp.add_argument("--part-size", type=int, help="分片大小（字节，默认 8MB，范围 1024..16MB）")
+    sp.add_argument("--resume-id", help="显式指定要断点续传的会话 ID")
+    sp.add_argument("--no-wait", action="store_true", help="提交完成入队后立即返回，不阻塞等待后台导入结束")
+    sp.set_defaults(fn=cmd_import)
+
+    sp = sub.add_parser("imports", help="列出当前可见的导入任务与进度")
+    sp.set_defaults(fn=cmd_imports)
+
+    sp = sub.add_parser("import-status", help="查询单个导入会话/任务状态与分片进度")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_import_status)
+
+    sp = sub.add_parser("import-cancel", help="取消正在上传、排队或解析中的导入任务")
+    sp.add_argument("id")
+    sp.set_defaults(fn=cmd_import_cancel)
 
     sp = sub.add_parser("req", help="透传任意 /api/v1 请求")
     sp.add_argument("method")

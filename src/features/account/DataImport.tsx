@@ -1,12 +1,18 @@
 import { Check, ChevronRight, FileText, Loader2, Upload, X } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useUi } from "../../app/ui-context";
 import { ZipStream, zipEntries } from "../../core/zip";
 import { api } from "./api";
+import type { ImportJobDto, ImportReportDto } from "./useImports";
 
 /* 导入向导：Obsidian 库文件夹（浏览器打包 zip）或现成 zip；Notion 收它自己的
-   导出 zip。一次 POST 上传，轮询任务到完成。导入落在新的根页面下，不碰现有树。 */
+   导出 zip。走统一 /api/v1/imports 分片并发上传、轮询任务到完成。 */
 
 type Source = "obsidian" | "notion";
+type ImportReport = ImportReportDto;
+type Job = ImportJobDto;
+const CHUNK_BYTES = 8 * 1024 * 1024;
+const UPLOAD_CONCURRENCY = 4;
 
 const OBSIDIAN_PATH = "M19.355 18.538a68.967 68.959 0 0 0 1.858-2.954.81.81 0 0 0-.062-.9c-.516-.685-1.504-2.075-2.042-3.362-.553-1.321-.636-3.375-.64-4.377a1.707 1.707 0 0 0-.358-1.05l-3.198-4.064a3.744 3.744 0 0 1-.076.543c-.106.503-.307 1.004-.536 1.5-.134.29-.29.6-.446.914l-.31.626c-.516 1.068-.997 2.227-1.132 3.59-.124 1.26.046 2.73.815 4.481.128.011.257.025.386.044a6.363 6.363 0 0 1 3.326 1.505c.916.79 1.744 1.922 2.415 3.5zM8.199 22.569c.073.012.146.02.22.02.78.024 2.095.092 3.16.29.87.16 2.593.64 4.01 1.055 1.083.316 2.198-.548 2.355-1.664.114-.814.33-1.735.725-2.58l-.01.005c-.67-1.87-1.522-3.078-2.416-3.849a5.295 5.295 0 0 0-2.778-1.257c-1.54-.216-2.952.19-3.84.45.532 2.218.368 4.829-1.425 7.531zM5.533 9.938c-.023.1-.056.197-.098.29L2.82 16.059a1.602 1.602 0 0 0 .313 1.772l4.116 4.24c2.103-3.101 1.796-6.02.836-8.3-.728-1.73-1.832-3.081-2.55-3.831zM9.32 14.01c.615-.183 1.606-.465 2.745-.534-.683-1.725-.848-3.233-.716-4.577.154-1.552.7-2.847 1.235-3.95.113-.235.223-.454.328-.664.149-.297.288-.577.419-.86.217-.47.379-.885.46-1.27.08-.38.08-.72-.014-1.043-.095-.325-.297-.675-.68-1.06a1.6 1.6 0 0 0-1.475.36l-4.95 4.452a1.602 1.602 0 0 0-.513.952l-.427 2.83c.672.59 2.328 2.316 3.335 4.711.09.21.175.43.253.653z";
 const NOTION_PATH = "M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L17.86 1.968c-.42-.326-.981-.7-2.055-.607L3.01 2.295c-.466.046-.56.28-.374.466zm.793 3.08v13.904c0 .747.373 1.027 1.214.98l14.523-.84c.841-.046.935-.56.935-1.167V6.354c0-.606-.233-.933-.748-.887l-15.177.887c-.56.047-.747.327-.747.933zm14.337.745c.093.42 0 .84-.42.888l-.7.14v10.264c-.608.327-1.168.514-1.635.514-.748 0-.935-.234-1.495-.933l-4.577-7.186v6.952L12.21 19s0 .84-1.168.84l-3.222.186c-.093-.186 0-.653.327-.746l.84-.233V9.854L7.822 9.76c-.094-.42.14-1.026.793-1.073l3.456-.233 4.764 7.279v-6.44l-1.215-.139c-.093-.514.28-.887.747-.933zM1.936 1.035l13.31-.98c1.634-.14 2.055-.047 3.082.7l4.249 2.986c.7.513.934.653.934 1.213v16.378c0 1.026-.373 1.634-1.68 1.726l-15.458.934c-.98.047-1.448-.093-1.962-.747l-3.129-4.06c-.56-.747-.793-1.306-.793-1.96V2.667c0-.839.374-1.54 1.447-1.632z";
@@ -16,25 +22,6 @@ const Brand = ({ source }: { source: Source }) => (
     <svg viewBox="0 0 24 24" fill="currentColor"><path d={source === "obsidian" ? OBSIDIAN_PATH : NOTION_PATH} /></svg>
   </span>
 );
-
-interface ImportReport {
-  rootPageId: string;
-  title: string;
-  pages: number;
-  attachments: number;
-  links: number;
-  unresolved: string[];
-  warnings: string[];
-}
-interface Job {
-  id: string;
-  status: string;
-  phase: string;
-  done: number;
-  total: number;
-  result?: ImportReport;
-  error?: string;
-}
 
 type Stage =
   | { kind: "pick" }
@@ -53,6 +40,7 @@ function Wizard({ source, onClose, onOpenPage, onBusyChange }: {
   onOpenPage?(pageId: string): void;
   onBusyChange(busy: boolean): void;
 }) {
+  const { refreshImports } = useUi();
   const [stage, setStage] = useState<Stage>({ kind: "pick" });
   const [drag, setDrag] = useState(false);
   const folderRef = useRef<HTMLInputElement>(null);
@@ -65,21 +53,23 @@ function Wizard({ source, onClose, onOpenPage, onBusyChange }: {
     window.clearInterval(poll.current);
     poll.current = window.setInterval(async () => {
       try {
-        const job = await api<Job>(`/api/account/import/${id}`);
+        const job = await api<Job>(`/api/v1/imports/${encodeURIComponent(id)}`);
         if (job.status === "done") {
           window.clearInterval(poll.current);
           setStage({ kind: "done", report: job.result! });
+          void refreshImports();
           onBusyChange(false);
         } else if (job.status === "failed") {
           window.clearInterval(poll.current);
           setStage({ kind: "failed", message: job.error ?? "导入失败。" });
+          void refreshImports();
           onBusyChange(false);
         } else {
           setStage({ kind: "running", job });
         }
       } catch { /* poll again */ }
     }, 700);
-  }, [onBusyChange]);
+  }, [onBusyChange, refreshImports]);
 
   /** Folder picked → bundle it as a STORE zip in memory, then confirm. */
   const bundleFolder = useCallback(async (files: FileList) => {
@@ -134,22 +124,60 @@ function Wizard({ source, onClose, onOpenPage, onBusyChange }: {
     else setStage({ kind: "failed", message: "请选择 .zip 文件。" });
   }, [inspectZip]);
 
-  const upload = useCallback(async (zip: File | Blob) => {
-    setStage({ kind: "uploading", detail: "上传中…" });
+  const upload = useCallback(async (zip: File | Blob, label?: string) => {
+    setStage({ kind: "uploading", detail: "准备上传…" });
     onBusyChange(true);
     try {
-      const started = await api<{ id: string }>(`/api/account/import/${source}`, {
+      const cleanTitle = label?.replace(/(\.zip|\/)$/i, "").trim();
+      const session = await api<Job>("/api/v1/imports", {
         method: "POST",
-        headers: { "Content-Type": "application/zip" },
-        body: zip,
+        body: JSON.stringify({
+          source,
+          totalBytes: zip.size,
+          partSize: CHUNK_BYTES,
+          ...(cleanTitle ? { title: cleanTitle } : {}),
+        }),
       });
-      setStage({ kind: "running", job: { id: started.id, status: "queued", phase: "排队中…", done: 0, total: 1 } });
+      void refreshImports();
+
+      const totalParts = session.partCount;
+      let nextPart = 0;
+      let uploaded = 0;
+      const uploadWorker = async () => {
+        while (nextPart < totalParts) {
+          const index = nextPart;
+          nextPart += 1;
+          const start = index * session.partSize;
+          const end = Math.min(zip.size, start + session.partSize);
+          const slice = zip.slice(start, end);
+          const res = await fetch(`/api/v1/imports/${encodeURIComponent(session.id)}/parts/${index}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: slice,
+            credentials: "same-origin",
+          });
+          if (!res.ok) {
+            const payload = await res.json().catch(() => ({})) as { error?: string };
+            throw new Error(payload.error || `上传分片 ${index} 失败（${res.status}）`);
+          }
+          uploaded += end - start;
+          const pct = Math.min(99, Math.round((uploaded / Math.max(1, zip.size)) * 100));
+          setStage({ kind: "uploading", detail: `上传中 ${pct}%…` });
+        }
+      };
+
+      const workers = Array.from({ length: Math.min(UPLOAD_CONCURRENCY, totalParts) }, () => uploadWorker());
+      await Promise.all(workers);
+
+      const started = await api<Job>(`/api/v1/imports/${encodeURIComponent(session.id)}/complete`, { method: "POST" });
+      void refreshImports();
+      setStage({ kind: "running", job: started });
       watch(started.id);
     } catch (error) {
       setStage({ kind: "failed", message: error instanceof Error ? error.message : "上传失败。" });
       onBusyChange(false);
     }
-  }, [source, watch, onBusyChange]);
+  }, [onBusyChange, refreshImports, source, watch]);
 
   const close = () => {
     window.clearInterval(poll.current);
@@ -203,7 +231,7 @@ function Wizard({ source, onClose, onOpenPage, onBusyChange }: {
       </div>
       <div className="import-actions">
         <button type="button" className="btn btn-secondary" onClick={() => setStage({ kind: "pick" })}>重选</button>
-        <button type="button" className="btn btn-primary" onClick={() => void upload(stage.zip)}>开始导入</button>
+        <button type="button" className="btn btn-primary" onClick={() => void upload(stage.zip, stage.label)}>开始导入</button>
       </div>
       <p className="account-muted">导入会新建「{label} 导入」页面树，不改动现有笔记。</p>
     </div>}

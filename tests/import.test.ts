@@ -291,7 +291,7 @@ test("导入进行中：读请求正常响应，写请求明确拒绝", async (t
     assert.equal(probe.status, 200, "session endpoint must answer during import");
     const write = await b.request("/api/spaces", { method: "POST", body: { name: "x" } });
     if (write.status === 503) saw503 = true;
-    else assert.equal(write.status, 200, `unexpected write status ${write.status}`);
+    else assert.ok(write.status === 200 || write.status === 201, `unexpected write status ${write.status}`);
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
   assert.ok(sawRunning, "import should still be running when we poll");

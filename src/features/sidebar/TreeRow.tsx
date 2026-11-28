@@ -1,4 +1,4 @@
-import { ChevronRight, Link, MoreHorizontal, Plus } from "lucide-react";
+import { AlertCircle, ChevronRight, Link, Loader2, MoreHorizontal, Plus } from "lucide-react";
 import { memo, type CSSProperties, type DragEvent } from "react";
 import { ProfileAvatar, personName } from "../../components/ProfileAvatar";
 import { Tooltip } from "../../components/Tooltip";
@@ -6,6 +6,7 @@ import { pageName } from "../../core/block-tree";
 import { imeComposing } from "../../core/keyboard";
 import type { NotePage, SpaceMember } from "../../core/types";
 import { rectOf, type AnchorRect } from "../../hooks/useAnchoredPosition";
+import type { ImportJobDto } from "../account/useImports";
 import { pageGlyph } from "../editor/block-registry";
 import type { PageTree } from "./tree";
 
@@ -266,7 +267,62 @@ export interface TreeMetrics {
   totalRows: number;
 }
 
-export function measureTree(tree: PageTree, expanded: ReadonlySet<string>): TreeMetrics {
+export const ImportTreeRow = memo(function ImportTreeRow({
+  job,
+  depth,
+  selected,
+  onSelect,
+}: {
+  job: ImportJobDto;
+  depth: number;
+  selected: boolean;
+  onSelect(): void;
+}) {
+  const failed = job.status === "failed";
+  const badge = (() => {
+    if (failed) return "失败";
+    if (job.status === "uploading") {
+      const pct = job.totalBytes > 0 ? Math.round((job.uploadedBytes / job.totalBytes) * 100) : 0;
+      return `上传 ${pct}%`;
+    }
+    if (job.status === "queued") return "排队";
+    if (job.status === "committing") return "落库";
+    if (job.total > 0) return `${Math.round((job.done / job.total) * 100)}%`;
+    return "解析中";
+  })();
+
+  return (
+    <div
+      className={`tree-row tree-row--import ${selected ? "is-selected" : ""} ${failed ? "tree-row--import-failed" : ""}`}
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-selected={selected}
+      data-import-id={job.id}
+      style={{ "--depth": depth } as CSSProperties}
+    >
+      <span className="tree-row__mark" aria-hidden="true">
+        <span className="tree-row__glyph">
+          {failed ? <AlertCircle size={14} /> : <Loader2 size={14} className="spin" />}
+        </span>
+      </span>
+      <button
+        type="button"
+        className="tree-row__main"
+        aria-current={selected ? "page" : undefined}
+        onClick={onSelect}
+      >
+        <span className="tree-row__label">{job.title || "导入笔记"}</span>
+        <span className="tree-row__import-badge">{badge}</span>
+      </button>
+    </div>
+  );
+});
+
+export function measureTree(
+  tree: PageTree,
+  expanded: ReadonlySet<string>,
+  extraChildren?: ReadonlyMap<string, number>,
+): TreeMetrics {
   const counts = new Map<string, number>();
   const rowIndex = new Map<string, number>();
   let cursor = 0;
@@ -276,6 +332,9 @@ export function measureTree(tree: PageTree, expanded: ReadonlySet<string>): Tree
     rowIndex.set(page.id, start);
     let size = 1;
     if (expanded.has(page.id)) {
+      const extra = extraChildren?.get(page.id) ?? 0;
+      size += extra;
+      cursor += extra;
       const children = tree.children.get(page.id);
       if (children) {
         for (const child of children) size += walk(child);

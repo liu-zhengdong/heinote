@@ -12,6 +12,8 @@ import { CornerStack, ToastStack, type ToastMessage, type ToastTone } from "../c
 import type { GithubResult } from "../core/github-auth";
 import { SaveRecovery } from "../features/account/SaveRecovery";
 import { SyncIndicator } from "../features/account/SyncIndicator";
+import { useSession } from "../features/account/AuthGate";
+import { useImportJobs, type ImportJobDto } from "../features/account/useImports";
 import { useFold } from "../hooks/useFold";
 import { useIsMobileEditing } from "./edit-surface";
 import { useWorkspace } from "./workspace-context";
@@ -66,6 +68,12 @@ interface UiContextValue {
   accountSettingsNotice: GithubResult | null;
   openAccountSettings(notice?: GithubResult | null): void;
   closeAccountSettings(): void;
+  importJobs: ImportJobDto[];
+  selectedImportId: string | null;
+  selectImport(id: string | null): void;
+  refreshImports(): Promise<void>;
+  cancelImportJob(id: string): Promise<void>;
+  dismissImportJob(id: string): Promise<void>;
 }
 
 const UiContext = createContext<UiContextValue | null>(null);
@@ -90,6 +98,9 @@ function useThemeAttribute(theme: string): void {
 
 export function UiProvider({ children }: { children: ReactNode }) {
   const { preferences } = useWorkspace();
+  const { user } = useSession();
+  const { jobs: importJobs, refresh: refreshImports, cancelJob: cancelImportJob, dismissJob: dismissImportJob } = useImportJobs(Boolean(user));
+  const [selectedImportId, setSelectedImportId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [quickFindOpen, setQuickFindOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -176,6 +187,20 @@ export function UiProvider({ children }: { children: ReactNode }) {
   const focusMemoComposer = useCallback(() => {
     setMemoFocusNonce((value) => value + 1);
   }, []);
+  const selectImport = useCallback((id: string | null) => {
+    setSelectedImportId(id);
+    if (id) {
+      setAdminOpen(false);
+      setPeekPageId(null);
+      setHistoryOpen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedImportId && !importJobs.some((job) => job.id === selectedImportId)) {
+      setSelectedImportId(null);
+    }
+  }, [importJobs, selectedImportId]);
 
   const value = useMemo<UiContextValue>(
     () => ({
@@ -210,8 +235,14 @@ export function UiProvider({ children }: { children: ReactNode }) {
       accountSettingsNotice,
       openAccountSettings,
       closeAccountSettings,
+      importJobs,
+      selectedImportId,
+      selectImport,
+      refreshImports,
+      cancelImportJob,
+      dismissImportJob,
     }),
-    [accountSettingsNotice, accountSettingsOpen, adminOpen, bumpMemoRefresh, closeAccountSettings, closeAdmin, closePeek, closeShare, drawerOpen, focusMemoComposer, historyOpen, memoFocusNonce, memoQuickFilter, memoRefreshNonce, memoTagFilter, memoTarget, openAccountSettings, openAdmin, openMemo, openPeek, peekPageId, quickFindOpen, requestShare, sharePageId, toast],
+    [accountSettingsNotice, accountSettingsOpen, adminOpen, bumpMemoRefresh, cancelImportJob, closeAccountSettings, closeAdmin, closePeek, closeShare, dismissImportJob, drawerOpen, focusMemoComposer, historyOpen, importJobs, memoFocusNonce, memoQuickFilter, memoRefreshNonce, memoTagFilter, memoTarget, openAccountSettings, openAdmin, openMemo, openPeek, peekPageId, quickFindOpen, refreshImports, requestShare, selectImport, selectedImportId, sharePageId, toast],
   );
 
   return (

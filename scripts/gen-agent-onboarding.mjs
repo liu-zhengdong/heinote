@@ -63,7 +63,7 @@ const llmsTxt = [
   "",
   "- [站点根路径](/): `GET /` 在 `Accept` 不偏好 `text/html`（如 `*/*` 或优先 `text/markdown`）时直接返回本导览；HTML 响应也附 `Link` 头与 `<noscript>` 指针",
   "- [接入技能](api/v1/skill.md): 使用说明 + 内嵌 heinote 命令行助手脚本，一次抓取即完成接入",
-  "- [API 契约](api/v1/agent-api.md): 完整接口文档（认证、页面、闪念、数据库、附件、提案、版本）",
+  "- [API 契约](api/v1/agent-api.md): 完整接口文档（认证、页面、闪念、数据库、附件、批量导入、提案、版本）",
   "- [版本探测](api/version): 部署名称与版本号",
   "",
   "## 授权（免手动令牌自举）",

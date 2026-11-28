@@ -18,6 +18,7 @@ import type { LoadedNotePage, StoredFile } from "../src/core/types.ts";
 import { pageOpSubmissionSchema } from "./collaboration.ts";
 import { attachCollaborationSocket, PresenceHub, type SocketCredentials } from "./collaboration-socket.ts";
 import { attachAgentFiles } from "./agent-files.ts";
+import { attachAgentImports } from "./agent-imports.ts";
 import { attachAgentCopy } from "./agent-copy.ts";
 import { transferPageTree, transferSchema } from "./tree-transfer.ts";
 import { attachAgentOperations } from "./agent-operations.ts";
@@ -36,7 +37,7 @@ import { AVATAR_PRESETS, eventDto, parseTokenAvatar, recordTokenEvent, tokenAvat
 import { attachGithubAuth, githubConfigFromEnvironment, type GithubConfig } from "./github-auth.ts";
 import { clearEmbedCookie, createEmbed } from "./embed.ts";
 import { writeExport } from "./export.ts";
-import { cancelImport, importActive, importJob, initializeImports, shutdownImports, startImport } from "./import.ts";
+import { cancelImport, importActive, importCommitting, importJob, initializeImports, setImportUpdateListener, shutdownImports, startImport, toImportDto } from "./import.ts";
 import { migrateDatabase } from "./migrations/index.ts";
 import { applyUpdate, checkUpdate, updateStatus, type UpdateConfig } from "./update.ts";
 import { attachAdminBackupRoutes, Backups } from "./backups.ts";
@@ -142,7 +143,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     next();
   });
   const jsonParser = express.json({ limit: "16mb" });
-  app.use((req, res, next) => req.path.startsWith("/api/files/") || req.path.startsWith("/api/v1/files/") || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
+  app.use((req, res, next) => req.path.startsWith("/api/files/") || req.path.startsWith("/api/v1/files/") || /^\/api\/v1\/imports\/[^/]+\/parts\/\d+\/?$/i.test(req.path) || /^\/api\/account\/import\/(obsidian|notion)\/?$/i.test(req.path) || /^\/api\/account\/avatar\/?$/i.test(req.path) ? next() : jsonParser(req, res, next));
   /* UC-58: embed sessions act with token identity — account, auth, member
      and token management are closed to them even on routes that never call
      actor() (login, register). req.path is mount-relative here. */
@@ -156,9 +157,9 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") return next();
     /* Embed tickets only write an in-memory map + last_used_at; the plugin
        must still be able to redeem a session while an import runs. */
-    if (req.path.startsWith("/account/import") || req.path.startsWith("/admin/update-apply") ||
+    if (req.path.startsWith("/account/import") || req.path.startsWith("/v1/imports") || req.path.startsWith("/admin/update-apply") ||
         req.path.startsWith("/auth/") || req.path.startsWith("/v1/embed/")) return next();
-    if (importActive()) return fail(503, "导入进行中，请稍后再试。", "import_running");
+    if (importCommitting()) return fail(503, "导入提交中，请稍后再试。", "import_running");
     next();
   });
   // UC-52: every /api/v1 response points back at the onboarding guide so an
@@ -697,12 +698,11 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     const who = actor(req);
     const job = importJob(who.user.id, req.params.id);
     if (!job) fail(404, "导入任务不存在。", "not_found");
-    const { userId: _user, created: _created, ...dto } = job;
-    res.json(dto);
+    res.json(toImportDto(job));
   });
   app.delete("/api/account/import/:id", (req, res) => {
     const who = actor(req);
-    if (!cancelImport(who.user.id, req.params.id)) fail(404, "没有进行中的导入任务。", "not_found");
+    if (!cancelImport(who.user.id, req.params.id, who)) fail(404, "没有进行中的导入任务。", "not_found");
     res.json({ ok: true });
   });
   app.get("/api/tokens/presets", (_req, res) => res.json(AVATAR_PRESETS.map((preset) => ({ id: preset }))));
@@ -1011,6 +1011,7 @@ export async function startServer(options: { dataDir?: string; host?: string; po
   attachAgentOperations(app, store, actor);
   attachAgentCopy(app, { store, actor });
   attachAgentFiles(app, store, actor);
+  attachAgentImports(app, store, actor);
   attachPublicApp(app, store);
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "接口不存在。", "not_found")));
   let vite: { close(): Promise<void> } | undefined;
@@ -1042,7 +1043,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     }
     if (error instanceof HttpError) {
       const quota = (error as { quota?: unknown }).quota;
-      res.status(error.status).json({ error: error.message, code: error.code, ...(quota ? { quota } : {}) });
+      const missingParts = (error as { missingParts?: unknown }).missingParts;
+      res.status(error.status).json({
+        error: error.message,
+        code: error.code,
+        ...(quota ? { quota } : {}),
+        ...(missingParts ? { missingParts } : {}),
+      });
       return;
     }
     if ((error as { type?: string })?.type === "entity.too.large") { res.status(413).json({ error: "请求过大。", code: "too_large" }); return; }
@@ -1089,10 +1096,13 @@ export async function startServer(options: { dataDir?: string; host?: string; po
     },
     presenceHub,
   );
+  setImportUpdateListener((targetScope, userId) => {
+    collaborationSocket?.notifyImportUpdate(targetScope, userId);
+  });
   await new Promise<void>((resolve, reject) => { server.once("listening", resolve); server.once("error", reject); });
   const address = server.address();
   const url = `http://${options.host && options.host !== "0.0.0.0" ? options.host : "127.0.0.1"}:${typeof address === "object" && address ? address.port : 3000}`;
-  return { url, async close() { store.maintenance.stop(); store.purge.stop(); backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
+  return { url, async close() { setImportUpdateListener(undefined); store.maintenance.stop(); store.purge.stop(); backups.stop(); collaborationSocket?.close(); await vite?.close(); await shutdownImports(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); store.db.close(); } };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

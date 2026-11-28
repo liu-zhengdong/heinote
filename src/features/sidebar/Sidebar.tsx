@@ -60,8 +60,10 @@ import { MemoSidebarPane } from "../memos/MemoSidebarPane";
 import { MoveToMenu } from "../editor/MoveToMenu";
 import { AccountSettingsButton } from "../account/AccountMenu";
 import { useSession } from "../account/AuthGate";
+import type { ImportJobDto } from "../account/useImports";
 import { SpaceSwitcher } from "../knowledge/SpaceSwitcher";
 import {
+  ImportTreeRow,
   measureTree,
   PAGE_DRAG,
   readExpanded,
@@ -124,7 +126,7 @@ export function Sidebar() {
     ensureAllSpaces,
     directoryLoading,
   } = useWorkspace();
-  const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast, adminOpen, openAdmin, closeAdmin } = useUi();
+  const { drawerOpen, setDrawerOpen, setQuickFindOpen, requestShare, toast, adminOpen, openAdmin, closeAdmin, importJobs, selectedImportId, selectImport } = useUi();
   const { user: sessionUser } = useSession();
   const isAdmin = sessionUser?.siteRole === "admin";
   const folded = useFold();
@@ -234,7 +236,31 @@ export function Sidebar() {
   const rowHeight = mobile ? ROW_HEIGHT_MOBILE : ROW_HEIGHT_DESKTOP;
   const [scrollBucket, setScrollBucket] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(800);
-  const treeMetrics = useMemo(() => measureTree(tree, expanded), [tree, expanded]);
+
+  const { rootImports, importsByParent, extraImportCounts } = useMemo(() => {
+    const roots: ImportJobDto[] = [];
+    const byParent = new Map<string, ImportJobDto[]>();
+    const counts = new Map<string, number>();
+    const kbHomeId = activeSpace?.knowledgeBase?.homePageId;
+    for (const job of importJobs) {
+      if (job.status === "done") continue;
+      const inCurrentSpace = inLibrary
+        ? job.targetScope === activeSpaceId
+        : job.targetScope === "personal" || Boolean(spaces[job.targetScope] && !spaces[job.targetScope].knowledgeBase);
+      if (!inCurrentSpace) continue;
+      if (job.parentId && job.parentId !== kbHomeId && pages[job.parentId] && !inTrash(pages, job.parentId)) {
+        const list = byParent.get(job.parentId) ?? [];
+        list.push(job);
+        byParent.set(job.parentId, list);
+        counts.set(job.parentId, list.length);
+      } else {
+        roots.push(job);
+      }
+    }
+    return { rootImports: roots, importsByParent: byParent, extraImportCounts: counts };
+  }, [activeSpace?.knowledgeBase?.homePageId, activeSpaceId, importJobs, inLibrary, pages, spaces]);
+
+  const treeMetrics = useMemo(() => measureTree(tree, expanded, extraImportCounts), [tree, expanded, extraImportCounts]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -303,6 +329,18 @@ export function Sidebar() {
       return next;
     });
   }, []);
+
+  const revealedImportsRef = useRef(new Set<string>());
+  useEffect(() => {
+    const toReveal: string[] = [];
+    for (const [parentId, list] of importsByParent) {
+      if (!list.some((job) => !revealedImportsRef.current.has(job.id))) continue;
+      for (const job of list) revealedImportsRef.current.add(job.id);
+      for (const ancestor of pageAncestry(pages, parentId)) toReveal.push(ancestor.id);
+    }
+    if (!toReveal.length) return;
+    updateExpanded((current) => (toReveal.every((id) => current.has(id)) ? current : new Set([...current, ...toReveal])));
+  }, [importsByParent, pages, updateExpanded]);
 
   /* The page being read is always in view in the tree: the pages above it
      open, as Obsidian reveals the active file. */
@@ -401,6 +439,7 @@ export function Sidebar() {
   const createIn = (parentId: string | null, kind: PageKind) => {
     if (!writable) return;
     if (adminOpen) closeAdmin();
+    selectImport(null);
     const id = createPage(parentId, kind, { block: true });
     if (id && view !== "files") setPreference("sidebar_view", "files");
     setNewMenu(null);
@@ -476,6 +515,7 @@ export function Sidebar() {
   useLayoutEffect(() => {
     handlers.current = {
       select: (pageId) => {
+        selectImport(null);
         selectPage(pageId);
         if (view === "memos") setPreference("sidebar_view", "files");
         afterNavigate();
@@ -494,6 +534,7 @@ export function Sidebar() {
         setRenaming(null);
       },
       createInside: (pageId) => {
+        selectImport(null);
         createPage(pageId, "document", { block: true });
         updateExpanded((current) => new Set([...current, pageId]));
         afterNavigate();
@@ -676,15 +717,16 @@ export function Sidebar() {
     // A page holds pages — its blocks among them, a block being a page —
     // listed under it; a database, its rows.
     const children = source.children.get(page.id) ?? [];
+    const childImports = view === "files" ? (importsByParent.get(page.id) ?? []) : [];
     const open = expanded.has(page.id);
     return (
       <div className="tree-branch" key={page.id}>
         <TreeRow
           page={page}
           depth={depth}
-          branch={children.length > 0}
+          branch={children.length > 0 || childImports.length > 0}
           open={open}
-          selected={selectedPageId === page.id}
+          selected={!selectedImportId && selectedPageId === page.id}
           renaming={renaming === page.id}
           menuOpen={rowMenu?.pageId === page.id}
           editable={canEdit(page.id)}
@@ -698,9 +740,18 @@ export function Sidebar() {
           me={me}
           actions={actions}
         />
-        {open && children.length > 0 ? (
+        {open && (children.length > 0 || childImports.length > 0) ? (
           <div className="tree-children" style={{ "--tree-depth": depth } as CSSProperties}>
-            {startRow !== undefined ? renderList(children, depth + 1, startRow + 1) : children.map((child) => branch(child, depth + 1, source))}
+            {childImports.map((job) => (
+              <ImportTreeRow
+                key={job.id}
+                job={job}
+                depth={depth + 1}
+                selected={selectedImportId === job.id}
+                onSelect={() => { selectImport(job.id); afterNavigate(); }}
+              />
+            ))}
+            {startRow !== undefined ? renderList(children, depth + 1, startRow + 1 + childImports.length) : children.map((child) => branch(child, depth + 1, source))}
           </div>
         ) : null}
       </div>
@@ -924,7 +975,16 @@ export function Sidebar() {
         >
           {view === "files" ? (
             <>
-              {tree.roots.length ? renderList(tree.roots, 0, 0) : !directoryLoading ? (
+              {rootImports.map((job) => (
+                <ImportTreeRow
+                  key={job.id}
+                  job={job}
+                  depth={0}
+                  selected={selectedImportId === job.id}
+                  onSelect={() => { selectImport(job.id); afterNavigate(); }}
+                />
+              ))}
+              {tree.roots.length ? renderList(tree.roots, 0, 0) : !directoryLoading && !rootImports.length ? (
                 writable ? <button type="button" className="rail-invite" onClick={() => createIn(null, "document")}>
                   <Plus size={15} />New page
                 </button> : !shelvedTree.roots.length ? <div className="sidebar__empty"><p>当前空间没有页面</p></div> : null

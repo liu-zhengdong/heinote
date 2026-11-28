@@ -137,3 +137,108 @@ test("深色与窄屏下导入行不破版", async ({ page, app }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await screenshot(page, "import-rows-mobile-390x844");
 });
+
+test("UC-66：侧边栏展示导入中虚拟占位条目，点击看实时进度，完成替换与失败可关闭", async ({ page, app }) => {
+  await register(page, app, "uc66_ui");
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  const titleField = page.locator('.page-title [contenteditable="true"], [contenteditable="true"][aria-label="Page title"], .title-field.doc__title[contenteditable="true"]').first();
+  await expect(titleField).toBeVisible();
+  await titleField.fill("父页A");
+  await expect.poll(() => new URL(page.url()).searchParams.get("page")).not.toBeNull();
+  const parentId = new URL(page.url()).searchParams.get("page")!;
+  await page.waitForTimeout(400);
+
+  const tokRes = await page.request.post(`${app.url}/api/tokens`, {
+    data: { name: "SyncAgent", access: "write", displayName: "SyncAgent" },
+    headers: { Origin: app.url },
+  });
+  expect(tokRes.status()).toBe(201);
+  const { token } = await tokRes.json() as { token: string };
+
+  const chunks: Uint8Array[] = [];
+  const zs = new ZipStream({ write: (chunk) => chunks.push(chunk) });
+  await zs.add("MyVault/.obsidian/app.json", "{}");
+  await zs.add("MyVault/导入笔记一.md", "# 导入笔记一\n\n" + "内容".repeat(400));
+  zs.finish();
+  const zipBuf = Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength)));
+
+  const partSize = 1024;
+  const sessionRes = await page.request.post(`${app.url}/api/v1/imports`, {
+    data: { source: "obsidian", totalBytes: zipBuf.length, partSize, parentId, title: "MyVault" },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(sessionRes.status()).toBe(201);
+  const session = await sessionRes.json() as { id: string; partCount: number };
+  expect(session.partCount).toBeGreaterThanOrEqual(2);
+
+  // Upload part 0 only so the job stays in `uploading` state for UI inspection.
+  const put0 = await page.request.put(`${app.url}/api/v1/imports/${session.id}/parts/0`, {
+    data: zipBuf.subarray(0, partSize),
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+  });
+  expect(put0.status()).toBe(200);
+
+  const placeholder = page.locator(`[data-import-id="${session.id}"]`);
+  await expect(placeholder).toBeVisible({ timeout: 10000 });
+  await expect(placeholder).toContainText("MyVault");
+
+  // Virtual projection must NOT create fake pages in records or search.
+  const searchRes = await page.request.get(`${app.url}/api/v1/search?q=MyVault`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect((await searchRes.json()).hits).toHaveLength(0);
+
+  await placeholder.click();
+  const view = page.locator(`[data-import-view="${session.id}"]`);
+  await expect(view).toBeVisible();
+  await expect(view).toContainText("MyVault");
+  await expect(view).toContainText("Agent「SyncAgent」");
+  await expect(view).toContainText("上传分片");
+  await screenshot(page, "uc66-import-progress");
+
+  // Reloading preserves the virtual placeholder.
+  await page.reload();
+  await expect(page.locator(`[data-import-id="${session.id}"]`)).toBeVisible({ timeout: 10000 });
+
+  // Finish uploading remaining parts and complete.
+  for (let idx = 1; idx < session.partCount; idx += 1) {
+    const start = idx * partSize;
+    const end = Math.min(zipBuf.length, start + partSize);
+    const putN = await page.request.put(`${app.url}/api/v1/imports/${session.id}/parts/${idx}`, {
+      data: zipBuf.subarray(start, end),
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+    });
+    expect(putN.status()).toBe(200);
+  }
+  const comp = await page.request.post(`${app.url}/api/v1/imports/${session.id}/complete`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(comp.status()).toBe(202);
+
+  // Placeholder disappears automatically and real imported page appears under 父页A.
+  await expect(page.locator(`[data-import-id="${session.id}"]`)).toBeHidden({ timeout: 15000 });
+  await expect(page.locator(".tree-row__label", { hasText: "导入笔记一" })).toBeVisible({ timeout: 10000 });
+
+  // Failed import shows error row and can be dismissed cleanly.
+  const badBuf = Buffer.from("not-a-valid-zip-payload-1234567890");
+  const badCreate = await page.request.post(`${app.url}/api/v1/imports`, {
+    data: { source: "obsidian", totalBytes: badBuf.length, partSize: 1024, parentId, title: "BrokenVault" },
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(badCreate.status()).toBe(201);
+  const badJob = await badCreate.json() as { id: string };
+  await page.request.put(`${app.url}/api/v1/imports/${badJob.id}/parts/0`, {
+    data: badBuf,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/octet-stream" },
+  });
+  await page.request.post(`${app.url}/api/v1/imports/${badJob.id}/complete`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const badRow = page.locator(`[data-import-id="${badJob.id}"]`);
+  await expect(badRow).toContainText("失败", { timeout: 10000 });
+  await badRow.click();
+  await expect(page.locator(`[data-import-view="${badJob.id}"] [role="alert"]`)).toBeVisible();
+  await page.getByRole("button", { name: "关闭并移除提示" }).click();
+  await expect(badRow).toBeHidden();
+});

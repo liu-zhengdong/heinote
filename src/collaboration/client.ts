@@ -149,6 +149,7 @@ const spacePresenceListeners = new Map<string, Set<(list: CollaboratorPresence[]
 const latestSpacePresence = new Map<string, CollaboratorPresence[]>();
 const subscribedSpaces = new Set<string>();
 const authRequestListeners = new Set<(pending: unknown[]) => void>();
+const importUpdateListeners = new Set<(scope?: string) => void>();
 const socketStateListeners = new Set<(connected: boolean) => void>();
 
 let readRecords: (scope: string, collection: string) => Array<{ id: string; value: JsonRecord }> = () => [];
@@ -201,7 +202,7 @@ function wsSend(payload: unknown): boolean {
 }
 
 function hasAnySocketInterest(): boolean {
-  return sessions.size > 0 || subscribedSpaces.size > 0 || authRequestListeners.size > 0;
+  return sessions.size > 0 || subscribedSpaces.size > 0 || authRequestListeners.size > 0 || importUpdateListeners.size > 0;
 }
 
 function syncSpaceSubscriptions(): void {
@@ -893,6 +894,11 @@ function connect(): void {
       return;
     }
 
+    if (message.type === "import_update") {
+      for (const listener of [...importUpdateListeners]) listener(message.scope);
+      return;
+    }
+
     if (message.snapshot) {
       receiveSnapshot(message.snapshot, message.type === "reset");
       return;
@@ -1027,6 +1033,13 @@ export function subscribeAuthRequests(listener: (pending: unknown[]) => void): (
   wsSend({ type: "subscribe_auth_requests" });
   if (accountId && !suspended) connect();
   return () => { authRequestListeners.delete(listener); };
+}
+
+/** Subscribe to UC-66 background import status updates over the shared WebSocket. */
+export function subscribeImportUpdates(listener: (scope?: string) => void): () => void {
+  importUpdateListeners.add(listener);
+  if (accountId && !suspended) connect();
+  return () => { importUpdateListeners.delete(listener); };
 }
 
 /**

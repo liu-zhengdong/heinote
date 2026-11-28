@@ -219,6 +219,45 @@ POST /api/v1/pages/:id/copy
 - 闪念与 `#tag`（含多级 `#工作/设计`）自动从正文提取并索引；添加或删除批注不会改变父闪念的 `created_at` 排序位置。
 - `GET /pages` 与 `/api/records/personal/pages` 不返回 `kind: "memo"` 记录。
 
+## 批量导入接口（分片与断点续传）
+
+Agent 与网页端共用同一套落盘分片导入协议，支持将本地 Obsidian 笔记库或 Notion 导出 zip 迁移到个人空间、指定父页面或团队知识库。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | `/imports` | 创建分片上传会话，预检权限、父页面、配额与磁盘空间 |
+| PUT | `/imports/:id/parts/:index` | 上传单个二进制分片（支持多通道并发与幂等重试） |
+| POST | `/imports/:id/complete` | 校验分片齐备（及可选 `sha256`）并投入 FIFO 后台导入队列 |
+| GET | `/imports` | 列出当前可见的活跃、近期完成及未关闭失败导入任务 |
+| GET | `/imports/:id` | 查询任务进度、已收分片 `receivedParts` 或最终报告 |
+| DELETE | `/imports/:id` | 取消上传中、排队中或解析中的导入任务并清理临时文件 |
+| POST | `/imports/:id/dismiss` | 关闭已失败或已完成的终端占位提示 |
+
+### 创建会话与目标挂载
+
+```json
+{
+  "source": "obsidian",
+  "totalBytes": 104857600,
+  "partSize": 8388608,
+  "parentId": "可选的目标文档父页面 ID",
+  "spaceId": "可选的目标团队知识库或空间 ID",
+  "title": "MyVault",
+  "sha256": "可选的 64 位小写 hex 整包校验和"
+}
+```
+
+- `partSize` 可省略（默认 `8 MiB`，合法范围 `1024`–`16 MiB`）。
+- **直接展开挂载**：指定 `parentId` 时，自动继承父页面所属空间，剥离归档共有的最外层根目录（如 `MyVault/`）后，顶层文件夹页、顶层笔记页与 `.base` 数据库直接设置 `parent_id = parentId`（不额外套外框容器页，不修改父页面自身正文），报告返回 `parentPageId` 与 `topLevelPageIds`。
+- **仅指定 `spaceId`**：团队知识库默认挂载到其首页（`home_page_id`）下直接展开；都不指定时在个人空间新建「`Obsidian 导入 — <库名>`」／「`Notion 导入`」容器页。
+- 只读令牌（403）、无权限或非文档/已归档父页面（403/404/409/400）、超出空间限额（413）或磁盘可用空间不足（507）在建会话时立即拒绝。
+
+### 多通道上传、断点续传与后台隔离
+
+- `PUT /api/v1/imports/:id/parts/:index` 接收原始二进制分片体（`index` 从 `0` 开始），服务端按 `offset = index * partSize` 直接随机写盘，支持并发乱序上传与同分片幂等重传；未完成的上传会话在 24 小时内支持重启后通过 `GET /api/v1/imports/:id` 查询 `receivedParts` 续传。
+- 解析支持 ZIP64（按文件偏移随机读取，不把整包读入堆内存），并在低优先级、带堆内存上限的独立子进程中执行；准备阶段（扫描、Markdown／`.base` 解析、写附件）不阻塞主服务普通读写，仅最后单事务原子提交 `bulkTransaction` 的极短窗口进入写保护（其他写请求返回 503）。
+- 进行中与未关闭失败任务会在网页端侧边栏目标父页下以纯虚拟占位条目呈现（不写入 `records` 表），点击可查看实时进度与取消操作。
+
 ## 数据库接口
 
 以下路径也以 `/api/v1` 开头。数据库条目是以 Database 为父页面的普通文档。正文继续使用页面与 `operations` 接口。数据库及条目创建、属性和视图修改均使用 Bearer 令牌，不需要浏览器会话。

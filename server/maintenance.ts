@@ -1,4 +1,5 @@
 import type { Store } from "./store.ts";
+import { sweepExpiredImports } from "./import.ts";
 
 const DEFAULT_FILE_GRACE_MS = 10 * 60_000;
 const DEFAULT_REQUEST_TTL_MS = 7 * 86_400_000;
@@ -356,7 +357,9 @@ export class MaintenanceManager {
     maxOpsPerPage?: number;
     minOpRetentionMs?: number;
     hardMaxOpsPerPage?: number;
+    importTtlMs?: number;
   } = {}): MaintenanceSummary {
+    sweepExpiredImports(this.store, options.importTtlMs);
     const files = this.sweepFiles({ graceMs: options.fileGraceMs });
     const prunedRequests = this.pruneRequests({ ttlMs: options.requestTtlMs });
     const compactedTombstones = this.compactTombstones({ maxTombstones: options.maxTombstones });

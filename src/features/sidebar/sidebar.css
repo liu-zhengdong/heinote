@@ -596,6 +596,31 @@
   color: var(--ink-4);
 }
 
+.tree-row--import .tree-row__glyph {
+  color: var(--blue);
+}
+
+.tree-row--import-failed .tree-row__glyph {
+  color: var(--danger);
+}
+
+.tree-row__import-badge {
+  flex: none;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--blue-tint);
+  color: var(--blue);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+.tree-row--import-failed .tree-row__import-badge {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
 .tree-row__rename {
   min-width: 0;
   flex: 1;
