@@ -22,6 +22,39 @@ function indentationDepth(value: string): number {
   return Math.floor(whitespace.replaceAll("\t", "  ").length / 2);
 }
 
+/** Reads a `$$...$$` or `\[...\]` display equation across one or multiple lines.
+ *  Returns null if unclosed so a stray opener never swallows the rest of a paste. */
+function readBlockEquation(
+  lines: readonly string[],
+  startIndex: number,
+  openToken: "$$" | "\\[",
+  closeToken: "$$" | "\\]",
+): { nextIndex: number; expr: string } | null {
+  const first = lines[startIndex].trim();
+  if (!first.startsWith(openToken)) return null;
+  const afterOpen = first.slice(openToken.length);
+  if (afterOpen.endsWith(closeToken) && afterOpen.length >= closeToken.length) {
+    return {
+      nextIndex: startIndex,
+      expr: afterOpen.slice(0, afterOpen.length - closeToken.length).trim(),
+    };
+  }
+  if (afterOpen.includes(closeToken)) return null;
+
+  const body: string[] = [];
+  if (afterOpen.trim()) body.push(afterOpen.trimStart());
+  for (let cursor = startIndex + 1; cursor < lines.length; cursor += 1) {
+    const trimmedEnd = lines[cursor].trimEnd();
+    if (trimmedEnd.trimStart() === closeToken || trimmedEnd.endsWith(closeToken)) {
+      const beforeClose = trimmedEnd.slice(0, trimmedEnd.length - closeToken.length).trimEnd();
+      if (beforeClose.trim()) body.push(beforeClose);
+      return { nextIndex: cursor, expr: body.join("\n").trim() };
+    }
+    body.push(lines[cursor]);
+  }
+  return null;
+}
+
 export function parseMarkdown(
   value: string,
   idFactory: () => string,
@@ -43,22 +76,19 @@ export function parseMarkdown(
         code.push(lines[index]);
         index += 1;
       }
-      drafts.push({ kind: "code", content: [{ text: code.join("\n") }], language: fence[1] || undefined, depth: 0 });
-      continue;
-    }
-    const singleMath = line.match(/^\s*\$\$\s*(.+?)\s*\$\$\s*$/);
-    if (singleMath) {
-      drafts.push({ kind: "equation", content: [{ text: singleMath[1] }], depth: 0 });
-      continue;
-    }
-    if (/^\s*\$\$\s*$/.test(line)) {
-      const mathLines: string[] = [];
-      index += 1;
-      while (index < lines.length && !/^\s*\$\$\s*$/.test(lines[index])) {
-        mathLines.push(lines[index]);
-        index += 1;
+      const language = fence[1] || undefined;
+      if (language?.toLowerCase() === "math") {
+        drafts.push({ kind: "equation", content: [{ text: code.join("\n").trim() }], depth: 0 });
+      } else {
+        drafts.push({ kind: "code", content: [{ text: code.join("\n") }], language, depth: 0 });
       }
-      drafts.push({ kind: "equation", content: [{ text: mathLines.join("\n").trim() }], depth: 0 });
+      continue;
+    }
+    const mathBlock = readBlockEquation(lines, index, "$$", "$$")
+      ?? readBlockEquation(lines, index, "\\[", "\\]");
+    if (mathBlock) {
+      drafts.push({ kind: "equation", content: [{ text: mathBlock.expr }], depth: 0 });
+      index = mathBlock.nextIndex;
       continue;
     }
     if (!line.trim()) continue;

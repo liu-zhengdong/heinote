@@ -11,6 +11,7 @@ import {
   MENTION_CHAR,
   normalizeInlineContent,
   replaceRange,
+  sameInlineContent,
   sliceInlineContent,
   splitInlineContent,
 } from "../../core/inline-content";
@@ -30,9 +31,9 @@ import {
   updateBlockFields,
   type EditorTransaction,
 } from "./editor-commands";
-import { collapseInlineMarkdown, mentionQueryAt, resumeTyping, slashQueryAt } from "../../core/inline-markdown";
+import { collapseInlineMarkdown, markdownInlineToContent, mentionQueryAt, resumeTyping, slashQueryAt } from "../../core/inline-markdown";
 import { mentionItems, pageFromLink, type MentionItem } from "./mentions";
-import { linkifyContent, linkTypedAddress } from "../../core/autolink";
+import { linkTypedAddress } from "../../core/autolink";
 import { embedFromUrl } from "../../core/embeds";
 import { caretOffset, caretRect, editableWithin, placeCaretNear, selectionOffsets } from "./selection";
 import { slashCommands, type Command } from "./SlashMenu";
@@ -331,29 +332,31 @@ export function blockTyping(editor: Editor & Pick<ReturnType<typeof useMedia>, "
     const pasted = pastedBlocks(event.clipboardData);
     if (!pasted) {
       const plain = event.clipboardData.getData("text/plain");
-      const across = replaceSelection(linkifyContent(inlineFromText(decodeHtmlEntities(plain))));
+      const across = replaceSelection(markdownInlineToContent(decodeHtmlEntities(plain)));
       if (across) {
         event.preventDefault();
         runReplace(across);
         return;
       }
-      // One line holding a web address — pasted from the address bar, say —
-      // goes in with the address linked, as Notion pastes one; an entity —
-      // `&emsp;` in a copied paragraph — lands as the character a renderer
-      // shows. Any other line is left to the browser, which pastes it among
-      // the words like typing.
+      // One line holding inline Markdown/math (`$...$`, `\(...\)`, `**...**`),
+      // a web address, or an HTML entity (`&emsp;`) is parsed into structured
+      // inline content on paste; ordinary plain text stays with the browser.
       const range = words ?? { start: caretOffset(event.currentTarget), end: caretOffset(event.currentTarget) };
       const raw = plain.replace(/\r?\n$/, "");
       const line = decodeHtmlEntities(raw);
-      const inserted = replaceRange(block.content, range.start, range.end, line);
-      const withLinks = linkifyContent(inserted, range.start, range.start + line.length);
-      if ((withLinks !== inserted || line !== raw) && !/\n/.test(line)) {
+      const parsed = !/\n/.test(line) ? markdownInlineToContent(line) : [];
+      const hasRich = !/\n/.test(line) && !sameInlineContent(parsed, inlineFromText(line));
+      if (!/\n/.test(line) && (hasRich || line !== raw)) {
         event.preventDefault();
-        execute(updateBlockContent(tree, block.id, withLinks), { id: block.id, start: range.start + line.length, force: true });
+        const [head, rest] = splitInlineContent(block.content, range.start);
+        const [, tail] = splitInlineContent(rest, Math.max(0, range.end - range.start));
+        const nextContent = normalizeInlineContent([...head, ...parsed, ...tail]);
+        const insertedLen = inlinePlainText(parsed).length;
+        execute(updateBlockContent(tree, block.id, nextContent), { id: block.id, start: range.start + insertedLen, force: true });
         // A link that makes a card, pasted onto an empty line: its card is
         // offered, the link kept if it is not taken.
-        const href = withLinks.find((run) => run.marks?.link)?.marks?.link;
-        if (href && !inlinePlainText(block.content).trim() && embedFromUrl(href) && lineIsOnlyLink({ ...block, content: withLinks }, href)) {
+        const href = parsed.find((run) => run.marks?.link)?.marks?.link;
+        if (href && !inlinePlainText(block.content).trim() && embedFromUrl(href) && lineIsOnlyLink({ ...block, content: nextContent }, href)) {
           offerCard(block.id, href);
         }
       }

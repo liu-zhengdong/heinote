@@ -6,6 +6,7 @@ import { collapseInlineMarkdown, markdownInlineToContent } from "../../core/inli
 import { markdownToBlockTree } from "../../core/markdown-blocks";
 import { extractTagsFromBlockTree, rewriteTagInBlockTree } from "../../core/memos";
 import { markdownShortcut } from "./adapters";
+import { textToBlocks } from "./block-clipboard";
 
 describe("math equations (UC-65)", () => {
   it("keeps currency, escapes, and inline code literal", () => {
@@ -101,5 +102,57 @@ describe("math equations (UC-65)", () => {
     expect(rewritten.changed).toBe(true);
     expect(inlinePlainText(rewritten.tree.by_id.e1.content)).toBe("#notatag");
     expect(inlinePlainText(rewritten.tree.by_id.t1.content)).toContain("#math");
+  });
+
+  it("parses pasted standard LaTeX delimiters (\\(...\\), \\[...\\], ```math, inline $$...$$, single-line blocks)", () => {
+    // Inline LaTeX delimiters \(...\) and $$...$$ on a line with prose
+    expect(markdownInlineToContent("Where \\(a_i + b_i\\) and $$c_0$$ hold.")).toEqual([
+      { text: "Where " },
+      { text: MENTION_CHAR, mention: { kind: "equation", expression: "a_i + b_i" } },
+      { text: " and " },
+      { text: MENTION_CHAR, mention: { kind: "equation", expression: "c_0" } },
+      { text: " hold." },
+    ]);
+
+    // Multi-line Markdown paste with $$ on same line as \begin{aligned}, \[...\], ```math, and unclosed $$
+    let seq = 0;
+    const pasted = [
+      "Intro \\(E = mc^2\\)",
+      "",
+      "$$ \\begin{aligned}",
+      "x &= 1 + 2",
+      "\\end{aligned} $$",
+      "",
+      "\\[",
+      "\\alpha + \\beta",
+      "\\]",
+      "",
+      "```math",
+      "y = kx + b",
+      "```",
+      "",
+      "$$ unclosed stay text",
+    ].join("\n");
+
+    const tree = markdownToBlockTree(pasted, () => `p${++seq}`);
+    const blocks = orderedBlocks(tree);
+    expect(blocks.map((b) => b.kind)).toEqual(["text", "equation", "equation", "equation", "text"]);
+    expect(inlinePlainText(blocks[1].content)).toBe("\\begin{aligned}\nx &= 1 + 2\n\\end{aligned}");
+    expect(inlinePlainText(blocks[2].content)).toBe("\\alpha + \\beta");
+    expect(inlinePlainText(blocks[3].content)).toBe("y = kx + b");
+    expect(inlinePlainText(blocks[4].content)).toBe("$$ unclosed stay text");
+
+    // Standalone single-line display equations turn into equation blocks on paste
+    const singleDollar = textToBlocks("$$E = mc^2$$", () => `s${++seq}`);
+    expect(singleDollar).not.toBeNull();
+    expect(orderedBlocks(singleDollar!).map((b) => [b.kind, inlinePlainText(b.content)])).toEqual([
+      ["equation", "E = mc^2"],
+    ]);
+
+    const singleBracket = textToBlocks("\\[a^2 + b^2 = c^2\\]", () => `s${++seq}`);
+    expect(singleBracket).not.toBeNull();
+    expect(orderedBlocks(singleBracket!).map((b) => [b.kind, inlinePlainText(b.content)])).toEqual([
+      ["equation", "a^2 + b^2 = c^2"],
+    ]);
   });
 });

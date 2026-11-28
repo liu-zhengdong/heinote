@@ -1014,6 +1014,7 @@ export function DocumentEditor({
   const handleContainerBlur = useCallback(() => {
     if (readOnly) return;
     if (standaloneRef.current) {
+      if (subOverlayOpenRef.current || equationEditRef.current) return;
       if (standaloneRef.current.onBlurOutside) {
         requestAnimationFrame(() => {
           if (subOverlayOpenRef.current || equationEditRef.current) return;
@@ -3338,7 +3339,16 @@ export function DocumentEditor({
                 );
               }
             } else {
+              const keepFocus = !document.activeElement || document.activeElement === document.body
+                || Boolean(document.activeElement.closest(".equation-popover"));
               execute(updateBlockContent(currentTree, block.id, inlineFromText(nextExpr)));
+              if (keepFocus) {
+                requestAnimationFrame(() => {
+                  blocksRef.current
+                    ?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(currentEdit.blockId)}"] .block__equation`)
+                    ?.focus({ preventScroll: true });
+                });
+              }
             }
           }}
           onRemove={() => {
@@ -3367,7 +3377,18 @@ export function DocumentEditor({
                 updateBlockContent(currentTree, block.id, replaceRange(block.content, currentEdit.offset, currentEdit.offset + 1, "")),
                 { id: block.id, start: currentEdit.offset, force: true },
               );
+              return;
             }
+            requestAnimationFrame(() => {
+              if (currentEdit.mode === "inline") {
+                const el = editableWithin(blocksRef.current, currentEdit.blockId);
+                if (el) focusRange(el, Math.min(currentEdit.offset + 1, el.textContent?.length ?? 0));
+              } else {
+                blocksRef.current
+                  ?.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(currentEdit.blockId)}"] .block__equation`)
+                  ?.focus({ preventScroll: true });
+              }
+            });
           }}
         />
       ) : null}

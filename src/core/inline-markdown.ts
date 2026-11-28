@@ -48,9 +48,26 @@ interface Reader {
  *  leading/trailing spaces inside delimiters, and currency values like `$50`. */
 const INLINE_MATH_SOURCE = String.raw`(?<!\\)(?<!\$)\$(?!\$)(?!\s)((?:\\\$|[^$\n\u2063])+?)(?<!\s)(?<!\\)\$(?!\$)(?!\d)`;
 const INLINE_MATH_CLOSED = new RegExp(`(?:${INLINE_MATH_SOURCE})$`);
+const INLINE_DOUBLE_MATH_SOURCE = String.raw`(?<!\\)\$\$(?!\$)([^\n\u2063]+?)(?<!\\)\$\$`;
+const INLINE_PAREN_MATH_SOURCE = String.raw`(?<!\\)\\\(([^\n\u2063]+?)(?<!\\)\\\)`;
+
+function equationReader(patternSource: string): Reader {
+  return {
+    pattern: new RegExp(patternSource, "g"),
+    read: (match, marks) => {
+      const expr = match[1].trim();
+      if (!expr) return [{ text: match[0], ...(Object.keys(marks).length ? { marks } : {}) }];
+      return [{
+        text: MENTION_CHAR,
+        mention: { kind: "equation", expression: expr },
+        ...(Object.keys(marks).length ? { marks } : {}),
+      }];
+    },
+  };
+}
 
 /** What a line of Markdown holds: its marks, each read again inside but
- *  code; inline `$...$` equations; a [link](…) to the web or a page; and the `<br>` a table's cell
+ *  code; inline equations (`$$...$$`, `\(...\)`, `$...$`); a [link](…) to the web or a page; and the `<br>` a table's cell
  *  writes for a line break. Code and math sit before emphasis so underscores
  *  or asterisks inside them do not turn into italics/bold. */
 const READERS: readonly Reader[] = [
@@ -58,14 +75,9 @@ const READERS: readonly Reader[] = [
     pattern: new RegExp(RULES[0].pattern.source, "g"),
     read: (match, marks) => [{ text: match[1], marks: { ...marks, ...RULES[0].marks } }],
   },
-  {
-    pattern: new RegExp(INLINE_MATH_SOURCE, "g"),
-    read: (match, marks) => [{
-      text: MENTION_CHAR,
-      mention: { kind: "equation", expression: match[1] },
-      ...(Object.keys(marks).length ? { marks } : {}),
-    }],
-  },
+  equationReader(INLINE_DOUBLE_MATH_SOURCE),
+  equationReader(INLINE_PAREN_MATH_SOURCE),
+  equationReader(INLINE_MATH_SOURCE),
   ...RULES.slice(1).map((rule): Reader => ({
     pattern: new RegExp(rule.pattern.source, "g"),
     read: (match, marks) => markdownRuns(match[1], { ...marks, ...rule.marks }),

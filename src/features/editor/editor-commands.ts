@@ -439,7 +439,7 @@ export function deleteAcrossBlocks(
    together. Every group command acts on the TOP-LEVEL selection — a selected
    block whose parent is also selected travels inside its parent. */
 
-const UNWRITABLE: ReadonlySet<BlockKind> = new Set(["divider", "file", "table", "embed", "page"]);
+const UNWRITABLE: ReadonlySet<BlockKind> = new Set(["divider", "equation", "file", "table", "embed", "page"]);
 
 /** The selected blocks a group command acts on, in reading order. */
 export function topLevelBlocks(tree: BlockTree, blockIds: readonly string[]): Block[] {

@@ -161,3 +161,67 @@ test("UC-65: Memos compose, render, and click-to-edit inline & block formulas", 
   await expect(popover).toBeHidden();
   await expect(inlineBox).toBeVisible();
 });
+
+test("UC-65: pasting single-line & multi-line Markdown with math renders KaTeX formulas immediately", async ({ page }) => {
+  await register(page, "uc65_paste");
+
+  await page.getByRole("button", { name: "New page", exact: true }).first().click();
+  await expect(page).toHaveURL(/page=/);
+
+  const pasteInto = async (selector: string, text: string) => {
+    await page.locator(selector).first().evaluate((el, value) => {
+      const data = new DataTransfer();
+      data.setData("text/plain", value);
+      el.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, text);
+  };
+
+  // 1. Single-line paste containing $...$ and \(...\) parses inline equations
+  const firstEditable = page.locator('.block__editable[contenteditable="true"]').first();
+  await firstEditable.click();
+  await pasteInto('.block__editable[contenteditable="true"]', "粘贴行内 $E = mc^2$ 与 \\(a_1 + b_1\\) 公式");
+  await expect(page.locator('.mention[data-mention="equation"]')).toHaveCount(2);
+  await expect.poll(async () => (
+    page.evaluate(() => {
+      const tokens = [...document.querySelectorAll('.mention[data-mention="equation"]')];
+      return tokens.length === 2 && tokens.every((el) => Boolean(el.shadowRoot?.querySelector(".katex")));
+    })
+  ), { timeout: 15000 }).toBe(true);
+
+  // 2. Single-line $$...$$ display math pastes as an equation block
+  await firstEditable.click();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await pasteInto('.block--text:last-of-type .block__editable[contenteditable="true"]', "$$\\sum_{i=1}^n i = \\frac{n(n+1)}{2}$$");
+  await expect(page.locator(".block__equation .katex-display").first()).toBeVisible({ timeout: 15000 });
+
+  // 3. Multi-line Markdown paste (inline math + multiline $$...$$ + \[...\]) in Memos composer
+  await page.getByRole("navigation", { name: "HeiNote navigation", exact: true })
+    .getByRole("tablist", { name: "Page list", exact: true })
+    .getByRole("tab", { name: "Memos", exact: true })
+    .click();
+  await expect(page.getByRole("main", { name: "闪念卡片流", exact: true })).toBeVisible();
+
+  const memoEditable = page.locator('.memo-composer .block__editable[contenteditable="true"]').first();
+  await memoEditable.click();
+  await pasteInto('.memo-composer .block__editable[contenteditable="true"]', [
+    "粘贴笔记 $f(x) = x^2$ #数学",
+    "",
+    "$$ \\begin{aligned}",
+    "y &= 2x",
+    "\\end{aligned} $$",
+    "",
+    "\\[",
+    "\\alpha + \\beta",
+    "\\]",
+  ].join("\n"));
+
+  await expect(page.locator('.memo-composer .mention[data-mention="equation"]')).toHaveCount(1);
+  await expect(page.locator(".memo-composer .block__equation")).toHaveCount(2);
+  await page.locator(".memo-composer__foot").getByRole("button", { name: "发送", exact: true }).click();
+
+  const card = page.locator(".memo-entry").first();
+  await expect(card).toContainText("粘贴笔记");
+  await expect(card.locator(".memo-math-inline .katex")).toHaveCount(1, { timeout: 15000 });
+  await expect(card.locator(".memo-math-block .katex-display")).toHaveCount(2, { timeout: 15000 });
+});

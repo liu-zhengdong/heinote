@@ -185,11 +185,13 @@ export function readBlocks(data: DataTransfer): CopiedBlocks | null {
   return { tree, cut: payload.cut === true, source: typeof payload.source === "string" ? payload.source : "" };
 }
 
-/** Text of more than one line as blocks — one per line, with Markdown read as
- *  the blocks it describes. A single line is not blocks: it is pasted among
- *  the words like anything typed. */
+/** Text of more than one line — or a standalone display equation (`$$...$$` /
+ *  `\[...\]`) — as blocks, with Markdown read as the blocks it describes.
+ *  A single ordinary line is left to inline paste handling. */
 export function textToBlocks(text: string, idFactory: () => string): BlockTree | null {
-  if (!/\r?\n/.test(text.trim())) return null;
+  const trimmed = text.trim();
+  const singleDisplayMath = /^\$\$(.+?)\$\$$/.test(trimmed) || /^\\\[(.+?)\\\]$/.test(trimmed);
+  if (!/\r?\n/.test(trimmed) && !singleDisplayMath) return null;
   const tree = markdownToBlockTree(text, idFactory);
   return Object.keys(tree.by_id).length ? tree : null;
 }
